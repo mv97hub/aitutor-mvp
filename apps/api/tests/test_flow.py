@@ -135,6 +135,7 @@ def test_advance_rules_and_checkpoint_edits() -> None:
     session_id = opened.json()["id"]
     assert opened.json()["student"]["display_name"] == "Storm"
     assert opened.json()["topics"][0]["checkpoints"][0]["kind"] == "teach"
+    assert "equal parts" in opened.json()["topics"][0]["learning_goal"].lower()
     assert "tutor_prompt" not in opened.json()["topics"][0]["checkpoints"][0]
 
     context = client.get(f"/sessions/{session_id}/context")

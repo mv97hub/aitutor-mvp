@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
 import { KICKOFF } from "@/lib/kickoff";
-import type { Board, BoardCheckpoint, LessonPlanSummary, Student, StoredMessage } from "@/lib/types";
+import type { Board, LessonPlanSummary, SessionSummary, Student, StoredMessage } from "@/lib/types";
 
 const LOOKS: Record<string, { ink: string; wash: string; mark: string }> = {
   "iron-man": { ink: "#7c2d12", wash: "#f6d7a8", mark: "IM" },
@@ -20,32 +20,6 @@ const greeted = new Set<string>();
 
 function lookFor(slug: string) {
   return LOOKS[slug] ?? { ink: "#0f6e6b", wash: "#e7f3f2", mark: slug.slice(0, 1).toUpperCase() };
-}
-
-function kindLabel(kind: string) {
-  if (kind === "teach") return "Teach";
-  if (kind === "practice") return "Practice";
-  if (kind === "quiz") return "Quiz";
-  return kind;
-}
-
-function railState(board: Board, checkpointId: string) {
-  const flat = board.topics.flatMap((topic) => topic.checkpoints);
-  const index = flat.findIndex((item) => item.id === checkpointId);
-  const currentIndex = flat.findIndex((item) => item.id === board.current_checkpoint_id);
-  const checkpoint = flat[index];
-  const result = checkpoint?.latest_result;
-  if (!checkpoint) return "upcoming";
-  if (board.current_checkpoint_id == null) {
-    if (result?.passed) return "passed";
-    if (result) return "failed";
-    return "done";
-  }
-  if (checkpoint.id === board.current_checkpoint_id) return "current";
-  if (currentIndex !== -1 && index > currentIndex) return "upcoming";
-  if (result?.passed) return "passed";
-  if (result) return "failed";
-  return "done";
 }
 
 function toUiMessages(messages: StoredMessage[]): UIMessage[] {
@@ -122,23 +96,18 @@ function MessageView({ message, studentName }: { message: UIMessage; studentName
   );
 }
 
-function CheckpointRow({ board, checkpoint }: { board: Board; checkpoint: BoardCheckpoint }) {
-  const state = railState(board, checkpoint.id);
-  const result = checkpoint.latest_result;
-  return (
-    <li className={`step is-${state}`}>
-      <div className="step-kind">
-        <span>{kindLabel(checkpoint.kind)}</span>
-        <span>{state === "current" ? "Now" : state === "passed" ? "Passed" : state === "failed" ? "Not yet" : state === "done" ? "Done" : "Later"}</span>
-      </div>
-      {result ? (
-        <p className={`score ${result.passed ? "pass" : "miss"}`}>
-          {result.passed ? "Passed" : "Not yet"} · {result.score}/100
-          <span>{result.feedback}</span>
-        </p>
-      ) : null}
-    </li>
-  );
+function lessonScore(board: Board) {
+  const scored = board.topics
+    .flatMap((topic) => topic.checkpoints)
+    .filter((checkpoint) => checkpoint.kind === "practice" || checkpoint.kind === "quiz");
+  const earned = scored.reduce((sum, checkpoint) => sum + (checkpoint.latest_result?.score ?? 0), 0);
+  return { earned, possible: scored.length * 100 };
+}
+
+function classDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function ChatPanel({
@@ -247,11 +216,6 @@ function startablePlans(plans: LessonPlanSummary[]): LessonPlanSummary[] {
   return plans.filter((plan) => plan.topic_count > 0);
 }
 
-function startingPlanId(plans: LessonPlanSummary[]): string | null {
-  const startable = startablePlans(plans);
-  return startable.find((plan) => plan.is_active)?.id ?? startable[0]?.id ?? null;
-}
-
 export function KidSession({
   initialStudents,
   initialPlans,
@@ -263,26 +227,76 @@ export function KidSession({
 }) {
   const [students, setStudents] = useState(initialStudents);
   const [plans, setPlans] = useState(initialPlans);
-  const [planId, setPlanId] = useState<string | null>(() => startingPlanId(initialPlans));
+  const [learner, setLearner] = useState<Student | null>(null);
+  const [notebooks, setNotebooks] = useState<SessionSummary[]>([]);
+  const [making, setMaking] = useState(false);
   const [error, setError] = useState(initialError);
   const [board, setBoard] = useState<Board | null>(null);
   const [opening, setOpening] = useState(false);
   const choices = startablePlans(plans);
-  const selectedPlan = choices.find((plan) => plan.id === planId) ?? null;
 
-  async function openStudent(studentId: string, fresh: boolean, lessonPlanId: string) {
+  async function loadNotebooks(studentId: string) {
+    const rows = await api<SessionSummary[]>(`/sessions?student_id=${studentId}`);
+    setNotebooks(rows);
+  }
+
+  async function chooseStudent(student: Student) {
+    setOpening(true);
+    setError(null);
+    setBoard(null);
+    setMaking(false);
+    try {
+      await loadNotebooks(student.id);
+      setLearner(student);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not open this learner's classes.");
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  async function startClass(lessonPlanId: string) {
+    if (!learner) return;
     setOpening(true);
     setError(null);
     try {
       const next = await api<Board>("/sessions", {
         method: "POST",
-        body: JSON.stringify({ student_id: studentId, lesson_plan_id: lessonPlanId, fresh }),
+        body: JSON.stringify({ student_id: learner.id, lesson_plan_id: lessonPlanId, fresh: true }),
       });
       setBoard(next);
+      setMaking(false);
+      await loadNotebooks(learner.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not open the lesson.");
+      setError(err instanceof Error ? err.message : "Could not start that class.");
     } finally {
       setOpening(false);
+    }
+  }
+
+  async function openNotebook(sessionId: string) {
+    setOpening(true);
+    setError(null);
+    try {
+      const next = await api<Board>(`/sessions/${sessionId}/board`);
+      setBoard(next);
+      setMaking(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not open that class.");
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  async function backToClasses() {
+    setBoard(null);
+    setMaking(false);
+    if (!learner) return;
+    try {
+      await loadNotebooks(learner.id);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load classes.");
     }
   }
 
@@ -294,46 +308,22 @@ export function KidSession({
       ]);
       setStudents(nextStudents);
       setPlans(nextPlans);
-      setPlanId((current) =>
-        current && nextPlans.some((plan) => plan.id === current) ? current : startingPlanId(nextPlans),
-      );
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The tutor service is not reachable.");
     }
   }
 
-  if (!board) {
+  if (!learner) {
     return (
       <main className="gate">
         <section className="gate-card">
           <div className="rail-head">
             <p className="eyebrow">Kid session</p>
-            <Link className="top-link" href="/admin">Lesson desk</Link>
-          </div>
-          <div className="lesson-pick">
-            <p className="eyebrow">Lesson</p>
-            <div className="lesson-row" role="group" aria-label="Choose a lesson">
-              {choices.map((plan) => (
-                <button
-                  key={plan.id}
-                  type="button"
-                  className={`choice lesson-choice ${plan.id === planId ? "is-on" : ""}`}
-                  aria-pressed={plan.id === planId}
-                  onClick={() => setPlanId(plan.id)}
-                >
-                  {plan.title}
-                </button>
-              ))}
-            </div>
-            {choices.length === 0 ? <p className="lede">No lessons yet.</p> : null}
+            <Link className="top-link" href="/admin">Edit lessons</Link>
           </div>
           <h1>Who&apos;s learning today?</h1>
-          <p className="lede">
-            {selectedPlan
-              ? `This session stays on ${selectedPlan.title}. Pick a name to start.`
-              : "Pick a lesson, then a name."}
-          </p>
+          <p className="lede">Pick a name. Then choose a class, or start a new one.</p>
           {students.length === 0 ? <p className="lede">Loading the class list…</p> : null}
           <div className="name-grid">
             {students.map((student) => {
@@ -343,16 +333,14 @@ export function KidSession({
                   key={student.id}
                   type="button"
                   className="name-card"
-                  disabled={opening || !planId}
+                  disabled={opening}
                   style={{ ["--wash" as string]: look.wash, ["--ink-color" as string]: look.ink }}
-                  onClick={() => {
-                    if (planId) void openStudent(student.id, false, planId);
-                  }}
+                  onClick={() => void chooseStudent(student)}
                 >
                   <span className="mark" style={{ background: look.ink }}>{look.mark}</span>
                   <span>
                     <strong>{student.display_name}</strong>
-                    <span className="hint">{selectedPlan ? `Open ${selectedPlan.title}` : "Choose a lesson first"}</span>
+                    <span className="hint">Open their classes</span>
                   </span>
                 </button>
               );
@@ -369,58 +357,144 @@ export function KidSession({
     );
   }
 
-  const look = lookFor(board.student.slug);
+  const look = lookFor(learner.slug);
+  const score = board ? lessonScore(board) : null;
+
   return (
-    <main className="shell" style={{ ["--wash" as string]: look.wash, ["--ink-color" as string]: look.ink }}>
-      <aside className="rail">
-        <div className="rail-head">
-          <p className="eyebrow">Today&apos;s path</p>
-          <Link className="top-link" href="/admin">Lesson desk</Link>
-        </div>
-        <div className="who-pill">
-          <span className="mark" style={{ background: look.ink }}>{look.mark}</span>
-          <div>
-            <strong>{board.student.display_name}</strong>
-            <p className="lesson-name">{board.lesson_title}</p>
+    <main
+      className={`shell ${board ? "is-class" : "is-shelf"}`}
+      style={{ ["--wash" as string]: look.wash, ["--ink-color" as string]: look.ink }}
+    >
+      <aside className={`rail ${board ? "lesson-desk" : ""}`}>
+        <div className="desk-top">
+          <div className="rail-head">
+            <p className="eyebrow">{board ? "Lesson desk" : "Learner"}</p>
+            <Link className="top-link" href="/admin">Edit lessons</Link>
+          </div>
+          {score ? (
+            <div className="desk-score" aria-label={`Score so far ${score.earned} of ${score.possible}`}>
+              <p className="eyebrow">Score so far</p>
+              <p className="desk-score-value">{score.earned}</p>
+              <p className="quiet">of {score.possible} in {board?.lesson_title}</p>
+            </div>
+          ) : (
+            <p className="lede">Classes are on the right. Start a new one, or open a notebook you already began.</p>
+          )}
+          <div className="who-pill">
+            <span className="mark" style={{ background: look.ink }}>{look.mark}</span>
+            <div>
+              <strong>{learner.display_name}</strong>
+              <p className="lesson-name">{board ? board.lesson_title : "No class open"}</p>
+            </div>
           </div>
         </div>
-        {board.status === "completed" ? <p className="score pass">You finished this lesson.</p> : null}
-        <ol className="path">
-          {board.topics.map((topic) => (
-            <li key={topic.id} className="topic-block">
-              <h2>{topic.position}. {topic.title}</h2>
-              <ul className="path">
-                {topic.checkpoints.map((checkpoint) => (
-                  <CheckpointRow key={checkpoint.id} board={board} checkpoint={checkpoint} />
-                ))}
-              </ul>
-            </li>
-          ))}
-        </ol>
-        <div className="rail-actions">
-          <button type="button" className="ghost" onClick={() => setBoard(null)}>Switch learner</button>
-          <button type="button" className="ghost" onClick={() => void openStudent(board.student.id, true, board.lesson_plan_id)}>
-            New session
-          </button>
-        </div>
+        {board ? (
+          <div className="desk-goals">
+            <p className="eyebrow">Lesson goals</p>
+            <ul className="goal-list">
+              {board.topics.map((topic) => (
+                <li key={topic.id}>
+                  <strong>{topic.position}. {topic.title}</strong>
+                  <span>{topic.learning_goal}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="rail-actions">
+              <button type="button" className="ghost" onClick={() => void backToClasses()}>Classes</button>
+              <button type="button" className="ghost" onClick={() => { setLearner(null); setBoard(null); setMaking(false); }}>
+                Switch learner
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="rail-actions">
+            <button type="button" className="ghost" onClick={() => { setLearner(null); setMaking(false); }}>
+              Switch learner
+            </button>
+          </div>
+        )}
       </aside>
-      <section className="stage">
-        <div className="stage-head">
-          <h1>{board.lesson_title}</h1>
-          <p className="quiet">{board.status === "completed" ? "Finished" : "One step at a time"}</p>
-        </div>
-        <ChatPanel
-          key={board.id}
-          sessionId={board.id}
-          lessonStatus={board.status}
-          initialMessages={board.messages}
-          studentName={board.student.display_name}
-          wash={look.wash}
-          onTurn={() => {
-            void api<Board>(`/sessions/${board.id}/board`).then(setBoard).catch(() => undefined);
-          }}
-        />
-      </section>
+      {board ? (
+        <section className="stage">
+          <div className="stage-head">
+            <h1>{board.lesson_title}</h1>
+            <p className="quiet">{board.status === "completed" ? "Finished" : "One step at a time"}</p>
+          </div>
+          <ChatPanel
+            key={board.id}
+            sessionId={board.id}
+            lessonStatus={board.status}
+            initialMessages={board.messages}
+            studentName={board.student.display_name}
+            wash={look.wash}
+            onTurn={() => {
+              void api<Board>(`/sessions/${board.id}/board`).then(setBoard).catch(() => undefined);
+            }}
+          />
+        </section>
+      ) : (
+        <section className="stage shelf">
+          <div className="stage-head">
+            <h1>Classes</h1>
+            <p className="quiet">{learner.display_name}</p>
+          </div>
+          {making ? (
+            <div className="lesson-pick">
+              <p className="eyebrow">New class</p>
+              <p className="lede">Choose the lesson for this notebook.</p>
+              <div className="lesson-row" role="group" aria-label="Choose a lesson">
+                {choices.map((plan) => (
+                  <button
+                    key={plan.id}
+                    type="button"
+                    className="choice lesson-choice"
+                    disabled={opening}
+                    onClick={() => void startClass(plan.id)}
+                  >
+                    {plan.title}
+                  </button>
+                ))}
+              </div>
+              {choices.length === 0 ? <p className="lede">No lessons yet.</p> : null}
+              <div className="rail-actions">
+                <button type="button" className="ghost" onClick={() => setMaking(false)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div className="notebook-grid">
+              <button
+                type="button"
+                className="notebook notebook-new"
+                aria-label="New class"
+                disabled={opening}
+                onClick={() => setMaking(true)}
+              >
+                <span className="plus" aria-hidden="true">+</span>
+                <span>New class</span>
+              </button>
+              {notebooks.map((session) => (
+                <button
+                  key={session.id}
+                  type="button"
+                  className="notebook"
+                  disabled={opening}
+                  onClick={() => void openNotebook(session.id)}
+                >
+                  <strong>{session.lesson_title}</strong>
+                  <span className="notebook-meta">{classDate(session.updated_at)}</span>
+                  <span className="notebook-meta">{session.status === "completed" ? "Finished" : "In progress"}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {error ? (
+            <div className="banner" role="alert">
+              <p>{error}</p>
+              <button type="button" className="ghost" onClick={() => void backToClasses()}>Try again</button>
+            </div>
+          ) : null}
+        </section>
+      )}
     </main>
   );
 }

@@ -68,8 +68,8 @@ npm run dev --workspace web
 
 ## Try the lesson
 
-1. Open `/`, leave Fractions selected at the top (or pick Reading or Science), and choose Storm. The tutor greets Storm and starts the first checkpoint of that lesson. On Fractions that is a teach step about a pizza cut into 4 slices. It should not dump the rest of the lesson. A session stays on the lesson you picked.
-2. Answer the teach check, then the chocolate-bar practice, then the granola-bar quiz. Quiz scores show in the chat and on the path.
+1. Open `/` and choose Storm. On the right, open a class notebook or press + for a new class and pick Fractions, Reading, or Science. The tutor greets Storm and starts the first checkpoint of that lesson. On Fractions that is a teach step about a pizza cut into 4 slices. It should not dump the rest of the lesson. The lesson desk on the left shows the score so far at the top and the lesson goals at the bottom.
+2. Answer the teach check, then the chocolate-bar practice, then the granola-bar quiz. Quiz scores show in the chat and in the lesson-desk score.
 3. Open `/admin`, filter sessions to Storm, and open the session. The transcript and checkpoint scores are the rows FastAPI stored.
 4. Edit that checkpoint's tutor prompt and save. Start a new session from the kid page. The next turn uses the new prompt.
 
