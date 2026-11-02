@@ -666,9 +666,8 @@ export function KidSession({
   if (!learner) {
     return (
       <main className="ds-landing">
-        <nav className="ds-landing-links" aria-label="Site">
-          <Link href="/admin">Configure Lessons</Link>
-          <Link href="/viewchats">View Chats / Debug</Link>
+        <nav className="ds-landing-links" aria-label="Administration">
+          <Link href="/admin">Administration</Link>
         </nav>
         <section className="ds-landing-card">
           <BrandMark />
@@ -740,7 +739,6 @@ export function KidSession({
             </div>
           ) : null}
         </section>
-        <p className="ds-placeholder">PLACEHOLDER PAGE</p>
       </main>
     );
   }

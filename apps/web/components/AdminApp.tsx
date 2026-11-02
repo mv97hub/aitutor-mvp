@@ -1,10 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 
-import { BrandMark } from "@/components/BrandMark";
-import { DeskSwitch } from "@/components/DeskSwitch";
+import { AdminFrame } from "@/components/admin/AdminFrame";
 import { api } from "@/lib/api";
 import type {
   BeatOut,
@@ -232,12 +230,10 @@ export function AdminApp({
   }
 
   return (
-    <main className="ds-shell ds-desk">
-      <aside className="ds-side">
-        <div className="ds-logo">
-          <BrandMark />
-        </div>
-        <DeskSwitch current="admin" />
+    <AdminFrame
+      current="lessons"
+      sidebar={
+        <>
         <button type="button" className="ds-new" disabled={busy} onClick={() => void createCourse()}>
           <span aria-hidden="true">+</span>
           New course
@@ -301,12 +297,9 @@ export function AdminApp({
             );
           })}
         </ul>
-        <div className="ds-foot">
-          <Link className="ds-settings" href="/viewchats">View chats</Link>
-          <Link className="ds-settings" href="/">Kid session</Link>
-        </div>
-      </aside>
-      <section className="ds-work">
+        </>
+      }
+    >
         {error ? (
           <div className="banner" role="alert" style={{ margin: 18 }}>
             <p>{error}</p>
@@ -358,8 +351,7 @@ export function AdminApp({
             <p className="help">Import a course file, or add a course, then open a quest to edit its four beats.</p>
           </article>
         )}
-      </section>
-    </main>
+    </AdminFrame>
   );
 }
 
