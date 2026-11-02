@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { DeskSwitch } from "@/components/DeskSwitch";
 import { api } from "@/lib/api";
 import type {
   AdminCheckpoint,
@@ -98,6 +99,7 @@ export function AdminApp({
   return (
     <main className="ds-shell ds-desk">
       <aside className="ds-side">
+        <DeskSwitch current="admin" />
         <div className="ds-logo">
           <span className="ds-logo-name">Lesson desk</span>
         </div>

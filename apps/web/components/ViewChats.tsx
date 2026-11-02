@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { DeskSwitch } from "@/components/DeskSwitch";
 import { api } from "@/lib/api";
 import type { ModelPrompt, SessionDetail, SessionSummary, Student } from "@/lib/types";
 
@@ -17,21 +18,6 @@ function when(iso: string) {
 
 function messageOf(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
-}
-
-function PromptIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-      <path
-        d="M5.2 3.2 2.4 8l2.8 4.8M10.8 3.2 13.6 8l-2.8 4.8"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
 }
 
 function messageRole(message: unknown) {
@@ -57,6 +43,10 @@ function messageBody(message: unknown) {
       .join("\n");
   }
   return JSON.stringify(content, null, 2);
+}
+
+function isRequestNote(message: unknown) {
+  return messageRole(message) === "request";
 }
 
 export function ViewChats({ initialStudents, initialError }: { initialStudents: Student[]; initialError: string | null }) {
@@ -100,6 +90,7 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
   return (
     <main className="ds-shell ds-desk">
       <aside className="ds-side">
+        <DeskSwitch current="chats" />
         <div className="ds-logo">
           <span className="ds-logo-name">View chats</span>
         </div>
@@ -215,7 +206,7 @@ function PromptDialog({
       >
         <header>
           <div>
-            <h2 id="prompt-title">Prompt for this turn</h2>
+            <h2 id="prompt-title">View full prompt to debug</h2>
             <p>{subtitle}</p>
           </div>
           <button type="button" className="ghost" onClick={onClose}>Close</button>
@@ -227,15 +218,23 @@ function PromptDialog({
           <h3>System prompt</h3>
           <pre className="prompt-pre">{prompt.system_prompt}</pre>
           <h3>Messages sent to the model</h3>
-          {prompt.messages.length === 0 ? <p className="help">No messages were attached to this call.</p> : null}
+          {prompt.messages.filter((message) => !isRequestNote(message)).length === 0 ? (
+            <p className="help">No messages were attached to this call.</p>
+          ) : null}
           <ol className="prompt-messages">
-            {prompt.messages.map((message, index) => (
+            {prompt.messages.filter((message) => !isRequestNote(message)).map((message, index) => (
               <li key={`${prompt.id}-${index}`}>
                 <strong>{messageRole(message)}</strong>
                 <pre className="prompt-pre">{messageBody(message)}</pre>
               </li>
             ))}
           </ol>
+          {prompt.messages.filter(isRequestNote).map((message, index) => (
+            <div key={`${prompt.id}-request-${index}`}>
+              <h3>Also sent to the model</h3>
+              <pre className="prompt-pre">{messageBody(message)}</pre>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -292,11 +291,10 @@ function SessionView({ session }: { session: SessionDetail }) {
                 {turnPrompt ? (
                   <button
                     type="button"
-                    className="prompt-icon"
-                    aria-label="View the prompt for this turn"
+                    className="ds-debug"
                     onClick={() => setPrompt(turnPrompt)}
                   >
-                    <PromptIcon />
+                    View full prompt to debug
                   </button>
                 ) : null}
               </div>

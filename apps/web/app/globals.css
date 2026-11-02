@@ -1209,6 +1209,54 @@ body:has(.ds-shell) {
 
 a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
 
+.ds-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin: 8px 4px 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(38, 49, 72, 0.06);
+}
+
+.ds-switch a {
+  display: grid;
+  place-items: center;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  color: rgb(97, 102, 107);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.ds-switch a:hover { color: rgb(15, 17, 21); }
+
+.ds-switch a[aria-current="page"] {
+  background: #fff;
+  color: rgb(15, 17, 21);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+}
+
+.ds-debug {
+  flex: none;
+  max-width: 9.5rem;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgb(97, 102, 107);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: right;
+}
+
+.ds-debug:hover { background: rgba(38, 49, 72, 0.06); color: rgb(15, 17, 21); }
+
 .ds-desk .ds-foot { display: grid; gap: 2px; }
 
 .ds-work {
