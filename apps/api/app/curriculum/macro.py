@@ -840,7 +840,7 @@ def macro_course() -> dict:
                             ),
                             mv(
                                 "name",
-                                "Connect the rate-rise chain to the curve: higher rates cut interest-sensitive spending, AD shifts left, and that is a move along the Phillips curve, not the supply-shock shift.",
+                                "A rate rise makes loans more expensive, so spending that depends on borrowing falls and aggregate demand shifts left. That leftward shift is a move along the short-run Phillips curve. A supply shock is a different event: it shifts the whole curve, and inflation and unemployment get worse together.",
                                 LINK,
                                 "Which spending cares about the price of a loan?",
                                 "A more expensive loan is a gate on a factory and on a financed purchase.",

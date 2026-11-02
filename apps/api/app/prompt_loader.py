@@ -165,6 +165,8 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
     finished = current is None
     if source is None and beats:
         source = beats[-1]
+    engage = next((item for item in beats if item.role == "engage"), None)
+    opening_idea = (engage.prompt if engage is not None else "").strip()
     held = (
         source is not None
         and not finished
@@ -196,6 +198,7 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             learning_goal=goal,
             success_criterion=criterion,
             requires_teach_back=bool(quest.requires_teach_back),
+            opening_idea=opening_idea,
         )
         attempt_count = 0
     else:
@@ -223,6 +226,7 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             learning_goal=goal,
             success_criterion=criterion,
             requires_teach_back=bool(quest.requires_teach_back),
+            opening_idea=opening_idea,
         )
         attempt_count = 0 if finished or current is None else _failed(tutor_session, current.id)
     interests = tuple(str(item) for item in (student.interests or []) if str(item).strip())

@@ -129,12 +129,13 @@ def test_prompt_includes_all_seven_layers_and_keeps_tutor_settings_apart() -> No
     assert "Growth-mindset praise only" in text
     assert "one self-explanation line" in text
     assert "No live Leitner scheduling" in text
-    assert "do not state the answer yet" in text.lower()
+    assert "stating the answer that passes the move is not" in text.lower()
     assert "worked answer" not in text.lower()
     assert "At most a few sentences" not in text
-    assert "Ask one question per turn." in text
-    assert "A nudge or a check is short, often one or two sentences." in text
-    assert "may be more than one sentence" in text
+    assert "Teach, then ask." in text
+    assert "One question per turn, and it comes last." in text
+    assert "student could retell" in text
+    assert "Do not say hint to the student." in text
     assert "Do not ask a second question." in text
     assert "Do not teach the next move." in text
     assert "King Tarquin abused solo lifetime power" in text
@@ -173,9 +174,9 @@ def test_struggle_window_then_worked_answer() -> None:
     )
     text = assemble(*layers).system_prompt
     assert "The struggle window is over" in text
-    assert "worked answer" in text.lower()
+    assert "why the worked answer fits" in text.lower()
     assert "Set advance to true" in text
-    assert "do not state the answer yet" not in text.lower()
+    assert "stating the answer that passes the move is not" not in text.lower()
 
 
 def test_kickoff_states_the_goal_and_not_later_answers() -> None:
@@ -190,6 +191,8 @@ def test_kickoff_states_the_goal_and_not_later_answers() -> None:
     )
     text = assemble(*layers, kickoff=True).system_prompt
     assert "what finished work looks like" in text
+    assert "short teaching of the first idea" in text
+    assert "Do not ask them to pick an answer." in text
     assert "Do not invent a different topic" in text
     assert "Two consuls can veto each other, which stops a new king and can deadlock." in text
     assert "Done looks like:" in text
@@ -224,7 +227,8 @@ def test_opening_hold_keeps_the_choice_out_of_the_kickoff() -> None:
     assert "pottery" not in text.lower()
     assert "Which of these are archaeological clues" not in text
     reply = assemble(*layers, hold_widget=True).system_prompt
-    assert "still the opening exchange" in reply
+    assert "not on screen yet" in reply
+    assert "This reply teaches the move." in reply
     assert "Invite them to choose" not in reply
     assert "pottery" not in reply.lower()
 
@@ -269,19 +273,36 @@ def test_a_failed_try_gets_a_fuller_explanation() -> None:
         zpd="support",
     )
     text = assemble(*layers).system_prompt
-    assert "The student is stuck." in text
-    assert "why the attempt missed" in text
+    assert "The student missed." in text
+    assert "what they tried" in text
+    assert "what the idea actually is" in text
+    assert "Do not give the worked answer yet." in text
+    assert "Do not say hint to the student." in text
     assert "Do not ask a second question." in text
     assert "Do not teach the next move." in text
-    assert "worked answer" not in text.lower()
+    assert "The struggle window is over" not in text
 
 
-def test_name_may_take_more_than_one_sentence() -> None:
+def test_engage_and_name_teach_before_the_question() -> None:
     layers = list(_layers())
-    layers[0] = _beat(beat_role="name")
-    text = assemble(*layers).system_prompt
-    assert "not a separate student task" in text.lower()
-    assert "More than one sentence is allowed" in text
+    layers[0] = _beat(
+        beat_role="engage",
+        prompt="Two consuls can each veto, which stops a king and can also deadlock.",
+    )
+    engage = assemble(*layers).system_prompt
+    assert "Expand this idea" in engage
+    assert "Do not turn it into a quiz stem." in engage
+    assert "The one question comes last." in engage
+    assert "No choice box." in engage
+    assert "Two consuls can each veto" in engage
+    layers[0] = _beat(
+        beat_role="name",
+        prompt="A veto stops a king, and the same veto can freeze a decision.",
+    )
+    name = assemble(*layers).system_prompt
+    assert "Name teaches, then asks." in name
+    assert "set advance to true" in name.lower()
+    assert "Do not start the next move." in name
 
 
 def test_age_band_defaults() -> None:

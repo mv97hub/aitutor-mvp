@@ -384,7 +384,19 @@ function ChatPanel({
   const endRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
   const awaitingReply = useRef(false);
+  const moveBaseline = useRef<{ id: string; assistants: number } | null>(null);
   const busy = status === "submitted" || status === "streaming";
+  const assistants = tutorTurns(messages);
+  if (block && moveBaseline.current?.id !== block.id) {
+    moveBaseline.current = {
+      id: block.id,
+      assistants: block.quiz ? Math.max(0, assistants - 1) : assistants,
+    };
+  }
+  const tutorSpokeForMove =
+    block != null &&
+    moveBaseline.current?.id === block.id &&
+    assistants > moveBaseline.current.assistants;
 
   function growDraft(element: HTMLTextAreaElement) {
     element.style.height = "auto";
@@ -434,7 +446,7 @@ function ChatPanel({
           lessonStatus !== "completed" &&
           !quizLocked &&
           (block.kind === "try" || block.kind === "show") &&
-          openingExchangeDone(messages) ? (
+          tutorSpokeForMove ? (
             <ChoiceWidget
               key={block.id}
               quiz={block.quiz}
@@ -519,15 +531,8 @@ function messageText(message: UIMessage) {
     .trim();
 }
 
-function openingExchangeDone(messages: UIMessage[]) {
-  let users = 0;
-  let assistants = 0;
-  for (const message of messages) {
-    if (!messageText(message)) continue;
-    if (message.role === "user") users += 1;
-    else if (message.role === "assistant") assistants += 1;
-  }
-  return users >= 2 && assistants >= 2;
+function tutorTurns(messages: UIMessage[]) {
+  return messages.filter((message) => message.role === "assistant" && messageText(message)).length;
 }
 
 function isTyping(element: HTMLElement) {

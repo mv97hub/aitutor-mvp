@@ -388,7 +388,7 @@ def apply_turn_score(
             "graded_by": "opening",
             "passed": False,
             "score": 0,
-            "feedback": "The opening discussion is still going.",
+            "feedback": "This move is still being taught.",
         }
     if beat.role == "name":
         recorded = record_result(
@@ -457,7 +457,7 @@ def apply_turn_score(
     score = round(100 * earned / total) if total else 0
     passed = score >= PASS_SCORE
     tier = hint_tier_for(failed_attempts(tutor_session, beat.id))
-    feedback = "That meets this move." if passed else "Not yet. Use the hint and try again."
+    feedback = "That meets this move." if passed else "Not yet. The idea still needs another try."
     if reveal and not passed:
         feedback = "The struggle window is over. A worked answer can move this on."
     recorded = record_result(
@@ -501,9 +501,9 @@ def blank_beats(criterion: list[dict] | None = None) -> list[dict]:
         {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
     ]
     roles = (
-        ("engage", "understand", "Ask one short puzzle that opens this goal. No lecture."),
+        ("engage", "understand", "The idea has one fact, a picture the student can retell, and a reason it matters for this goal."),
         ("try", "apply", "One short attempt before the explanation."),
-        ("name", "understand", "Connect their try to the learning goal in a few clear sentences."),
+        ("name", "understand", "The try and the goal are the same idea: name the fact and why it matters."),
         ("show", "analyze", "Ask for the evidence in the success criterion."),
     )
     beats = []

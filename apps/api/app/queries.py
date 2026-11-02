@@ -75,43 +75,46 @@ def latest_result(tutor_session: TutorSession, beat_id: uuid.UUID) -> BeatResult
     return max(matches, key=lambda result: result.seq)
 
 
-def _spoken(tutor_session: TutorSession) -> tuple[int, int]:
-    users = 0
-    assistants = 0
+def tutor_has_spoken_for_move(tutor_session: TutorSession, beat: Beat) -> bool:
+    """True after a tutor reply that belongs to this move.
+
+    The reply that finishes the previous move is stored after that move's result,
+    so it does not count. The next student message, then a tutor reply, does.
+    On the first move, the opening lesson is that reply.
+    """
+    beats = ordered_beats(tutor_session.quest)
+    index = next((i for i, item in enumerate(beats) if item.id == beat.id), None)
+    if index is None:
+        return False
+    if index == 0:
+        return any(
+            message.role == "assistant" and (message.content or "").strip()
+            for message in tutor_session.messages
+        )
+    previous = latest_result(tutor_session, beats[index - 1].id)
+    if previous is None or previous.created_at is None:
+        return False
+    heard_student = False
     for message in tutor_session.messages:
         text = (message.content or "").strip()
-        if not text:
+        if not text or message.created_at is None or message.created_at <= previous.created_at:
             continue
         if message.role == "user":
-            users += 1
-        elif message.role == "assistant":
-            assistants += 1
-    return users, assistants
-
-
-def opening_exchange_done(tutor_session: TutorSession) -> bool:
-    """Kickoff plus the student's reply, and the tutor's answer to that reply."""
-    users, assistants = _spoken(tutor_session)
-    return users >= 2 and assistants >= 2
+            heard_student = True
+        elif message.role == "assistant" and heard_student:
+            return True
+    return False
 
 
 def choice_widget_visible(tutor_session: TutorSession, beat: Beat) -> bool:
-    """The choice box waits until Try, after Engage and the opening exchange.
-
-    A Show quiz is the last check. It is not the first thing on screen.
-    """
+    """The choice box is the check. It waits until Try or Show has been taught."""
     quiz = beat.widget if isinstance(beat.widget, dict) else None
-    if not quiz or beat.role == "engage":
+    if not quiz or beat.role not in {"try", "show"}:
         return False
     result = latest_result(tutor_session, beat.id)
     if result is not None and isinstance(result.choice, dict) and result.choice.get("ids"):
         return True
-    beats = ordered_beats(tutor_session.quest)
-    if beats and beat.id != beats[0].id:
-        return beat.role in {"try", "show"}
-    if beat.role not in {"try", "show"}:
-        return False
-    return opening_exchange_done(tutor_session)
+    return tutor_has_spoken_for_move(tutor_session, beat)
 
 
 def next_position(values: list[int]) -> int:
