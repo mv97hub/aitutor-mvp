@@ -400,12 +400,6 @@ h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1.05; }
 .stage > .banner,
 .stage > .block-map { flex: 0 0 auto; }
 
-.stage > .widget {
-  flex: 0 1 auto;
-  min-height: 0;
-  overflow: auto;
-  max-height: 38%;
-}
 .widget textarea { min-height: 56px; }
 
 .block-map {
@@ -445,26 +439,39 @@ h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1.05; }
 }
 
 .widget {
-  margin-top: 8px;
-  padding: 12px;
-  border: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  max-width: min(680px, 100%);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.widget-prompt {
+  margin: 0;
+  padding: 12px 14px;
   border-radius: 16px;
+  border: 1px solid var(--line);
   background: white;
 }
 
-.widget-prompt { margin: 6px 0 10px; }
 .choice-list, .order-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .widget-choice, .order-list li {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px;
+  margin: 0;
+  padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 16px;
+  background: white;
+  font-weight: 450;
 }
 .widget-choice.is-on { border-color: var(--teal); background: #f3fbfa; }
 .widget-choice input { width: auto; }
+.widget .button { justify-self: start; }
 
 .top-links { display: flex; gap: 12px; }
 .age-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

@@ -168,7 +168,7 @@ function ChatPanel({
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
-  }, [messages, status]);
+  }, [messages, status, block?.id]);
 
   return (
     <>
@@ -176,6 +176,17 @@ function ChatPanel({
         {messages.map((message) => (
           <MessageView key={message.id} message={message} studentName={studentName} />
         ))}
+        {block?.quiz && lessonStatus !== "completed" && !quizLocked ? (
+          <ChoiceWidget
+            key={block.id}
+            quiz={block.quiz}
+            busy={busy}
+            onSubmit={(choice, explanation, transcript) => {
+              clearError();
+              void sendMessage({ text: transcript }, { body: { widget: { choice, explanation } } });
+            }}
+          />
+        ) : null}
         <div ref={endRef} />
       </div>
       {busy ? <p className="typing">Tutor is writing…</p> : null}
@@ -195,17 +206,6 @@ function ChatPanel({
             Try again
           </button>
         </div>
-      ) : null}
-      {block?.quiz && lessonStatus !== "completed" && !quizLocked ? (
-        <ChoiceWidget
-          key={block.id}
-          quiz={block.quiz}
-          busy={busy}
-          onSubmit={(choice, explanation, transcript) => {
-            clearError();
-            void sendMessage({ text: transcript }, { body: { widget: { choice, explanation } } });
-          }}
-        />
       ) : null}
       <form
         className="composer"
