@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aitutor
+      POSTGRES_PASSWORD: aitutor
+      POSTGRES_DB: aitutor
+    ports:
+      - "5432:5432"
+    volumes:
+      - aitutor_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aitutor -d aitutor"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  aitutor_pg:
