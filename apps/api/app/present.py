@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 from app.flow import checkpoint_state, failed_attempts
-from app.models import Checkpoint, CheckpointResult, LessonPlan, Message, Session as TutorSession, Topic
+from app.models import (
+    Checkpoint,
+    CheckpointResult,
+    LessonPlan,
+    Message,
+    ModelPrompt,
+    Session as TutorSession,
+    Topic,
+)
 from app.queries import flat_checkpoints, locate, latest_result
 from app.schemas import (
     AdminCheckpoint,
@@ -24,6 +32,7 @@ from app.schemas import (
     QuizOut,
     ResultOut,
     RubricRowOut,
+    ModelPromptOut,
     SessionAdminOut,
     SessionSummary,
     StudentOut,
@@ -39,6 +48,18 @@ def student_out(student) -> StudentOut:
         slug=student.slug,
         display_name=student.display_name,
         age=student.age,
+    )
+
+
+def prompt_out(row: ModelPrompt) -> ModelPromptOut:
+    return ModelPromptOut(
+        id=row.id,
+        session_id=row.session_id,
+        seq=row.seq,
+        system_prompt=row.system_prompt,
+        messages=list(row.messages or []),
+        model=row.model,
+        created_at=row.created_at,
     )
 
 

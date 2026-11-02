@@ -13,6 +13,7 @@ from app.models import (
     CheckpointResult,
     LessonPlan,
     Message,
+    ModelPrompt,
     Session as TutorSession,
     Student,
     Topic,
@@ -201,6 +202,28 @@ def append_message(
     tutor_session.updated_at = now()
     db.flush()
     return message
+
+
+def append_model_prompt(
+    db: Session,
+    tutor_session: TutorSession,
+    system_prompt: str,
+    messages: list,
+    model: str,
+) -> ModelPrompt:
+    seq = db.scalar(
+        select(func.max(ModelPrompt.seq)).where(ModelPrompt.session_id == tutor_session.id)
+    )
+    row = ModelPrompt(
+        session_id=tutor_session.id,
+        seq=(seq or 0) + 1,
+        system_prompt=system_prompt,
+        messages=messages,
+        model=model.strip(),
+    )
+    db.add(row)
+    db.flush()
+    return row
 
 
 def record_result(

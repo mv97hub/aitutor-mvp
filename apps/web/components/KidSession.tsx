@@ -10,18 +10,7 @@ import { api } from "@/lib/api";
 import { KICKOFF } from "@/lib/kickoff";
 import type { Board, CurrentBlock, LessonPlanSummary, SessionSummary, Student, StoredMessage } from "@/lib/types";
 
-const LOOKS: Record<string, { ink: string; wash: string; mark: string }> = {
-  "iron-man": { ink: "#7c2d12", wash: "#f6d7a8", mark: "IM" },
-  storm: { ink: "#3d3470", wash: "#ddd6f3", mark: "ST" },
-  "spider-man": { ink: "#8f1d1d", wash: "#f6cfc8", mark: "SM" },
-  wolverine: { ink: "#8a5b00", wash: "#f6e3a8", mark: "W" },
-};
-
 const greeted = new Set<string>();
-
-function lookFor(slug: string) {
-  return LOOKS[slug] ?? { ink: "#0f6e6b", wash: "#e7f3f2", mark: slug.slice(0, 1).toUpperCase() };
-}
 
 function toUiMessages(messages: StoredMessage[]): UIMessage[] {
   return messages.map((message) => ({
@@ -90,8 +79,7 @@ function MessageView({ message, studentName }: { message: UIMessage; studentName
   });
   if (pieces.every((piece) => piece == null)) return null;
   return (
-    <article className={`bubble ${message.role}`}>
-      <span className="who">{message.role === "user" ? studentName : "Tutor"}</span>
+    <article className={`bubble ${message.role}`} aria-label={message.role === "user" ? studentName : "Tutor"}>
       {pieces}
     </article>
   );
@@ -118,12 +106,41 @@ function classDate(value: string) {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+function SendIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M8 13V3M8 3 3.5 7.5M8 3l4.5 4.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M12.6 3.4l-1.2 1.2M4.6 11.4l-1.2 1.2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function ChatPanel({
   sessionId,
   lessonStatus,
   initialMessages,
   studentName,
-  wash,
   block,
   quizLocked,
   onTurn,
@@ -132,7 +149,6 @@ function ChatPanel({
   lessonStatus: string;
   initialMessages: StoredMessage[];
   studentName: string;
-  wash: string;
   block: CurrentBlock | null;
   quizLocked: boolean;
   onTurn: () => void;
@@ -150,7 +166,13 @@ function ChatPanel({
   });
   const [input, setInput] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
+  const draftRef = useRef<HTMLTextAreaElement>(null);
   const busy = status === "submitted" || status === "streaming";
+
+  function growDraft(element: HTMLTextAreaElement) {
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 336)}px`;
+  }
 
   useEffect(() => {
     if (seed.length > 0 || lessonStatus === "completed") return;
@@ -172,24 +194,26 @@ function ChatPanel({
 
   return (
     <>
-      <div className="transcript" role="log" aria-live="polite" aria-relevant="additions">
-        {messages.map((message) => (
-          <MessageView key={message.id} message={message} studentName={studentName} />
-        ))}
-        {block?.quiz && lessonStatus !== "completed" && !quizLocked ? (
-          <ChoiceWidget
-            key={block.id}
-            quiz={block.quiz}
-            busy={busy}
-            onSubmit={(choice, explanation, transcript) => {
-              clearError();
-              void sendMessage({ text: transcript }, { body: { widget: { choice, explanation } } });
-            }}
-          />
-        ) : null}
-        <div ref={endRef} />
+      <div className="ds-scroll" role="log" aria-live="polite" aria-relevant="additions">
+        <div className="ds-column">
+          {messages.map((message) => (
+            <MessageView key={message.id} message={message} studentName={studentName} />
+          ))}
+          {block?.quiz && lessonStatus !== "completed" && !quizLocked ? (
+            <ChoiceWidget
+              key={block.id}
+              quiz={block.quiz}
+              busy={busy}
+              onSubmit={(choice, explanation, transcript) => {
+                clearError();
+                void sendMessage({ text: transcript }, { body: { widget: { choice, explanation } } });
+              }}
+            />
+          ) : null}
+          <div ref={endRef} />
+        </div>
       </div>
-      {busy ? <p className="typing">Tutor is writing…</p> : null}
+      {busy ? <p className="ds-typing">Tutor is writing…</p> : null}
       {error ? (
         <div className="banner" role="alert">
           <p>{error.message}</p>
@@ -200,6 +224,7 @@ function ChatPanel({
               clearError();
               const text = input.trim() || KICKOFF;
               setInput("");
+              if (draftRef.current) draftRef.current.style.height = "auto";
               void sendMessage({ text });
             }}
           >
@@ -208,28 +233,44 @@ function ChatPanel({
         </div>
       ) : null}
       <form
-        className="composer"
+        className="ds-composer-seat"
         onSubmit={(event) => {
           event.preventDefault();
           const text = input.trim();
           if (!text || busy) return;
           clearError();
           setInput("");
+          if (draftRef.current) draftRef.current.style.height = "auto";
           void sendMessage({ text });
         }}
       >
-        <input
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          placeholder="Type your answer"
-          aria-label="Your answer"
-          disabled={busy}
-          maxLength={2000}
-          style={{ background: wash }}
-        />
-        <button className="button" type="submit" disabled={busy || input.trim().length === 0}>
-          Send
-        </button>
+        <div className="ds-card">
+          <textarea
+            ref={draftRef}
+            className="ds-draft"
+            value={input}
+            rows={1}
+            onChange={(event) => {
+              setInput(event.target.value);
+              growDraft(event.target);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="Message"
+            aria-label="Your answer"
+            disabled={busy}
+            maxLength={2000}
+          />
+          <div className="ds-card-row">
+            <button className="ds-send" type="submit" aria-label="Send" disabled={busy || input.trim().length === 0}>
+              <SendIcon />
+            </button>
+          </div>
+        </div>
       </form>
     </>
   );
@@ -264,7 +305,25 @@ export function KidSession({
   const [draftName, setDraftName] = useState("");
   const [draftAge, setDraftAge] = useState("");
   const [savingChild, setSavingChild] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef<HTMLDivElement>(null);
   const choices = startablePlans(plans, learner);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    function onPointer(event: PointerEvent) {
+      if (!settingsRef.current?.contains(event.target as Node)) setSettingsOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setSettingsOpen(false);
+    }
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [settingsOpen]);
 
   async function loadNotebooks(studentId: string) {
     const rows = await api<SessionSummary[]>(`/sessions?student_id=${studentId}`);
@@ -446,142 +505,161 @@ export function KidSession({
     );
   }
 
-  const look = lookFor(learner.slug);
-  const score = board ? lessonScore(board) : null;
+  const score = board && !making ? lessonScore(board) : null;
+  const crumb = board && !making ? board.lesson_title : making ? "New class" : "Classes";
 
   return (
-    <main
-      className={`shell ${board ? "is-class" : "is-shelf"}`}
-      style={{ ["--wash" as string]: look.wash, ["--ink-color" as string]: look.ink }}
-    >
-      <aside className="rail class-rail">
-        <div className="rail-head">
-          <p className="eyebrow">Classes</p>
-          <Link className="top-link" href="/admin">Edit lessons</Link>
+    <main className="ds-shell">
+      <aside className="ds-side">
+        <div className="ds-logo">
+          <span className="ds-logo-name">{learner.display_name}</span>
         </div>
-        <div className="who-pill">
-          <span className="mark" style={{ background: look.ink }}>{look.mark}</span>
-          <div>
-            <strong>{learner.display_name}</strong>
-            <p className="lesson-name">
-              {board && !making ? board.lesson_title : learner.age == null ? "No class open" : `Age ${learner.age}`}
-            </p>
-          </div>
-        </div>
-        {score ? (
-          <p className="side-score" aria-label={`Score so far ${score.earned} of ${score.possible}`}>
-            Score so far <strong>{score.earned}</strong>
-            <span> of {score.possible}</span>
-          </p>
-        ) : null}
-        <ul className="class-list" aria-label="This child's classes">
-          <li>
-            <button
-              type="button"
-              className={`class-row class-row-new ${making ? "is-on" : ""}`}
-              disabled={opening}
-              onClick={() => setMaking(true)}
-            >
-              + New class
-            </button>
-          </li>
-          {notebooks.length === 0 ? <li className="quiet">No classes yet.</li> : null}
+        <button
+          type="button"
+          className={`ds-new ${making ? "is-on" : ""}`}
+          disabled={opening}
+          onClick={() => setMaking(true)}
+        >
+          <span aria-hidden="true">+</span>
+          New class
+        </button>
+        <ul className="ds-list" aria-label="This child's classes">
+          {notebooks.length === 0 ? <li className="ds-quiet">No classes yet.</li> : null}
           {notebooks.map((session) => (
             <li key={session.id}>
               <button
                 type="button"
-                className={`class-row ${board?.id === session.id && !making ? "is-on" : ""}`}
+                className={`ds-session ${board?.id === session.id && !making ? "is-on" : ""}`}
                 disabled={opening}
                 onClick={() => void openNotebook(session.id)}
               >
-                <strong>{session.lesson_title}</strong>
-                <span>{classDate(session.updated_at)} · {session.status === "completed" ? "Finished" : "In progress"}</span>
+                <span className="ds-session-title">{session.lesson_title}</span>
+                <span className="ds-session-time">{classDate(session.updated_at)}</span>
               </button>
             </li>
           ))}
         </ul>
-        {board && !making ? (
-          <div className="desk-goals">
-            <p className="eyebrow">Lesson goals</p>
-            <ul className="goal-list">
-              {board.topics.map((topic) => (
-                <li key={topic.id}>
-                  <strong>{topic.position}. {topic.title}</strong>
-                  <span>{topic.learning_goal}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        <div className="rail-actions">
-          <button type="button" className="ghost" onClick={() => { setLearner(null); setBoard(null); setMaking(false); }}>
-            Switch child
+        <div className="ds-foot" ref={settingsRef}>
+          {settingsOpen ? (
+            <div className="ds-menu" role="menu">
+              <p className="ds-menu-name">
+                {learner.display_name}
+                {learner.age == null ? "" : ` · age ${learner.age}`}
+              </p>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setSettingsOpen(false);
+                  setLearner(null);
+                  setBoard(null);
+                  setMaking(false);
+                }}
+              >
+                Switch child
+              </button>
+              <Link role="menuitem" href="/admin" onClick={() => setSettingsOpen(false)}>
+                Edit lessons
+              </Link>
+              {board && !making ? (
+                <div className="ds-menu-goals">
+                  <p>Lesson goals</p>
+                  <ul>
+                    {board.topics.map((topic) => (
+                      <li key={topic.id}>
+                        <strong>{topic.position}. {topic.title}</strong>
+                        <span>{topic.learning_goal}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <button
+            type="button"
+            className="ds-settings"
+            aria-expanded={settingsOpen}
+            aria-haspopup="menu"
+            onClick={() => setSettingsOpen((open) => !open)}
+          >
+            <GearIcon />
+            Settings
           </button>
         </div>
       </aside>
-      {board && !making ? (
-        <section className="stage">
-          <div className="stage-head">
-            <h1>{board.lesson_title}</h1>
-            <p className="quiet">{board.status === "completed" ? "Finished" : board.current_block?.objective || "One step at a time"}</p>
+      <section className="ds-stage">
+        <header className="ds-header">
+          <div className="ds-crumbs">
+            <span className="ds-crumb">{learner.display_name}</span>
+            <span className="ds-crumb-sep" aria-hidden="true">/</span>
+            <span className="ds-crumb is-current">{crumb}</span>
           </div>
-          <BlockStepper steps={board.steps ?? []} />
-          <ChatPanel
-            key={board.id}
-            sessionId={board.id}
-            lessonStatus={board.status}
-            initialMessages={board.messages}
-            studentName={board.student.display_name}
-            wash={look.wash}
-            block={board.current_block}
-            quizLocked={
-              board.topics
-                .flatMap((topic) => topic.checkpoints)
-                .find((checkpoint) => checkpoint.id === board.current_checkpoint_id)?.latest_result?.passed === true
-            }
-            onTurn={() => {
-              void api<Board>(`/sessions/${board.id}/board`).then(setBoard).catch(() => undefined);
-            }}
-          />
-        </section>
-      ) : (
-        <section className="stage shelf">
-          <div className="stage-head">
-            <h1>{making ? "New class" : "Pick a class"}</h1>
-            <p className="quiet">{learner.display_name}</p>
-          </div>
-          {making ? (
-            <div className="lesson-pick">
-              <p className="lede">Choose the lesson. Your other classes stay in the list.</p>
-              <div className="lesson-row" role="group" aria-label="Choose a lesson">
-                {choices.map((plan) => (
-                  <button
-                    key={plan.id}
-                    type="button"
-                    className="choice lesson-choice"
-                    disabled={opening}
-                    onClick={() => void startClass(plan.id)}
-                  >
-                    {plan.title}
-                  </button>
-                ))}
-              </div>
-              {choices.length === 0 ? <p className="lede">No lessons match this age.</p> : null}
-              <div className="rail-actions">
-                <button type="button" className="ghost" onClick={() => setMaking(false)}>Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <p className="lede">Choose a class from the list, or start a new one.</p>
-          )}
-          {error ? (
-            <div className="banner" role="alert">
-              <p>{error}</p>
-              <button type="button" className="ghost" onClick={() => void backToClasses()}>Try again</button>
-            </div>
+          {score ? (
+            <span className="ds-score" aria-label={`Score so far ${score.earned} of ${score.possible}`}>
+              {score.earned} / {score.possible}
+            </span>
           ) : null}
-        </section>
-      )}
+          {board && !making ? (
+            <p className="ds-objective">
+              {board.status === "completed" ? "Finished" : board.current_block?.objective || "One step at a time"}
+            </p>
+          ) : null}
+        </header>
+        {board && !making ? (
+          <>
+            <div className="ds-steps">
+              <BlockStepper steps={board.steps ?? []} />
+            </div>
+            <ChatPanel
+              key={board.id}
+              sessionId={board.id}
+              lessonStatus={board.status}
+              initialMessages={board.messages}
+              studentName={board.student.display_name}
+              block={board.current_block}
+              quizLocked={
+                board.topics
+                  .flatMap((topic) => topic.checkpoints)
+                  .find((checkpoint) => checkpoint.id === board.current_checkpoint_id)?.latest_result?.passed === true
+              }
+              onTurn={() => {
+                void api<Board>(`/sessions/${board.id}/board`).then(setBoard).catch(() => undefined);
+              }}
+            />
+          </>
+        ) : making ? (
+          <div className="ds-picker">
+            <h1>New class</h1>
+            <p>Choose a lesson. Other classes stay in the list.</p>
+            <div className="ds-lesson-list" role="group" aria-label="Choose a lesson">
+              {choices.map((plan) => (
+                <button
+                  key={plan.id}
+                  type="button"
+                  className="ds-lesson"
+                  disabled={opening}
+                  onClick={() => void startClass(plan.id)}
+                >
+                  {plan.title}
+                </button>
+              ))}
+            </div>
+            {choices.length === 0 ? <p>No lessons match this age.</p> : null}
+            <button type="button" className="ds-text" onClick={() => setMaking(false)}>Cancel</button>
+          </div>
+        ) : (
+          <div className="ds-empty">
+            <p>Choose a class, or start a new one.</p>
+          </div>
+        )}
+        {error ? (
+          <div className="banner" role="alert">
+            <p>{error}</p>
+            <button type="button" className="ghost" onClick={() => void backToClasses()}>Try again</button>
+          </div>
+        ) : null}
+      </section>
     </main>
   );
 }

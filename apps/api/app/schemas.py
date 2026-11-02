@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -361,3 +361,19 @@ class TurnScoreIn(BaseModel):
     misconception: str | None = None
     hint_tier: Literal["nudge", "analogy", "scaffold"] = "nudge"
     advance: bool = False
+
+
+class ModelPromptIn(BaseModel):
+    system_prompt: str = Field(min_length=1)
+    messages: list[Any] = Field(default_factory=list)
+    model: str = Field(default="", max_length=120)
+
+
+class ModelPromptOut(BaseModel):
+    id: UUID
+    session_id: UUID
+    seq: int
+    system_prompt: str
+    messages: list[Any]
+    model: str
+    created_at: datetime

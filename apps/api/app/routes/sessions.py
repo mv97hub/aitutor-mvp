@@ -5,9 +5,26 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
-from app.flow import advance, append_message, apply_turn_score, grade_widget, open_session, record_result
+from app.flow import (
+    advance,
+    append_message,
+    append_model_prompt,
+    apply_turn_score,
+    grade_widget,
+    open_session,
+    record_result,
+)
+from app.models import ModelPrompt
 from app.models import Session as TutorSession
-from app.present import board, context_out, current_step, message_out, session_admin, session_summary
+from app.present import (
+    board,
+    context_out,
+    current_step,
+    message_out,
+    prompt_out,
+    session_admin,
+    session_summary,
+)
 from app.queries import load_session
 from app.schemas import (
     BoardOut,
@@ -15,6 +32,8 @@ from app.schemas import (
     CurrentStepOut,
     MessageIn,
     MessageOut,
+    ModelPromptIn,
+    ModelPromptOut,
     ResultIn,
     SessionAdminOut,
     SessionOpen,
@@ -103,6 +122,30 @@ def grade_widget_route(
 ) -> dict:
     tutor_session = load_session(db, session_id)
     return grade_widget(db, tutor_session, body.choice, body.explanation)
+
+
+@router.get("/sessions/{session_id}/model-prompts", response_model=list[ModelPromptOut])
+def list_model_prompts(
+    session_id: UUID, db: Session = Depends(get_db)
+) -> list[ModelPromptOut]:
+    tutor_session = load_session(db, session_id)
+    rows = db.scalars(
+        select(ModelPrompt)
+        .where(ModelPrompt.session_id == tutor_session.id)
+        .order_by(ModelPrompt.seq)
+    ).all()
+    return [prompt_out(row) for row in rows]
+
+
+@router.post("/sessions/{session_id}/model-prompts", response_model=ModelPromptOut)
+def create_model_prompt(
+    session_id: UUID, body: ModelPromptIn, db: Session = Depends(get_db)
+) -> ModelPromptOut:
+    tutor_session = load_session(db, session_id)
+    row = append_model_prompt(
+        db, tutor_session, body.system_prompt, list(body.messages), body.model
+    )
+    return prompt_out(row)
 
 
 @router.post("/sessions/{session_id}/turn-score")

@@ -42,6 +42,16 @@ function textOf(message: UIMessage): string {
     .trim();
 }
 
+function jsonSafe(value: unknown): unknown {
+  return JSON.parse(
+    JSON.stringify(value, (_key, item: unknown) => {
+      if (typeof item === "bigint") return item.toString();
+      if (item instanceof Uint8Array) return Buffer.from(item).toString("base64");
+      return item;
+    }),
+  );
+}
+
 export async function POST(req: Request) {
   let body: { messages?: UIMessage[]; sessionId?: string; widget?: WidgetBody };
   try {
@@ -114,6 +124,23 @@ export async function POST(req: Request) {
     return new Response(message, { status: 502 });
   }
 
+  const system = buildSystemPrompt(context, { kickoff });
+  const modelMessages = await convertToModelMessages(messages);
+  const sentMessages = jsonSafe(modelMessages);
+  try {
+    await api(`/sessions/${sessionId}/model-prompts`, {
+      method: "POST",
+      body: JSON.stringify({
+        system_prompt: system,
+        messages: Array.isArray(sentMessages) ? sentMessages : [],
+        model: openaiModelName(),
+      }),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not store the prompt.";
+    return new Response(message, { status: 502 });
+  }
+
   const result = streamText({
     model: openai(openaiModelName()),
     output: Output.object({
@@ -121,8 +148,8 @@ export async function POST(req: Request) {
       name: "turn_score",
       description: "Rubric rows met, misconception if any, hint tier, and the tutor reply.",
     }),
-    instructions: buildSystemPrompt(context, { kickoff }),
-    messages: await convertToModelMessages(messages),
+    instructions: system,
+    messages: modelMessages,
     temperature: 0.4,
   });
 

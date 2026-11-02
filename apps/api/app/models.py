@@ -162,6 +162,11 @@ class Session(Base):
         cascade="all, delete-orphan",
         order_by="CheckpointResult.seq",
     )
+    prompts: Mapped[list[ModelPrompt]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="ModelPrompt.seq",
+    )
 
 
 class Message(Base):
@@ -214,3 +219,26 @@ class CheckpointResult(Base):
 
     session: Mapped[Session] = relationship(back_populates="results")
     checkpoint: Mapped[Checkpoint] = relationship(back_populates="results")
+
+
+class ModelPrompt(Base):
+    """One model call: the system prompt plus the messages sent to the model."""
+
+    __tablename__ = "model_prompts"
+    __table_args__ = (
+        UniqueConstraint("session_id", "seq", name="uq_model_prompts_session_seq"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    messages: Mapped[list] = mapped_column(JSON, nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    session: Mapped[Session] = relationship(back_populates="prompts")
