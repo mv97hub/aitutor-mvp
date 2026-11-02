@@ -12,6 +12,8 @@ from app.engine.types import (
     Layer4Discourse,
     MisconceptionTrap,
     RubricCriterion,
+    WidgetChoice,
+    WidgetTask,
 )
 
 
@@ -109,7 +111,7 @@ def test_prompt_includes_all_seven_layers_and_keeps_tutor_settings_apart() -> No
         "advance",
     ]
     for heading in (
-        "Layer 1 — Active beat",
+        "Layer 1 — Active move",
         "Layer 2 — Student",
         "Layer 3 — Tutor agent",
         "Layer 4 — Discourse",
@@ -129,8 +131,12 @@ def test_prompt_includes_all_seven_layers_and_keeps_tutor_settings_apart() -> No
     assert "No live Leitner scheduling" in text
     assert "do not state the answer yet" in text.lower()
     assert "worked answer" not in text.lower()
-    assert "At most a few sentences" in text
-    assert "Ask one question" in text
+    assert "At most a few sentences" not in text
+    assert "Ask one question per turn." in text
+    assert "A nudge or a check is short, often one or two sentences." in text
+    assert "may be more than one sentence" in text
+    assert "Do not ask a second question." in text
+    assert "Do not teach the next move." in text
     assert "King Tarquin abused solo lifetime power" in text
     assert "advantage (weight 50)" in text
     assert "Live hint tier for this turn: nudge" in text
@@ -172,21 +178,79 @@ def test_struggle_window_then_worked_answer() -> None:
     assert "do not state the answer yet" not in text.lower()
 
 
-def test_kickoff_summarizes_the_quest_objectives() -> None:
+def test_kickoff_states_the_goal_and_not_later_answers() -> None:
     layers = list(_layers())
     layers[0] = _beat(
-        quest_objective="Sharing power and writing laws in public protects regular citizens.",
-        beat_objectives=(
-            "Mystery hook: What is one advantage and one problem of two consuls?",
-            "Interactive toy: How did Plebeians peacefully win fair rights?",
+        learning_goal="Two consuls can veto each other, which stops a new king and can deadlock.",
+        success_criterion=(
+            RubricCriterion("veto", "Each consul can veto.", 50),
+            RubricCriterion("stall", "They can deadlock.", 50),
         ),
+        beat_objectives=("Later answer: the plebeian walkout of 494.",),
     )
     text = assemble(*layers, kickoff=True).system_prompt
-    assert "short summary of what this quest will teach" in text
+    assert "what finished work looks like" in text
     assert "Do not invent a different topic" in text
-    assert "Sharing power and writing laws in public protects regular citizens." in text
-    assert "How did Plebeians peacefully win fair rights?" in text
+    assert "Two consuls can veto each other, which stops a new king and can deadlock." in text
+    assert "Done looks like:" in text
+    assert "plebeian walkout of 494" not in text
+    assert "Do not preview later moves" in text
     assert "advance to false" in text
+
+
+def test_widget_answer_stays_hidden_until_the_window() -> None:
+    widget = WidgetTask(
+        type="single",
+        prompt="Which one?",
+        choices=(WidgetChoice("deadlock", "They stall.", ""), WidgetChoice("king", "One becomes king.", "no")),
+        answer="deadlock",
+        explain=False,
+        grade=None,
+    )
+    layers = list(_layers())
+    layers[0] = _beat(widget=widget, beat_role="try")
+    hidden = assemble(*layers).system_prompt
+    assert "Correct answer, for you only" not in hidden
+    assert "stays hidden" in hidden
+    layers[1] = Layer2Student(
+        display_name="Storm",
+        age_band="9-11",
+        reading_level="middle-grade",
+        modality="story",
+        interests=(),
+        attempt_count=2,
+        zpd="support",
+    )
+    shown = assemble(*layers).system_prompt
+    assert "Correct answer, for you only: deadlock." in shown
+    assert "worked answer" in shown.lower()
+
+
+def test_a_failed_try_gets_a_fuller_explanation() -> None:
+    layers = list(_layers())
+    layers[1] = Layer2Student(
+        display_name="Storm",
+        age_band="9-11",
+        reading_level="middle-grade",
+        modality="story",
+        interests=(),
+        attempt_count=1,
+        zpd="support",
+    )
+    text = assemble(*layers).system_prompt
+    assert "The student is stuck." in text
+    assert "why the attempt missed" in text
+    assert "Do not ask a second question." in text
+    assert "Do not teach the next move." in text
+    assert "worked answer" not in text.lower()
+
+
+def test_name_may_take_more_than_one_sentence() -> None:
+    layers = list(_layers())
+    layers[0] = _beat(beat_role="name")
+    text = assemble(*layers).system_prompt
+    assert "not a separate student task" in text.lower()
+    assert "More than one sentence is allowed" in text
 
 
 def test_age_band_defaults() -> None:

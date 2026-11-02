@@ -33,10 +33,11 @@ from app.schemas import (
 from app.widgets import hint_text, public_quiz
 
 ROLE_TITLE = {
-    "mystery_hook": "Mystery hook",
-    "interactive_toy": "Interactive toy",
-    "diagnostic_gate": "Diagnostic gate",
-    "feynman_flip": "Feynman flip",
+    "engage": "Engage",
+    "try": "Try",
+    "name": "Name",
+    "show": "Show",
+    "teach_back": "Teach back",
 }
 
 
@@ -174,6 +175,9 @@ def quest_detail(quest: Quest) -> QuestDetail:
         **_quest_node(quest).model_dump(),
         unit_id=quest.unit_id,
         course_id=quest.unit.course_id,
+        learning_goal=quest.learning_goal or "",
+        success_criterion=list(quest.success_criterion or []),
+        requires_teach_back=bool(quest.requires_teach_back),
         beats=[beat_out(beat) for beat in ordered_beats(quest)],
     )
 

@@ -53,6 +53,27 @@ def flaw(
     return body
 
 
+def multi(
+    prompt: str,
+    choices: list[tuple[str, str, str]],
+    answer: list[str],
+    *,
+    explain: bool = False,
+    misconception: str = "",
+) -> dict:
+    return {
+        "type": "multi",
+        "prompt": prompt,
+        "choices": [
+            {"id": choice_id, "text": text, "misconception": note}
+            for choice_id, text, note in choices
+        ],
+        "answer": answer,
+        "explain": explain,
+        "misconception": misconception,
+    }
+
+
 def ordering(
     prompt: str,
     choices: list[tuple[str, str]],
@@ -101,6 +122,10 @@ def quest(
     tags: list[str],
     dinner: str,
     beats: list[dict],
+    *,
+    goal: str,
+    criterion: list[dict],
+    teach_back: bool = False,
 ) -> dict:
     return {
         "code": code,
@@ -109,87 +134,37 @@ def quest(
         "prerequisite_codes": prereqs,
         "competency_tags": tags,
         "dinner_prompt": dinner,
+        "learning_goal": goal,
+        "success_criterion": criterion,
+        "requires_teach_back": teach_back,
         "beats": beats,
     }
 
 
-def standard(
-    code: str,
-    title: str,
-    quest_type: str,
-    prereqs: list[str],
-    tags: list[str],
-    dinner: str,
+def mv(
+    role: str,
+    prompt: str,
+    rows: list[dict],
+    nudge: str,
+    analogy: str,
+    scaffold: str,
+    trap: tuple[str, str, str],
     *,
-    hook: str,
-    hook_pair: tuple[tuple[str, str], tuple[str, str]],
-    hook_hints: tuple[str, str, str],
-    hook_trap: tuple[str, str, str],
-    toy_prompt: str,
-    choices: list[tuple[str, str, str]],
-    answer: str,
-    toy_trap: tuple[str, str, str],
-    gate: str,
-    gate_pair: tuple[tuple[str, str], tuple[str, str]],
-    gate_hints: tuple[str, str, str],
-    gate_trap: tuple[str, str, str],
-    flip: str,
-    flip_pair: tuple[tuple[str, str], tuple[str, str]],
-    flip_hints: tuple[str, str, str],
-    flip_trap: tuple[str, str, str],
-    hook_bloom: str = "understand",
-    toy_bloom: str = "apply",
-    gate_bloom: str = "analyze",
-    flip_bloom: str = "evaluate",
+    bloom: str = "understand",
+    load: str = "medium",
+    widget: dict | None = None,
+    extra_traps: tuple[tuple[str, str, str], ...] = (),
 ) -> dict:
-    toy_note = next(text for choice_id, text, _note in choices if choice_id == answer)
-    beats = [
-        _beat(
-            "mystery_hook",
-            hook,
-            half(*hook_pair),
-            ladder(*hook_hints),
-            traps(hook_trap),
-            hook_bloom,
-            "medium",
-            None,
-        ),
-        _beat(
-            "interactive_toy",
-            toy_prompt,
-            rubric(("choice", toy_note, 100)),
-            ladder(
-                "Which choice answers the question that was actually asked?",
-                "Cross out the choice that brings in an outside power, a pile of money, or a look-alike.",
-                "The correct choice is the one that matches the event in this quest, not a neighboring story.",
-            ),
-            traps(toy_trap),
-            toy_bloom,
-            "low",
-            mcq(toy_prompt, choices, answer, misconception=toy_trap[1]),
-        ),
-        _beat(
-            "diagnostic_gate",
-            gate,
-            half(*gate_pair),
-            ladder(*gate_hints),
-            traps(gate_trap),
-            gate_bloom,
-            "medium",
-            None,
-        ),
-        _beat(
-            "feynman_flip",
-            flip,
-            half(*flip_pair),
-            ladder(*flip_hints),
-            traps(flip_trap),
-            flip_bloom,
-            "high",
-            None,
-        ),
-    ]
-    return quest(code, title, quest_type, prereqs, tags, dinner, beats)
+    return _beat(
+        role,
+        prompt,
+        rows,
+        ladder(nudge, analogy, scaffold),
+        traps(trap, *extra_traps),
+        bloom,
+        load,
+        widget,
+    )
 
 
 def unit(

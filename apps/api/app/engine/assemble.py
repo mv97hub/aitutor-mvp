@@ -47,10 +47,11 @@ RESPONSE_SCHEMA: dict = {
 }
 
 _ROLE_LABEL = {
-    "mystery_hook": "mystery hook",
-    "interactive_toy": "interactive toy",
-    "diagnostic_gate": "diagnostic gate",
-    "feynman_flip": "Feynman flip",
+    "engage": "engage",
+    "try": "try",
+    "name": "name",
+    "show": "show",
+    "teach_back": "teach-back",
 }
 
 
@@ -96,22 +97,37 @@ def _traps_line(beat: Layer1Beat) -> str:
     )
 
 
-def _widget_lines(widget: WidgetTask) -> list[str]:
+def _criterion_line(beat: Layer1Beat) -> str:
+    if not beat.success_criterion:
+        return _rubric_line(beat)
+    return " ".join(
+        f"{row.id} (weight {row.weight}): {row.text}" for row in beat.success_criterion
+    )
+
+
+def _answer_text(widget: WidgetTask) -> str:
+    answer = widget.answer
+    if isinstance(answer, tuple):
+        return ", ".join(answer)
+    return answer
+
+
+def _widget_lines(widget: WidgetTask, *, reveal: bool) -> list[str]:
     choices = []
     for choice in widget.choices:
         note = f" misconception: {choice.misconception}" if choice.misconception else ""
         choices.append(f"{choice.id}. {choice.text}{note}")
-    answer = widget.answer
-    if isinstance(answer, tuple):
-        shown = ", ".join(answer)
-    else:
-        shown = answer
     lines = [
         f"Choice widget ({widget.type}), graded by the server before you speak. Do not grade the taps.",
         f"Widget prompt: {widget.prompt}",
         f"Choices: {' | '.join(choices)}",
-        f"Correct answer, for you only: {shown}.",
     ]
+    if reveal:
+        lines.append(f"Correct answer, for you only: {_answer_text(widget)}.")
+    else:
+        lines.append(
+            "The correct widget answer stays hidden until the struggle window opens. Do not name it."
+        )
     if widget.explain:
         lines.append(
             "A short written explanation may come with the choice. Grade that writing with rubric_met. Do not change the tap score."
@@ -133,14 +149,18 @@ def _widget_lines(widget: WidgetTask) -> list[str]:
     return lines
 
 
-def _layer1(beat: Layer1Beat, tier: str) -> list[str]:
+def _layer1(beat: Layer1Beat, tier: str, *, reveal: bool) -> list[str]:
     role = _ROLE_LABEL.get(beat.beat_role, beat.beat_role.replace("_", " "))
+    goal = beat.learning_goal.strip() or beat.quest_objective.strip() or beat.quest_title
     lines = [
-        "Layer 1 — Active beat",
+        "Layer 1 — Active move",
         f"Course: {beat.course_title}.",
         f"Unit: {beat.unit_title}.",
         f"Unit continuity: {beat.continuity.strip() or 'None.'}",
         f"Quest {beat.quest_code}: {beat.quest_title}.",
+        f"Learning goal: {goal}",
+        f"Success criterion: {_criterion_line(beat)}",
+        f"Pass score: {beat.pass_score}. The quest finishes when those rows are met. After the struggle window on Show, state the answer and finish the quest.",
     ]
     if beat.finished:
         lines.append(
@@ -149,22 +169,31 @@ def _layer1(beat: Layer1Beat, tier: str) -> list[str]:
         return lines
     lines.extend(
         [
-            f"Beat {beat.beat_position} of {beat.beat_count}: {role}.",
+            f"Move {beat.beat_position} of {beat.beat_count}: {role}.",
             f"Bloom level: {beat.bloom_level}. Cognitive load: {beat.cognitive_load}.",
-            f"Task, in your own short words if you need to: {beat.prompt}",
-            f"Rubric rows: {_rubric_line(beat)}",
-            f"Pass score: {beat.pass_score}.",
+            f"Stay on this move. Task, in your own words if you need to: {beat.prompt}",
+            f"This move's rubric rows: {_rubric_line(beat)}",
             f"Misconception traps: {_traps_line(beat)}",
             "Hint ladder: "
             f"rung 1 nudge: {beat.hint_ladder.nudge or 'Ask them to try once more.'} "
             f"Rung 2 analogy: {beat.hint_ladder.analogy or 'Offer a picture, not the answer.'} "
             f"Rung 3 scaffold: {beat.hint_ladder.scaffold or 'Give a sentence starter.'}",
             f"Live hint tier for this turn: {tier}. Use this rung only: {_hint_text(beat.hint_ladder, tier) or 'Ask them to try once more.'}",
-            f"Diagnostic gate cleared: {'yes' if beat.gate_cleared else 'no'}.",
+            f"Show already cleared: {'yes' if beat.gate_cleared else 'no'}.",
+            "Mark the criterion: rubric_met lists ids from this move's rubric and, on Try or Show, any success-criterion ids their words earned.",
+            "Advance when this move is done. If the success criterion is already met on Try or Show, the quest ends and later moves are skipped.",
         ]
     )
+    if beat.beat_role == "name":
+        lines.append(
+            "Name is not a separate student task. Connect their try to the learning goal. More than one sentence is allowed so the explanation is clear. Then set advance to true. Do not start the next move."
+        )
+    elif beat.beat_role == "teach_back":
+        lines.append(
+            "Teach-back: the student corrects the sidekick. You may confirm a correct correction. Do not lecture the whole model."
+        )
     if beat.widget is not None:
-        lines.extend(_widget_lines(beat.widget))
+        lines.extend(_widget_lines(beat.widget, reveal=reveal))
     return lines
 
 
@@ -177,7 +206,7 @@ def _layer2(student: Layer2Student) -> list[str]:
         f"Reading level: {student.reading_level or 'unspecified'}.",
         f"Modality: {student.modality or 'unspecified'}.",
         f"Interest affinities: {interests}.",
-        f"Live attempt count on this beat: {student.attempt_count}.",
+        f"Live attempt count on this move: {student.attempt_count}.",
         f"ZPD: {student.zpd}.",
     ]
 
@@ -188,31 +217,53 @@ def _layer3(tutor: Layer3Tutor) -> list[str]:
         f"Persona: {tutor.persona}.",
         f"Lexicon: {tutor.lexicon}.",
         f"Metaphor dictionary: {tutor.metaphors}.",
-        f"Beat 4 sidekick: {tutor.sidekick}.",
+        f"Teach-back sidekick: {tutor.sidekick}.",
     ]
+
+
+def _pacing_lines(discourse: Layer4Discourse, beat: Layer1Beat, *, stuck: bool) -> list[str]:
+    lines = [
+        f"Pacing: {discourse.pacing}. Ask one question per turn.",
+        "A nudge or a check is short, often one or two sentences.",
+        "Explaining the idea, especially on Name, may be more than one sentence so the explanation is clear.",
+    ]
+    if stuck:
+        lines.append(
+            "The student is stuck. Give a fuller explanation: the idea, why the attempt missed, and the next step. Do not ask a second question. Do not teach the next move."
+        )
+    elif beat.beat_role == "name":
+        lines.append(
+            "This Name turn explains the idea. More than one sentence is allowed. Do not ask a second question. Do not teach the next move."
+        )
+    return lines
 
 
 def _layer4(discourse: Layer4Discourse, beat: Layer1Beat, student: Layer2Student) -> list[str]:
     limit = struggle_limit(discourse.struggle_window)
     closed = student.attempt_count >= limit
+    stuck = student.attempt_count > 0 or closed
     lines = [
         "Layer 4 — Discourse",
         f"Socratic strictness: {discourse.socratic_strictness}.",
         f"Productive-struggle window: {discourse.struggle_window}. Hold that window before a heavier hint.",
-        f"Pacing: {discourse.pacing}. At most a few sentences. Ask one question.",
-        f"Unsuccessful tries on this beat: {student.attempt_count} of {limit}.",
+        *_pacing_lines(discourse, beat, stuck=stuck),
+        f"Unsuccessful tries on this move: {student.attempt_count} of {limit}.",
     ]
-    if closed:
+    if closed and beat.beat_role == "show":
         lines.append(
-            "The struggle window is over. State a short worked answer grounded on this beat's rubric and the correct choice if this beat has one. Do not invent a different fact. Set advance to true so this beat ends and the quest moves to the next beat. The anti-spoiler ban must not keep the student on this beat."
+            "The struggle window is over. State the worked answer for this goal: the idea, why the attempt missed, and the finished criterion. Do not invent a different fact. Do not ask a second question. Do not teach a later move. Set advance to true. The worked answer finishes the quest."
         )
-    elif discourse.anti_spoiler and beat.gate_cleared and beat.beat_role == "feynman_flip":
+    elif closed:
         lines.append(
-            "The diagnostic gate is passed. Let the student teach the sidekick. You may confirm a correct teaching move. Do not lecture the whole model."
+            "The struggle window is over. State the worked answer for this move, including the correct choice if this move has one. Do not invent a different fact. Do not ask a second question. Do not teach the next move. Set advance to true so this move ends. The anti-spoiler ban must not keep the student on this move."
+        )
+    elif discourse.anti_spoiler and beat.beat_role == "teach_back":
+        lines.append(
+            "The student is correcting the sidekick. You may confirm a correct correction. Do not lecture the whole model, and do not state the answer before they try."
         )
     elif discourse.anti_spoiler:
         lines.append(
-            "Anti-spoiler ban, for this window only: do not state the answer yet. Use the live hint rung. When this window ends, give the answer and let the quest move on."
+            "Anti-spoiler ban, for this window only: do not state the answer yet. Use the live hint rung. When this window ends, give the answer and let the move end."
         )
     else:
         lines.append(
@@ -245,29 +296,43 @@ def _layer7(memory: Layer7Memory) -> list[str]:
     ]
 
 
-def _rules(student: Layer2Student, tier: str, *, reveal: bool) -> list[str]:
+def _rules(student: Layer2Student, beat: Layer1Beat, tier: str, *, reveal: bool, stuck: bool) -> list[str]:
     lines = [
         "Rules:",
-        "- Stay on the active beat. If they wander off, answer in one sentence and come back.",
-        "- Do not dump the whole quest or teach a later beat.",
+        "- Stay on the active move. If they wander off, answer in one sentence and come back.",
+        "- Do not dump the whole quest or teach a later move.",
+        "- Ask one question per turn. Do not ask a second question.",
         "- Do not grade taps. A choice widget is already scored before you speak.",
-        "- rubric_met lists the rubric row ids their written words earned. Use [] when there is no writing to grade or the writing missed.",
+        "- rubric_met lists the rubric row ids their written words earned. On Try or Show, include success-criterion ids they earned. Use [] when there is no writing to grade or the writing missed.",
         "- misconception is null when the writing is fine. On a wrong tap, the stored misconception is already set. You may repeat it in the reply. Do not clear it.",
         f"- hint_tier must be {tier}.",
     ]
-    if reveal:
-        lines.extend(
-            [
-                "- The struggle window is over. State a short worked answer from this beat's rubric and the correct choice if there is one. Do not invent a different fact.",
-                "- Set advance to true so this beat ends and the quest moves to the next beat. A failed tap no longer blocks progress.",
-            ]
+    if beat.beat_role == "name" and not reveal:
+        lines.append(
+            "- This is Name. Explain the idea in as many sentences as clarity needs, then set advance to true. Do not teach the next move."
         )
+    if stuck:
+        lines.append(
+            "- The student is stuck. Give a fuller explanation: the idea, why the attempt missed, and the next step. Do not ask a second question. Do not teach the next move."
+        )
+    if reveal:
+        if beat.beat_role == "show":
+            lines.append(
+                "- The struggle window is over. State the worked answer for the success criterion. Do not invent a different fact. Set advance to true. That finishes the quest."
+            )
+        else:
+            lines.append(
+                "- The struggle window is over. State the worked answer for this move and the correct choice if there is one. Do not invent a different fact. Do not teach the next move."
+            )
+            lines.append(
+                "- Set advance to true so this move ends. A failed tap no longer blocks progress."
+            )
     else:
         lines.extend(
             [
-                "- advance is true only when this beat should end. On a failed tap or a typed answer below the pass score, advance is false.",
+                "- advance is true only when this move should end. On a failed tap or a typed answer below the pass score, advance is false, unless this move is Name.",
                 "- On a wrong choice, use the active hint rung. Do not state the correct choice.",
-                "- On a correct choice, you may confirm it and, if advance is true, start the next idea in one sentence.",
+                "- On a correct choice, you may confirm it. Do not teach the next move.",
             ]
         )
     lines.extend(
@@ -292,32 +357,32 @@ def assemble(
 ) -> PromptBundle:
     tier = hint_tier_for(student.attempt_count)
     reveal = student.attempt_count >= struggle_limit(discourse.struggle_window)
+    stuck = student.attempt_count > 0 or reveal
     lines: list[str] = [
         f"You are the tutor for {student.display_name}.",
         "The reply field is the only text the student reads. The other fields are the turn score.",
     ]
-    lines.extend(_layer1(beat, tier))
+    lines.extend(_layer1(beat, tier, reveal=reveal))
     lines.extend(_layer2(student))
     lines.extend(_layer3(tutor))
     lines.extend(_layer4(discourse, beat, student))
     lines.extend(_layer5(affect))
     lines.extend(_layer6(metacognition))
     lines.extend(_layer7(memory))
-    lines.append("\n".join(_rules(student, tier, reveal=reveal)))
+    lines.append("\n".join(_rules(student, beat, tier, reveal=reveal, stuck=stuck)))
     if kickoff and not beat.finished:
-        objective = beat.quest_objective.strip() or beat.quest_title
-        listed = beat.beat_objectives or (f"Current beat: {beat.prompt.strip() or beat.quest_title}",)
-        catalog = "\n".join(f"- {item}" for item in listed)
+        goal = beat.learning_goal.strip() or beat.quest_objective.strip() or beat.quest_title
+        done = _criterion_line(beat)
         lines.append(
             "\n".join(
                 [
-                    f"{student.display_name} just opened this quest. The first reply is a short summary of what this quest will teach.",
+                    f"{student.display_name} just opened this quest. The first reply states the learning goal and what finished work looks like.",
                     f"Quest: {beat.quest_code} {beat.quest_title}.",
-                    f"Quest objective: {objective}",
-                    "Beat objectives:",
-                    catalog,
-                    "Use only that quest and those beat objectives. Do not invent a different topic, event, or skill.",
-                    "This opening turn may preview the quest in two or three sentences, then ask one question that opens the current beat. Do not give away later answers.",
+                    f"Learning goal: {goal}",
+                    f"Done looks like: {done}",
+                    "Use only that goal and that criterion. Do not invent a different topic, event, or skill.",
+                    "Do not preview later moves or give away later answers.",
+                    "Then ask one question that opens the current move.",
                     "Set rubric_met to [], misconception to null, and advance to false.",
                 ]
             )

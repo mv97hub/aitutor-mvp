@@ -4,13 +4,21 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.course_io import CourseFileError, export_course, replace_course, validate_beat
+from app.course_io import (
+    CourseFileError,
+    check_moves,
+    export_course,
+    normalize_criterion,
+    normalize_goal,
+    replace_course,
+    validate_move,
+)
 from app.database import get_db
 from app.engine.defaults import profile_for_age
 from app.flow import apply_student_profile, blank_beats, now, unique_course_code, unique_student_slug
 from app.models import (
     AGE_BANDS,
-    BEAT_ROLES,
+    Beat,
     Course,
     Quest,
     Session as TutorSession,
@@ -307,6 +315,18 @@ def create_quest(unit_id: UUID, body: QuestCreate, db: Session = Depends(get_db)
         raise HTTPException(status_code=409, detail="That quest code is already used.")
     course = load_course(db, unit.course_id)
     current = next(item for item in course.units if item.id == unit.id)
+    try:
+        goal = normalize_goal(body.learning_goal, "learning_goal")
+        criterion = normalize_criterion(
+            body.success_criterion
+            or [
+                {"id": "part-a", "text": "Names the first part of the idea.", "weight": 50},
+                {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
+            ],
+            "success_criterion",
+        )
+    except CourseFileError as exc:
+        raise HTTPException(status_code=422, detail=f"{exc.field}: {exc.message}") from exc
     quest = Quest(
         code=code,
         title=body.title.strip(),
@@ -314,11 +334,14 @@ def create_quest(unit_id: UUID, body: QuestCreate, db: Session = Depends(get_db)
         prerequisite_codes=_clean_list(body.prerequisite_codes),
         competency_tags=_clean_list(body.competency_tags)[:2],
         dinner_prompt=body.dinner_prompt.strip(),
+        learning_goal=goal,
+        success_criterion=criterion,
+        requires_teach_back=False,
         position=next_position([item.position for item in current.quests]),
     )
     current.quests.append(quest)
     db.flush()
-    for index, beat_body in enumerate(blank_beats(), start=1):
+    for index, beat_body in enumerate(blank_beats(criterion), start=1):
         from app.models import Beat
 
         quest.beats.append(
@@ -354,12 +377,20 @@ def patch_quest(quest_id: UUID, body: QuestPatch, db: Session = Depends(get_db))
     tags = _clean_list(body.competency_tags)
     if len(tags) > 2:
         raise HTTPException(status_code=422, detail="competency_tags: needs one or two tags")
+    try:
+        goal = normalize_goal(body.learning_goal, "learning_goal")
+        criterion = normalize_criterion(body.success_criterion, "success_criterion")
+    except CourseFileError as exc:
+        raise HTTPException(status_code=422, detail=f"{exc.field}: {exc.message}") from exc
     quest.code = code
     quest.title = body.title.strip()
     quest.quest_type = body.quest_type
     quest.prerequisite_codes = _clean_list(body.prerequisite_codes)
     quest.competency_tags = tags
     quest.dinner_prompt = body.dinner_prompt.strip()
+    quest.learning_goal = goal
+    quest.success_criterion = criterion
+    quest.requires_teach_back = body.requires_teach_back
     quest.unit.course.updated_at = now()
     db.flush()
     return quest_detail(quest)
@@ -376,27 +407,51 @@ def delete_quest(quest_id: UUID, db: Session = Depends(get_db)) -> None:
 @router.put("/quests/{quest_id}/beats", response_model=QuestDetail)
 def put_beats(quest_id: UUID, body: BeatWrite, db: Session = Depends(get_db)) -> QuestDetail:
     quest = load_quest(db, quest_id)
-    if len(body.beats) != 4:
-        raise HTTPException(status_code=422, detail="beats: must contain exactly four beats")
     normalized = []
-    for index, beat_body in enumerate(body.beats):
-        role = BEAT_ROLES[index]
-        try:
-            normalized.append(
-                validate_beat(beat_body.model_dump(), f"beats[{index}]", role=role)
-            )
-        except CourseFileError as exc:
-            raise HTTPException(status_code=422, detail=f"{exc.field}: {exc.message}") from exc
+    try:
+        for index, beat_body in enumerate(body.beats):
+            normalized.append(validate_move(beat_body.model_dump(), f"beats[{index}]"))
+        check_moves(
+            normalized,
+            teach_back=bool(quest.requires_teach_back),
+            criterion=list(quest.success_criterion or []),
+        )
+    except CourseFileError as exc:
+        raise HTTPException(status_code=422, detail=f"{exc.field}: {exc.message}") from exc
     existing = sorted(quest.beats, key=lambda item: item.position)
-    for beat, fields in zip(existing, normalized, strict=True):
-        beat.role = fields["role"]
-        beat.bloom_level = fields["bloom_level"]
-        beat.cognitive_load = fields["cognitive_load"]
-        beat.prompt = fields["prompt"]
-        beat.rubric = fields["rubric"]
-        beat.misconception_map = fields["misconception_map"]
-        beat.hint_ladder = fields["hint_ladder"]
-        beat.widget = fields["widget"]
+    if len(existing) != len(normalized):
+        if quest_in_use(db, quest.id):
+            raise HTTPException(
+                status_code=409,
+                detail="This quest has classes, so its moves cannot be added or removed.",
+            )
+        for beat in list(quest.beats):
+            db.delete(beat)
+        db.flush()
+        for position, fields in enumerate(normalized, start=1):
+            quest.beats.append(
+                Beat(
+                    position=position,
+                    role=fields["role"],
+                    bloom_level=fields["bloom_level"],
+                    cognitive_load=fields["cognitive_load"],
+                    prompt=fields["prompt"],
+                    rubric=fields["rubric"],
+                    misconception_map=fields["misconception_map"],
+                    hint_ladder=fields["hint_ladder"],
+                    widget=fields["widget"],
+                )
+            )
+    else:
+        for beat, fields in zip(existing, normalized, strict=True):
+            beat.role = fields["role"]
+            beat.bloom_level = fields["bloom_level"]
+            beat.cognitive_load = fields["cognitive_load"]
+            beat.prompt = fields["prompt"]
+            beat.rubric = fields["rubric"]
+            beat.misconception_map = fields["misconception_map"]
+            beat.hint_ladder = fields["hint_ladder"]
+            beat.widget = fields["widget"]
     quest.unit.course.updated_at = now()
     db.flush()
     return quest_detail(quest)

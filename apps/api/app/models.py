@@ -22,10 +22,11 @@ from app.database import Base
 AGE_BANDS = ("6-8", "9-11", "12-14", "15-17")
 QUEST_TYPES = ("core", "branch", "capstone")
 BEAT_ROLES = (
-    "mystery_hook",
-    "interactive_toy",
-    "diagnostic_gate",
-    "feynman_flip",
+    "engage",
+    "try",
+    "name",
+    "show",
+    "teach_back",
 )
 
 
@@ -139,6 +140,9 @@ class Quest(Base):
     prerequisite_codes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     competency_tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     dinner_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    learning_goal: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    success_criterion: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    requires_teach_back: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
 
     unit: Mapped[Unit] = relationship(back_populates="quests")
@@ -155,10 +159,10 @@ class Beat(Base):
     __table_args__ = (
         UniqueConstraint("quest_id", "position", name="uq_beats_quest_position"),
         CheckConstraint(
-            "role IN ('mystery_hook', 'interactive_toy', 'diagnostic_gate', 'feynman_flip')",
+            "role IN ('engage', 'try', 'name', 'show', 'teach_back')",
             name="ck_beats_role",
         ),
-        CheckConstraint("position >= 1 AND position <= 4", name="ck_beats_position"),
+        CheckConstraint("position >= 1", name="ck_beats_position"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

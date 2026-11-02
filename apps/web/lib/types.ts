@@ -116,7 +116,7 @@ export type QuizChoiceInput = {
 };
 
 export type QuizInput = {
-  type: "single" | "flaw" | "order";
+  type: "single" | "multi" | "flaw" | "order";
   prompt: string;
   choices: QuizChoiceInput[];
   answer: string | string[];
@@ -140,6 +140,9 @@ export type BeatOut = {
 export type QuestDetail = QuestNode & {
   unit_id: string;
   course_id: string;
+  learning_goal: string;
+  success_criterion: RubricRowInput[];
+  requires_teach_back: boolean;
   beats: BeatOut[];
 };
 

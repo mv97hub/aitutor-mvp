@@ -1,8 +1,9 @@
 """Idempotent seed: four students and three courses.
 
-Running this twice does not duplicate rows. An existing course is left as edited.
+Running this twice does not duplicate students. Rome, Geometry, and AP Macro are
+rewritten to the quest cycle. Any other course code is left as edited.
 Students keep a tutor persona that was already saved. Blank tutor fields are filled
-from the age band. Old lesson transcripts are not rebuilt; the migration clears them.
+from the age band. Revision 006 clears old class transcripts.
 """
 
 from sqlalchemy import select
@@ -76,10 +77,9 @@ def seed(db: Session) -> dict[str, int]:
     created_courses = 0
     for payload in COURSES:
         exists = db.scalar(select(Course.id).where(Course.code == payload["code"]))
-        if exists is not None:
-            continue
         replace_course(db, payload)
-        created_courses += 1
+        if exists is None:
+            created_courses += 1
     db.commit()
     return {"students_created": created_students, "courses_created": created_courses}
 

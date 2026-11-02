@@ -242,10 +242,11 @@ function SessionView({ session }: { session: SessionDetail }) {
   }, [session.id]);
   const current = session.beats.find((beat) => beat.id === session.current_beat_id);
   const roleLabel: Record<string, string> = {
-    mystery_hook: "mystery hook",
-    interactive_toy: "interactive toy",
-    diagnostic_gate: "diagnostic gate",
-    feynman_flip: "Feynman flip",
+    engage: "engage",
+    try: "try",
+    name: "name",
+    show: "show",
+    teach_back: "teach-back",
   };
   return (
     <article className="transcript-view">

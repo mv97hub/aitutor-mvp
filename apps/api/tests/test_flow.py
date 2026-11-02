@@ -53,6 +53,9 @@ def test_seed_is_idempotent_and_counts_the_map() -> None:
         quests = db.scalar(select(func.count()).select_from(Quest))
         beats = db.scalar(select(func.count()).select_from(Beat))
         rome = db.scalar(select(func.count()).select_from(Quest).join(Unit).join(Course).where(Course.code == "rome"))
+        macro_units = db.scalar(
+            select(func.count()).select_from(Unit).join(Course).where(Course.code == "macro")
+        )
         ages = {student.slug: student.age for student in db.scalars(select(Student)).all()}
         storm = db.scalar(select(Student).where(Student.slug == "storm"))
         persona = storm.tutor_persona
@@ -62,9 +65,10 @@ def test_seed_is_idempotent_and_counts_the_map() -> None:
     assert again == {"students_created": 0, "courses_created": 0}
     assert students == 4
     assert courses == 3
-    assert quests == 48
-    assert beats == 192
+    assert quests == 50
+    assert beats > 48
     assert rome == 16
+    assert macro_units == 6
     assert ages["storm"] == 10
     assert ages["wolverine"] == 16
     assert "Co-Explorer" in persona
@@ -158,10 +162,10 @@ def test_any_age_can_open_any_course() -> None:
     assert courses["macro"] == "15-17"
     macro = client.post(
         "/sessions",
-        json={"student_id": storm, "quest_id": _quest("MAC-U4-Q1")["id"], "fresh": True},
+        json={"student_id": storm, "quest_id": _quest("MAC-U5-Q1")["id"], "fresh": True},
     )
     assert macro.status_code == 200
-    assert macro.json()["quest_code"] == "MAC-U4-Q1"
+    assert macro.json()["quest_code"] == "MAC-U5-Q1"
     rome = client.post(
         "/sessions",
         json={"student_id": wolverine, "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
@@ -179,8 +183,11 @@ def test_any_age_can_open_any_course() -> None:
         json={"student_id": storm, "quest_id": _quest("ROM-U4-Q2A")["id"], "fresh": True},
     )
     assert branch.status_code == 200
-    assert branch.json()["current_block"]["kind"] == "mystery_hook"
-    assert len(branch.json()["steps"]) == 4
+    opened = branch.json()
+    detail = client.get(f"/quests/{_quest('ROM-U4-Q2A')['id']}").json()
+    assert opened["current_block"]["kind"] == detail["beats"][0]["role"]
+    assert len(opened["steps"]) == len(detail["beats"])
+    assert opened["current_block"]["kind"] != "mystery_hook"
 
 
 def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
@@ -196,9 +203,10 @@ def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
     assert "Layer 7 — Memory" in prompt["system_prompt"]
     assert "Curious Co-Explorer" in prompt["system_prompt"]
     assert "weather" in prompt["system_prompt"]
-    assert "short summary of what this quest will teach" in prompt["system_prompt"]
+    assert "what finished work looks like" in prompt["system_prompt"]
     assert "Do not invent a different topic" in prompt["system_prompt"]
-    assert "How did Plebeians peacefully win fair rights" in prompt["system_prompt"]
+    assert "Do not preview later moves" in prompt["system_prompt"]
+    assert "494" not in prompt["system_prompt"]
     assert "worked answer" not in prompt["system_prompt"].lower()
     assert prompt["temperature"] == 0.4
     assert "reply" in prompt["response_schema"]["properties"]
@@ -215,22 +223,22 @@ def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
     assert "answer" not in quiz
     wrong = client.post(
         f"/sessions/{session_id}/grade-widget",
-        json={"choice": "greece", "explanation": "I asked another country."},
+        json={"choice": "walkout", "explanation": "They left the city."},
     )
     assert wrong.json()["passed"] is False
-    assert "greece" in wrong.json()["misconception"].lower()
+    assert "later" in wrong.json()["misconception"].lower()
     right = client.post(
         f"/sessions/{session_id}/grade-widget",
-        json={"choice": "walkout", "explanation": ""},
+        json={"choice": "deadlock", "explanation": ""},
     )
     assert right.json()["passed"] is True
     moved = client.post(
         f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["walkout"], "misconception": None, "hint_tier": "nudge", "advance": True},
+        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
     )
     assert moved.json()["graded_by"] == "widget"
     assert moved.json()["advanced"] is True
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "diagnostic_gate"
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "name"
 
 
 def test_struggle_window_then_worked_answer_advances() -> None:
@@ -246,40 +254,77 @@ def test_struggle_window_then_worked_answer_advances() -> None:
     assert first.json()["advanced"] is False
     second = client.post(f"/sessions/{session_id}/turn-score", json=held)
     assert second.json()["advanced"] is False
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "mystery_hook"
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "engage"
     revealed = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
     assert "The struggle window is over" in revealed
     assert "worked answer" in revealed.lower()
+    assert "Correct answer, for you only" not in revealed
     third = client.post(f"/sessions/{session_id}/turn-score", json=held)
     assert third.json()["passed"] is False
     assert third.json()["advanced"] is True
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "interactive_toy"
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "try"
 
 
-def test_four_beats_finish_the_quest() -> None:
+def test_moves_finish_the_quest_and_a_met_criterion_skips_teach_back() -> None:
     storm = _student("storm")["id"]
     opened = client.post(
         "/sessions",
         json={"student_id": storm, "quest_id": _quest("ROM-U1-Q1")["id"], "fresh": True},
     )
     session_id = opened.json()["id"]
-    for rubric in (
-        ["story", "clue"],
-        ["choice"],
-        ["keep", "trust"],
-        ["myth", "clue"],
-    ):
-        if rubric == ["choice"]:
-            graded = client.post(
-                f"/sessions/{session_id}/grade-widget",
-                json={"choice": "wall", "explanation": ""},
-            )
-            assert graded.json()["passed"] is True
-        result = client.post(
-            f"/sessions/{session_id}/turn-score",
-            json={"rubric_met": rubric, "misconception": None, "hint_tier": "nudge", "advance": True},
-        )
-        assert result.json()["ok"] is True
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "try"
+    graded = client.post(
+        f"/sessions/{session_id}/grade-widget",
+        json={"choice": ["wall", "pottery"], "explanation": ""},
+    )
+    assert graded.json()["passed"] is True
+    client.post(
+        f"/sessions/{session_id}/turn-score",
+        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "name"
+    client.post(
+        f"/sessions/{session_id}/turn-score",
+        json={"rubric_met": [], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "show"
+    done = client.post(
+        f"/sessions/{session_id}/turn-score",
+        json={"rubric_met": ["story", "find"], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    assert done.json()["advanced"] is True
+    assert client.get(f"/sessions/{session_id}/board").json()["status"] == "completed"
+
+    consuls = client.post(
+        "/sessions",
+        json={"student_id": storm, "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
+    )
+    session_id = consuls.json()["id"]
+    client.post(
+        f"/sessions/{session_id}/turn-score",
+        json={"rubric_met": ["advantage", "problem"], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    client.post(
+        f"/sessions/{session_id}/grade-widget",
+        json={"choice": "deadlock", "explanation": ""},
+    )
+    client.post(
+        f"/sessions/{session_id}/turn-score",
+        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "name"
+    client.post(
+        f"/sessions/{session_id}/turn-score",
+        json={"rubric_met": [], "misconception": None, "hint_tier": "nudge", "advance": False},
+    )
+    show = client.get(f"/sessions/{session_id}/board").json()
+    assert show["current_block"]["kind"] == "show"
+    assert any(step["kind"] == "teach_back" for step in show["steps"])
+    finished = client.post(
+        f"/sessions/{session_id}/turn-score",
+        json={"rubric_met": ["veto", "deadlock"], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    assert finished.json()["advanced"] is True
     assert client.get(f"/sessions/{session_id}/board").json()["status"] == "completed"
 
 
@@ -304,7 +349,13 @@ def test_import_rejects_the_field_and_replaces_by_code() -> None:
                         "prerequisite_codes": [],
                         "competency_tags": ["idea"],
                         "dinner_prompt": "Ask what the file was for.",
-                        "beats": _four_beats(),
+                        "learning_goal": "The file practices one idea.",
+                        "success_criterion": [
+                            {"id": "part-a", "text": "Names the first part of the idea.", "weight": 50},
+                            {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
+                        ],
+                        "requires_teach_back": False,
+                        "beats": _cycle_moves(),
                     }
                 ],
             }
@@ -319,7 +370,7 @@ def test_import_rejects_the_field_and_replaces_by_code() -> None:
     assert "beats[0].rubric" in rejected.json()["detail"]
 
     good = bad
-    good["units"][0]["quests"][0]["beats"] = _four_beats()
+    good["units"][0]["quests"][0]["beats"] = _cycle_moves()
     created = client.post("/courses/import", json=good)
     assert created.status_code == 200
     assert created.json()["code"] == "trial"
@@ -335,16 +386,18 @@ def test_import_rejects_the_field_and_replaces_by_code() -> None:
         assert client.delete(f"/courses/{course_id}").status_code == 204
 
 
-def _four_beats() -> list[dict]:
-    roles = ["mystery_hook", "interactive_toy", "diagnostic_gate", "feynman_flip"]
-    beats = []
-    for role in roles:
+def _cycle_moves() -> list[dict]:
+    criterion = [
+        {"id": "part-a", "text": "Names the first part of the idea.", "weight": 50},
+        {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
+    ]
+    moves = []
+    for role in ("try", "name", "show"):
         widget = None
         rubric = [
-            {"id": "a", "text": "Names the first part.", "weight": 50},
-            {"id": "b", "text": "Names the second part.", "weight": 50},
+            {"id": "link", "text": "Connects the try to the idea.", "weight": 100},
         ]
-        if role == "interactive_toy":
+        if role == "try":
             rubric = [{"id": "choice", "text": "Picks the matching choice.", "weight": 100}]
             widget = {
                 "type": "single",
@@ -357,15 +410,17 @@ def _four_beats() -> list[dict]:
                 "explain": False,
                 "misconception": "Match the question.",
             }
-        beats.append(
+        if role == "show":
+            rubric = criterion
+        moves.append(
             {
                 "role": role,
                 "bloom_level": "understand",
                 "cognitive_load": "low",
-                "prompt": f"Work the {role.replace('_', ' ')}.",
+                "prompt": f"Work the {role.replace('_', ' ')} move.",
                 "rubric": rubric,
                 "misconception_map": [
-                    {"id": "miss", "trap": "A nearby idea answers it.", "note": "Stay on this beat."}
+                    {"id": "miss", "trap": "A nearby idea answers it.", "note": "Stay on this move."}
                 ],
                 "hint_ladder": {
                     "nudge": "What is the question asking?",
@@ -375,7 +430,7 @@ def _four_beats() -> list[dict]:
                 "widget": widget,
             }
         )
-    return beats
+    return moves
 
 
 def test_model_prompt_round_trip() -> None:

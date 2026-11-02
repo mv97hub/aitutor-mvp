@@ -26,13 +26,6 @@ from app.queries import latest_result, locate_beat, ordered_beats
 
 PASS_SCORE = 70
 
-_BEAT_LABEL = {
-    "mystery_hook": "Mystery hook",
-    "interactive_toy": "Interactive toy",
-    "diagnostic_gate": "Diagnostic gate",
-    "feynman_flip": "Feynman flip",
-}
-
 
 def _rows(beat: Beat) -> tuple[RubricCriterion, ...]:
     rows = []
@@ -124,39 +117,25 @@ def _zpd(tutor_session: TutorSession, beat: Beat | None) -> str:
     return "on-level"
 
 
+def _criterion(quest) -> tuple[RubricCriterion, ...]:
+    rows = []
+    for row in quest.success_criterion or []:
+        if isinstance(row, dict) and row.get("id"):
+            rows.append(
+                RubricCriterion(
+                    id=str(row["id"]),
+                    text=str(row.get("text") or ""),
+                    weight=int(row.get("weight") or 0),
+                )
+            )
+    return tuple(rows)
+
+
 def _quest_objective(quest) -> str:
-    unit = quest.unit
-    course = unit.course
-    descriptions: dict[str, str] = {}
-    for item in course.competency_dictionary or []:
-        if isinstance(item, dict) and item.get("code"):
-            descriptions[str(item["code"])] = str(item.get("description") or "").strip()
-    taught: list[str] = []
-    for tag in quest.competency_tags or []:
-        code = str(tag).strip()
-        if not code:
-            continue
-        text = descriptions.get(code, "")
-        taught.append(f"{code}: {text}" if text else code)
-    parts: list[str] = []
-    enduring = (unit.enduring_understanding or "").strip()
-    if enduring:
-        parts.append(enduring)
-    if taught:
-        parts.append("This quest teaches " + "; ".join(taught) + ".")
-    title = (quest.title or "").strip()
-    if title:
-        parts.append(title + ".")
-    return " ".join(parts)
-
-
-def _beat_objectives(beats: list[Beat]) -> tuple[str, ...]:
-    lines: list[str] = []
-    for beat in beats:
-        label = _BEAT_LABEL.get(beat.role, beat.role.replace("_", " "))
-        task = (beat.prompt or "").strip() or "None."
-        lines.append(f"{label}: {task}")
-    return tuple(lines)
+    goal = (quest.learning_goal or "").strip()
+    if goal:
+        return goal
+    return (quest.title or "").strip()
 
 
 def _failed(tutor_session: TutorSession, beat_id) -> int:
@@ -174,13 +153,14 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
     student = tutor_session.student
     beats = ordered_beats(quest)
     quest_objective = _quest_objective(quest)
-    beat_objectives = _beat_objectives(beats)
+    criterion = _criterion(quest)
+    goal = (quest.learning_goal or "").strip()
     current = locate_beat(quest, tutor_session.current_beat_id)
-    gate = next((beat for beat in beats if beat.role == "diagnostic_gate"), None)
+    show = next((beat for beat in beats if beat.role == "show"), None)
     gate_cleared = False
-    if gate is not None:
-        gate_result = latest_result(tutor_session, gate.id)
-        gate_cleared = gate_result is not None and gate_result.passed
+    if show is not None:
+        show_result = latest_result(tutor_session, show.id)
+        gate_cleared = show_result is not None and show_result.passed
     source = current
     finished = current is None
     if source is None and beats:
@@ -206,7 +186,10 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             gate_cleared=False,
             finished=True,
             quest_objective=quest_objective,
-            beat_objectives=beat_objectives,
+            beat_objectives=(),
+            learning_goal=goal,
+            success_criterion=criterion,
+            requires_teach_back=bool(quest.requires_teach_back),
         )
         attempt_count = 0
     else:
@@ -230,7 +213,10 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             gate_cleared=gate_cleared,
             finished=finished,
             quest_objective=quest_objective,
-            beat_objectives=beat_objectives,
+            beat_objectives=(),
+            learning_goal=goal,
+            success_criterion=criterion,
+            requires_teach_back=bool(quest.requires_teach_back),
         )
         attempt_count = 0 if finished or current is None else _failed(tutor_session, current.id)
     interests = tuple(str(item) for item in (student.interests or []) if str(item).strip())
