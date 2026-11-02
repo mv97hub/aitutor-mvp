@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { BrandMark } from "@/components/BrandMark";
 import { DeskSwitch } from "@/components/DeskSwitch";
 import { api } from "@/lib/api";
 import type { ModelPrompt, SessionDetail, SessionSummary, Student } from "@/lib/types";
@@ -90,10 +91,10 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
   return (
     <main className="ds-shell ds-desk">
       <aside className="ds-side">
-        <DeskSwitch current="chats" />
         <div className="ds-logo">
-          <span className="ds-logo-name">View chats</span>
+          <BrandMark />
         </div>
+        <DeskSwitch current="chats" />
         <label>
           Student
           <select value={studentFilter} onChange={(event) => setStudentFilter(event.target.value)}>
