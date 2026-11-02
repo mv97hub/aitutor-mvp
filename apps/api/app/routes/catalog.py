@@ -14,6 +14,7 @@ from app.flow import (
     now,
     topic_in_use,
     unique_slug,
+    unique_student_slug,
 )
 from app.models import Checkpoint, LessonPlan, Session as TutorSession, Student, Topic
 from app.present import lesson_plan_out, lesson_summary, student_out
@@ -25,6 +26,7 @@ from app.schemas import (
     LessonPlanPatch,
     LessonPlanSummary,
     MoveBody,
+    StudentCreate,
     StudentOut,
     TopicCreate,
     TopicPatch,
@@ -33,12 +35,34 @@ from app.schemas import (
 router = APIRouter()
 
 
+ROSTER = ["iron-man", "storm", "spider-man", "wolverine"]
+
+
 @router.get("/students", response_model=list[StudentOut])
 def list_students(db: Session = Depends(get_db)) -> list[StudentOut]:
-    roster = ["iron-man", "storm", "spider-man", "wolverine"]
     students = list(db.scalars(select(Student)).all())
-    students.sort(key=lambda student: roster.index(student.slug) if student.slug in roster else 99)
+    students.sort(
+        key=lambda student: (
+            ROSTER.index(student.slug) if student.slug in ROSTER else len(ROSTER),
+            student.display_name.lower(),
+        )
+    )
     return [student_out(student) for student in students]
+
+
+@router.post("/students", response_model=StudentOut)
+def create_student(body: StudentCreate, db: Session = Depends(get_db)) -> StudentOut:
+    name = body.display_name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Name is required")
+    student = Student(
+        slug=unique_student_slug(db, name),
+        display_name=name,
+        age=body.age,
+    )
+    db.add(student)
+    db.flush()
+    return student_out(student)
 
 
 @router.get("/lesson-plans", response_model=list[LessonPlanSummary])

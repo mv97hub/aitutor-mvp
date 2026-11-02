@@ -80,6 +80,41 @@ def test_reorder_checkpoint_round_trip() -> None:
     ]
 
 
+def _drop_named(name: str) -> None:
+    db = SessionLocal()
+    try:
+        db.execute(delete(Student).where(Student.display_name == name))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_create_student() -> None:
+    _drop_named("Ada Lovelace")
+    created = client.post("/students", json={"display_name": "Ada Lovelace", "age": 12})
+    assert created.status_code == 200
+    body = created.json()
+    assert body["display_name"] == "Ada Lovelace"
+    assert body["age"] == 12
+    assert body["slug"] == "ada-lovelace"
+    try:
+        roster = client.get("/students").json()
+        assert [student["display_name"] for student in roster] == [
+            "Iron Man",
+            "Storm",
+            "Spider-Man",
+            "Wolverine",
+            "Ada Lovelace",
+        ]
+        duplicate = client.post("/students", json={"display_name": "Ada Lovelace", "age": 9})
+        assert duplicate.status_code == 200
+        assert duplicate.json()["slug"] == "ada-lovelace-2"
+        blank = client.post("/students", json={"display_name": "   ", "age": 10})
+        assert blank.status_code == 422
+    finally:
+        _drop_named("Ada Lovelace")
+
+
 def test_health_and_roster() -> None:
     health = client.get("/health")
     assert health.status_code == 200

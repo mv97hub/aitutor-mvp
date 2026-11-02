@@ -12,6 +12,11 @@ class StudentOut(BaseModel):
     age: int | None = None
 
 
+class StudentCreate(BaseModel):
+    display_name: str = Field(min_length=1, max_length=120)
+    age: int = Field(ge=4, le=18)
+
+
 class LessonPlanCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     preamble: str = ""
