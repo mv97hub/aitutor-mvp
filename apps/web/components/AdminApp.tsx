@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { BrandMark } from "@/components/BrandMark";
 import { DeskSwitch } from "@/components/DeskSwitch";
 import { api } from "@/lib/api";
 import type {
@@ -99,10 +100,10 @@ export function AdminApp({
   return (
     <main className="ds-shell ds-desk">
       <aside className="ds-side">
-        <DeskSwitch current="admin" />
         <div className="ds-logo">
-          <span className="ds-logo-name">Lesson desk</span>
+          <BrandMark />
         </div>
+        <DeskSwitch current="admin" />
         <button type="button" className="ds-new" onClick={() => void createPlan()}>
           <span aria-hidden="true">+</span>
           New plan

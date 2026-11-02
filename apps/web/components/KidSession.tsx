@@ -5,6 +5,7 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
+import { BrandMark } from "@/components/BrandMark";
 import { BlockStepper, ChoiceWidget } from "@/components/LessonBlocks";
 import { api } from "@/lib/api";
 import { KICKOFF } from "@/lib/kickoff";
@@ -454,14 +455,11 @@ export function KidSession({
 
   if (!learner) {
     return (
-      <main className="gate">
-        <section className="gate-card">
-          <div className="rail-head">
-            <p className="eyebrow">Kid session</p>
-            <Link className="top-link" href="/admin">Edit lessons</Link>
-          </div>
+      <main className="ds-landing">
+        <section className="ds-landing-card">
+          <BrandMark />
           <h1>Who&apos;s learning today?</h1>
-          <p className="lede">Choose a child, or add a new one. Then open a class.</p>
+          <p>Choose a child, or add a new one. Then open a class.</p>
           <label>
             Child
             <select
@@ -520,6 +518,7 @@ export function KidSession({
               <button type="button" className="ghost" onClick={() => void reloadRoster()}>Try again</button>
             </div>
           ) : null}
+          <Link className="ds-text" href="/admin">Edit lessons</Link>
         </section>
       </main>
     );
@@ -532,8 +531,9 @@ export function KidSession({
     <main className="ds-shell">
       <aside className="ds-side">
         <div className="ds-logo">
-          <span className="ds-logo-name">{learner.display_name}</span>
+          <BrandMark />
         </div>
+        <p className="ds-learner">{learner.display_name}</p>
         <button
           type="button"
           className={`ds-new ${making ? "is-on" : ""}`}
