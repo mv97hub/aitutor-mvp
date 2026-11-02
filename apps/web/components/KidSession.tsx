@@ -456,6 +456,10 @@ export function KidSession({
   if (!learner) {
     return (
       <main className="ds-landing">
+        <nav className="ds-landing-links" aria-label="Site">
+          <Link href="/admin">Configure Lessons</Link>
+          <Link href="/viewchats">View Chats / Debug</Link>
+        </nav>
         <section className="ds-landing-card">
           <BrandMark />
           <h1>Who&apos;s learning today?</h1>
@@ -478,8 +482,8 @@ export function KidSession({
             </select>
           </label>
           <div className="rail-actions">
-            <button type="button" className="ghost" onClick={() => { setAdding((open) => !open); setError(null); }}>
-              Add a new child
+            <button type="button" className="button ds-add-child" onClick={() => { setAdding((open) => !open); setError(null); }}>
+              Add child
             </button>
           </div>
           {adding ? (
@@ -518,8 +522,8 @@ export function KidSession({
               <button type="button" className="ghost" onClick={() => void reloadRoster()}>Try again</button>
             </div>
           ) : null}
-          <Link className="ds-text" href="/admin">Edit lessons</Link>
         </section>
+        <p className="ds-placeholder">PLACEHOLDER PAGE</p>
       </main>
     );
   }

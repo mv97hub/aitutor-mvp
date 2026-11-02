@@ -749,9 +749,8 @@ body:has(.ds-landing) {
 
 .ds-landing {
   display: grid;
-  place-items: center;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: 100dvh;
-  padding: 32px 16px;
   background: #fff;
   color: rgb(15, 17, 21);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -759,8 +758,40 @@ body:has(.ds-landing) {
   line-height: 22px;
 }
 
+.ds-landing-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  justify-self: start;
+  padding: 16px 20px;
+}
+
+.ds-landing-links a {
+  color: rgb(15, 17, 21);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+  text-decoration: none;
+}
+
+.ds-landing-links a:hover { color: rgb(65, 118, 230); }
+
 .ds-landing-card {
   width: min(420px, 100%);
+  justify-self: center;
+  align-self: center;
+  padding: 0 16px;
+}
+
+.ds-placeholder {
+  margin: 0;
+  padding: 24px 16px 32px;
+  color: rgb(15, 17, 21);
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 40px;
+  text-align: center;
 }
 
 .ds-landing .brand { margin-bottom: 16px; }
@@ -811,6 +842,13 @@ body:has(.ds-landing) {
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
+}
+
+.ds-landing .button.ds-add-child {
+  min-height: 44px;
+  padding: 10px 20px;
+  font-size: 16px;
+  font-weight: 600;
 }
 
 .ds-landing .ghost {
