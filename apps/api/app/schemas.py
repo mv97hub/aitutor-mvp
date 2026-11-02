@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 AgeBand = Literal["6-8", "9-11", "12-14", "15-17"]
 QuestType = Literal["core", "branch", "capstone"]
-BeatRole = Literal["mystery_hook", "interactive_toy", "diagnostic_gate", "feynman_flip"]
+BeatRole = Literal["engage", "try", "name", "show", "teach_back"]
 Bloom = Literal["remember", "understand", "apply", "analyze", "evaluate", "create"]
 Load = Literal["low", "medium", "high"]
 
@@ -117,6 +117,9 @@ class QuestCreate(BaseModel):
     prerequisite_codes: list[str] = Field(default_factory=list)
     competency_tags: list[str] = Field(default_factory=list)
     dinner_prompt: str = ""
+    learning_goal: str = "State the idea this quest is building."
+    success_criterion: list = Field(default_factory=list)
+    requires_teach_back: bool = False
 
 
 class QuestPatch(QuestCreate):
@@ -148,7 +151,7 @@ class QuizChoiceIn(BaseModel):
 
 
 class QuizIn(BaseModel):
-    type: Literal["single", "flaw", "order"]
+    type: Literal["single", "multi", "flaw", "order"]
     prompt: str = ""
     choices: list[QuizChoiceIn] = Field(default_factory=list)
     answer: str | list[str] = ""
@@ -241,6 +244,9 @@ class BeatOut(BaseModel):
 class QuestDetail(QuestNode):
     unit_id: UUID
     course_id: UUID
+    learning_goal: str = ""
+    success_criterion: list[dict] = Field(default_factory=list)
+    requires_teach_back: bool = False
     beats: list[BeatOut]
 
 

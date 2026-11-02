@@ -5,10 +5,11 @@ import { useEffect, useState } from "react";
 import type { BlockStep, KidQuiz } from "@/lib/types";
 
 const KIND_LABEL: Record<string, string> = {
-  mystery_hook: "Mystery hook",
-  interactive_toy: "Interactive toy",
-  diagnostic_gate: "Diagnostic gate",
-  feynman_flip: "Feynman flip",
+  engage: "Engage",
+  try: "Try",
+  name: "Name",
+  show: "Show",
+  teach_back: "Teach back",
 };
 
 export function BlockStepper({ steps }: { steps: BlockStep[] }) {

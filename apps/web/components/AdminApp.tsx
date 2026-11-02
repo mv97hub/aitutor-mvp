@@ -17,12 +17,20 @@ import type {
   UnitNode,
 } from "@/lib/types";
 
-const ROLES = ["mystery_hook", "interactive_toy", "diagnostic_gate", "feynman_flip"] as const;
+const ROLES = ["engage", "try", "name", "show", "teach_back"] as const;
 const ROLE_LABEL: Record<string, string> = {
-  mystery_hook: "Mystery hook",
-  interactive_toy: "Interactive toy",
-  diagnostic_gate: "Diagnostic gate",
-  feynman_flip: "Feynman flip",
+  engage: "Engage",
+  try: "Try",
+  name: "Name",
+  show: "Show",
+  teach_back: "Teach back",
+};
+const ROLE_RANK: Record<string, number> = {
+  engage: 0,
+  try: 1,
+  name: 2,
+  show: 3,
+  teach_back: 4,
 };
 const BLOOMS = ["remember", "understand", "apply", "analyze", "evaluate", "create"];
 const LOADS = ["low", "medium", "high"];
@@ -40,7 +48,7 @@ function widgetFrom(beat: BeatOut): QuizInput | null {
   const widget = beat.widget;
   if (!widget) return null;
   return {
-    type: widget.type === "flaw" || widget.type === "order" ? widget.type : "single",
+    type: widget.type === "flaw" || widget.type === "order" || widget.type === "multi" ? widget.type : "single",
     prompt: widget.prompt ?? "",
     choices: (widget.choices ?? []).map((choice) => ({
       id: choice.id ?? "",
@@ -69,11 +77,45 @@ type BeatDraft = {
   useWidget: boolean;
 };
 
-function draftBeat(beat: BeatOut, index: number): BeatDraft {
-  const role = ROLES[index] ?? beat.role;
-  const widget = role === "mystery_hook" || role === "feynman_flip" ? null : widgetFrom(beat);
+function blankMove(role: string): BeatDraft {
+  const criterion = [
+    { id: "part-a", text: "Names the first part of the idea.", weight: 50 },
+    { id: "part-b", text: "Names the second part of the idea.", weight: 50 },
+  ];
   return {
     role,
+    bloom_level: role === "show" ? "analyze" : "understand",
+    cognitive_load: "medium",
+    prompt: "",
+    rubric: role === "try" ? [{ id: "choice", text: "Selects the choice that matches the idea.", weight: 100 }] : criterion,
+    misconception_map: [
+      { id: "nearby", trap: "A nearby idea answers this question.", note: "Stay on the idea named in the quest." },
+    ],
+    hint_ladder: {
+      nudge: "What is the question actually asking?",
+      analogy: "Picture the idea with one concrete object.",
+      scaffold: "The idea is ____. The missing piece is ____.",
+    },
+    widget:
+      role === "try"
+        ? {
+            type: "single",
+            prompt: "",
+            choices: [emptyChoice(), emptyChoice()],
+            answer: "",
+            explain: false,
+            misconception: "",
+          }
+        : null,
+    useWidget: role === "try",
+  };
+}
+
+function draftBeat(beat: BeatOut): BeatDraft {
+  const typed = beat.role === "engage" || beat.role === "name" || beat.role === "teach_back";
+  const widget = typed ? null : widgetFrom(beat);
+  return {
+    role: beat.role,
     bloom_level: beat.bloom_level || "understand",
     cognitive_load: beat.cognitive_load || "medium",
     prompt: beat.prompt ?? "",
@@ -89,28 +131,22 @@ function draftBeat(beat: BeatOut, index: number): BeatDraft {
       scaffold: beat.hint_ladder?.scaffold ?? "",
     },
     widget,
-    useWidget: role === "interactive_toy" || widget != null,
+    useWidget: beat.role === "try" || widget != null,
   };
 }
 
 function payloadBeat(draft: BeatDraft) {
   let widget: QuizInput | null = null;
-  if (draft.role === "interactive_toy" || (draft.role === "diagnostic_gate" && draft.useWidget && draft.widget)) {
-    const source = draft.widget ?? {
-      type: "single" as const,
-      prompt: draft.prompt,
-      choices: [emptyChoice(), emptyChoice()],
-      answer: "",
-      explain: false,
-      misconception: "",
-    };
-    const answer =
-      source.type === "order"
-        ? answerText(source.answer)
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean)
-        : answerText(source.answer).trim();
+  const widgetRole = draft.role === "try" || draft.role === "show";
+  if (widgetRole && draft.useWidget && draft.widget) {
+    const source = draft.widget;
+    const listed = source.type === "order" || source.type === "multi";
+    const answer = listed
+      ? answerText(source.answer)
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : answerText(source.answer).trim();
     widget = { ...source, answer };
   }
   return {
@@ -348,7 +384,7 @@ export function AdminApp({
         ) : (
           <article className="editor">
             <h2>Course tree</h2>
-            <p className="help">Import a course file, or add a course, then open a quest to edit its four beats.</p>
+            <p className="help">Import a course file, or add a course, then open a quest to edit its goal, criterion, and moves.</p>
           </article>
         )}
     </AdminFrame>
@@ -540,7 +576,7 @@ function CourseEditor({
         </label>
         <button type="button" className="button" onClick={() => void addUnit()}>Add unit</button>
       </div>
-      <p className="help">Open a quest in the tree to edit its four beats, rubric, hints, and widget.</p>
+      <p className="help">Open a quest in the tree to edit its goal, criterion, standard code, and ordered moves.</p>
     </article>
   );
 }
@@ -559,20 +595,45 @@ function QuestEditor({
   onSaved: () => Promise<void>;
 }) {
   const [meta, setMeta] = useState(quest);
-  const [beats, setBeats] = useState<BeatDraft[]>(() => {
-    const ordered = [...quest.beats].sort((left, right) => left.position - right.position);
-    return ROLES.map((role, index) => draftBeat(ordered[index] ?? ordered.find((beat) => beat.role === role) ?? ordered[0], index));
-  });
+  const [beats, setBeats] = useState<BeatDraft[]>(() =>
+    [...quest.beats].sort((left, right) => left.position - right.position).map((beat) => draftBeat(beat)),
+  );
   const shown = meta.id === quest.id ? meta : quest;
+  const criterion = shown.success_criterion ?? [];
 
   function setBeat(index: number, patch: Partial<BeatDraft>) {
     setBeats((current) => current.map((beat, beatIndex) => (beatIndex === index ? { ...beat, ...patch } : beat)));
   }
 
-  async function saveMeta() {
+  function setCriterionRow(index: number, patch: Partial<{ id: string; text: string; weight: number }>) {
+    const success_criterion = criterion.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row));
+    setMeta({ ...shown, success_criterion });
+  }
+
+  function setTeachBack(checked: boolean) {
+    setMeta({ ...shown, requires_teach_back: checked });
+    setBeats((current) => {
+      const without = current.filter((beat) => beat.role !== "teach_back");
+      return checked ? [...without, blankMove("teach_back")] : without;
+    });
+  }
+
+  function addMove(role: string) {
+    setBeats((current) => {
+      const next = [...current, blankMove(role)];
+      next.sort((left, right) => (ROLE_RANK[left.role] ?? 9) - (ROLE_RANK[right.role] ?? 9));
+      return next;
+    });
+  }
+
+  async function saveQuest() {
     onError(null);
+    const success_criterion = criterion.map((row) => ({ ...row }));
+    const prepared = beats.map((beat) =>
+      beat.role === "show" ? { ...beat, rubric: success_criterion.map((row) => ({ ...row })) } : beat,
+    );
     try {
-      const next = await api<QuestDetail>(`/quests/${quest.id}`, {
+      const patched = await api<QuestDetail>(`/quests/${quest.id}`, {
         method: "PATCH",
         body: JSON.stringify({
           title: shown.title,
@@ -581,26 +642,19 @@ function QuestEditor({
           prerequisite_codes: shown.prerequisite_codes,
           competency_tags: shown.competency_tags,
           dinner_prompt: shown.dinner_prompt,
+          learning_goal: shown.learning_goal,
+          success_criterion,
+          requires_teach_back: shown.requires_teach_back,
         }),
       });
-      setMeta(next);
-      onChange(next);
-      await onSaved();
-    } catch (err) {
-      onError(messageOf(err));
-    }
-  }
-
-  async function saveBeats() {
-    onError(null);
-    try {
       const next = await api<QuestDetail>(`/quests/${quest.id}/beats`, {
         method: "PUT",
-        body: JSON.stringify({ beats: beats.map(payloadBeat) }),
+        body: JSON.stringify({ beats: prepared.map(payloadBeat) }),
       });
-      setMeta(next);
-      setBeats(ROLES.map((role, index) => draftBeat(next.beats[index], index)));
+      setMeta(next.learning_goal ? next : { ...next, ...patched });
+      setBeats([...next.beats].sort((left, right) => left.position - right.position).map((beat) => draftBeat(beat)));
       onChange(next);
+      await onSaved();
     } catch (err) {
       onError(messageOf(err));
     }
@@ -645,7 +699,7 @@ function QuestEditor({
         />
       </label>
       <label>
-        Competency tags
+        Standard code
         <input
           value={shown.competency_tags.join(", ")}
           onChange={(event) =>
@@ -656,6 +710,71 @@ function QuestEditor({
           }
         />
       </label>
+      <p className="help">One or two codes from this course's dictionary, such as HSG.CO.A.1 or POL-1.D. They are shown, not used as a lock.</p>
+      <label>
+        Learning goal
+        <textarea
+          value={shown.learning_goal ?? ""}
+          onChange={(event) => setMeta({ ...shown, learning_goal: event.target.value })}
+        />
+      </label>
+      <p className="help">One sentence the student could say back.</p>
+      <h3>Success criterion</h3>
+      {criterion.map((row, index) => (
+        <div className="split" key={`criterion-${index}`}>
+          <label>
+            Id
+            <input value={row.id} onChange={(event) => setCriterionRow(index, { id: event.target.value })} />
+          </label>
+          <label>
+            Text
+            <input value={row.text} onChange={(event) => setCriterionRow(index, { text: event.target.value })} />
+          </label>
+          <label>
+            Weight
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={row.weight}
+              onChange={(event) => setCriterionRow(index, { weight: Number(event.target.value) })}
+            />
+          </label>
+        </div>
+      ))}
+      <div className="rail-actions">
+        {criterion.length < 3 ? (
+          <button
+            type="button"
+            className="ghost"
+            onClick={() =>
+              setMeta({
+                ...shown,
+                success_criterion: [...criterion, { id: "", text: "", weight: 0 }],
+              })
+            }
+          >
+            Add criterion row
+          </button>
+        ) : null}
+        {criterion.length > 2 ? (
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setMeta({ ...shown, success_criterion: criterion.slice(0, -1) })}
+          >
+            Remove criterion row
+          </button>
+        ) : null}
+      </div>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={Boolean(shown.requires_teach_back)}
+          onChange={(event) => setTeachBack(event.target.checked)}
+        />
+        Must explain (teach-back)
+      </label>
       <label>
         Parent dinner-table prompt
         <textarea
@@ -663,22 +782,48 @@ function QuestEditor({
           onChange={(event) => setMeta({ ...shown, dinner_prompt: event.target.value })}
         />
       </label>
-      <p className="help">The dinner-table prompt is stored only. It is not sent to the child.</p>
-      <button type="button" className="button" onClick={() => void saveMeta()}>Save quest</button>
-      <h3>Four beats</h3>
+      <p className="help">The dinner-table prompt is stored only. It is not sent to the child. Show holds the success criterion.</p>
+      <h3>Moves</h3>
+      <div className="rail-actions">
+        {ROLES.filter((role) => role !== "teach_back" || shown.requires_teach_back).map((role) => (
+          <button key={role} type="button" className="ghost" onClick={() => addMove(role)}>
+            Add {ROLE_LABEL[role]}
+          </button>
+        ))}
+      </div>
       {beats.map((beat, index) => (
-        <BeatFields key={beat.role} beat={beat} onChange={(patch) => setBeat(index, patch)} />
+        <BeatFields
+          key={`${beat.role}-${index}`}
+          beat={beat}
+          onChange={(patch) => setBeat(index, patch)}
+          onRemove={
+            beats.length > 1
+              ? () => setBeats((current) => current.filter((_, beatIndex) => beatIndex !== index))
+              : undefined
+          }
+        />
       ))}
-      <button type="button" className="button" onClick={() => void saveBeats()}>Save beats</button>
+      <button type="button" className="button" onClick={() => void saveQuest()}>Save quest</button>
     </article>
   );
 }
 
-function BeatFields({ beat, onChange }: { beat: BeatDraft; onChange: (patch: Partial<BeatDraft>) => void }) {
-  const typed = beat.role === "mystery_hook" || beat.role === "feynman_flip";
+function BeatFields({
+  beat,
+  onChange,
+  onRemove,
+}: {
+  beat: BeatDraft;
+  onChange: (patch: Partial<BeatDraft>) => void;
+  onRemove?: () => void;
+}) {
+  const typed = beat.role === "engage" || beat.role === "name" || beat.role === "teach_back";
   return (
     <fieldset className="beat-fields">
       <legend>{ROLE_LABEL[beat.role] ?? beat.role}</legend>
+      {onRemove ? (
+        <button type="button" className="ghost" onClick={onRemove}>Remove move</button>
+      ) : null}
       <div className="split">
         <label>
           Bloom level
@@ -808,7 +953,8 @@ function BeatFields({ beat, onChange }: { beat: BeatDraft; onChange: (patch: Par
           onChange={(event) => onChange({ hint_ladder: { ...beat.hint_ladder, scaffold: event.target.value } })}
         />
       </label>
-      {typed ? <p className="help">This beat stays a typed reply.</p> : (
+      {beat.role === "show" ? <p className="help">Show uses the success criterion above. Its rubric is saved from those rows.</p> : null}
+      {typed ? <p className="help">This move stays a typed reply.</p> : (
         <WidgetFields beat={beat} onChange={onChange} />
       )}
     </fieldset>
@@ -816,7 +962,7 @@ function BeatFields({ beat, onChange }: { beat: BeatDraft; onChange: (patch: Par
 }
 
 function WidgetFields({ beat, onChange }: { beat: BeatDraft; onChange: (patch: Partial<BeatDraft>) => void }) {
-  const optional = beat.role === "diagnostic_gate";
+  const optional = beat.role === "show";
   const widget = beat.widget ?? {
     type: "single" as const,
     prompt: "",
@@ -838,10 +984,10 @@ function WidgetFields({ beat, onChange }: { beat: BeatDraft; onChange: (patch: P
             checked={beat.useWidget}
             onChange={(event) => onChange({ useWidget: event.target.checked, widget: event.target.checked ? widget : null })}
           />
-          Use a widget on this gate
+          Use a widget on Show
         </label>
       ) : null}
-      {beat.useWidget || beat.role === "interactive_toy" ? (
+      {beat.useWidget || beat.role === "try" ? (
         <>
           <label>
             Widget type
@@ -850,6 +996,7 @@ function WidgetFields({ beat, onChange }: { beat: BeatDraft; onChange: (patch: P
               onChange={(event) => setWidget({ type: event.target.value as QuizInput["type"] })}
             >
               <option value="single">misconception MCQ</option>
+              <option value="multi">select all that fit</option>
               <option value="flaw">spot the flaw</option>
               <option value="order">ordering</option>
             </select>
@@ -922,7 +1069,7 @@ function WidgetFields({ beat, onChange }: { beat: BeatDraft; onChange: (patch: P
           </label>
         </>
       ) : (
-        <p className="help">This gate stays a typed reply until you turn the widget on.</p>
+        <p className="help">Show stays a typed reply until you turn the widget on.</p>
       )}
     </div>
   );

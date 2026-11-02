@@ -82,6 +82,9 @@ class Layer1Beat:
     finished: bool
     quest_objective: str = ""
     beat_objectives: tuple[str, ...] = ()
+    learning_goal: str = ""
+    success_criterion: tuple[RubricCriterion, ...] = ()
+    requires_teach_back: bool = False
 
 
 @dataclass(frozen=True)

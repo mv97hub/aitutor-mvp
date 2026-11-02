@@ -99,8 +99,8 @@ def open_session(db: Session, student_id: uuid.UUID, quest_id: uuid.UUID, fresh:
         if existing is not None:
             return existing
     beats = ordered_beats(quest)
-    if len(beats) != 4:
-        raise HTTPException(status_code=400, detail="This quest does not have four beats.")
+    if not beats:
+        raise HTTPException(status_code=400, detail="This quest does not have a move.")
     tutor_session = TutorSession(
         student_id=student.id,
         quest_id=quest.id,
@@ -224,7 +224,7 @@ def advance(db: Session, tutor_session: TutorSession, *, allow_unpassed: bool = 
         return {"ok": False, "reason": "This quest is already finished."}
     result = latest_result(tutor_session, beat.id)
     if result is None or (not result.passed and not allow_unpassed):
-        return {"ok": False, "reason": "This beat needs a passing result before moving on."}
+        return {"ok": False, "reason": "This move needs a passing result before moving on."}
     beats = ordered_beats(tutor_session.quest)
     index = next(i for i, item in enumerate(beats) if item.id == beat.id)
     tutor_session.updated_at = now()
@@ -279,11 +279,13 @@ def grade_widget(
         return {"ok": False, "reason": "This quest is finished, so there is nothing to score."}
     quiz = beat.widget if isinstance(beat.widget, dict) else None
     if quiz is None:
-        return {"ok": False, "reason": "This beat is a typed reply, not a choice widget."}
+        return {"ok": False, "reason": "This move is a typed reply, not a choice widget."}
     ids = choice_ids(choice)
     if not ids:
         return {"ok": False, "reason": "Choose an answer before sending."}
-    graded = grade_choice(quiz, ids if quiz.get("type") == "order" else ids[0])
+    graded = grade_choice(
+        quiz, ids if quiz.get("type") in {"multi", "order"} else ids[0]
+    )
     passed = graded["score"] >= PASS_SCORE
     tier = hint_tier_for(failed_attempts(tutor_session, beat.id))
     feedback = "That choice is right." if graded["correct"] else "That choice is not right."
@@ -322,6 +324,47 @@ def _weights(beat: Beat) -> dict[str, int]:
     return weights
 
 
+def _criterion_met(quest: Quest, rubric_met: list[str]) -> bool:
+    weights: dict[str, int] = {}
+    for row in quest.success_criterion or []:
+        if isinstance(row, dict) and row.get("id"):
+            weights[str(row["id"])] = int(row.get("weight") or 0)
+    total = sum(weights.values())
+    if total <= 0:
+        return False
+    earned = sum(weights[row_id] for row_id in rubric_met if row_id in weights)
+    return round(100 * earned / total) >= PASS_SCORE
+
+
+def _complete(db: Session, tutor_session: TutorSession) -> dict:
+    tutor_session.current_beat_id = None
+    tutor_session.status = "completed"
+    tutor_session.updated_at = now()
+    db.flush()
+    return {"ok": True, "completed": True, "current_beat": None}
+
+
+def _advance_move(
+    db: Session,
+    tutor_session: TutorSession,
+    beat: Beat,
+    met: list[str],
+    *,
+    reveal: bool,
+    advance_flag: bool,
+    passed: bool,
+) -> bool:
+    """Leave this move. A met criterion on Try or Show ends the quest."""
+    if beat.role in {"try", "show"} and _criterion_met(tutor_session.quest, met):
+        return bool(_complete(db, tutor_session).get("ok"))
+    if beat.role == "show" and reveal and advance_flag:
+        return bool(_complete(db, tutor_session).get("ok"))
+    if beat.role == "name" or (advance_flag and (passed or reveal)):
+        moved = advance(db, tutor_session, allow_unpassed=bool(beat.role == "name" or (reveal and not passed)))
+        return bool(moved.get("ok"))
+    return False
+
+
 def apply_turn_score(
     db: Session,
     tutor_session: TutorSession,
@@ -338,6 +381,26 @@ def apply_turn_score(
     quiz = beat.widget if isinstance(beat.widget, dict) else None
     note = blank_to_none(misconception)
     reveal = _window_closed(tutor_session, beat)
+    if beat.role == "name":
+        recorded = record_result(
+            db,
+            tutor_session,
+            100,
+            True,
+            "The idea is connected. The next move can start.",
+            rubric_met=met,
+            hint_tier=hint_tier_for(failed_attempts(tutor_session, beat.id)),
+        )
+        advanced = _advance_move(
+            db,
+            tutor_session,
+            beat,
+            met,
+            reveal=reveal,
+            advance_flag=True,
+            passed=True,
+        )
+        return {**recorded, "advanced": advanced, "graded_by": "model"}
     if quiz is not None and latest is not None and isinstance(latest.choice, dict):
         latest.rubric_met = met
         if not latest.misconception and note and not latest.passed:
@@ -348,11 +411,19 @@ def apply_turn_score(
             bool(advance_flag and latest.passed)
             or (latest.passed and not quiz.get("explain"))
             or bool(advance_flag and reveal)
+            or bool(beat.role in {"try", "show"} and _criterion_met(tutor_session.quest, met))
         )
         advanced = False
         if should_advance:
-            moved = advance(db, tutor_session, allow_unpassed=bool(reveal and not latest.passed))
-            advanced = bool(moved.get("ok"))
+            advanced = _advance_move(
+                db,
+                tutor_session,
+                beat,
+                met,
+                reveal=reveal,
+                advance_flag=advance_flag or bool(latest.passed and not quiz.get("explain")),
+                passed=latest.passed,
+            )
         return {
             "ok": True,
             "graded_by": "widget",
@@ -377,9 +448,9 @@ def apply_turn_score(
     score = round(100 * earned / total) if total else 0
     passed = score >= PASS_SCORE
     tier = hint_tier_for(failed_attempts(tutor_session, beat.id))
-    feedback = "That meets this beat." if passed else "Not yet. Use the hint and try again."
+    feedback = "That meets this move." if passed else "Not yet. Use the hint and try again."
     if reveal and not passed:
-        feedback = "The struggle window is over. A worked answer can move this beat on."
+        feedback = "The struggle window is over. A worked answer can move this on."
     recorded = record_result(
         db,
         tutor_session,
@@ -392,22 +463,49 @@ def apply_turn_score(
     )
     advanced = False
     if advance_flag and (passed or reveal):
-        moved = advance(db, tutor_session, allow_unpassed=bool(reveal and not passed))
-        advanced = bool(moved.get("ok"))
+        advanced = _advance_move(
+            db,
+            tutor_session,
+            beat,
+            met,
+            reveal=reveal,
+            advance_flag=True,
+            passed=passed,
+        )
+    elif beat.role in {"try", "show"} and _criterion_met(tutor_session.quest, met):
+        advanced = _advance_move(
+            db,
+            tutor_session,
+            beat,
+            met,
+            reveal=reveal,
+            advance_flag=False,
+            passed=passed,
+        )
     return {**recorded, "advanced": advanced, "graded_by": "model"}
 
 
-def blank_beats() -> list[dict]:
+def blank_beats(criterion: list[dict] | None = None) -> list[dict]:
+    """A starter cycle: engage, try, name, and show. Show holds the criterion."""
+    rows = criterion or [
+        {"id": "part-a", "text": "Names the first part of the idea.", "weight": 50},
+        {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
+    ]
     roles = (
-        ("mystery_hook", "understand", "Ask one question that opens the mystery of this quest."),
-        ("interactive_toy", "apply", "Which choice matches the idea this quest is building?"),
-        ("diagnostic_gate", "analyze", "Explain the idea in two parts the rubric can score."),
-        ("feynman_flip", "evaluate", "Teach the sidekick who states the misconception."),
+        ("engage", "understand", "Ask one short puzzle that opens this goal. No lecture."),
+        ("try", "apply", "One short attempt before the explanation."),
+        ("name", "understand", "Connect their try to the learning goal in a few clear sentences."),
+        ("show", "analyze", "Ask for the evidence in the success criterion."),
     )
     beats = []
     for role, bloom, prompt in roles:
         widget = None
-        if role == "interactive_toy":
+        rubric = rows if role == "show" else [
+            {"id": "part-a", "text": "Names the first part of the idea.", "weight": 50},
+            {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
+        ]
+        if role == "try":
+            rubric = [{"id": "choice", "text": "Selects the choice that matches the quest idea.", "weight": 100}]
             widget = {
                 "type": "single",
                 "prompt": prompt,
@@ -429,12 +527,7 @@ def blank_beats() -> list[dict]:
                 "bloom_level": bloom,
                 "cognitive_load": "medium",
                 "prompt": prompt,
-                "rubric": [
-                    {"id": "part-a", "text": "Names the first part of the idea.", "weight": 50},
-                    {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
-                ]
-                if role != "interactive_toy"
-                else [{"id": "choice", "text": "Selects the choice that matches the quest idea.", "weight": 100}],
+                "rubric": rubric,
                 "misconception_map": [
                     {
                         "id": "nearby",

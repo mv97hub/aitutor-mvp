@@ -23,8 +23,10 @@ from app.models import (
 
 BLOOM_LEVELS = {"remember", "understand", "apply", "analyze", "evaluate", "create"}
 LOADS = {"low", "medium", "high"}
-WIDGET_TYPES = {"single", "flaw", "order"}
-CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,39}$")
+WIDGET_TYPES = {"single", "multi", "flaw", "order"}
+TYPED_ROLES = {"engage", "name", "teach_back"}
+ROLE_ORDER = {role: index for index, role in enumerate(BEAT_ROLES)}
+CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,39}$")
 
 
 class CourseFileError(Exception):
@@ -50,12 +52,58 @@ def _as_list(value, field: str) -> list:
     return value
 
 
-def validate_beat(raw, field: str, *, role: str) -> dict:
+def normalize_goal(value, field: str) -> str:
+    goal = _text(value, field)
+    if _sentence_count(goal) != 1:
+        raise CourseFileError(field, "must be one sentence")
+    return goal
+
+
+def normalize_criterion(raw, field: str) -> list[dict]:
+    if not isinstance(raw, list):
+        raise CourseFileError(field, "must be a list")
+    rows = normalize_rows(raw)
+    if not 2 <= len(rows) <= 3:
+        raise CourseFileError(field, "needs two or three rows")
+    if sum(row["weight"] for row in rows) != 100:
+        raise CourseFileError(field, "weights must sum to 100")
+    return rows
+
+
+def check_moves(moves: list[dict], *, teach_back: bool, criterion: list[dict], field: str = "beats") -> None:
+    if not moves:
+        raise CourseFileError(field, "needs at least one move")
+    if len(moves) > 6:
+        raise CourseFileError(field, "needs at most six moves")
+    ranks = [ROLE_ORDER[move["role"]] for move in moves]
+    if ranks != sorted(ranks):
+        raise CourseFileError(field, "must stay in cycle order")
+    teach_indexes = [index for index, move in enumerate(moves) if move["role"] == "teach_back"]
+    if teach_back and not teach_indexes:
+        raise CourseFileError("requires_teach_back", "needs a teach-back move")
+    if teach_indexes and not teach_back:
+        raise CourseFileError(
+            f"{field}[{teach_indexes[0]}].role",
+            "teach-back is only for a quest that must explain",
+        )
+    if len(teach_indexes) > 1 or (teach_indexes and teach_indexes != [len(moves) - 1]):
+        raise CourseFileError(f"{field}[{teach_indexes[0]}].role", "teach-back must be the last move")
+    show_indexes = [index for index, move in enumerate(moves) if move["role"] == "show"]
+    if not show_indexes:
+        raise CourseFileError(field, "needs a show move for the success criterion")
+    criterion_key = [(row["id"], row["text"], row["weight"]) for row in criterion]
+    for index in show_indexes:
+        move_key = [(row["id"], row["text"], row["weight"]) for row in moves[index]["rubric"]]
+        if move_key != criterion_key:
+            raise CourseFileError(f"{field}[{index}].rubric", "must match the success criterion")
+
+
+def validate_move(raw, field: str) -> dict:
     if not isinstance(raw, dict):
         raise CourseFileError(field, "must be an object")
-    found = raw.get("role", role)
-    if found != role:
-        raise CourseFileError(f"{field}.role", f"must be {role}")
+    role = _text(raw.get("role"), f"{field}.role")
+    if role not in BEAT_ROLES:
+        raise CourseFileError(f"{field}.role", "must be engage, try, name, show, or teach_back")
     bloom = _text(raw.get("bloom_level"), f"{field}.bloom_level").lower()
     if bloom not in BLOOM_LEVELS:
         raise CourseFileError(f"{field}.bloom_level", "must be a Bloom level")
@@ -89,19 +137,17 @@ def validate_beat(raw, field: str, *, role: str) -> dict:
     if not traps:
         raise CourseFileError(f"{field}.misconception_map", "needs at least one trap")
     widget = raw.get("widget")
-    if role in {"mystery_hook", "feynman_flip"}:
+    if role in TYPED_ROLES:
         if widget not in (None, {}):
-            raise CourseFileError(f"{field}.widget", "must be empty on a typed beat")
+            raise CourseFileError(f"{field}.widget", "must be empty on this move")
         widget = None
-    elif role == "interactive_toy" and not widget:
-        raise CourseFileError(f"{field}.widget", "is required on the interactive toy")
     if widget:
         try:
             widget = normalize_quiz(widget)
         except HTTPException as exc:
             raise CourseFileError(f"{field}.widget", str(exc.detail)) from exc
         if widget["type"] not in WIDGET_TYPES:
-            raise CourseFileError(f"{field}.widget.type", "must be single, flaw, or order")
+            raise CourseFileError(f"{field}.widget.type", "must be single, multi, flaw, or order")
     return {
         "role": role,
         "bloom_level": bloom,
@@ -119,7 +165,7 @@ def validate_course(payload) -> dict:
         raise CourseFileError("course", "must be an object")
     code = _text(payload.get("code"), "code")
     if not CODE_RE.match(code):
-        raise CourseFileError("code", "must be letters, numbers, and hyphens")
+        raise CourseFileError("code", "must be letters, numbers, hyphens, and dots")
     title = _text(payload.get("title"), "title")
     age_band = _text(payload.get("age_band"), "age_band")
     if age_band not in AGE_BANDS:
@@ -134,7 +180,7 @@ def validate_course(payload) -> dict:
             raise CourseFileError(path, "must be an object")
         tag = _text(item.get("code"), f"{path}.code")
         if not CODE_RE.match(tag):
-            raise CourseFileError(f"{path}.code", "must be letters, numbers, and hyphens")
+            raise CourseFileError(f"{path}.code", "must be letters, numbers, hyphens, and dots")
         if tag in tags:
             raise CourseFileError(f"{path}.code", "is duplicated")
         tags.add(tag)
@@ -194,13 +240,22 @@ def validate_course(payload) -> dict:
                         "is not in the competency dictionary",
                     )
                 quest_tags.append(cleaned)
+            goal = normalize_goal(raw_quest.get("learning_goal"), f"{qpath}.learning_goal")
+            criterion = normalize_criterion(raw_quest.get("success_criterion"), f"{qpath}.success_criterion")
+            teach_back = raw_quest.get("requires_teach_back")
+            if not isinstance(teach_back, bool):
+                raise CourseFileError(f"{qpath}.requires_teach_back", "must be true or false")
             beats_raw = _as_list(raw_quest.get("beats"), f"{qpath}.beats")
-            if len(beats_raw) != 4:
-                raise CourseFileError(f"{qpath}.beats", "must contain exactly four beats")
             beats = [
-                validate_beat(beats_raw[index], f"{qpath}.beats[{index}]", role=role)
-                for index, role in enumerate(BEAT_ROLES)
+                validate_move(beat, f"{qpath}.beats[{index}]")
+                for index, beat in enumerate(beats_raw)
             ]
+            check_moves(
+                beats,
+                teach_back=teach_back,
+                criterion=criterion,
+                field=f"{qpath}.beats",
+            )
             quests.append(
                 {
                     "code": quest_code,
@@ -209,6 +264,9 @@ def validate_course(payload) -> dict:
                     "prerequisite_codes": prereqs,
                     "competency_tags": quest_tags,
                     "dinner_prompt": _text(raw_quest.get("dinner_prompt"), f"{qpath}.dinner_prompt"),
+                    "learning_goal": goal,
+                    "success_criterion": criterion,
+                    "requires_teach_back": teach_back,
                     "beats": beats,
                 }
             )
@@ -267,6 +325,9 @@ def export_course(course: Course) -> dict:
                         "prerequisite_codes": list(quest.prerequisite_codes or []),
                         "competency_tags": list(quest.competency_tags or []),
                         "dinner_prompt": quest.dinner_prompt,
+                        "learning_goal": quest.learning_goal,
+                        "success_criterion": copy.deepcopy(quest.success_criterion or []),
+                        "requires_teach_back": bool(quest.requires_teach_back),
                         "beats": [
                             {
                                 "role": beat.role,
@@ -314,6 +375,9 @@ def _write_tree(course: Course, payload: dict) -> None:
                 prerequisite_codes=quest_body["prerequisite_codes"],
                 competency_tags=quest_body["competency_tags"],
                 dinner_prompt=quest_body["dinner_prompt"],
+                learning_goal=quest_body["learning_goal"],
+                success_criterion=quest_body["success_criterion"],
+                requires_teach_back=quest_body["requires_teach_back"],
                 position=position,
             )
             unit.quests.append(quest)
