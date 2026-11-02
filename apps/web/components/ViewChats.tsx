@@ -1,10 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { BrandMark } from "@/components/BrandMark";
-import { DeskSwitch } from "@/components/DeskSwitch";
+import { AdminFrame } from "@/components/admin/AdminFrame";
 import { api } from "@/lib/api";
 import type { ModelPrompt, SessionDetail, SessionSummary, Student } from "@/lib/types";
 
@@ -89,12 +87,10 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
   }, [sessionId]);
 
   return (
-    <main className="ds-shell ds-desk">
-      <aside className="ds-side">
-        <div className="ds-logo">
-          <BrandMark />
-        </div>
-        <DeskSwitch current="chats" />
+    <AdminFrame
+      current="chats"
+      sidebar={
+        <>
         <label>
           Student
           <select value={studentFilter} onChange={(event) => setStudentFilter(event.target.value)}>
@@ -122,12 +118,9 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
             </li>
           ))}
         </ul>
-        <div className="ds-foot">
-          <Link className="ds-settings" href="/admin">Edit lessons</Link>
-          <Link className="ds-settings" href="/">Kid session</Link>
-        </div>
-      </aside>
-      <section className="ds-work">
+        </>
+      }
+    >
         {error ? (
           <div className="banner" role="alert" style={{ margin: 18 }}>
             <p>{error}</p>
@@ -139,8 +132,7 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
             <p className="help">The transcript opens here. This page does not edit blocks.</p>
           </article>
         )}
-      </section>
-    </main>
+    </AdminFrame>
   );
 }
 
