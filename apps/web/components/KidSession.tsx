@@ -165,11 +165,13 @@ function GearIcon() {
 function ProfileFields({
   draft,
   saving,
+  notice,
   onChange,
   onSubmit,
 }: {
   draft: ProfileDraft;
   saving: boolean;
+  notice: string | null;
   onChange: (next: ProfileDraft) => void;
   onSubmit: (event: FormEvent) => void;
 }) {
@@ -265,10 +267,88 @@ function ProfileFields({
           Hold the answer during the struggle window
         </label>
       </div>
+      {notice ? (
+        <div className="banner" role="alert">
+          <p>{notice}</p>
+        </div>
+      ) : null}
       <div className="rail-actions">
         <button className="button" type="submit" disabled={saving}>Save settings</button>
       </div>
     </form>
+  );
+}
+
+function SettingsDialog({
+  learner,
+  draft,
+  saving,
+  notice,
+  goals,
+  onChange,
+  onSubmit,
+  onClose,
+}: {
+  learner: Student;
+  draft: ProfileDraft;
+  saving: boolean;
+  notice: string | null;
+  goals: string | null;
+  onChange: (next: ProfileDraft) => void;
+  onSubmit: (event: FormEvent) => void;
+  onClose: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    panelRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const subtitle = learner.age == null ? learner.display_name : `${learner.display_name} · age ${learner.age}`;
+
+  return (
+    <div className="prompt-backdrop" role="presentation" onMouseDown={onClose}>
+      <div
+        ref={panelRef}
+        className="prompt-dialog settings-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        tabIndex={-1}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <h2 id="settings-title">Settings</h2>
+            <p>{subtitle}</p>
+          </div>
+          <button type="button" className="ghost" onClick={onClose}>Close</button>
+        </header>
+        <div className="prompt-body">
+          <ProfileFields
+            draft={draft}
+            saving={saving}
+            notice={notice}
+            onChange={onChange}
+            onSubmit={onSubmit}
+          />
+          {goals ? (
+            <div className="ds-menu-goals">
+              <p>Enduring understanding</p>
+              <span>{goals}</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -457,27 +537,11 @@ export function KidSession({
   const [classesOpen, setClassesOpen] = useState(false);
   const [profile, setProfile] = useState<ProfileDraft | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [quests, setQuests] = useState<QuestListItem[]>([]);
   const [courseId, setCourseId] = useState("");
   const [questId, setQuestId] = useState("");
-  const settingsRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!settingsOpen) return;
-    function onPointer(event: PointerEvent) {
-      if (!settingsRef.current?.contains(event.target as Node)) setSettingsOpen(false);
-    }
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setSettingsOpen(false);
-    }
-    window.addEventListener("pointerdown", onPointer);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onPointer);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [settingsOpen]);
 
   useEffect(() => {
     setProfile(learner ? profileFrom(learner) : null);
@@ -622,7 +686,7 @@ export function KidSession({
     event.preventDefault();
     if (!learner || !profile) return;
     setSavingProfile(true);
-    setError(null);
+    setSettingsError(null);
     try {
       const student = await api<Student>(`/students/${learner.id}`, {
         method: "PATCH",
@@ -645,8 +709,9 @@ export function KidSession({
       if (board && board.student.id === student.id) {
         setBoard({ ...board, student });
       }
+      setSettingsOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save those settings.");
+      setSettingsError(err instanceof Error ? err.message : "Could not save those settings.");
     } finally {
       setSavingProfile(false);
     }
@@ -787,55 +852,46 @@ export function KidSession({
             </li>
           ))}
         </ul>
-        <div className="ds-foot" ref={settingsRef}>
-          {settingsOpen ? (
-            <div className="ds-menu" role="dialog" aria-label="Settings">
-              <p className="ds-menu-name">
-                {learner.display_name}
-                {learner.age == null ? "" : ` · age ${learner.age}`}
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setSettingsOpen(false);
-                  setLearner(null);
-                  setBoard(null);
-                  setMaking(false);
-                  setClassesOpen(false);
-                }}
-              >
-                Switch child
-              </button>
-              <Link href="/admin" onClick={() => setSettingsOpen(false)}>
-                Edit lessons
-              </Link>
-              {board && !making ? (
-                <div className="ds-menu-goals">
-                  <p>Enduring understanding</p>
-                  <span>{board.enduring_understanding}</span>
-                </div>
-              ) : null}
-              {profile ? (
-                <ProfileFields
-                  draft={profile}
-                  saving={savingProfile}
-                  onChange={setProfile}
-                  onSubmit={(event) => void saveProfile(event)}
-                />
-              ) : null}
-            </div>
-          ) : null}
+        <div className="ds-foot">
+          <button
+            type="button"
+            className="ds-settings"
+            onClick={() => {
+              setSettingsOpen(false);
+              setLearner(null);
+              setBoard(null);
+              setMaking(false);
+              setClassesOpen(false);
+            }}
+          >
+            Switch child
+          </button>
           <button
             type="button"
             className="ds-settings"
             aria-expanded={settingsOpen}
             aria-haspopup="dialog"
-            onClick={() => setSettingsOpen((open) => !open)}
+            onClick={() => {
+              setSettingsError(null);
+              setSettingsOpen((open) => !open);
+            }}
           >
             <GearIcon />
             Settings
           </button>
         </div>
+        {settingsOpen && profile ? (
+          <SettingsDialog
+            learner={learner}
+            draft={profile}
+            saving={savingProfile}
+            notice={settingsError}
+            goals={board && !making ? board.enduring_understanding : null}
+            onChange={setProfile}
+            onSubmit={(event) => void saveProfile(event)}
+            onClose={() => setSettingsOpen(false)}
+          />
+        ) : null}
       </aside>
       <section className="ds-stage">
         <header className="ds-header">

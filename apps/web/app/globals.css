@@ -615,6 +615,21 @@ textarea { min-height: 88px; resize: vertical; }
 
 .prompt-dialog header p { margin: 2px 0 0; color: var(--ink-soft); font-size: 13px; }
 
+.settings-dialog { width: min(440px, 100%); }
+
+.settings-dialog .ds-profile {
+  margin-top: 0;
+  padding: 0;
+  border-top: 0;
+}
+
+.settings-dialog .ds-menu-goals {
+  margin-top: 12px;
+  padding: 12px 0 0;
+}
+
+.settings-dialog .banner { margin-top: 12px; }
+
 .prompt-body {
   overflow: auto;
   padding: 16px;
@@ -944,7 +959,13 @@ body:has(.ds-landing) {
   line-height: 16px;
 }
 
-.ds-foot { position: relative; flex: none; padding-top: 4px; }
+.ds-foot {
+  position: relative;
+  display: grid;
+  flex: none;
+  gap: 2px;
+  padding-top: 4px;
+}
 
 .ds-settings {
   display: flex;
@@ -1395,6 +1416,7 @@ body:has(.ds-landing) {
 }
 .ds-shell .ghost:hover { background: rgba(38, 49, 72, 0.06); }
 .ds-shell textarea { min-height: 0; }
+.ds-shell .settings-dialog textarea { min-height: 72px; }
 
 a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
 
