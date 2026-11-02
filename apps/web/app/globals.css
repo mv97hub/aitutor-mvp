@@ -1703,12 +1703,16 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
     text-align: left;
     cursor: pointer;
   }
-  .ds-list { display: none; }
-  .ds-list.is-open {
+  #class-list { display: none; }
+  #class-list.is-open {
     display: grid;
     flex: none;
     max-height: min(240px, 40dvh);
     margin-bottom: 8px;
+  }
+  .ds-desk .ds-list {
+    flex: none;
+    max-height: min(280px, 42dvh);
   }
   .ds-menu {
     position: fixed;
