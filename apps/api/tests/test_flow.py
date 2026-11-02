@@ -119,29 +119,68 @@ def test_create_student_keeps_layer_2_apart_from_tutor_settings() -> None:
         defaults = client.get("/profile-defaults", params={"age": 16}).json()
         assert "Moderator" in defaults["tutor_persona"]
         assert defaults["reading_level"] == "high-school"
+        named = client.post("/students", json={"display_name": "Grace Hopper", "age": 10})
+        assert named.status_code == 200
+        assert named.json()["reading_level"] == "middle-grade"
+        assert "Co-Explorer" in named.json()["tutor_persona"]
+        patched = client.patch(
+            f"/students/{named.json()['id']}",
+            json={
+                "reading_level": "early-reader",
+                "modality": "hands-on",
+                "interests": ["ships"],
+                "tutor_persona": "Harbor Guide",
+                "tutor_lexicon": "short concrete words",
+                "tutor_metaphors": "ships and maps",
+                "tutor_sidekick": "a cabin kid",
+                "tutor_socratic_strictness": "balanced",
+                "tutor_struggle_window": "minimum",
+                "tutor_anti_spoiler": True,
+                "tutor_pacing": "short-turns-one-question",
+            },
+        )
+        assert patched.status_code == 200
+        assert patched.json()["reading_level"] == "early-reader"
+        assert patched.json()["interests"] == ["ships"]
+        assert patched.json()["tutor_persona"] == "Harbor Guide"
+        assert patched.json()["age"] == 10
     finally:
         _drop_named("Ada Lovelace")
+        _drop_named("Grace Hopper")
 
 
-def test_age_gate_and_any_quest_in_band() -> None:
+def test_any_age_can_open_any_course() -> None:
     storm = _student("storm")["id"]
     wolverine = _student("wolverine")["id"]
-    macro = _quest("MAC-U4-Q1")
-    branch = _quest("ROM-U4-Q2A")
-    blocked = client.post("/sessions", json={"student_id": storm, "quest_id": macro["id"], "fresh": True})
-    assert blocked.status_code == 400
-    assert "15-17" in blocked.json()["detail"]
-    opened = client.post("/sessions", json={"student_id": storm, "quest_id": branch["id"], "fresh": True})
-    assert opened.status_code == 200
-    body = opened.json()
-    assert body["quest_code"] == "ROM-U4-Q2A"
-    assert body["current_block"]["kind"] == "mystery_hook"
-    assert len(body["steps"]) == 4
-    older = client.post(
+    courses = {course["code"]: course["age_band"] for course in client.get("/courses").json()}
+    assert courses["rome"] == "9-11"
+    assert courses["geometry"] == "12-14"
+    assert courses["macro"] == "15-17"
+    macro = client.post(
+        "/sessions",
+        json={"student_id": storm, "quest_id": _quest("MAC-U4-Q1")["id"], "fresh": True},
+    )
+    assert macro.status_code == 200
+    assert macro.json()["quest_code"] == "MAC-U4-Q1"
+    rome = client.post(
         "/sessions",
         json={"student_id": wolverine, "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
     )
-    assert older.status_code == 400
+    assert rome.status_code == 200
+    assert rome.json()["course_code"] == "rome"
+    geometry = client.post(
+        "/sessions",
+        json={"student_id": storm, "quest_id": _quest("GEO-U2-Q2")["id"], "fresh": True},
+    )
+    assert geometry.status_code == 200
+    assert geometry.json()["course_code"] == "geometry"
+    branch = client.post(
+        "/sessions",
+        json={"student_id": storm, "quest_id": _quest("ROM-U4-Q2A")["id"], "fresh": True},
+    )
+    assert branch.status_code == 200
+    assert branch.json()["current_block"]["kind"] == "mystery_hook"
+    assert len(branch.json()["steps"]) == 4
 
 
 def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
@@ -157,6 +196,10 @@ def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
     assert "Layer 7 — Memory" in prompt["system_prompt"]
     assert "Curious Co-Explorer" in prompt["system_prompt"]
     assert "weather" in prompt["system_prompt"]
+    assert "short summary of what this quest will teach" in prompt["system_prompt"]
+    assert "Do not invent a different topic" in prompt["system_prompt"]
+    assert "How did Plebeians peacefully win fair rights" in prompt["system_prompt"]
+    assert "worked answer" not in prompt["system_prompt"].lower()
     assert prompt["temperature"] == 0.4
     assert "reply" in prompt["response_schema"]["properties"]
 
@@ -188,6 +231,29 @@ def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
     assert moved.json()["graded_by"] == "widget"
     assert moved.json()["advanced"] is True
     assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "diagnostic_gate"
+
+
+def test_struggle_window_then_worked_answer_advances() -> None:
+    storm = _student("storm")["id"]
+    opened = client.post(
+        "/sessions",
+        json={"student_id": storm, "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
+    )
+    session_id = opened.json()["id"]
+    held = {"rubric_met": [], "misconception": None, "hint_tier": "nudge", "advance": True}
+    first = client.post(f"/sessions/{session_id}/turn-score", json=held)
+    assert first.json()["passed"] is False
+    assert first.json()["advanced"] is False
+    second = client.post(f"/sessions/{session_id}/turn-score", json=held)
+    assert second.json()["advanced"] is False
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "mystery_hook"
+    revealed = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+    assert "The struggle window is over" in revealed
+    assert "worked answer" in revealed.lower()
+    third = client.post(f"/sessions/{session_id}/turn-score", json=held)
+    assert third.json()["passed"] is False
+    assert third.json()["advanced"] is True
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "interactive_toy"
 
 
 def test_four_beats_finish_the_quest() -> None:

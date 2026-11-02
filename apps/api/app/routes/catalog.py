@@ -32,6 +32,7 @@ from app.schemas import (
     QuestPatch,
     StudentCreate,
     StudentOut,
+    StudentPatch,
     UnitCreate,
     UnitPatch,
 )
@@ -115,6 +116,38 @@ def create_student(body: StudentCreate, db: Session = Depends(get_db)) -> Studen
         student.tutor_pacing = body.tutor_pacing.strip()
     apply_student_profile(student, provided=provided)
     db.add(student)
+    db.flush()
+    return student_out(student)
+
+
+@router.patch("/students/{student_id}", response_model=StudentOut)
+def patch_student(student_id: UUID, body: StudentPatch, db: Session = Depends(get_db)) -> StudentOut:
+    student = db.get(Student, student_id)
+    if student is None:
+        raise HTTPException(status_code=404, detail="Student not found")
+    provided = _provided(body)
+    if "reading_level" in provided and body.reading_level is not None:
+        student.reading_level = body.reading_level.strip()
+    if "modality" in provided and body.modality is not None:
+        student.modality = body.modality.strip()
+    if "interests" in provided:
+        student.interests = _clean_list(body.interests)
+    if "tutor_persona" in provided and body.tutor_persona is not None:
+        student.tutor_persona = body.tutor_persona.strip()
+    if "tutor_lexicon" in provided and body.tutor_lexicon is not None:
+        student.tutor_lexicon = body.tutor_lexicon.strip()
+    if "tutor_metaphors" in provided and body.tutor_metaphors is not None:
+        student.tutor_metaphors = body.tutor_metaphors.strip()
+    if "tutor_sidekick" in provided and body.tutor_sidekick is not None:
+        student.tutor_sidekick = body.tutor_sidekick.strip()
+    if "tutor_socratic_strictness" in provided and body.tutor_socratic_strictness is not None:
+        student.tutor_socratic_strictness = body.tutor_socratic_strictness.strip()
+    if "tutor_struggle_window" in provided and body.tutor_struggle_window is not None:
+        student.tutor_struggle_window = body.tutor_struggle_window.strip()
+    if "tutor_anti_spoiler" in provided and body.tutor_anti_spoiler is not None:
+        student.tutor_anti_spoiler = body.tutor_anti_spoiler
+    if "tutor_pacing" in provided and body.tutor_pacing is not None:
+        student.tutor_pacing = body.tutor_pacing.strip()
     db.flush()
     return student_out(student)
 

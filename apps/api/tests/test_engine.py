@@ -1,7 +1,7 @@
 import inspect
 from pathlib import Path
 
-from app.engine.assemble import RESPONSE_SCHEMA, TURN_TEMPERATURE, assemble, hint_tier_for
+from app.engine.assemble import RESPONSE_SCHEMA, TURN_TEMPERATURE, assemble, hint_tier_for, struggle_limit
 from app.engine.defaults import age_band_for, profile_for_age
 from app.engine.placeholders import affect_layer, memory_layer, metacognition_layer
 from app.engine.types import (
@@ -127,7 +127,8 @@ def test_prompt_includes_all_seven_layers_and_keeps_tutor_settings_apart() -> No
     assert "Growth-mindset praise only" in text
     assert "one self-explanation line" in text
     assert "No live Leitner scheduling" in text
-    assert "do not state the answer before the diagnostic gate is passed" in text.lower()
+    assert "do not state the answer yet" in text.lower()
+    assert "worked answer" not in text.lower()
     assert "At most a few sentences" in text
     assert "Ask one question" in text
     assert "King Tarquin abused solo lifetime power" in text
@@ -150,6 +151,42 @@ def test_attempt_count_selects_the_hint_rung() -> None:
     assert hint_tier_for(2) == "scaffold"
     assert "Live hint tier for this turn: scaffold" in text
     assert "Fill in the blank." in text
+
+
+def test_struggle_window_then_worked_answer() -> None:
+    assert struggle_limit("minimum") == 2
+    layers = list(_layers())
+    layers[1] = Layer2Student(
+        display_name="Storm",
+        age_band="9-11",
+        reading_level="middle-grade",
+        modality="story",
+        interests=(),
+        attempt_count=2,
+        zpd="support",
+    )
+    text = assemble(*layers).system_prompt
+    assert "The struggle window is over" in text
+    assert "worked answer" in text.lower()
+    assert "Set advance to true" in text
+    assert "do not state the answer yet" not in text.lower()
+
+
+def test_kickoff_summarizes_the_quest_objectives() -> None:
+    layers = list(_layers())
+    layers[0] = _beat(
+        quest_objective="Sharing power and writing laws in public protects regular citizens.",
+        beat_objectives=(
+            "Mystery hook: What is one advantage and one problem of two consuls?",
+            "Interactive toy: How did Plebeians peacefully win fair rights?",
+        ),
+    )
+    text = assemble(*layers, kickoff=True).system_prompt
+    assert "short summary of what this quest will teach" in text
+    assert "Do not invent a different topic" in text
+    assert "Sharing power and writing laws in public protects regular citizens." in text
+    assert "How did Plebeians peacefully win fair rights?" in text
+    assert "advance to false" in text
 
 
 def test_age_band_defaults() -> None:

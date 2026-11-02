@@ -26,6 +26,13 @@ from app.queries import latest_result, locate_beat, ordered_beats
 
 PASS_SCORE = 70
 
+_BEAT_LABEL = {
+    "mystery_hook": "Mystery hook",
+    "interactive_toy": "Interactive toy",
+    "diagnostic_gate": "Diagnostic gate",
+    "feynman_flip": "Feynman flip",
+}
+
 
 def _rows(beat: Beat) -> tuple[RubricCriterion, ...]:
     rows = []
@@ -117,6 +124,41 @@ def _zpd(tutor_session: TutorSession, beat: Beat | None) -> str:
     return "on-level"
 
 
+def _quest_objective(quest) -> str:
+    unit = quest.unit
+    course = unit.course
+    descriptions: dict[str, str] = {}
+    for item in course.competency_dictionary or []:
+        if isinstance(item, dict) and item.get("code"):
+            descriptions[str(item["code"])] = str(item.get("description") or "").strip()
+    taught: list[str] = []
+    for tag in quest.competency_tags or []:
+        code = str(tag).strip()
+        if not code:
+            continue
+        text = descriptions.get(code, "")
+        taught.append(f"{code}: {text}" if text else code)
+    parts: list[str] = []
+    enduring = (unit.enduring_understanding or "").strip()
+    if enduring:
+        parts.append(enduring)
+    if taught:
+        parts.append("This quest teaches " + "; ".join(taught) + ".")
+    title = (quest.title or "").strip()
+    if title:
+        parts.append(title + ".")
+    return " ".join(parts)
+
+
+def _beat_objectives(beats: list[Beat]) -> tuple[str, ...]:
+    lines: list[str] = []
+    for beat in beats:
+        label = _BEAT_LABEL.get(beat.role, beat.role.replace("_", " "))
+        task = (beat.prompt or "").strip() or "None."
+        lines.append(f"{label}: {task}")
+    return tuple(lines)
+
+
 def _failed(tutor_session: TutorSession, beat_id) -> int:
     return sum(
         1
@@ -131,6 +173,8 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
     course = unit.course
     student = tutor_session.student
     beats = ordered_beats(quest)
+    quest_objective = _quest_objective(quest)
+    beat_objectives = _beat_objectives(beats)
     current = locate_beat(quest, tutor_session.current_beat_id)
     gate = next((beat for beat in beats if beat.role == "diagnostic_gate"), None)
     gate_cleared = False
@@ -161,6 +205,8 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             pass_score=PASS_SCORE,
             gate_cleared=False,
             finished=True,
+            quest_objective=quest_objective,
+            beat_objectives=beat_objectives,
         )
         attempt_count = 0
     else:
@@ -183,6 +229,8 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             pass_score=PASS_SCORE,
             gate_cleared=gate_cleared,
             finished=finished,
+            quest_objective=quest_objective,
+            beat_objectives=beat_objectives,
         )
         attempt_count = 0 if finished or current is None else _failed(tutor_session, current.id)
     interests = tuple(str(item) for item in (student.interests or []) if str(item).strip())

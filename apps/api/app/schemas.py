@@ -47,6 +47,20 @@ class StudentCreate(BaseModel):
     tutor_pacing: str | None = None
 
 
+class StudentPatch(BaseModel):
+    reading_level: str | None = None
+    modality: str | None = None
+    interests: list[str] | None = None
+    tutor_persona: str | None = None
+    tutor_lexicon: str | None = None
+    tutor_metaphors: str | None = None
+    tutor_sidekick: str | None = None
+    tutor_socratic_strictness: str | None = None
+    tutor_struggle_window: str | None = None
+    tutor_anti_spoiler: bool | None = None
+    tutor_pacing: str | None = None
+
+
 class ProfileDefaults(BaseModel):
     age_band: str
     reading_level: str

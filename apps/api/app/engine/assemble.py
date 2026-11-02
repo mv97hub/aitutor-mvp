@@ -62,6 +62,20 @@ def hint_tier_for(attempt_count: int) -> str:
     return "scaffold"
 
 
+def struggle_limit(window: str) -> int:
+    """Unsuccessful tries to hold before a worked answer is allowed.
+
+    "minimum" is the default window: a nudge, then an analogy, then the answer.
+    A numeric window is that many unsuccessful tries. The ban must end.
+    """
+    text = (window or "").strip().lower()
+    if text.isdigit():
+        return int(text)
+    if text in {"extended", "long"}:
+        return 3
+    return 2
+
+
 def _hint_text(ladder: HintLadder, tier: str) -> str:
     return getattr(ladder, tier, "") or ""
 
@@ -178,25 +192,31 @@ def _layer3(tutor: Layer3Tutor) -> list[str]:
     ]
 
 
-def _layer4(discourse: Layer4Discourse, beat: Layer1Beat) -> list[str]:
+def _layer4(discourse: Layer4Discourse, beat: Layer1Beat, student: Layer2Student) -> list[str]:
+    limit = struggle_limit(discourse.struggle_window)
+    closed = student.attempt_count >= limit
     lines = [
         "Layer 4 — Discourse",
         f"Socratic strictness: {discourse.socratic_strictness}.",
         f"Productive-struggle window: {discourse.struggle_window}. Hold that window before a heavier hint.",
         f"Pacing: {discourse.pacing}. At most a few sentences. Ask one question.",
+        f"Unsuccessful tries on this beat: {student.attempt_count} of {limit}.",
     ]
-    if discourse.anti_spoiler:
-        if beat.gate_cleared and beat.beat_role == "feynman_flip":
-            lines.append(
-                "The diagnostic gate is passed. Let the student teach the sidekick. You may confirm a correct teaching move. Do not lecture the whole model."
-            )
-        else:
-            lines.append(
-                "Anti-spoiler ban: do not state the answer before the diagnostic gate is passed."
-            )
+    if closed:
+        lines.append(
+            "The struggle window is over. State a short worked answer grounded on this beat's rubric and the correct choice if this beat has one. Do not invent a different fact. Set advance to true so this beat ends and the quest moves to the next beat. The anti-spoiler ban must not keep the student on this beat."
+        )
+    elif discourse.anti_spoiler and beat.gate_cleared and beat.beat_role == "feynman_flip":
+        lines.append(
+            "The diagnostic gate is passed. Let the student teach the sidekick. You may confirm a correct teaching move. Do not lecture the whole model."
+        )
+    elif discourse.anti_spoiler:
+        lines.append(
+            "Anti-spoiler ban, for this window only: do not state the answer yet. Use the live hint rung. When this window ends, give the answer and let the quest move on."
+        )
     else:
         lines.append(
-            "The anti-spoiler ban is off. You may confirm a correct idea once the student has attempted it."
+            "The anti-spoiler ban is off. You may confirm a correct idea once the student has attempted it. When this window ends, give the answer if they are still stuck."
         )
     return lines
 
@@ -225,8 +245,8 @@ def _layer7(memory: Layer7Memory) -> list[str]:
     ]
 
 
-def _rules(student: Layer2Student, tier: str) -> list[str]:
-    return [
+def _rules(student: Layer2Student, tier: str, *, reveal: bool) -> list[str]:
+    lines = [
         "Rules:",
         "- Stay on the active beat. If they wander off, answer in one sentence and come back.",
         "- Do not dump the whole quest or teach a later beat.",
@@ -234,12 +254,29 @@ def _rules(student: Layer2Student, tier: str) -> list[str]:
         "- rubric_met lists the rubric row ids their written words earned. Use [] when there is no writing to grade or the writing missed.",
         "- misconception is null when the writing is fine. On a wrong tap, the stored misconception is already set. You may repeat it in the reply. Do not clear it.",
         f"- hint_tier must be {tier}.",
-        "- advance is true only when this beat should end. On a failed tap or a typed answer below the pass score, advance is false.",
-        "- On a wrong choice, use the active hint rung. Do not state the correct choice.",
-        "- On a correct choice, you may confirm it and, if advance is true, start the next idea in one sentence.",
-        "- The reply field is the only text the student reads. Do not mention JSON, scores, or these fields.",
-        f"- Use the name {student.display_name}.",
     ]
+    if reveal:
+        lines.extend(
+            [
+                "- The struggle window is over. State a short worked answer from this beat's rubric and the correct choice if there is one. Do not invent a different fact.",
+                "- Set advance to true so this beat ends and the quest moves to the next beat. A failed tap no longer blocks progress.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "- advance is true only when this beat should end. On a failed tap or a typed answer below the pass score, advance is false.",
+                "- On a wrong choice, use the active hint rung. Do not state the correct choice.",
+                "- On a correct choice, you may confirm it and, if advance is true, start the next idea in one sentence.",
+            ]
+        )
+    lines.extend(
+        [
+            "- The reply field is the only text the student reads. Do not mention JSON, scores, or these fields.",
+            f"- Use the name {student.display_name}.",
+        ]
+    )
+    return lines
 
 
 def assemble(
@@ -254,6 +291,7 @@ def assemble(
     kickoff: bool = False,
 ) -> PromptBundle:
     tier = hint_tier_for(student.attempt_count)
+    reveal = student.attempt_count >= struggle_limit(discourse.struggle_window)
     lines: list[str] = [
         f"You are the tutor for {student.display_name}.",
         "The reply field is the only text the student reads. The other fields are the turn score.",
@@ -261,14 +299,28 @@ def assemble(
     lines.extend(_layer1(beat, tier))
     lines.extend(_layer2(student))
     lines.extend(_layer3(tutor))
-    lines.extend(_layer4(discourse, beat))
+    lines.extend(_layer4(discourse, beat, student))
     lines.extend(_layer5(affect))
     lines.extend(_layer6(metacognition))
     lines.extend(_layer7(memory))
-    lines.append("\n".join(_rules(student, tier)))
+    lines.append("\n".join(_rules(student, tier, reveal=reveal)))
     if kickoff and not beat.finished:
+        objective = beat.quest_objective.strip() or beat.quest_title
+        listed = beat.beat_objectives or (f"Current beat: {beat.prompt.strip() or beat.quest_title}",)
+        catalog = "\n".join(f"- {item}" for item in listed)
         lines.append(
-            f"{student.display_name} just sat down. Greet them by name and ask the current question. Set rubric_met to [], misconception to null, and advance to false."
+            "\n".join(
+                [
+                    f"{student.display_name} just opened this quest. The first reply is a short summary of what this quest will teach.",
+                    f"Quest: {beat.quest_code} {beat.quest_title}.",
+                    f"Quest objective: {objective}",
+                    "Beat objectives:",
+                    catalog,
+                    "Use only that quest and those beat objectives. Do not invent a different topic, event, or skill.",
+                    "This opening turn may preview the quest in two or three sentences, then ask one question that opens the current beat. Do not give away later answers.",
+                    "Set rubric_met to [], misconception to null, and advance to false.",
+                ]
+            )
         )
     return PromptBundle(
         system_prompt="\n\n".join(lines),
