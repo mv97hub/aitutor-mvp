@@ -1,45 +1,43 @@
 from __future__ import annotations
 
-from app.flow import checkpoint_state, failed_attempts
-from app.models import (
-    Checkpoint,
-    CheckpointResult,
-    LessonPlan,
-    Message,
-    ModelPrompt,
-    Session as TutorSession,
-    Topic,
-)
-from app.queries import flat_checkpoints, locate, latest_result
+from app.engine.assemble import hint_tier_for
+from app.engine.defaults import age_band_for
+from app.flow import beat_state, failed_attempts
+from app.models import Beat, BeatResult, Course, Message, ModelPrompt, Quest, Session as TutorSession
+from app.queries import latest_result, locate_beat, ordered_beats
 from app.schemas import (
-    AdminCheckpoint,
-    AdminTopic,
+    BeatOut,
     BlockStep,
-    BoardCheckpoint,
+    BoardBeat,
     BoardOut,
     BoardResult,
-    BoardTopic,
-    CheckpointContext,
-    ContextOut,
+    CourseSummary,
+    CourseTree,
     CurrentBlock,
-    CurrentStepOut,
-    LessonPlanOut,
-    LessonPlanSummary,
     MessageOut,
-    OutlineCheckpoint,
-    OutlineTopic,
+    ModelPromptOut,
+    QuestDetail,
+    QuestListItem,
+    QuestNode,
     QuizChoiceOut,
     QuizOut,
     ResultOut,
     RubricRowOut,
-    ModelPromptOut,
     SessionAdminOut,
+    SessionBeat,
+    SessionQuest,
     SessionSummary,
     StudentOut,
-    TopicContext,
-    WidgetGradeOut,
+    UnitNode,
 )
-from app.widgets import hint_text, hint_tier_for, public_quiz
+from app.widgets import hint_text, public_quiz
+
+ROLE_TITLE = {
+    "mystery_hook": "Mystery hook",
+    "interactive_toy": "Interactive toy",
+    "diagnostic_gate": "Diagnostic gate",
+    "feynman_flip": "Feynman flip",
+}
 
 
 def student_out(student) -> StudentOut:
@@ -48,6 +46,28 @@ def student_out(student) -> StudentOut:
         slug=student.slug,
         display_name=student.display_name,
         age=student.age,
+        age_band=age_band_for(student.age),
+        reading_level=student.reading_level or "",
+        modality=student.modality or "",
+        interests=[str(item) for item in (student.interests or [])],
+        tutor_persona=student.tutor_persona or "",
+        tutor_lexicon=student.tutor_lexicon or "",
+        tutor_metaphors=student.tutor_metaphors or "",
+        tutor_sidekick=student.tutor_sidekick or "",
+        tutor_socratic_strictness=student.tutor_socratic_strictness or "balanced",
+        tutor_struggle_window=student.tutor_struggle_window or "minimum",
+        tutor_anti_spoiler=bool(student.tutor_anti_spoiler),
+        tutor_pacing=student.tutor_pacing or "short-turns-one-question",
+    )
+
+
+def message_out(message: Message) -> MessageOut:
+    return MessageOut(
+        id=message.id,
+        role=message.role,
+        content=message.content,
+        client_id=message.client_id,
+        created_at=message.created_at,
     )
 
 
@@ -64,136 +84,106 @@ def prompt_out(row: ModelPrompt) -> ModelPromptOut:
     )
 
 
-def message_out(message: Message) -> MessageOut:
-    return MessageOut(
-        id=message.id,
-        role=message.role,
-        content=message.content,
-        client_id=message.client_id,
-        created_at=message.created_at,
+def course_summary(course: Course) -> CourseSummary:
+    quests = [quest for unit in course.units for quest in unit.quests]
+    return CourseSummary(
+        id=course.id,
+        code=course.code,
+        title=course.title,
+        age_band=course.age_band,
+        standards_alignment=course.standards_alignment,
+        unit_count=len(course.units),
+        quest_count=len(quests),
     )
 
 
-def admin_checkpoint(checkpoint: Checkpoint) -> AdminCheckpoint:
-    return AdminCheckpoint(
-        id=checkpoint.id,
-        kind=checkpoint.kind,
-        position=checkpoint.position,
-        tutor_prompt=checkpoint.tutor_prompt,
-        rubric=checkpoint.rubric,
-        pass_criteria=checkpoint.pass_criteria,
-        objective=checkpoint.objective,
-        rubric_rows=list(checkpoint.rubric_rows or []),
-        hint_ladder=dict(checkpoint.hint_ladder or {}),
-        pass_score=checkpoint.pass_score or 70,
-        quiz=checkpoint.quiz if isinstance(checkpoint.quiz, dict) else None,
+def _quest_node(quest: Quest) -> QuestNode:
+    return QuestNode(
+        id=quest.id,
+        code=quest.code,
+        title=quest.title,
+        quest_type=quest.quest_type,
+        prerequisite_codes=list(quest.prerequisite_codes or []),
+        competency_tags=list(quest.competency_tags or []),
+        dinner_prompt=quest.dinner_prompt,
+        position=quest.position,
     )
 
 
-def admin_topic(topic: Topic) -> AdminTopic:
-    return AdminTopic(
-        id=topic.id,
-        title=topic.title,
-        position=topic.position,
-        learning_goal=topic.learning_goal,
-        tutor_instructions=topic.tutor_instructions,
-        checkpoints=[
-            admin_checkpoint(checkpoint)
-            for checkpoint in sorted(topic.checkpoints, key=lambda item: item.position)
-        ],
-    )
-
-
-def lesson_plan_out(plan: LessonPlan) -> LessonPlanOut:
-    return LessonPlanOut(
-        id=plan.id,
-        slug=plan.slug,
-        title=plan.title,
-        preamble=plan.preamble,
-        is_active=plan.is_active,
-        age_min=plan.age_min,
-        age_max=plan.age_max,
-        created_at=plan.created_at,
-        updated_at=plan.updated_at,
-        topics=[
-            admin_topic(topic)
-            for topic in sorted(plan.topics, key=lambda item: item.position)
-        ],
-    )
-
-
-def lesson_summary(plan: LessonPlan) -> LessonPlanSummary:
-    return LessonPlanSummary(
-        id=plan.id,
-        slug=plan.slug,
-        title=plan.title,
-        is_active=plan.is_active,
-        updated_at=plan.updated_at,
-        topic_count=len(plan.topics),
-        age_min=plan.age_min,
-        age_max=plan.age_max,
-    )
-
-
-def board_result(result: CheckpointResult) -> BoardResult:
-    return BoardResult(
-        id=result.id,
-        score=result.score,
-        passed=result.passed,
-        feedback=result.feedback,
-        created_at=result.created_at,
-    )
-
-
-def board(tutor_session: TutorSession) -> BoardOut:
-    topics: list[BoardTopic] = []
-    for topic in sorted(tutor_session.lesson_plan.topics, key=lambda item: item.position):
-        checkpoints: list[BoardCheckpoint] = []
-        for checkpoint in sorted(topic.checkpoints, key=lambda item: item.position):
-            result = latest_result(tutor_session, checkpoint.id)
-            checkpoints.append(
-                BoardCheckpoint(
-                    id=checkpoint.id,
-                    kind=checkpoint.kind,
-                    position=checkpoint.position,
-                    latest_result=board_result(result) if result else None,
-                )
-            )
-        topics.append(
-            BoardTopic(
-                id=topic.id,
-                title=topic.title,
-                position=topic.position,
-                learning_goal=topic.learning_goal,
-                checkpoints=checkpoints,
+def course_tree(course: Course) -> CourseTree:
+    units = []
+    for unit in sorted(course.units, key=lambda item: item.number):
+        units.append(
+            UnitNode(
+                id=unit.id,
+                number=unit.number,
+                title=unit.title,
+                enduring_understanding=unit.enduring_understanding,
+                continuity_summary=unit.continuity_summary,
+                is_diagnostic=unit.is_diagnostic,
+                is_capstone=unit.is_capstone,
+                quests=[
+                    _quest_node(quest)
+                    for quest in sorted(unit.quests, key=lambda item: item.position)
+                ],
             )
         )
-    steps, current = _board_blocks(tutor_session)
-    return BoardOut(
-        id=tutor_session.id,
-        status=tutor_session.status,
-        created_at=tutor_session.created_at,
-        updated_at=tutor_session.updated_at,
-        student=student_out(tutor_session.student),
-        lesson_title=tutor_session.lesson_plan.title,
-        lesson_plan_id=tutor_session.lesson_plan_id,
-        current_topic_id=tutor_session.current_topic_id,
-        current_checkpoint_id=tutor_session.current_checkpoint_id,
-        topics=topics,
-        messages=[message_out(message) for message in tutor_session.messages],
-        steps=steps,
-        current_block=current,
+    return CourseTree(
+        id=course.id,
+        code=course.code,
+        title=course.title,
+        age_band=course.age_band,
+        standards_alignment=course.standards_alignment,
+        competency_dictionary=list(course.competency_dictionary or []),
+        units=units,
     )
 
 
-def _rubric_rows(checkpoint: Checkpoint, met_ids: set[str]) -> list[RubricRowOut]:
-    rows: list[RubricRowOut] = []
-    for row in checkpoint.rubric_rows or []:
-        if not isinstance(row, dict):
+def quest_list_item(quest: Quest) -> QuestListItem:
+    unit = quest.unit
+    return QuestListItem(
+        id=quest.id,
+        code=quest.code,
+        title=quest.title,
+        quest_type=quest.quest_type,
+        prerequisite_codes=list(quest.prerequisite_codes or []),
+        competency_tags=list(quest.competency_tags or []),
+        unit_number=unit.number,
+        unit_title=unit.title,
+        position=quest.position,
+    )
+
+
+def beat_out(beat: Beat) -> BeatOut:
+    return BeatOut(
+        id=beat.id,
+        position=beat.position,
+        role=beat.role,
+        bloom_level=beat.bloom_level,
+        cognitive_load=beat.cognitive_load,
+        prompt=beat.prompt,
+        rubric=list(beat.rubric or []),
+        misconception_map=list(beat.misconception_map or []),
+        hint_ladder=dict(beat.hint_ladder or {}),
+        widget=beat.widget if isinstance(beat.widget, dict) else None,
+    )
+
+
+def quest_detail(quest: Quest) -> QuestDetail:
+    return QuestDetail(
+        **_quest_node(quest).model_dump(),
+        unit_id=quest.unit_id,
+        course_id=quest.unit.course_id,
+        beats=[beat_out(beat) for beat in ordered_beats(quest)],
+    )
+
+
+def _rubric_rows(beat: Beat, met_ids: set[str]) -> list[RubricRowOut]:
+    rows = []
+    for row in beat.rubric or []:
+        if not isinstance(row, dict) or not row.get("id"):
             continue
-        row_id = str(row.get("id") or "")
-        if not row_id:
-            continue
+        row_id = str(row["id"])
         rows.append(
             RubricRowOut(
                 id=row_id,
@@ -217,57 +207,85 @@ def _quiz_out(quiz: dict | None) -> QuizOut | None:
     )
 
 
-def _board_blocks(tutor_session: TutorSession) -> tuple[list[BlockStep], CurrentBlock | None]:
-    rows = flat_checkpoints(tutor_session.lesson_plan)
-    lesson_complete = tutor_session.current_checkpoint_id is None
-    seen_current = False
+def board(tutor_session: TutorSession) -> BoardOut:
+    quest = tutor_session.quest
+    beats = ordered_beats(quest)
+    complete = tutor_session.current_beat_id is None
+    seen = False
     steps: list[BlockStep] = []
-    current: CurrentBlock | None = None
-    for index, (topic, checkpoint) in enumerate(rows, start=1):
-        result = latest_result(tutor_session, checkpoint.id)
-        state = checkpoint_state(
-            checkpoint,
-            tutor_session.current_checkpoint_id,
-            result,
-            seen_current,
-            lesson_complete,
-        )
-        if checkpoint.id == tutor_session.current_checkpoint_id:
-            seen_current = True
-            tier = hint_tier_for(failed_attempts(tutor_session, checkpoint.id))
+    board_beats: list[BoardBeat] = []
+    current = None
+    for beat in beats:
+        result = latest_result(tutor_session, beat.id)
+        state = beat_state(beat, tutor_session.current_beat_id, result, seen, complete)
+        if beat.id == tutor_session.current_beat_id:
+            seen = True
+            tier = hint_tier_for(failed_attempts(tutor_session, beat.id))
             met = set(result.rubric_met or []) if result is not None else set()
             current = CurrentBlock(
-                id=checkpoint.id,
-                kind=checkpoint.kind,
-                title=topic.title,
-                objective=(checkpoint.objective or "").strip(),
-                tutor_prompt=checkpoint.tutor_prompt,
-                rubric=_rubric_rows(checkpoint, met),
+                id=beat.id,
+                kind=beat.role,
+                title=ROLE_TITLE.get(beat.role, beat.role),
+                objective=f"{ROLE_TITLE.get(beat.role, beat.role)} · {beat.bloom_level}",
+                tutor_prompt=beat.prompt,
+                rubric=_rubric_rows(beat, met),
                 hint_tier=tier,  # type: ignore[arg-type]
-                hint_text=hint_text(checkpoint.hint_ladder, tier),
-                quiz=_quiz_out(checkpoint.quiz if isinstance(checkpoint.quiz, dict) else None),
+                hint_text=hint_text(beat.hint_ladder, tier),
+                quiz=_quiz_out(beat.widget if isinstance(beat.widget, dict) else None),
             )
         steps.append(
             BlockStep(
-                id=checkpoint.id,
-                position=index,
-                kind=checkpoint.kind,
-                title=topic.title,
+                id=beat.id,
+                position=beat.position,
+                kind=beat.role,
+                title=ROLE_TITLE.get(beat.role, beat.role),
                 state=state,
             )
         )
-    return steps, current
+        board_beats.append(
+            BoardBeat(
+                id=beat.id,
+                position=beat.position,
+                role=beat.role,
+                latest_result=BoardResult(
+                    id=result.id,
+                    score=result.score,
+                    passed=result.passed,
+                    feedback=result.feedback,
+                    created_at=result.created_at,
+                )
+                if result
+                else None,
+            )
+        )
+    return BoardOut(
+        id=tutor_session.id,
+        status=tutor_session.status,
+        created_at=tutor_session.created_at,
+        updated_at=tutor_session.updated_at,
+        student=student_out(tutor_session.student),
+        course_code=quest.unit.course.code,
+        course_title=quest.unit.course.title,
+        quest_id=quest.id,
+        quest_code=quest.code,
+        quest_title=quest.title,
+        enduring_understanding=quest.unit.enduring_understanding,
+        current_beat_id=tutor_session.current_beat_id,
+        beats=board_beats,
+        messages=[message_out(message) for message in tutor_session.messages],
+        steps=steps,
+        current_block=current,
+    )
 
 
-def result_out(result: CheckpointResult) -> ResultOut:
-    checkpoint = result.checkpoint
-    topic = checkpoint.topic
+def result_out(result: BeatResult) -> ResultOut:
+    beat = result.beat
     return ResultOut(
         id=result.id,
-        checkpoint_id=checkpoint.id,
-        topic_title=topic.title,
-        checkpoint_kind=checkpoint.kind,
-        checkpoint_position=checkpoint.position,
+        beat_id=beat.id,
+        beat_role=beat.role,
+        beat_position=beat.position,
+        quest_title=beat.quest.title,
         score=result.score,
         passed=result.passed,
         feedback=result.feedback,
@@ -277,29 +295,16 @@ def result_out(result: CheckpointResult) -> ResultOut:
     )
 
 
-def session_admin(tutor_session: TutorSession) -> SessionAdminOut:
-    return SessionAdminOut(
-        id=tutor_session.id,
-        status=tutor_session.status,
-        created_at=tutor_session.created_at,
-        updated_at=tutor_session.updated_at,
-        student=student_out(tutor_session.student),
-        lesson_plan=lesson_plan_out(tutor_session.lesson_plan),
-        current_topic_id=tutor_session.current_topic_id,
-        current_checkpoint_id=tutor_session.current_checkpoint_id,
-        messages=[message_out(message) for message in tutor_session.messages],
-        results=[result_out(result) for result in tutor_session.results],
-        prompts=[prompt_out(row) for row in tutor_session.prompts],
-    )
-
-
 def session_summary(tutor_session: TutorSession) -> SessionSummary:
+    quest = tutor_session.quest
     return SessionSummary(
         id=tutor_session.id,
         student_id=tutor_session.student_id,
         student_display_name=tutor_session.student.display_name,
-        lesson_plan_id=tutor_session.lesson_plan_id,
-        lesson_title=tutor_session.lesson_plan.title,
+        quest_id=quest.id,
+        quest_code=quest.code,
+        quest_title=quest.title,
+        course_title=quest.unit.course.title,
         status=tutor_session.status,
         created_at=tutor_session.created_at,
         updated_at=tutor_session.updated_at,
@@ -308,105 +313,27 @@ def session_summary(tutor_session: TutorSession) -> SessionSummary:
     )
 
 
-def context_out(tutor_session: TutorSession) -> ContextOut:
-    plan = tutor_session.lesson_plan
-    rows = flat_checkpoints(plan)
-    lesson_complete = tutor_session.current_checkpoint_id is None
-    seen_current = False
-    outline: list[OutlineTopic] = []
-    grouped: dict = {}
-    for topic, checkpoint in rows:
-        result = latest_result(tutor_session, checkpoint.id)
-        state = checkpoint_state(
-            checkpoint,
-            tutor_session.current_checkpoint_id,
-            result,
-            seen_current,
-            lesson_complete,
-        )
-        if checkpoint.id == tutor_session.current_checkpoint_id:
-            seen_current = True
-        grouped.setdefault(topic.id, OutlineTopic(title=topic.title, position=topic.position, checkpoints=[]))
-        grouped[topic.id].checkpoints.append(
-            OutlineCheckpoint(kind=checkpoint.kind, position=checkpoint.position, state=state)
-        )
-    for topic, _checkpoint in rows:
-        if topic.id in grouped and grouped[topic.id] not in outline:
-            outline.append(grouped[topic.id])
-    located = locate(plan, tutor_session.current_checkpoint_id)
-    current_topic = None
-    current_checkpoint = None
-    if located is not None:
-        topic, checkpoint = located
-        current_topic = TopicContext(
-            title=topic.title,
-            position=topic.position,
-            learning_goal=topic.learning_goal,
-            tutor_instructions=topic.tutor_instructions,
-        )
-        result = latest_result(tutor_session, checkpoint.id)
-        tier = hint_tier_for(failed_attempts(tutor_session, checkpoint.id))
-        grade = None
-        if result is not None and isinstance(result.choice, dict):
-            ids = [str(item) for item in result.choice.get("ids") or []]
-            grade = WidgetGradeOut(
-                correct=result.passed,
-                score=result.score,
-                passed=result.passed,
-                misconception=result.misconception,
-                choice_ids=ids,
-                explanation=str(result.choice.get("explanation") or ""),
-            )
-        current_checkpoint = CheckpointContext(
-            kind=checkpoint.kind,
-            position=checkpoint.position,
-            checkpoints_in_topic=len(topic.checkpoints),
-            tutor_prompt=checkpoint.tutor_prompt,
-            rubric=checkpoint.rubric,
-            pass_criteria=checkpoint.pass_criteria,
-            objective=checkpoint.objective,
-            rubric_rows=list(checkpoint.rubric_rows or []),
-            hint_tier=tier,
-            hint_text=hint_text(checkpoint.hint_ladder, tier),
-            pass_score=checkpoint.pass_score or 70,
-            quiz=checkpoint.quiz if isinstance(checkpoint.quiz, dict) else None,
-            widget_grade=grade,
-        )
-    return ContextOut(
-        session_id=tutor_session.id,
+def session_admin(tutor_session: TutorSession) -> SessionAdminOut:
+    quest = tutor_session.quest
+    return SessionAdminOut(
+        id=tutor_session.id,
         status=tutor_session.status,
-        student_display_name=tutor_session.student.display_name,
-        lesson_title=plan.title,
-        preamble=plan.preamble,
-        topic_count=len({topic.id for topic, _checkpoint in rows}),
-        outline=outline,
-        current_topic=current_topic,
-        current_checkpoint=current_checkpoint,
-    )
-
-
-def current_step(tutor_session: TutorSession) -> CurrentStepOut:
-    plan = tutor_session.lesson_plan
-    located = locate(plan, tutor_session.current_checkpoint_id)
-    if located is None:
-        return CurrentStepOut(
-            status=tutor_session.status,
-            message="The lesson is finished. Congratulate the student and do not start a new topic.",
-        )
-    topic, checkpoint = located
-    rows = flat_checkpoints(plan)
-    return CurrentStepOut(
-        status=tutor_session.status,
-        message="This is the only step you may teach right now.",
-        topic_title=topic.title,
-        topic_position=topic.position,
-        topic_count=len({item.id for item, _checkpoint in rows}),
-        learning_goal=topic.learning_goal,
-        tutor_instructions=topic.tutor_instructions,
-        checkpoint_kind=checkpoint.kind,
-        checkpoint_position=checkpoint.position,
-        checkpoints_in_topic=len(topic.checkpoints),
-        tutor_prompt=checkpoint.tutor_prompt,
-        rubric=checkpoint.rubric,
-        pass_criteria=checkpoint.pass_criteria,
+        created_at=tutor_session.created_at,
+        updated_at=tutor_session.updated_at,
+        student=student_out(tutor_session.student),
+        quest=SessionQuest(
+            id=quest.id,
+            code=quest.code,
+            title=quest.title,
+            course_code=quest.unit.course.code,
+            course_title=quest.unit.course.title,
+        ),
+        current_beat_id=tutor_session.current_beat_id,
+        beats=[
+            SessionBeat(id=beat.id, position=beat.position, role=beat.role)
+            for beat in ordered_beats(quest)
+        ],
+        messages=[message_out(message) for message in tutor_session.messages],
+        results=[result_out(result) for result in tutor_session.results],
+        prompts=[prompt_out(row) for row in tutor_session.prompts],
     )

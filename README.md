@@ -1,12 +1,12 @@
 # AI Tutor MVP
 
-A fractions tutor for one learner at a time. Next.js hosts the kid session, the lesson desk, and the streaming chat. FastAPI is the system of record for students, lesson plans, sessions, and transcripts. Postgres stores them.
+A quest tutor for one learner at a time. Next.js hosts the kid session, the course desk, and the streaming chat. FastAPI is the system of record for students, the four-tier syllabus, sessions, and transcripts. Postgres stores them. A browser refresh is not enough after this change: the API must be migrated and the database re-seeded.
 
 There is no login. The kid page is a name picker. Admin is a separate URL.
 
 ## Layout
 
-- `apps/web` — Next.js App Router. `/` is the kid session. `/admin` edits lesson blocks. `/viewchats` reads transcripts. `POST /api/chat` streams the tutor with the Vercel AI SDK.
+- `apps/web` — Next.js App Router. `/` is the kid session. `/admin` is the course tree. `/viewchats` reads transcripts. `POST /api/chat` streams the tutor with the Vercel AI SDK. Each turn asks FastAPI for the seven-layer prompt bundle and uses that system prompt, schema, and temperature.
 - `apps/api` — FastAPI, SQLAlchemy, Alembic. The only writer to Postgres.
 - `docker-compose.yml` — local Postgres.
 
@@ -53,7 +53,9 @@ python -m app.seed
 uvicorn app.main:app --reload --port 8000
 ```
 
-`alembic upgrade head` and `python -m app.seed` are safe to run again. The seed inserts Iron Man, Storm, Spider-Man, and Wolverine when they are missing, and fills an age only when it is blank. Lessons are Fractions, Reading, Science, Super prompts (ages 9–11), and Function shifts (ages 15–17). A new slug is inserted once. Fractions is rewritten in place into typed blocks with one choice widget, keeping the same lesson id, so a class that already points at it still opens. A second run leaves that rewrite alone. Other existing plans are left as edited, aside from a blank age range.
+`alembic upgrade head` and `python -m app.seed` are required. A local refresh of the Next.js page is not enough: revision `005_syllabus_quests` drops the old lesson tables, retargets sessions at a quest, and clears old test transcripts. Run both commands again after pulling this change.
+
+The seed inserts Iron Man, Storm, Spider-Man, and Wolverine when they are missing, and fills an age or tutor settings only when the tutor persona is blank. It inserts three courses when their codes are missing and leaves an existing course code as edited: Ancient Rome (ages 9–11), Euclidean and coordinate geometry (ages 12–14), and AP Macroeconomics (ages 15–17). A second run does not rewrite those courses.
 
 Terminal 2, web:
 
@@ -67,14 +69,14 @@ npm run dev --workspace web
 - Transcripts: http://localhost:3000/viewchats
 - API docs: http://localhost:8000/docs
 
-## Try the lesson
+## Try a quest
 
-1. Open `/` and choose Storm. On the right, open a class notebook or press + for a new class. Storm can start Fractions, Reading, Science, or Super prompts. Function shifts stays off that shelf because it is for ages 15–17. Wolverine can start Function shifts.
-2. Inside a class, the block stepper shows the path. A choice widget sits under the tutor prompt. The rubric strip and the hint badge (nudge, analogy, or scaffold) sit above the composer. A wrong tap stores that choice's misconception before the model replies. The model writes the reply and grades a written explanation. It does not grade the taps.
-3. Open `/viewchats`, filter to Storm, and open the class. The transcript and checkpoint scores are the rows FastAPI stored. The prompt icon on a class opens the system prompt and the messages that turn sent to the model. `/admin` edits blocks and does not list transcripts.
-4. Edit a block's objective, rubric rows, hint ladder, or widget and save. Start a new class from the kid page. The next turn uses the saved block.
+1. Open `/` and choose Storm. On the right, open a class notebook or press + for a new class. The course list is filtered to Storm's age band (9–11), so Ancient Rome is offered and AP Macroeconomics is not. Wolverine (15–17) sees Macroeconomics and not Rome. Pick a course, then a quest. Prerequisite codes are shown and do not lock the quest.
+2. Inside a class, the stepper shows the four beats: mystery hook, interactive toy, diagnostic gate, and Feynman flip. A choice widget sits under the tutor prompt when the beat has one. A wrong tap stores that choice's misconception before the model replies. The model writes the reply and grades a written explanation. It does not grade the taps.
+3. Open `/viewchats`, filter to Storm, and open the class. The transcript and beat scores are the rows FastAPI stored. The prompt button on a turn opens the system prompt and the messages that turn sent to the model. `/admin` is the course tree and does not list transcripts.
+4. On `/admin`, expand a course to its units and quests. Open a quest to edit the four beats, rubric, hints, and widget. Import and export move one Tier 1 course, including units, quests, and beats. Uploading a file replaces that course code. An invalid file is rejected with the field that failed.
 
-The chat route asks the model for a turn score: rubric rows met, a misconception if any, the hint tier, and the tutor reply. Choice widgets are graded by FastAPI first. A scored block does not advance until it has a passing result.
+Add child has a Student group and a Tutor agent settings group. Both start from the age band and can be changed before save. The chat route asks FastAPI for the prompt bundle on every turn, then asks the model for a turn score: rubric rows met, a misconception if any, the hint tier, and the tutor reply. Choice widgets are graded by FastAPI first. A beat does not advance until it has a passing result.
 
 ## Render
 

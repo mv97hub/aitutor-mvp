@@ -9,26 +9,55 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
-    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
-    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
+AGE_BANDS = ("6-8", "9-11", "12-14", "15-17")
+QUEST_TYPES = ("core", "branch", "capstone")
+BEAT_ROLES = (
+    "mystery_hook",
+    "interactive_toy",
+    "diagnostic_gate",
+    "feynman_flip",
+)
+
 
 class Student(Base):
+    """Layer 2 lives here. Layers 3 and 4 are tutor-agent settings stored on the
+    student until a tutor profile exists. Those columns are named tutor_* so
+    the later move is a relocation, not a redesign.
+    """
+
     __tablename__ = "students"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     slug: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
     age: Mapped[int | None] = mapped_column(Integer)
+    reading_level: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    modality: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    interests: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    tutor_persona: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    tutor_lexicon: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tutor_metaphors: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tutor_sidekick: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    tutor_socratic_strictness: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="balanced"
+    )
+    tutor_struggle_window: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="minimum"
+    )
+    tutor_anti_spoiler: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    tutor_pacing: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="short-turns-one-question"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -36,24 +65,21 @@ class Student(Base):
     sessions: Mapped[list[Session]] = relationship(back_populates="student")
 
 
-class LessonPlan(Base):
-    __tablename__ = "lesson_plans"
+class Course(Base):
+    __tablename__ = "courses"
     __table_args__ = (
-        Index(
-            "uq_lesson_plans_one_active",
-            "is_active",
-            unique=True,
-            postgresql_where=text("is_active"),
+        CheckConstraint(
+            "age_band IN ('6-8', '9-11', '12-14', '15-17')",
+            name="ck_courses_age_band",
         ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    slug: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    preamble: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    age_min: Mapped[int | None] = mapped_column(Integer)
-    age_max: Mapped[int | None] = mapped_column(Integer)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    code: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    age_band: Mapped[str] = mapped_column(String(8), nullable=False)
+    standards_alignment: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    competency_dictionary: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -61,64 +87,96 @@ class LessonPlan(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    topics: Mapped[list[Topic]] = relationship(
-        back_populates="lesson_plan",
+    units: Mapped[list[Unit]] = relationship(
+        back_populates="course",
         cascade="all, delete-orphan",
-        order_by="Topic.position",
+        order_by="Unit.number",
     )
-    sessions: Mapped[list[Session]] = relationship(back_populates="lesson_plan")
 
 
-class Topic(Base):
-    __tablename__ = "topics"
+class Unit(Base):
+    __tablename__ = "units"
     __table_args__ = (
-        UniqueConstraint("lesson_plan_id", "position", name="uq_topics_plan_position"),
+        UniqueConstraint("course_id", "number", name="uq_units_course_number"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    lesson_plan_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("lesson_plans.id", ondelete="CASCADE"), nullable=False
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    learning_goal: Mapped[str] = mapped_column(Text, nullable=False)
-    tutor_instructions: Mapped[str] = mapped_column(Text, nullable=False)
-    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    enduring_understanding: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    continuity_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    is_diagnostic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_capstone: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    lesson_plan: Mapped[LessonPlan] = relationship(back_populates="topics")
-    checkpoints: Mapped[list[Checkpoint]] = relationship(
-        back_populates="topic",
+    course: Mapped[Course] = relationship(back_populates="units")
+    quests: Mapped[list[Quest]] = relationship(
+        back_populates="unit",
         cascade="all, delete-orphan",
-        order_by="Checkpoint.position",
+        order_by="Quest.position",
     )
 
 
-class Checkpoint(Base):
-    __tablename__ = "checkpoints"
+class Quest(Base):
+    __tablename__ = "quests"
     __table_args__ = (
-        UniqueConstraint("topic_id", "position", name="uq_checkpoints_topic_position"),
+        UniqueConstraint("unit_id", "position", name="uq_quests_unit_position"),
         CheckConstraint(
-            "kind IN ('teach', 'practice', 'quiz', 'discovery', 'teach_back')",
-            name="ck_checkpoints_kind",
+            "quest_type IN ('core', 'branch', 'capstone')",
+            name="ck_quests_type",
         ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    topic_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("topics.id", ondelete="CASCADE"), nullable=False
+    unit_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("units.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)
-    tutor_prompt: Mapped[str] = mapped_column(Text, nullable=False)
-    rubric: Mapped[str | None] = mapped_column(Text)
-    pass_criteria: Mapped[str | None] = mapped_column(Text)
-    objective: Mapped[str | None] = mapped_column(Text)
-    rubric_rows: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    hint_ladder: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    pass_score: Mapped[int] = mapped_column(Integer, nullable=False, default=70)
-    quiz: Mapped[dict | None] = mapped_column(JSON)
+    code: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    quest_type: Mapped[str] = mapped_column(String(16), nullable=False, default="core")
+    prerequisite_codes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    competency_tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    dinner_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
     position: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    topic: Mapped[Topic] = relationship(back_populates="checkpoints")
-    results: Mapped[list[CheckpointResult]] = relationship(back_populates="checkpoint")
+    unit: Mapped[Unit] = relationship(back_populates="quests")
+    beats: Mapped[list[Beat]] = relationship(
+        back_populates="quest",
+        cascade="all, delete-orphan",
+        order_by="Beat.position",
+    )
+    sessions: Mapped[list[Session]] = relationship(back_populates="quest")
+
+
+class Beat(Base):
+    __tablename__ = "beats"
+    __table_args__ = (
+        UniqueConstraint("quest_id", "position", name="uq_beats_quest_position"),
+        CheckConstraint(
+            "role IN ('mystery_hook', 'interactive_toy', 'diagnostic_gate', 'feynman_flip')",
+            name="ck_beats_role",
+        ),
+        CheckConstraint("position >= 1 AND position <= 4", name="ck_beats_position"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    quest_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("quests.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    bloom_level: Mapped[str] = mapped_column(String(32), nullable=False, default="understand")
+    cognitive_load: Mapped[str] = mapped_column(String(16), nullable=False, default="medium")
+    prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    rubric: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    misconception_map: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    hint_ladder: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    widget: Mapped[dict | None] = mapped_column(JSON)
+
+    quest: Mapped[Quest] = relationship(back_populates="beats")
+    results: Mapped[list[BeatResult]] = relationship(back_populates="beat")
 
 
 class Session(Base):
@@ -133,14 +191,11 @@ class Session(Base):
     student_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("students.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    lesson_plan_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("lesson_plans.id", ondelete="RESTRICT"), nullable=False
+    quest_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("quests.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    current_topic_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("topics.id", ondelete="RESTRICT")
-    )
-    current_checkpoint_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("checkpoints.id", ondelete="RESTRICT")
+    current_beat_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("beats.id", ondelete="RESTRICT")
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
     created_at: Mapped[datetime] = mapped_column(
@@ -151,16 +206,16 @@ class Session(Base):
     )
 
     student: Mapped[Student] = relationship(back_populates="sessions")
-    lesson_plan: Mapped[LessonPlan] = relationship(back_populates="sessions")
+    quest: Mapped[Quest] = relationship(back_populates="sessions")
     messages: Mapped[list[Message]] = relationship(
         back_populates="session",
         cascade="all, delete-orphan",
         order_by="Message.seq",
     )
-    results: Mapped[list[CheckpointResult]] = relationship(
+    results: Mapped[list[BeatResult]] = relationship(
         back_populates="session",
         cascade="all, delete-orphan",
-        order_by="CheckpointResult.seq",
+        order_by="BeatResult.seq",
     )
     prompts: Mapped[list[ModelPrompt]] = relationship(
         back_populates="session",
@@ -191,19 +246,19 @@ class Message(Base):
     session: Mapped[Session] = relationship(back_populates="messages")
 
 
-class CheckpointResult(Base):
-    __tablename__ = "checkpoint_results"
+class BeatResult(Base):
+    __tablename__ = "beat_results"
     __table_args__ = (
-        UniqueConstraint("session_id", "seq", name="uq_results_session_seq"),
-        CheckConstraint("score >= 0 AND score <= 100", name="ck_results_score"),
+        UniqueConstraint("session_id", "seq", name="uq_beat_results_session_seq"),
+        CheckConstraint("score >= 0 AND score <= 100", name="ck_beat_results_score"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    checkpoint_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("checkpoints.id", ondelete="RESTRICT"), nullable=False
+    beat_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("beats.id", ondelete="RESTRICT"), nullable=False
     )
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     score: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -218,7 +273,7 @@ class CheckpointResult(Base):
     )
 
     session: Mapped[Session] = relationship(back_populates="results")
-    checkpoint: Mapped[Checkpoint] = relationship(back_populates="results")
+    beat: Mapped[Beat] = relationship(back_populates="results")
 
 
 class ModelPrompt(Base):

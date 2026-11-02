@@ -1,11 +1,8 @@
-"""Normalize block fields stored on a checkpoint."""
+"""Normalize rubric rows, hint ladders, and choice widgets."""
 
 from __future__ import annotations
 
 from fastapi import HTTPException
-
-from app.models import Checkpoint
-from app.schemas import CheckpointWrite
 
 QUIZ_TYPES = {"single", "multi", "flaw", "order"}
 LIST_ANSWER = {"multi", "order"}
@@ -108,23 +105,3 @@ def normalize_quiz(quiz) -> dict | None:
     }
 
 
-def apply_checkpoint(checkpoint: Checkpoint, body: CheckpointWrite, fields: set[str] | None) -> None:
-    use = fields if fields is not None else set(CheckpointWrite.model_fields)
-    if "kind" in use:
-        checkpoint.kind = body.kind
-    if "tutor_prompt" in use:
-        checkpoint.tutor_prompt = body.tutor_prompt.strip()
-    if "rubric" in use:
-        checkpoint.rubric = body.rubric.strip() or None
-    if "pass_criteria" in use:
-        checkpoint.pass_criteria = body.pass_criteria.strip() or None
-    if "objective" in use:
-        checkpoint.objective = body.objective.strip() or None
-    if "rubric_rows" in use:
-        checkpoint.rubric_rows = normalize_rows(body.rubric_rows)
-    if "hint_ladder" in use:
-        checkpoint.hint_ladder = normalize_hints(body.hint_ladder)
-    if "pass_score" in use:
-        checkpoint.pass_score = body.pass_score
-    if "quiz" in use:
-        checkpoint.quiz = normalize_quiz(body.quiz)
