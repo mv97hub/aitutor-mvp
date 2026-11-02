@@ -91,12 +91,13 @@ export async function POST(req: Request) {
     });
   }
 
+  let turnMessageId: string | null = null;
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   if (lastUser) {
     const content = textOf(lastUser);
     if (content) {
       try {
-        await api(`/sessions/${sessionId}/messages`, {
+        const saved = await api<{ id: string }>(`/sessions/${sessionId}/messages`, {
           method: "POST",
           body: JSON.stringify({
             role: "user",
@@ -104,6 +105,7 @@ export async function POST(req: Request) {
             client_id: lastUser.id,
           }),
         });
+        turnMessageId = saved.id;
       } catch (error) {
         const message = error instanceof Error ? error.message : "Could not save the message.";
         return new Response(message, { status: 502 });
@@ -134,6 +136,7 @@ export async function POST(req: Request) {
         system_prompt: system,
         messages: Array.isArray(sentMessages) ? sentMessages : [],
         model: openaiModelName(),
+        message_id: turnMessageId,
       }),
     });
   } catch (error) {

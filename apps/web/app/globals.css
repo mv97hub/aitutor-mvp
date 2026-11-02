@@ -552,21 +552,13 @@ textarea { min-height: 88px; resize: vertical; }
 .score-list li, .transcript-list li { padding: 10px 12px; border-radius: 12px; background: var(--paper); }
 .transcript-list .user { background: #f6e7c8; }
 
-.session-choice {
+.transcript-line {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 6px 6px 12px;
+  align-items: flex-start;
+  gap: 8px;
 }
 
-.session-open {
-  flex: 1;
-  min-width: 0;
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  text-align: left;
-}
+.transcript-line > div:first-child { flex: 1; min-width: 0; }
 
 .prompt-icon {
   display: grid;
@@ -637,15 +629,6 @@ textarea { min-height: 88px; resize: vertical; }
 }
 
 .prompt-body h3:first-child { margin-top: 0; }
-
-.prompt-turn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.prompt-turn select { width: auto; }
 
 .prompt-pre {
   margin: 0;

@@ -195,6 +195,7 @@ export type SessionSummary = {
 export type ModelPrompt = {
   id: string;
   session_id: string;
+  message_id: string | null;
   seq: number;
   system_prompt: string;
   messages: unknown[];
@@ -213,6 +214,7 @@ export type SessionDetail = {
   current_checkpoint_id: string | null;
   messages: StoredMessage[];
   results: ResultRow[];
+  prompts: ModelPrompt[];
 };
 
 export type OutlineCheckpoint = {

@@ -143,7 +143,12 @@ def create_model_prompt(
 ) -> ModelPromptOut:
     tutor_session = load_session(db, session_id)
     row = append_model_prompt(
-        db, tutor_session, body.system_prompt, list(body.messages), body.model
+        db,
+        tutor_session,
+        body.system_prompt,
+        list(body.messages),
+        body.model,
+        body.message_id,
     )
     return prompt_out(row)
 

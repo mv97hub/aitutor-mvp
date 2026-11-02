@@ -55,6 +55,7 @@ def prompt_out(row: ModelPrompt) -> ModelPromptOut:
     return ModelPromptOut(
         id=row.id,
         session_id=row.session_id,
+        message_id=row.message_id,
         seq=row.seq,
         system_prompt=row.system_prompt,
         messages=list(row.messages or []),
@@ -288,6 +289,7 @@ def session_admin(tutor_session: TutorSession) -> SessionAdminOut:
         current_checkpoint_id=tutor_session.current_checkpoint_id,
         messages=[message_out(message) for message in tutor_session.messages],
         results=[result_out(result) for result in tutor_session.results],
+        prompts=[prompt_out(row) for row in tutor_session.prompts],
     )
 
 

@@ -30,6 +30,7 @@ def load_session(db: Session, session_id: uuid.UUID) -> TutorSession:
             .selectinload(LessonPlan.topics)
             .selectinload(Topic.checkpoints),
             selectinload(TutorSession.messages),
+            selectinload(TutorSession.prompts),
             selectinload(TutorSession.results).selectinload(CheckpointResult.checkpoint).selectinload(
                 Checkpoint.topic
             ),

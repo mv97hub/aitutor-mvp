@@ -66,7 +66,6 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [error, setError] = useState(initialError);
-  const [promptChat, setPromptChat] = useState<SessionSummary | null>(null);
 
   useEffect(() => {
     const query = studentFilter ? `?student_id=${studentFilter}` : "";
@@ -122,23 +121,18 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
         <div className="stack">
           {sessions.length === 0 ? <p className="help">No classes yet. Open a learner on the kid page.</p> : null}
           {sessions.map((item) => (
-            <div key={item.id} className={`session-choice ${item.id === sessionId ? "is-on" : ""}`}>
-              <button type="button" className="session-open" onClick={() => setSessionId(item.id)}>
-                <strong>{item.student_display_name}</strong>
-                <small style={{ display: "block" }}>
-                  {item.lesson_title} · {item.status.replace("_", " ")} · {when(item.updated_at)}
-                </small>
-                <small>{item.message_count} messages · {item.result_count} scores</small>
-              </button>
-              <button
-                type="button"
-                className="prompt-icon"
-                aria-label={`View the full prompt for ${item.student_display_name}, ${item.lesson_title}`}
-                onClick={() => setPromptChat(item)}
-              >
-                <PromptIcon />
-              </button>
-            </div>
+            <button
+              key={item.id}
+              type="button"
+              className={`session-choice ${item.id === sessionId ? "is-on" : ""}`}
+              onClick={() => setSessionId(item.id)}
+            >
+              <strong>{item.student_display_name}</strong>
+              <small style={{ display: "block" }}>
+                {item.lesson_title} · {item.status.replace("_", " ")} · {when(item.updated_at)}
+              </small>
+              <small>{item.message_count} messages · {item.result_count} scores</small>
+            </button>
           ))}
         </div>
       </aside>
@@ -148,7 +142,6 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
             <p>{error}</p>
           </div>
         ) : null}
-        {promptChat ? <PromptDialog chat={promptChat} onClose={() => setPromptChat(null)} /> : null}
         {session ? <SessionView session={session} /> : (
           <article className="transcript-view">
             <h2>Pick a class</h2>
@@ -160,28 +153,50 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
   );
 }
 
-function PromptDialog({ chat, onClose }: { chat: SessionSummary; onClose: () => void }) {
-  const [prompts, setPrompts] = useState<ModelPrompt[] | null>(null);
-  const [turn, setTurn] = useState(0);
-  const [loadError, setLoadError] = useState<string | null>(null);
+function promptForMessage(session: SessionDetail): Map<string, ModelPrompt> {
+  const linked = new Map<string, ModelPrompt>();
+  const unlinked: ModelPrompt[] = [];
+  for (const prompt of [...(session.prompts ?? [])].sort((left, right) => left.seq - right.seq)) {
+    if (prompt.message_id) {
+      const current = linked.get(prompt.message_id);
+      if (!current || prompt.seq >= current.seq) linked.set(prompt.message_id, prompt);
+    } else {
+      unlinked.push(prompt);
+    }
+  }
+  let spare = 0;
+  for (const message of session.messages) {
+    if (message.role !== "user" || linked.has(message.id)) continue;
+    const prompt = unlinked[spare];
+    if (!prompt) break;
+    linked.set(message.id, prompt);
+    spare += 1;
+  }
+  return linked;
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    setPrompts(null);
-    setTurn(0);
-    setLoadError(null);
-    api<ModelPrompt[]>(`/sessions/${chat.id}/model-prompts`)
-      .then((rows) => {
-        if (!cancelled) setPrompts(rows);
-      })
-      .catch((err) => {
-        if (!cancelled) setLoadError(messageOf(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [chat.id]);
+function promptOnRow(session: SessionDetail): Map<string, ModelPrompt> {
+  const linked = promptForMessage(session);
+  const placed = new Map<string, ModelPrompt>();
+  session.messages.forEach((message, index) => {
+    if (message.role !== "user") return;
+    const prompt = linked.get(message.id);
+    if (!prompt) return;
+    const next = session.messages[index + 1];
+    placed.set(next && next.role === "assistant" ? next.id : message.id, prompt);
+  });
+  return placed;
+}
 
+function PromptDialog({
+  prompt,
+  subtitle,
+  onClose,
+}: {
+  prompt: ModelPrompt;
+  subtitle: string;
+  onClose: () => void;
+}) {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") onClose();
@@ -189,8 +204,6 @@ function PromptDialog({ chat, onClose }: { chat: SessionSummary; onClose: () => 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-
-  const current = prompts && prompts.length > 0 ? prompts[Math.min(turn, prompts.length - 1)] : null;
 
   return (
     <div className="prompt-backdrop" role="presentation" onMouseDown={onClose}>
@@ -203,50 +216,27 @@ function PromptDialog({ chat, onClose }: { chat: SessionSummary; onClose: () => 
       >
         <header>
           <div>
-            <h2 id="prompt-title">Full prompt</h2>
-            <p>{chat.student_display_name} · {chat.lesson_title}</p>
+            <h2 id="prompt-title">Prompt for this turn</h2>
+            <p>{subtitle}</p>
           </div>
           <button type="button" className="ghost" onClick={onClose}>Close</button>
         </header>
         <div className="prompt-body">
-          {loadError ? <p className="help">{loadError}</p> : null}
-          {prompts == null && !loadError ? <p className="help">Loading the prompt…</p> : null}
-          {prompts && prompts.length === 0 ? <p className="help">No prompt was stored for this chat.</p> : null}
-          {current ? (
-            <>
-              {prompts && prompts.length > 1 ? (
-                <label className="prompt-turn">
-                  Turn
-                  <select value={current.seq} onChange={(event) => {
-                    const seq = Number(event.target.value);
-                    const index = (prompts ?? []).findIndex((row) => row.seq === seq);
-                    if (index >= 0) setTurn(index);
-                  }}>
-                    {prompts.map((row, index) => (
-                      <option key={row.id} value={row.seq}>
-                        {index + 1} of {prompts.length} · {when(row.created_at)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              <p className="meta">
-                {current.model || "Model"} · {when(current.created_at)}
-              </p>
-              <h3>System prompt</h3>
-              <pre className="prompt-pre">{current.system_prompt}</pre>
-              <h3>Messages sent to the model</h3>
-              {current.messages.length === 0 ? <p className="help">No messages were attached to this call.</p> : null}
-              <ol className="prompt-messages">
-                {current.messages.map((message, index) => (
-                  <li key={`${current.id}-${index}`}>
-                    <strong>{messageRole(message)}</strong>
-                    <pre className="prompt-pre">{messageBody(message)}</pre>
-                  </li>
-                ))}
-              </ol>
-            </>
-          ) : null}
+          <p className="meta">
+            {prompt.model || "Model"} · {when(prompt.created_at)}
+          </p>
+          <h3>System prompt</h3>
+          <pre className="prompt-pre">{prompt.system_prompt}</pre>
+          <h3>Messages sent to the model</h3>
+          {prompt.messages.length === 0 ? <p className="help">No messages were attached to this call.</p> : null}
+          <ol className="prompt-messages">
+            {prompt.messages.map((message, index) => (
+              <li key={`${prompt.id}-${index}`}>
+                <strong>{messageRole(message)}</strong>
+                <pre className="prompt-pre">{messageBody(message)}</pre>
+              </li>
+            ))}
+          </ol>
         </div>
       </div>
     </div>
@@ -254,6 +244,11 @@ function PromptDialog({ chat, onClose }: { chat: SessionSummary; onClose: () => 
 }
 
 function SessionView({ session }: { session: SessionDetail }) {
+  const [prompt, setPrompt] = useState<ModelPrompt | null>(null);
+  const icons = promptOnRow(session);
+  useEffect(() => {
+    setPrompt(null);
+  }, [session.id]);
   const current = session.lesson_plan.topics
     .flatMap((topic) => topic.checkpoints.map((checkpoint) => ({ topic, checkpoint })))
     .find((item) => item.checkpoint.id === session.current_checkpoint_id);
@@ -285,14 +280,38 @@ function SessionView({ session }: { session: SessionDetail }) {
       <h3>Transcript</h3>
       {session.messages.length === 0 ? <p className="help">No messages stored yet.</p> : null}
       <ol className="transcript-list">
-        {session.messages.map((message) => (
-          <li key={message.id} className={message.role}>
-            <strong>{message.role === "user" ? session.student.display_name : "Tutor"}</strong>
-            <span className="quiet">{when(message.created_at)}</span>
-            <p style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{message.content}</p>
-          </li>
-        ))}
+        {session.messages.map((message) => {
+          const turnPrompt = icons.get(message.id);
+          return (
+            <li key={message.id} className={message.role}>
+              <div className="transcript-line">
+                <div>
+                  <strong>{message.role === "user" ? session.student.display_name : "Tutor"}</strong>
+                  <span className="quiet">{when(message.created_at)}</span>
+                  <p style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{message.content}</p>
+                </div>
+                {turnPrompt ? (
+                  <button
+                    type="button"
+                    className="prompt-icon"
+                    aria-label="View the prompt for this turn"
+                    onClick={() => setPrompt(turnPrompt)}
+                  >
+                    <PromptIcon />
+                  </button>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
       </ol>
+      {prompt ? (
+        <PromptDialog
+          prompt={prompt}
+          subtitle={`${session.student.display_name} · ${session.lesson_plan.title}`}
+          onClose={() => setPrompt(null)}
+        />
+      ) : null}
     </article>
   );
 }
