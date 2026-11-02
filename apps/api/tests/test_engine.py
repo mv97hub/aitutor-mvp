@@ -198,6 +198,37 @@ def test_kickoff_states_the_goal_and_not_later_answers() -> None:
     assert "advance to false" in text
 
 
+def test_opening_hold_keeps_the_choice_out_of_the_kickoff() -> None:
+    widget = WidgetTask(
+        type="multi",
+        prompt="Which of these are archaeological clues?",
+        choices=(
+            WidgetChoice("wall", "A wall dated to early Rome.", ""),
+            WidgetChoice("pottery", "Pottery found under the Forum.", ""),
+        ),
+        answer=("wall", "pottery"),
+        explain=False,
+        grade=None,
+    )
+    layers = list(_layers())
+    layers[0] = _beat(
+        beat_role="try",
+        prompt="Which of these are archaeological clues rather than the wolf legend?",
+        widget=widget,
+        learning_goal="I can tell a legend from an archaeological clue.",
+    )
+    text = assemble(*layers, kickoff=True, hold_widget=True).system_prompt
+    assert "what finished work looks like" in text
+    assert "choice widget is not on screen" in text
+    assert "Invite them to choose" not in text
+    assert "pottery" not in text.lower()
+    assert "Which of these are archaeological clues" not in text
+    reply = assemble(*layers, hold_widget=True).system_prompt
+    assert "still the opening exchange" in reply
+    assert "Invite them to choose" not in reply
+    assert "pottery" not in reply.lower()
+
+
 def test_widget_answer_stays_hidden_until_the_window() -> None:
     widget = WidgetTask(
         type="single",

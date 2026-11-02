@@ -430,7 +430,11 @@ function ChatPanel({
           {messages.map((message) => (
             <MessageView key={message.id} message={message} studentName={studentName} />
           ))}
-          {block?.quiz && lessonStatus !== "completed" && !quizLocked ? (
+          {block?.quiz &&
+          lessonStatus !== "completed" &&
+          !quizLocked &&
+          (block.kind === "try" || block.kind === "show") &&
+          openingExchangeDone(messages) ? (
             <ChoiceWidget
               key={block.id}
               quiz={block.quiz}
@@ -505,6 +509,25 @@ function ChatPanel({
       </form>
     </>
   );
+}
+
+function messageText(message: UIMessage) {
+  return (message.parts as LoosePart[])
+    .map((part) => (part.type === "text" ? part.text?.trim() ?? "" : ""))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function openingExchangeDone(messages: UIMessage[]) {
+  let users = 0;
+  let assistants = 0;
+  for (const message of messages) {
+    if (!messageText(message)) continue;
+    if (message.role === "user") users += 1;
+    else if (message.role === "assistant") assistants += 1;
+  }
+  return users >= 2 && assistants >= 2;
 }
 
 function isTyping(element: HTMLElement) {

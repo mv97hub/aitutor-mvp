@@ -241,6 +241,106 @@ def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
     assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "name"
 
 
+def test_choice_widget_waits_until_the_opening_exchange_is_done() -> None:
+    storm = _student("storm")["id"]
+    opened = client.post(
+        "/sessions",
+        json={"student_id": storm, "quest_id": _quest("ROM-U1-Q1")["id"], "fresh": True},
+    )
+    session_id = opened.json()["id"]
+    assert opened.json()["current_block"]["kind"] == "try"
+    assert opened.json()["current_block"]["quiz"] is None
+
+    kickoff = client.get(f"/sessions/{session_id}/prompt", params={"kickoff": True}).json()
+    assert "what finished work looks like" in kickoff["system_prompt"]
+    assert "choice widget is not on screen" in kickoff["system_prompt"]
+    assert "Invite them to choose" not in kickoff["system_prompt"]
+    assert "pottery" not in kickoff["system_prompt"].lower()
+    assert "one question" in kickoff["system_prompt"].lower()
+
+    client.post(
+        f"/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Hi! I'm ready to learn.", "client_id": "open-user"},
+    )
+    client.post(
+        f"/sessions/{session_id}/messages",
+        json={
+            "role": "assistant",
+            "content": "The goal is to tell a legend from a clue. A story can carry a meaning, and a find can be checked. What could someone dig up?",
+            "client_id": "open-tutor",
+        },
+    )
+    client.post(
+        f"/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Something left in the ground.", "client_id": "reply-user"},
+    )
+    held = client.post(
+        f"/sessions/{session_id}/turn-score",
+        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    assert held.json()["graded_by"] == "opening"
+    assert held.json()["advanced"] is False
+    board = client.get(f"/sessions/{session_id}/board").json()
+    assert board["current_block"]["kind"] == "try"
+    assert board["current_block"]["quiz"] is None
+    assert board["beats"][0]["latest_result"] is None
+
+    client.post(
+        f"/sessions/{session_id}/messages",
+        json={
+            "role": "assistant",
+            "content": "A find is something you can check again. The choices are next.",
+            "client_id": "reply-tutor",
+        },
+    )
+    shown = client.get(f"/sessions/{session_id}/board").json()
+    assert shown["current_block"]["quiz"]["type"] == "multi"
+    assert "answer" not in shown["current_block"]["quiz"]
+    follow = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+    assert "Invite them to choose" in follow
+
+    banker = client.post(
+        "/sessions",
+        json={"student_id": storm, "quest_id": _quest("MAC-U5-Q1")["id"], "fresh": True},
+    )
+    assert banker.json()["current_block"]["kind"] == "try"
+    assert banker.json()["current_block"]["quiz"] is None
+    banker_id = banker.json()["id"]
+    banker_kickoff = client.get(f"/sessions/{banker_id}/prompt", params={"kickoff": True}).json()
+    assert "FOMC" not in banker_kickoff["system_prompt"]
+    assert "simultaneously cure" not in banker_kickoff["system_prompt"].lower()
+    for content, role, client_id in (
+        ("Hi! I'm ready to learn.", "user", "bank-user"),
+        ("A rate rise cuts borrowing, and a supply shock moves the curve. What does finished work include?", "assistant", "bank-tutor"),
+        ("It includes the rate chain and the curve shift.", "user", "bank-reply"),
+        ("That is the goal. The choice is next.", "assistant", "bank-tutor-2"),
+    ):
+        client.post(
+            f"/sessions/{banker_id}/messages",
+            json={"role": role, "content": content, "client_id": client_id},
+        )
+    ready = client.get(f"/sessions/{banker_id}/board").json()
+    assert ready["current_block"]["quiz"]["type"] == "single"
+    assert "FOMC" not in ready["current_block"]["quiz"]["prompt"]
+    client.post(
+        f"/sessions/{banker_id}/grade-widget",
+        json={"choice": "shift", "explanation": ""},
+    )
+    client.post(
+        f"/sessions/{banker_id}/turn-score",
+        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    assert client.get(f"/sessions/{banker_id}/board").json()["current_block"]["kind"] == "name"
+    client.post(
+        f"/sessions/{banker_id}/turn-score",
+        json={"rubric_met": ["link"], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    show = client.get(f"/sessions/{banker_id}/board").json()
+    assert show["current_block"]["kind"] == "show"
+    assert show["current_block"]["quiz"]["type"] == "flaw"
+    assert "memo" in show["current_block"]["quiz"]["prompt"].lower()
+
+
 def test_struggle_window_then_worked_answer_advances() -> None:
     storm = _student("storm")["id"]
     opened = client.post(

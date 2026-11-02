@@ -4,7 +4,7 @@ from app.engine.assemble import hint_tier_for
 from app.engine.defaults import age_band_for
 from app.flow import beat_state, failed_attempts
 from app.models import Beat, BeatResult, Course, Message, ModelPrompt, Quest, Session as TutorSession
-from app.queries import latest_result, locate_beat, ordered_beats
+from app.queries import choice_widget_visible, latest_result, locate_beat, ordered_beats
 from app.schemas import (
     BeatOut,
     BlockStep,
@@ -235,7 +235,7 @@ def board(tutor_session: TutorSession) -> BoardOut:
                 rubric=_rubric_rows(beat, met),
                 hint_tier=tier,  # type: ignore[arg-type]
                 hint_text=hint_text(beat.hint_ladder, tier),
-                quiz=_quiz_out(beat.widget if isinstance(beat.widget, dict) else None),
+                quiz=_quiz_out(beat.widget if choice_widget_visible(tutor_session, beat) else None),
             )
         steps.append(
             BlockStep(

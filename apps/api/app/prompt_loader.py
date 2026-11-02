@@ -22,7 +22,7 @@ from app.engine.types import (
     WidgetTask,
 )
 from app.models import Beat, Session as TutorSession
-from app.queries import latest_result, locate_beat, ordered_beats
+from app.queries import choice_widget_visible, latest_result, locate_beat, ordered_beats
 
 PASS_SCORE = 70
 
@@ -165,6 +165,12 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
     finished = current is None
     if source is None and beats:
         source = beats[-1]
+    held = (
+        source is not None
+        and not finished
+        and isinstance(source.widget, dict)
+        and not choice_widget_visible(tutor_session, source)
+    )
     if source is None:
         beat_layer = Layer1Beat(
             course_title=course.title,
@@ -208,7 +214,7 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             rubric=_rows(source),
             misconceptions=_traps(source),
             hint_ladder=_ladder(source),
-            widget=None if finished else _widget(tutor_session, source),
+            widget=None if finished or held else _widget(tutor_session, source),
             pass_score=PASS_SCORE,
             gate_cleared=gate_cleared,
             finished=finished,
@@ -250,4 +256,5 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
         metacognition_layer(),
         memory_layer(),
         kickoff=kickoff,
+        hold_widget=held,
     )

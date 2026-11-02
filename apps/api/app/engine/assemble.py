@@ -149,7 +149,7 @@ def _widget_lines(widget: WidgetTask, *, reveal: bool) -> list[str]:
     return lines
 
 
-def _layer1(beat: Layer1Beat, tier: str, *, reveal: bool) -> list[str]:
+def _layer1(beat: Layer1Beat, tier: str, *, reveal: bool, hold_widget: bool = False) -> list[str]:
     role = _ROLE_LABEL.get(beat.beat_role, beat.beat_role.replace("_", " "))
     goal = beat.learning_goal.strip() or beat.quest_objective.strip() or beat.quest_title
     lines = [
@@ -171,7 +171,11 @@ def _layer1(beat: Layer1Beat, tier: str, *, reveal: bool) -> list[str]:
         [
             f"Move {beat.beat_position} of {beat.beat_count}: {role}.",
             f"Bloom level: {beat.bloom_level}. Cognitive load: {beat.cognitive_load}.",
-            f"Stay on this move. Task, in your own words if you need to: {beat.prompt}",
+            (
+                "Opening discussion. The choice widget is not on screen. Do not ask this move's choice question."
+                if hold_widget
+                else f"Stay on this move. Task, in your own words if you need to: {beat.prompt}"
+            ),
             f"This move's rubric rows: {_rubric_line(beat)}",
             f"Misconception traps: {_traps_line(beat)}",
             "Hint ladder: "
@@ -192,7 +196,7 @@ def _layer1(beat: Layer1Beat, tier: str, *, reveal: bool) -> list[str]:
         lines.append(
             "Teach-back: the student corrects the sidekick. You may confirm a correct correction. Do not lecture the whole model."
         )
-    if beat.widget is not None:
+    if beat.widget is not None and not hold_widget:
         lines.extend(_widget_lines(beat.widget, reveal=reveal))
     return lines
 
@@ -354,6 +358,7 @@ def assemble(
     memory: Layer7Memory,
     *,
     kickoff: bool = False,
+    hold_widget: bool = False,
 ) -> PromptBundle:
     tier = hint_tier_for(student.attempt_count)
     reveal = student.attempt_count >= struggle_limit(discourse.struggle_window)
@@ -362,7 +367,7 @@ def assemble(
         f"You are the tutor for {student.display_name}.",
         "The reply field is the only text the student reads. The other fields are the turn score.",
     ]
-    lines.extend(_layer1(beat, tier, reveal=reveal))
+    lines.extend(_layer1(beat, tier, reveal=reveal, hold_widget=hold_widget))
     lines.extend(_layer2(student))
     lines.extend(_layer3(tutor))
     lines.extend(_layer4(discourse, beat, student))
@@ -382,7 +387,22 @@ def assemble(
                     f"Done looks like: {done}",
                     "Use only that goal and that criterion. Do not invent a different topic, event, or skill.",
                     "Do not preview later moves or give away later answers.",
-                    "Then ask one question that opens the current move.",
+                    (
+                        "Then ask one question about the learning goal. The choice widget is not on screen. Do not mention choices, taps, or a quiz."
+                        if hold_widget
+                        else "Then ask one question that opens the current move."
+                    ),
+                    "Set rubric_met to [], misconception to null, and advance to false.",
+                ]
+            )
+        )
+    elif hold_widget and not beat.finished:
+        lines.append(
+            "\n".join(
+                [
+                    "This is still the opening exchange. The choice widget is not on screen and appears after this reply.",
+                    "Respond to what the student said about the goal.",
+                    "Do not ask the choice question and do not list choices.",
                     "Set rubric_met to [], misconception to null, and advance to false.",
                 ]
             )
