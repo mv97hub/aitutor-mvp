@@ -53,7 +53,7 @@ python -m app.seed
 uvicorn app.main:app --reload --port 8000
 ```
 
-`alembic upgrade head` and `python -m app.seed` are safe to run again. The seed inserts Iron Man, Storm, Spider-Man, and Wolverine when they are missing, and fills an age only when it is blank. Lessons are Fractions, Reading, Science, Super prompts (ages 9–11), and Function shifts (ages 15–17). A new slug is inserted once. Fractions is rewritten into blocks only when no class uses it. Other existing plans are left as edited, aside from a blank age range.
+`alembic upgrade head` and `python -m app.seed` are safe to run again. The seed inserts Iron Man, Storm, Spider-Man, and Wolverine when they are missing, and fills an age only when it is blank. Lessons are Fractions, Reading, Science, Super prompts (ages 9–11), and Function shifts (ages 15–17). A new slug is inserted once. Fractions is rewritten in place into typed blocks with one choice widget, keeping the same lesson id, so a class that already points at it still opens. A second run leaves that rewrite alone. Other existing plans are left as edited, aside from a blank age range.
 
 Terminal 2, web:
 

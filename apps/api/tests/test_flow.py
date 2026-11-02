@@ -366,3 +366,46 @@ def test_widget_grades_before_the_model_and_age_gate() -> None:
         },
     )
     assert older.status_code == 400
+
+
+def test_fractions_rewrites_in_place_under_an_open_class() -> None:
+    opened = client.post(
+        "/sessions",
+        json={"student_id": _storm_id(), "lesson_plan_id": _plan_id("fractions"), "fresh": True},
+    )
+    assert opened.status_code == 200
+    lesson_id = opened.json()["lesson_plan_id"]
+    session_id = opened.json()["id"]
+    current_id = opened.json()["current_checkpoint_id"]
+    db = SessionLocal()
+    try:
+        plan = db.get(LessonPlan, lesson_id)
+        for topic in plan.topics:
+            for checkpoint in topic.checkpoints:
+                checkpoint.kind = {1: "teach", 2: "practice"}.get(checkpoint.position, "quiz")
+                checkpoint.quiz = None
+                checkpoint.rubric_rows = []
+                checkpoint.objective = None
+                checkpoint.tutor_prompt = "OLD PROMPT that should be replaced."
+        db.commit()
+        rewritten = seed(db)
+        again = seed(db)
+    finally:
+        db.close()
+    assert rewritten["lesson_plans_rewritten"] == 1
+    assert again["lesson_plans_created"] == 0
+    assert again["lesson_plans_rewritten"] == 0
+    board = client.get(f"/sessions/{session_id}/board")
+    assert board.status_code == 200
+    body = board.json()
+    assert body["lesson_plan_id"] == lesson_id
+    assert body["current_checkpoint_id"] == current_id
+    assert body["current_block"]["kind"] == "discovery"
+    assert "pizza" in body["current_block"]["tutor_prompt"].lower()
+    quiz_blocks = [
+        checkpoint
+        for topic in body["topics"]
+        for checkpoint in topic["checkpoints"]
+        if checkpoint["kind"] == "quiz"
+    ]
+    assert len(quiz_blocks) == 1

@@ -1,14 +1,19 @@
 """Idempotent seed: four students and the lesson blocks.
 
 Running this twice does not duplicate rows. An existing plan is left as edited,
-except Fractions, which is rewritten into blocks only when no session uses it.
+except Fractions, which is rewritten in place into blocks. The lesson id stays
+the same, so classes that already point at it still open.
 """
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+import copy
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import SessionLocal
-from app.models import Checkpoint, LessonPlan, Session as TutorSession, Student, Topic
+from app.flow import topic_in_use
+from app.models import Checkpoint, LessonPlan, Student, Topic
+from app.queries import checkpoint_in_use
 
 STUDENTS = [
     {"slug": "iron-man", "display_name": "Iron Man", "age": 10},
@@ -528,7 +533,7 @@ LESSONS = [
         "activate_if_none": True,
         "age_min": 8,
         "age_max": 12,
-        "rewrite_if_unused": True,
+        "rewrite_in_place": True,
     },
     {
         "slug": "reading",
@@ -538,7 +543,6 @@ LESSONS = [
         "activate_if_none": False,
         "age_min": 8,
         "age_max": None,
-        "rewrite_if_unused": False,
     },
     {
         "slug": "science",
@@ -548,7 +552,6 @@ LESSONS = [
         "activate_if_none": False,
         "age_min": 8,
         "age_max": None,
-        "rewrite_if_unused": False,
     },
     {
         "slug": "super-prompts",
@@ -558,7 +561,6 @@ LESSONS = [
         "activate_if_none": False,
         "age_min": 9,
         "age_max": 11,
-        "rewrite_if_unused": False,
     },
     {
         "slug": "function-shifts",
@@ -568,9 +570,42 @@ LESSONS = [
         "activate_if_none": False,
         "age_min": 15,
         "age_max": 17,
-        "rewrite_if_unused": False,
     },
 ]
+
+
+def _copy_block(spec: dict) -> dict:
+    return {
+        "kind": spec["kind"],
+        "tutor_prompt": spec["tutor_prompt"],
+        "rubric": spec.get("rubric") or None,
+        "pass_criteria": spec.get("pass_criteria") or None,
+        "objective": spec.get("objective"),
+        "rubric_rows": copy.deepcopy(spec.get("rubric_rows") or []),
+        "hint_ladder": copy.deepcopy(
+            spec.get("hint_ladder") or {"nudge": "", "analogy": "", "scaffold": ""}
+        ),
+        "pass_score": spec.get("pass_score", 70),
+        "quiz": copy.deepcopy(spec.get("quiz")),
+    }
+
+
+def _write_checkpoint(checkpoint: Checkpoint, spec: dict) -> None:
+    fields = _copy_block(spec)
+    checkpoint.kind = fields["kind"]
+    checkpoint.tutor_prompt = fields["tutor_prompt"]
+    checkpoint.rubric = fields["rubric"]
+    checkpoint.pass_criteria = fields["pass_criteria"]
+    checkpoint.objective = fields["objective"]
+    checkpoint.rubric_rows = fields["rubric_rows"]
+    checkpoint.hint_ladder = fields["hint_ladder"]
+    checkpoint.pass_score = fields["pass_score"]
+    checkpoint.quiz = fields["quiz"]
+
+
+def _new_checkpoint(topic: Topic, spec: dict, position: int) -> Checkpoint:
+    fields = _copy_block(spec)
+    return Checkpoint(topic_id=topic.id, position=position, **fields)
 
 
 def _add_topics(db: Session, plan: LessonPlan, topics: list[dict]) -> None:
@@ -585,29 +620,7 @@ def _add_topics(db: Session, plan: LessonPlan, topics: list[dict]) -> None:
         db.add(topic)
         db.flush()
         for checkpoint_index, checkpoint_spec in enumerate(topic_spec["checkpoints"], start=1):
-            db.add(
-                Checkpoint(
-                    topic_id=topic.id,
-                    kind=checkpoint_spec["kind"],
-                    tutor_prompt=checkpoint_spec["tutor_prompt"],
-                    rubric=checkpoint_spec.get("rubric") or None,
-                    pass_criteria=checkpoint_spec.get("pass_criteria") or None,
-                    objective=checkpoint_spec.get("objective"),
-                    rubric_rows=checkpoint_spec.get("rubric_rows") or [],
-                    hint_ladder=checkpoint_spec.get("hint_ladder")
-                    or {"nudge": "", "analogy": "", "scaffold": ""},
-                    pass_score=checkpoint_spec.get("pass_score", 70),
-                    quiz=checkpoint_spec.get("quiz"),
-                    position=checkpoint_index,
-                )
-            )
-
-
-def _plan_in_use(db: Session, plan: LessonPlan) -> bool:
-    count = db.scalar(
-        select(func.count()).select_from(TutorSession).where(TutorSession.lesson_plan_id == plan.id)
-    )
-    return bool(count)
+            db.add(_new_checkpoint(topic, checkpoint_spec, checkpoint_index))
 
 
 def _needs_block_rewrite(plan: LessonPlan) -> bool:
@@ -621,18 +634,92 @@ def _fill_ages(plan: LessonPlan, spec: dict) -> None:
         plan.age_max = spec.get("age_max")
 
 
-def _insert_plan(db: Session, spec: dict) -> str:
-    existing = db.scalar(select(LessonPlan).where(LessonPlan.slug == spec["slug"]))
-    if existing is not None:
-        if spec.get("rewrite_if_unused") and _needs_block_rewrite(existing) and not _plan_in_use(db, existing):
-            for topic in list(existing.topics):
-                db.delete(topic)
+HELD_BLOCK = {
+    "kind": "teach_back",
+    "objective": "Explain a fraction you already know.",
+    "tutor_prompt": "Tell me one fraction you know, and what the top number and the bottom number mean.",
+    "rubric": "Names a fraction and both parts.",
+    "pass_criteria": "The student names a fraction and says what each number means.",
+    "rubric_rows": [
+        {"id": "fraction", "text": "Names a fraction.", "weight": 40},
+        {"id": "parts", "text": "Says what the numerator and the denominator mean.", "weight": 60},
+    ],
+    "hint_ladder": {
+        "nudge": "Pick a fraction you have already used, like 1/4.",
+        "analogy": "The bottom number is the equal pieces. The top number is how many of them you mean.",
+        "scaffold": "1/4 means 1 piece out of 4 equal pieces. 1 is the numerator and 4 is the denominator.",
+    },
+    "pass_score": 70,
+}
+
+
+def _sync_checkpoints(db: Session, topic: Topic, specs: list[dict]) -> None:
+    existing = sorted(topic.checkpoints, key=lambda item: item.position)
+    for index, checkpoint_spec in enumerate(specs):
+        if index < len(existing):
+            _write_checkpoint(existing[index], checkpoint_spec)
+            continue
+        position = index + 1
+        taken = {item.position for item in existing}
+        while position in taken:
+            position += 1
+        created = _new_checkpoint(topic, checkpoint_spec, position)
+        topic.checkpoints.append(created)
+        db.add(created)
+    for extra in existing[len(specs) :]:
+        if checkpoint_in_use(db, extra.id):
+            _write_checkpoint(extra, HELD_BLOCK)
+            continue
+        topic.checkpoints.remove(extra)
+        db.delete(extra)
+    db.flush()
+
+
+def _rewrite_plan_in_place(db: Session, plan: LessonPlan, spec: dict) -> None:
+    """Replace block text on the same lesson, topic, and checkpoint rows."""
+    plan.title = spec["title"]
+    plan.preamble = spec["preamble"]
+    plan.age_min = spec.get("age_min")
+    plan.age_max = spec.get("age_max")
+    topics = sorted(plan.topics, key=lambda item: item.position)
+    for index, topic_spec in enumerate(spec["topics"]):
+        if index < len(topics):
+            topic = topics[index]
+            topic.title = topic_spec["title"]
+            topic.learning_goal = topic_spec["learning_goal"]
+            topic.tutor_instructions = topic_spec["tutor_instructions"]
+        else:
+            topic = Topic(
+                lesson_plan_id=plan.id,
+                title=topic_spec["title"],
+                learning_goal=topic_spec["learning_goal"],
+                tutor_instructions=topic_spec["tutor_instructions"],
+                position=index + 1,
+            )
+            plan.topics.append(topic)
+            db.add(topic)
             db.flush()
-            existing.title = spec["title"]
-            existing.preamble = spec["preamble"]
-            existing.age_min = spec.get("age_min")
-            existing.age_max = spec.get("age_max")
-            _add_topics(db, existing, spec["topics"])
+            topics.append(topic)
+        _sync_checkpoints(db, topic, topic_spec["checkpoints"])
+    for extra in topics[len(spec["topics"]) :]:
+        if topic_in_use(db, extra):
+            for checkpoint in list(extra.checkpoints):
+                _write_checkpoint(checkpoint, HELD_BLOCK)
+            continue
+        plan.topics.remove(extra)
+        db.delete(extra)
+    db.flush()
+
+
+def _insert_plan(db: Session, spec: dict) -> str:
+    existing = db.scalar(
+        select(LessonPlan)
+        .where(LessonPlan.slug == spec["slug"])
+        .options(selectinload(LessonPlan.topics).selectinload(Topic.checkpoints))
+    )
+    if existing is not None:
+        if spec.get("rewrite_in_place") and _needs_block_rewrite(existing):
+            _rewrite_plan_in_place(db, existing, spec)
             return "rewritten"
         _fill_ages(existing, spec)
         return "kept"
