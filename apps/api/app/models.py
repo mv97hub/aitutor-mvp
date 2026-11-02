@@ -233,6 +233,9 @@ class ModelPrompt(Base):
     session_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), index=True
+    )
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     messages: Mapped[list] = mapped_column(JSON, nullable=False)

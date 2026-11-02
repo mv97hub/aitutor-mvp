@@ -210,12 +210,19 @@ def append_model_prompt(
     system_prompt: str,
     messages: list,
     model: str,
+    message_id: uuid.UUID | None = None,
 ) -> ModelPrompt:
+    linked = None
+    if message_id is not None:
+        linked = db.get(Message, message_id)
+        if linked is None or linked.session_id != tutor_session.id:
+            raise HTTPException(status_code=400, detail="That message is not part of this class.")
     seq = db.scalar(
         select(func.max(ModelPrompt.seq)).where(ModelPrompt.session_id == tutor_session.id)
     )
     row = ModelPrompt(
         session_id=tutor_session.id,
+        message_id=linked.id if linked is not None else None,
         seq=(seq or 0) + 1,
         system_prompt=system_prompt,
         messages=messages,

@@ -259,6 +259,7 @@ class SessionAdminOut(BaseModel):
     current_checkpoint_id: UUID | None
     messages: list[MessageOut]
     results: list[ResultOut]
+    prompts: list[ModelPromptOut] = Field(default_factory=list)
 
 
 class OutlineCheckpoint(BaseModel):
@@ -367,11 +368,13 @@ class ModelPromptIn(BaseModel):
     system_prompt: str = Field(min_length=1)
     messages: list[Any] = Field(default_factory=list)
     model: str = Field(default="", max_length=120)
+    message_id: UUID | None = None
 
 
 class ModelPromptOut(BaseModel):
     id: UUID
     session_id: UUID
+    message_id: UUID | None = None
     seq: int
     system_prompt: str
     messages: list[Any]
