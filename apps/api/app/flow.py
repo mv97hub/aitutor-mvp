@@ -21,6 +21,7 @@ from app.queries import (
     active_plan,
     checkpoint_in_use,
     flat_checkpoints,
+    load_plan,
     locate,
     latest_result,
     next_position,
@@ -74,11 +75,16 @@ def move_item(db: Session, items: list, item, direction: str) -> None:
     db.flush()
 
 
-def open_session(db: Session, student_id: uuid.UUID, fresh: bool) -> TutorSession:
+def open_session(
+    db: Session,
+    student_id: uuid.UUID,
+    fresh: bool,
+    lesson_plan_id: uuid.UUID | None = None,
+) -> TutorSession:
     student = db.get(Student, student_id)
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
-    plan = active_plan(db)
+    plan = active_plan(db) if lesson_plan_id is None else load_plan(db, lesson_plan_id)
     if not fresh:
         existing = db.scalar(
             select(TutorSession)
@@ -95,7 +101,7 @@ def open_session(db: Session, student_id: uuid.UUID, fresh: bool) -> TutorSessio
     if not rows:
         raise HTTPException(
             status_code=400,
-            detail="The active lesson plan has no checkpoints.",
+            detail="This lesson has no checkpoints.",
         )
     topic, checkpoint = rows[0]
     tutor_session = TutorSession(

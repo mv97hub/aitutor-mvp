@@ -20,27 +20,33 @@ def setup_function() -> None:
         db.close()
 
 
+def _checkpoint_count(db, slug: str) -> int:
+    return db.scalar(
+        select(func.count())
+        .select_from(Checkpoint)
+        .join(Topic)
+        .join(LessonPlan)
+        .where(LessonPlan.slug == slug)
+    )
+
+
 def test_seed_is_idempotent() -> None:
     db = SessionLocal()
     try:
         again = seed(db)
         students = db.scalar(select(func.count()).select_from(Student))
-        plans = db.scalar(
-            select(func.count()).select_from(LessonPlan).where(LessonPlan.slug == "fractions")
-        )
-        checkpoints = db.scalar(
-            select(func.count())
-            .select_from(Checkpoint)
-            .join(Topic)
-            .join(LessonPlan)
-            .where(LessonPlan.slug == "fractions")
-        )
+        plans = db.scalar(select(func.count()).select_from(LessonPlan))
+        fractions = _checkpoint_count(db, "fractions")
+        reading = _checkpoint_count(db, "reading")
+        science = _checkpoint_count(db, "science")
     finally:
         db.close()
     assert again == {"students_created": 0, "lesson_plans_created": 0}
     assert students == 4
-    assert plans == 1
-    assert checkpoints == 6
+    assert plans == 3
+    assert fractions == 6
+    assert reading == 3
+    assert science == 3
 
 
 def test_reorder_checkpoint_round_trip() -> None:
@@ -80,6 +86,47 @@ def test_health_and_roster() -> None:
 def _storm_id() -> str:
     students = client.get("/students").json()
     return next(student["id"] for student in students if student["slug"] == "storm")
+
+
+def _plan_id(slug: str) -> str:
+    plans = client.get("/lesson-plans").json()
+    return next(plan["id"] for plan in plans if plan["slug"] == slug)
+
+
+def test_session_stays_on_the_chosen_lesson() -> None:
+    reading_id = _plan_id("reading")
+    fractions_id = _plan_id("fractions")
+    opened = client.post(
+        "/sessions",
+        json={"student_id": _storm_id(), "lesson_plan_id": reading_id, "fresh": True},
+    )
+    assert opened.status_code == 200
+    assert opened.json()["lesson_title"] == "Reading"
+    assert opened.json()["topics"][0]["checkpoints"][0]["kind"] == "teach"
+    session_id = opened.json()["id"]
+    context = client.get(f"/sessions/{session_id}/context")
+    assert "fox" in context.json()["current_checkpoint"]["tutor_prompt"].lower()
+
+    resumed = client.post(
+        "/sessions",
+        json={"student_id": _storm_id(), "lesson_plan_id": reading_id, "fresh": False},
+    )
+    assert resumed.json()["id"] == session_id
+
+    other = client.post(
+        "/sessions",
+        json={"student_id": _storm_id(), "lesson_plan_id": fractions_id, "fresh": False},
+    )
+    assert other.status_code == 200
+    assert other.json()["id"] != session_id
+    assert other.json()["lesson_title"] == "Fractions"
+
+    fresh = client.post(
+        "/sessions",
+        json={"student_id": _storm_id(), "lesson_plan_id": reading_id, "fresh": True},
+    )
+    assert fresh.json()["id"] != session_id
+    assert fresh.json()["lesson_title"] == "Reading"
 
 
 def test_advance_rules_and_checkpoint_edits() -> None:

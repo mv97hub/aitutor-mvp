@@ -224,6 +224,7 @@ class CurrentStepOut(BaseModel):
 
 class SessionOpen(BaseModel):
     student_id: UUID
+    lesson_plan_id: UUID | None = None
     fresh: bool = False
 
 

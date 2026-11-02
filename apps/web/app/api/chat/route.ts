@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { api } from "@/lib/api";
 import { KICKOFF } from "@/lib/kickoff";
+import { openaiModelName } from "@/lib/model";
 import { buildSystemPrompt } from "@/lib/prompt";
 import type { LessonContext } from "@/lib/types";
 
@@ -83,9 +84,8 @@ export async function POST(req: Request) {
     lastUser != null &&
     textOf(lastUser) === KICKOFF;
 
-  const modelName = process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
   const result = streamText({
-    model: openai(modelName),
+    model: openai(openaiModelName()),
     instructions: buildSystemPrompt(context, { kickoff }),
     messages: await convertToModelMessages(messages),
     stopWhen: isStepCount(8),

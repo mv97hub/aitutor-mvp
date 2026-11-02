@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
 import { KICKOFF } from "@/lib/kickoff";
-import type { Board, BoardCheckpoint, Student, StoredMessage } from "@/lib/types";
+import type { Board, BoardCheckpoint, LessonPlanSummary, Student, StoredMessage } from "@/lib/types";
 
 const LOOKS: Record<string, { ink: string; wash: string; mark: string }> = {
   "iron-man": { ink: "#7c2d12", wash: "#f6d7a8", mark: "IM" },
@@ -243,25 +243,40 @@ function ChatPanel({
   );
 }
 
+function startablePlans(plans: LessonPlanSummary[]): LessonPlanSummary[] {
+  return plans.filter((plan) => plan.topic_count > 0);
+}
+
+function startingPlanId(plans: LessonPlanSummary[]): string | null {
+  const startable = startablePlans(plans);
+  return startable.find((plan) => plan.is_active)?.id ?? startable[0]?.id ?? null;
+}
+
 export function KidSession({
   initialStudents,
+  initialPlans,
   initialError,
 }: {
   initialStudents: Student[];
+  initialPlans: LessonPlanSummary[];
   initialError: string | null;
 }) {
   const [students, setStudents] = useState(initialStudents);
+  const [plans, setPlans] = useState(initialPlans);
+  const [planId, setPlanId] = useState<string | null>(() => startingPlanId(initialPlans));
   const [error, setError] = useState(initialError);
   const [board, setBoard] = useState<Board | null>(null);
   const [opening, setOpening] = useState(false);
+  const choices = startablePlans(plans);
+  const selectedPlan = choices.find((plan) => plan.id === planId) ?? null;
 
-  async function openStudent(studentId: string, fresh: boolean) {
+  async function openStudent(studentId: string, fresh: boolean, lessonPlanId: string) {
     setOpening(true);
     setError(null);
     try {
       const next = await api<Board>("/sessions", {
         method: "POST",
-        body: JSON.stringify({ student_id: studentId, fresh }),
+        body: JSON.stringify({ student_id: studentId, lesson_plan_id: lessonPlanId, fresh }),
       });
       setBoard(next);
     } catch (err) {
@@ -271,9 +286,17 @@ export function KidSession({
     }
   }
 
-  async function reloadStudents() {
+  async function reloadRoster() {
     try {
-      setStudents(await api<Student[]>("/students"));
+      const [nextStudents, nextPlans] = await Promise.all([
+        api<Student[]>("/students"),
+        api<LessonPlanSummary[]>("/lesson-plans"),
+      ]);
+      setStudents(nextStudents);
+      setPlans(nextPlans);
+      setPlanId((current) =>
+        current && nextPlans.some((plan) => plan.id === current) ? current : startingPlanId(nextPlans),
+      );
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The tutor service is not reachable.");
@@ -288,8 +311,29 @@ export function KidSession({
             <p className="eyebrow">Kid session</p>
             <Link className="top-link" href="/admin">Lesson desk</Link>
           </div>
+          <div className="lesson-pick">
+            <p className="eyebrow">Lesson</p>
+            <div className="lesson-row" role="group" aria-label="Choose a lesson">
+              {choices.map((plan) => (
+                <button
+                  key={plan.id}
+                  type="button"
+                  className={`choice lesson-choice ${plan.id === planId ? "is-on" : ""}`}
+                  aria-pressed={plan.id === planId}
+                  onClick={() => setPlanId(plan.id)}
+                >
+                  {plan.title}
+                </button>
+              ))}
+            </div>
+            {choices.length === 0 ? <p className="lede">No lessons yet.</p> : null}
+          </div>
           <h1>Who&apos;s learning today?</h1>
-          <p className="lede">Pick a name. The tutor starts at the current step and stays there until you are ready.</p>
+          <p className="lede">
+            {selectedPlan
+              ? `This session stays on ${selectedPlan.title}. Pick a name to start.`
+              : "Pick a lesson, then a name."}
+          </p>
           {students.length === 0 ? <p className="lede">Loading the class list…</p> : null}
           <div className="name-grid">
             {students.map((student) => {
@@ -299,14 +343,16 @@ export function KidSession({
                   key={student.id}
                   type="button"
                   className="name-card"
-                  disabled={opening}
+                  disabled={opening || !planId}
                   style={{ ["--wash" as string]: look.wash, ["--ink-color" as string]: look.ink }}
-                  onClick={() => void openStudent(student.id, false)}
+                  onClick={() => {
+                    if (planId) void openStudent(student.id, false, planId);
+                  }}
                 >
                   <span className="mark" style={{ background: look.ink }}>{look.mark}</span>
                   <span>
                     <strong>{student.display_name}</strong>
-                    <span className="hint">Open the active lesson</span>
+                    <span className="hint">{selectedPlan ? `Open ${selectedPlan.title}` : "Choose a lesson first"}</span>
                   </span>
                 </button>
               );
@@ -315,7 +361,7 @@ export function KidSession({
           {error ? (
             <div className="banner" role="alert">
               <p>{error}</p>
-              <button type="button" className="ghost" onClick={() => void reloadStudents()}>Try again</button>
+              <button type="button" className="ghost" onClick={() => void reloadRoster()}>Try again</button>
             </div>
           ) : null}
         </section>
@@ -353,7 +399,7 @@ export function KidSession({
         </ol>
         <div className="rail-actions">
           <button type="button" className="ghost" onClick={() => setBoard(null)}>Switch learner</button>
-          <button type="button" className="ghost" onClick={() => void openStudent(board.student.id, true)}>
+          <button type="button" className="ghost" onClick={() => void openStudent(board.student.id, true, board.lesson_plan_id)}>
             New session
           </button>
         </div>

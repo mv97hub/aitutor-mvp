@@ -1,4 +1,4 @@
-"""Idempotent seed: four students and one fractions lesson.
+"""Idempotent seed: four students and three short lessons.
 
 Running this twice does not duplicate rows. Existing rows are left as edited.
 """
@@ -142,6 +142,187 @@ TOPICS = [
     },
 ]
 
+READING_PREAMBLE = (
+    "You are a warm, patient reading tutor for a child who is about 8 to 10 years old. "
+    "Use short sentences and one short passage at a time."
+)
+
+READING_TOPICS = [
+    {
+        "title": "Main idea",
+        "learning_goal": (
+            "The main idea is what a short passage is mostly about, not one small detail."
+        ),
+        "tutor_instructions": (
+            "Read one short passage in the chat. Ask only about the main idea. "
+            "Do not start a second story."
+        ),
+        "checkpoints": [
+            {
+                "kind": "teach",
+                "tutor_prompt": (
+                    "Read this passage, then ask what it is mostly about: 'A fox looked for a "
+                    "den before the snow. She tried a hollow log, then a pile of leaves, and "
+                    "curled up where the wind could not reach.' The main idea is that the fox "
+                    "finds a warm place to sleep. When the student says that, call "
+                    "advance_checkpoint. If they name only the log or the leaves, say those are "
+                    "details and ask again."
+                ),
+                "rubric": "",
+                "pass_criteria": (
+                    "The student says the passage is mostly about the fox finding a warm place to sleep."
+                ),
+            },
+            {
+                "kind": "practice",
+                "tutor_prompt": (
+                    "Read this and let them try: 'Mina packed an apple, a sandwich, and a note "
+                    "from her dad. She checked the list twice so nothing would be left on the "
+                    "table.' The main idea is that Mina makes sure her lunch is packed. Hints are "
+                    "allowed. First hint: what did Mina do in the whole passage? When they say "
+                    "she packed her lunch, call record_checkpoint_result with passed true and "
+                    "short feedback, then advance_checkpoint."
+                ),
+                "rubric": "The main idea is Mina packing her lunch so she does not forget anything.",
+                "pass_criteria": "The student says Mina is packing her lunch.",
+            },
+            {
+                "kind": "quiz",
+                "tutor_prompt": (
+                    "Scored quiz. Read this and do not say the main idea first: 'The streetlights "
+                    "blinked on. Cars slowed, and people opened umbrellas as the rain got louder.' "
+                    "Ask what the passage is mostly about. Grade with the rubric, call "
+                    "record_checkpoint_result, and call advance_checkpoint only if they passed."
+                ),
+                "rubric": (
+                    "Pass, score 100: the passage is mostly about rain starting and people getting "
+                    "ready for it. Score 50 and passed false if they mention only umbrellas or "
+                    "only cars. Score 0 and passed false if they invent a different story."
+                ),
+                "pass_criteria": "The main idea is that rain is starting and people get ready for it.",
+            },
+        ],
+    },
+]
+
+SCIENCE_PREAMBLE = (
+    "You are a warm, patient science tutor for a child who is about 8 to 10 years old. "
+    "Use ice, water, and steam. Short sentences. One step at a time."
+)
+
+SCIENCE_TOPICS = [
+    {
+        "title": "Solids, liquids, and gases",
+        "learning_goal": (
+            "A solid keeps its shape, a liquid pours, and a gas spreads out to fill the space."
+        ),
+        "tutor_instructions": (
+            "Use ice, a puddle, and steam. Do not teach molecules or chemical formulas."
+        ),
+        "checkpoints": [
+            {
+                "kind": "teach",
+                "tutor_prompt": (
+                    "Explain three states with things they can picture: an ice cube keeps its "
+                    "shape, so it is a solid; juice pours, so it is a liquid; steam spreads "
+                    "through the air, so it is a gas. Then ask: a puddle of water is which state, "
+                    "and why? When they say liquid because it pours or takes the shape of the "
+                    "puddle, call advance_checkpoint. If they say solid or gas, explain the puddle "
+                    "once more and ask again."
+                ),
+                "rubric": "",
+                "pass_criteria": "The student says a puddle is a liquid and gives a reason about pouring or shape.",
+            },
+            {
+                "kind": "practice",
+                "tutor_prompt": (
+                    "Ask: is a rock a solid, a liquid, or a gas? Hints are allowed. First hint: "
+                    "does a rock keep its shape when you set it down? When they say solid because "
+                    "it keeps its shape, call record_checkpoint_result with passed true and short "
+                    "feedback, then advance_checkpoint."
+                ),
+                "rubric": "A rock is a solid because it keeps its shape.",
+                "pass_criteria": "The student says a rock is a solid and mentions its shape.",
+            },
+            {
+                "kind": "quiz",
+                "tutor_prompt": (
+                    "Scored quiz. Ask: steam from a kettle is which state, and how do you know? "
+                    "Do not say gas first. Grade with the rubric, call record_checkpoint_result, "
+                    "and call advance_checkpoint only if they passed."
+                ),
+                "rubric": (
+                    "Pass, score 100, only if they say gas and explain that steam spreads or has "
+                    "no shape you can hold. If they say gas with no reason, score 50 and passed "
+                    "false. If they say liquid or solid, score 0 and passed false."
+                ),
+                "pass_criteria": "Steam is a gas because it spreads out and does not keep a shape.",
+            },
+        ],
+    },
+]
+
+LESSONS = [
+    {
+        "slug": "fractions",
+        "title": "Fractions",
+        "preamble": PREAMBLE,
+        "topics": TOPICS,
+        "activate_if_none": True,
+    },
+    {
+        "slug": "reading",
+        "title": "Reading",
+        "preamble": READING_PREAMBLE,
+        "topics": READING_TOPICS,
+        "activate_if_none": False,
+    },
+    {
+        "slug": "science",
+        "title": "Science",
+        "preamble": SCIENCE_PREAMBLE,
+        "topics": SCIENCE_TOPICS,
+        "activate_if_none": False,
+    },
+]
+
+
+def _insert_plan(db: Session, spec: dict) -> bool:
+    existing = db.scalar(select(LessonPlan).where(LessonPlan.slug == spec["slug"]))
+    if existing is not None:
+        return False
+    already_active = db.scalar(select(LessonPlan.id).where(LessonPlan.is_active.is_(True)))
+    plan = LessonPlan(
+        slug=spec["slug"],
+        title=spec["title"],
+        preamble=spec["preamble"],
+        is_active=bool(spec["activate_if_none"]) and already_active is None,
+    )
+    db.add(plan)
+    db.flush()
+    for topic_index, topic_spec in enumerate(spec["topics"], start=1):
+        topic = Topic(
+            lesson_plan_id=plan.id,
+            title=topic_spec["title"],
+            learning_goal=topic_spec["learning_goal"],
+            tutor_instructions=topic_spec["tutor_instructions"],
+            position=topic_index,
+        )
+        db.add(topic)
+        db.flush()
+        for checkpoint_index, checkpoint_spec in enumerate(topic_spec["checkpoints"], start=1):
+            db.add(
+                Checkpoint(
+                    topic_id=topic.id,
+                    kind=checkpoint_spec["kind"],
+                    tutor_prompt=checkpoint_spec["tutor_prompt"],
+                    rubric=checkpoint_spec["rubric"] or None,
+                    pass_criteria=checkpoint_spec["pass_criteria"] or None,
+                    position=checkpoint_index,
+                )
+            )
+    return True
+
 
 def seed(db: Session) -> dict[str, int]:
     created_students = 0
@@ -152,44 +333,7 @@ def seed(db: Session) -> dict[str, int]:
             created_students += 1
     db.flush()
 
-    created_plans = 0
-    plan = db.scalar(select(LessonPlan).where(LessonPlan.slug == "fractions"))
-    if plan is None:
-        already_active = db.scalar(
-            select(LessonPlan.id).where(LessonPlan.is_active.is_(True))
-        )
-        plan = LessonPlan(
-            slug="fractions",
-            title="Fractions",
-            preamble=PREAMBLE,
-            is_active=already_active is None,
-        )
-        db.add(plan)
-        db.flush()
-        for topic_index, topic_spec in enumerate(TOPICS, start=1):
-            topic = Topic(
-                lesson_plan_id=plan.id,
-                title=topic_spec["title"],
-                learning_goal=topic_spec["learning_goal"],
-                tutor_instructions=topic_spec["tutor_instructions"],
-                position=topic_index,
-            )
-            db.add(topic)
-            db.flush()
-            for checkpoint_index, checkpoint_spec in enumerate(
-                topic_spec["checkpoints"], start=1
-            ):
-                db.add(
-                    Checkpoint(
-                        topic_id=topic.id,
-                        kind=checkpoint_spec["kind"],
-                        tutor_prompt=checkpoint_spec["tutor_prompt"],
-                        rubric=checkpoint_spec["rubric"] or None,
-                        pass_criteria=checkpoint_spec["pass_criteria"] or None,
-                        position=checkpoint_index,
-                    )
-                )
-        created_plans = 1
+    created_plans = sum(1 for spec in LESSONS if _insert_plan(db, spec))
     db.commit()
     return {"students_created": created_students, "lesson_plans_created": created_plans}
 

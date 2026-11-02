@@ -135,10 +135,21 @@ h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1.05; }
   grid-template-columns: 320px minmax(0, 1fr);
 }
 
+.shell {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .rail, .side {
   padding: 22px 18px 28px;
   border-right: 1px solid var(--line);
   background: rgba(255, 250, 243, 0.72);
+}
+
+.rail {
+  min-height: 0;
+  overflow: auto;
 }
 
 .rail-head, .side-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
@@ -202,12 +213,20 @@ h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1.05; }
 .button:disabled, .ghost:disabled { opacity: 0.55; cursor: not-allowed; }
 .danger { color: var(--miss); background: white; }
 
-.stage { display: flex; flex-direction: column; min-height: 100vh; padding: 18px 18px 16px; }
+.stage {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  padding: 18px 18px 16px;
+  overflow: hidden;
+}
 
-.stage-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.stage-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex: 0 0 auto; }
 
 .transcript {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -238,12 +257,16 @@ h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1.05; }
 
 .composer {
   display: flex;
+  flex: 0 0 auto;
   gap: 8px;
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: white;
 }
+
+.stage > .typing,
+.stage > .banner { flex: 0 0 auto; }
 
 .composer input {
   flex: 1;
@@ -260,6 +283,9 @@ h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1.05; }
 .side { min-height: 100vh; }
 .side h1 { font-size: 2rem; }
 .stack { display: grid; gap: 8px; margin-top: 14px; }
+.lesson-pick { margin: 18px 0 8px; }
+.lesson-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
 .choice, .session-choice {
   width: 100%;
   text-align: left;
@@ -268,6 +294,8 @@ h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1.05; }
   border-radius: 12px;
   padding: 10px 12px;
 }
+
+.choice.lesson-choice { width: auto; }
 .choice.is-on, .session-choice.is-on { border-color: var(--teal); background: #f3fbfa; }
 .choice small, .session-choice small, .meta { color: var(--ink-soft); }
 .pill {
@@ -316,7 +344,9 @@ textarea { min-height: 88px; resize: vertical; }
 
 @media (max-width: 860px) {
   .shell, .desk { grid-template-columns: 1fr; }
-  .rail, .side { border-right: 0; border-bottom: 1px solid var(--line); min-height: auto; }
+  .shell { grid-template-rows: minmax(0, 32dvh) minmax(0, 1fr); }
+  .rail, .side { border-right: 0; border-bottom: 1px solid var(--line); }
+  .side { min-height: auto; }
   .name-grid { grid-template-columns: 1fr; }
   .editor, .transcript-view { margin: 12px; }
   .gate-card { padding: 24px 18px; }

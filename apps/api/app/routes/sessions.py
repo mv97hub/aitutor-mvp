@@ -49,7 +49,7 @@ def list_sessions(
 
 @router.post("/sessions", response_model=BoardOut)
 def create_session(body: SessionOpen, db: Session = Depends(get_db)) -> BoardOut:
-    tutor_session = open_session(db, body.student_id, body.fresh)
+    tutor_session = open_session(db, body.student_id, body.fresh, body.lesson_plan_id)
     db.flush()
     return board(load_session(db, tutor_session.id))
 
