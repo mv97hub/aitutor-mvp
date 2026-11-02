@@ -352,7 +352,7 @@ def rome_course() -> dict:
                         [
                             mv(
                                 "engage",
-                                "Rome elected two Consuls for only 1 year who could shout VETO at each other. What is one big advantage and one messy problem of two equal captains?",
+                                "Rome put two consuls in charge for one year, and each one could shout VETO at the other. That veto stops either captain from becoming a king, because neither can act alone. The same veto can freeze a decision when the two captains disagree, and that stall is a deadlock.",
                                 rubric(
                                     ("advantage", "Names an advantage that stops one bully or a king.", 50),
                                     ("problem", "Names deadlock or arguing in an emergency.", 50),
@@ -393,7 +393,7 @@ def rome_course() -> dict:
                             ),
                             mv(
                                 "name",
-                                "Connect the stall to the rule: a veto stops a new king, and the same veto can freeze a decision.",
+                                "A veto stops one consul from turning into a king, and the same veto can freeze a decision when the two captains disagree. The stall is the cost of that protection.",
                                 LINK,
                                 "Which part of the rule stops a crown, and which part causes the stall?",
                                 "A lock that keeps a bully out can also jam the door.",

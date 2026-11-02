@@ -85,6 +85,7 @@ class Layer1Beat:
     learning_goal: str = ""
     success_criterion: tuple[RubricCriterion, ...] = ()
     requires_teach_back: bool = False
+    opening_idea: str = ""
 
 
 @dataclass(frozen=True)

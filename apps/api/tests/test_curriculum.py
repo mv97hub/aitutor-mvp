@@ -37,6 +37,10 @@ def test_seed_courses_match_the_cycle() -> None:
     assert set(roles) <= set(BEAT_ROLES)
     assert consuls["requires_teach_back"] is True
     assert "VETO" in consuls["beats"][0]["prompt"]
+    assert not consuls["beats"][0]["prompt"].rstrip().endswith("?")
+    name = next(beat for beat in consuls["beats"] if beat["role"] == "name")
+    assert "veto stops one consul" in name["prompt"]
+    assert not name["prompt"].rstrip().endswith("?")
     try_move = next(beat for beat in consuls["beats"] if beat["role"] == "try")
     assert try_move["widget"]["answer"] == "deadlock"
     assert "walkout" not in try_move["widget"]["answer"]
@@ -52,6 +56,9 @@ def test_seed_courses_match_the_cycle() -> None:
     assert show["widget"]["type"] == "order"
     assert show["widget"]["answer"] == ["given", "bisector", "reflexive", "sas"]
     assert show["rubric"] == truss["success_criterion"]
+    named = next(beat for beat in truss["beats"] if beat["role"] == "name")
+    assert "AAA keeps the angles" in named["prompt"]
+    assert not named["prompt"].rstrip().endswith("?")
     teach = next(beat for beat in truss["beats"] if beat["role"] == "teach_back")
     assert "Rookie Architect Bot" in teach["prompt"]
     bosses = [quest for quest in geometry if quest["quest_type"] == "capstone" or quest["code"].endswith("BOSS")]
@@ -68,6 +75,9 @@ def test_seed_courses_match_the_cycle() -> None:
     show = next(beat for beat in banker["beats"] if beat["role"] == "show")
     assert show["widget"]["type"] == "flaw"
     assert show["widget"]["answer"] == "s3"
+    named = next(beat for beat in banker["beats"] if beat["role"] == "name")
+    assert "rate rise makes loans more expensive" in named["prompt"]
+    assert not named["prompt"].rstrip().endswith("?")
     teach = next(beat for beat in banker["beats"] if beat["role"] == "teach_back")
     assert "Cable Pundit Bot" in teach["prompt"]
     assert "8 percent" in teach["prompt"]

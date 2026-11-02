@@ -450,7 +450,7 @@ def geometry_course() -> dict:
                             ),
                             mv(
                                 "name",
-                                "Connect the two tries: AAA keeps the shape and loses the size, SAS pins the included angle, and SSA lets the side swing.",
+                                "AAA keeps the angles, so two trusses can share a shape and still be different sizes. SAS locks one triangle because the given angle sits between the two sides. SSA leaves that angle off the hinge, so the shorter side can swing and meet the base in two places.",
                                 LINK,
                                 "Which recipe names the angle between the two sides?",
                                 "A hinge in the elbow versus a hinge at the wrist.",

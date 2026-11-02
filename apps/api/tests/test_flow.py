@@ -217,6 +217,10 @@ def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
     )
     assert scored.json()["passed"] is True
     assert scored.json()["advanced"] is True
+    waiting = client.get(f"/sessions/{session_id}/board").json()
+    assert waiting["current_block"]["kind"] == "try"
+    assert waiting["current_block"]["quiz"] is None
+    _speak(session_id, "try")
     board = client.get(f"/sessions/{session_id}/board").json()
     quiz = board["current_block"]["quiz"]
     assert quiz["type"] == "single"
@@ -241,7 +245,7 @@ def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
     assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "name"
 
 
-def test_choice_widget_waits_until_the_opening_exchange_is_done() -> None:
+def test_choice_widget_waits_until_the_tutor_has_spoken_for_the_move() -> None:
     storm = _student("storm")["id"]
     opened = client.post(
         "/sessions",
@@ -257,22 +261,12 @@ def test_choice_widget_waits_until_the_opening_exchange_is_done() -> None:
     assert "Invite them to choose" not in kickoff["system_prompt"]
     assert "pottery" not in kickoff["system_prompt"].lower()
     assert "one question" in kickoff["system_prompt"].lower()
+    assert "short teaching of the first idea" in kickoff["system_prompt"]
+    assert "First idea to teach:" in kickoff["system_prompt"]
 
     client.post(
         f"/sessions/{session_id}/messages",
         json={"role": "user", "content": "Hi! I'm ready to learn.", "client_id": "open-user"},
-    )
-    client.post(
-        f"/sessions/{session_id}/messages",
-        json={
-            "role": "assistant",
-            "content": "The goal is to tell a legend from a clue. A story can carry a meaning, and a find can be checked. What could someone dig up?",
-            "client_id": "open-tutor",
-        },
-    )
-    client.post(
-        f"/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Something left in the ground.", "client_id": "reply-user"},
     )
     held = client.post(
         f"/sessions/{session_id}/turn-score",
@@ -289,8 +283,8 @@ def test_choice_widget_waits_until_the_opening_exchange_is_done() -> None:
         f"/sessions/{session_id}/messages",
         json={
             "role": "assistant",
-            "content": "A find is something you can check again. The choices are next.",
-            "client_id": "reply-tutor",
+            "content": "The goal is to tell a legend from a clue. A story can carry a meaning, and a find can be checked.",
+            "client_id": "open-tutor",
         },
     )
     shown = client.get(f"/sessions/{session_id}/board").json()
@@ -309,16 +303,7 @@ def test_choice_widget_waits_until_the_opening_exchange_is_done() -> None:
     banker_kickoff = client.get(f"/sessions/{banker_id}/prompt", params={"kickoff": True}).json()
     assert "FOMC" not in banker_kickoff["system_prompt"]
     assert "simultaneously cure" not in banker_kickoff["system_prompt"].lower()
-    for content, role, client_id in (
-        ("Hi! I'm ready to learn.", "user", "bank-user"),
-        ("A rate rise cuts borrowing, and a supply shock moves the curve. What does finished work include?", "assistant", "bank-tutor"),
-        ("It includes the rate chain and the curve shift.", "user", "bank-reply"),
-        ("That is the goal. The choice is next.", "assistant", "bank-tutor-2"),
-    ):
-        client.post(
-            f"/sessions/{banker_id}/messages",
-            json={"role": role, "content": content, "client_id": client_id},
-        )
+    _speak(banker_id, "bank")
     ready = client.get(f"/sessions/{banker_id}/board").json()
     assert ready["current_block"]["quiz"]["type"] == "single"
     assert "FOMC" not in ready["current_block"]["quiz"]["prompt"]
@@ -337,6 +322,9 @@ def test_choice_widget_waits_until_the_opening_exchange_is_done() -> None:
     )
     show = client.get(f"/sessions/{banker_id}/board").json()
     assert show["current_block"]["kind"] == "show"
+    assert show["current_block"]["quiz"] is None
+    _speak(banker_id, "show")
+    show = client.get(f"/sessions/{banker_id}/board").json()
     assert show["current_block"]["quiz"]["type"] == "flaw"
     assert "memo" in show["current_block"]["quiz"]["prompt"].lower()
 
@@ -484,6 +472,21 @@ def test_import_rejects_the_field_and_replaces_by_code() -> None:
     finally:
         course_id = next(course["id"] for course in client.get("/courses").json() if course["code"] == "trial")
         assert client.delete(f"/courses/{course_id}").status_code == 204
+
+
+def _speak(session_id: str, label: str) -> None:
+    client.post(
+        f"/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Tell me the idea.", "client_id": f"{label}-user"},
+    )
+    client.post(
+        f"/sessions/{session_id}/messages",
+        json={
+            "role": "assistant",
+            "content": "Here is the idea, and then one question.",
+            "client_id": f"{label}-tutor",
+        },
+    )
 
 
 def _cycle_moves() -> list[dict]:
