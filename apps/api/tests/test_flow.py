@@ -13,9 +13,9 @@ client = TestClient(app)
 def setup_function() -> None:
     db = SessionLocal()
     try:
-        seed(db)
         db.execute(delete(TutorSession))
         db.commit()
+        seed(db)
     finally:
         db.close()
 
@@ -39,14 +39,25 @@ def test_seed_is_idempotent() -> None:
         fractions = _checkpoint_count(db, "fractions")
         reading = _checkpoint_count(db, "reading")
         science = _checkpoint_count(db, "science")
+        prompts = _checkpoint_count(db, "super-prompts")
+        shifts = _checkpoint_count(db, "function-shifts")
+        ages = {student.slug: student.age for student in db.scalars(select(Student)).all()}
     finally:
         db.close()
-    assert again == {"students_created": 0, "lesson_plans_created": 0}
+    assert again == {
+        "students_created": 0,
+        "lesson_plans_created": 0,
+        "lesson_plans_rewritten": 0,
+    }
     assert students == 4
-    assert plans == 3
-    assert fractions == 6
+    assert plans == 5
+    assert ages["storm"] == 10
+    assert ages["wolverine"] == 16
+    assert fractions == 5
     assert reading == 3
     assert science == 3
+    assert prompts == 4
+    assert shifts == 3
 
 
 def test_reorder_checkpoint_round_trip() -> None:
@@ -57,15 +68,15 @@ def test_reorder_checkpoint_round_trip() -> None:
     moved = client.post(f"/checkpoints/{practice['id']}/move", json={"direction": "up"})
     assert moved.status_code == 200
     assert [item["kind"] for item in moved.json()["topics"][0]["checkpoints"]] == [
-        "practice",
-        "teach",
         "quiz",
+        "discovery",
+        "teach_back",
     ]
     restored = client.post(f"/checkpoints/{practice['id']}/move", json={"direction": "down"})
     assert [item["kind"] for item in restored.json()["topics"][0]["checkpoints"]] == [
-        "teach",
-        "practice",
+        "discovery",
         "quiz",
+        "teach_back",
     ]
 
 
@@ -130,12 +141,15 @@ def test_session_stays_on_the_chosen_lesson() -> None:
 
 
 def test_advance_rules_and_checkpoint_edits() -> None:
-    opened = client.post("/sessions", json={"student_id": _storm_id(), "fresh": True})
+    opened = client.post(
+        "/sessions",
+        json={"student_id": _storm_id(), "lesson_plan_id": _plan_id("reading"), "fresh": True},
+    )
     assert opened.status_code == 200
     session_id = opened.json()["id"]
     assert opened.json()["student"]["display_name"] == "Storm"
+    assert opened.json()["lesson_title"] == "Reading"
     assert opened.json()["topics"][0]["checkpoints"][0]["kind"] == "teach"
-    assert "equal parts" in opened.json()["topics"][0]["learning_goal"].lower()
     assert "tutor_prompt" not in opened.json()["topics"][0]["checkpoints"][0]
 
     context = client.get(f"/sessions/{session_id}/context")
@@ -143,7 +157,7 @@ def test_advance_rules_and_checkpoint_edits() -> None:
     body = context.json()
     assert body["student_display_name"] == "Storm"
     assert body["current_checkpoint"]["kind"] == "teach"
-    assert "pizza" in body["current_checkpoint"]["tutor_prompt"].lower()
+    assert "fox" in body["current_checkpoint"]["tutor_prompt"].lower()
     first_checkpoint_id = opened.json()["topics"][0]["checkpoints"][0]["id"]
     original_prompt = body["current_checkpoint"]["tutor_prompt"]
 
@@ -185,7 +199,7 @@ def test_advance_rules_and_checkpoint_edits() -> None:
     assert quiz_pass.json()["kind"] == "quiz"
     after_quiz = client.post(f"/sessions/{session_id}/advance")
     assert after_quiz.json()["ok"] is True
-    assert after_quiz.json()["current_step"]["topic_title"] == "Same denominator"
+    assert after_quiz.json()["completed"] is True
 
     detail = client.get(f"/sessions/{session_id}")
     assert detail.status_code == 200
@@ -204,23 +218,24 @@ def test_advance_rules_and_checkpoint_edits() -> None:
         },
     )
     assert edited.status_code == 200
-    fresh = client.post("/sessions", json={"student_id": _storm_id(), "fresh": True})
-    fresh_context = client.get(f"/sessions/{fresh.json()['id']}/context")
-    assert "EDITED CHECKPOINT" in fresh_context.json()["current_checkpoint"]["tutor_prompt"]
-
-    restored = client.patch(
-        f"/checkpoints/{first_checkpoint_id}",
-        json={
-            "kind": "teach",
-            "tutor_prompt": original_prompt,
-            "rubric": "",
-            "pass_criteria": (
-                "The student says 1/4 or one fourth, and knows the bottom number is how many "
-                "equal slices the pizza was cut into."
-            ),
-        },
-    )
-    assert restored.status_code == 200
+    try:
+        fresh = client.post(
+            "/sessions",
+            json={"student_id": _storm_id(), "lesson_plan_id": _plan_id("reading"), "fresh": True},
+        )
+        fresh_context = client.get(f"/sessions/{fresh.json()['id']}/context")
+        assert "EDITED CHECKPOINT" in fresh_context.json()["current_checkpoint"]["tutor_prompt"]
+    finally:
+        restored = client.patch(
+            f"/checkpoints/{first_checkpoint_id}",
+            json={
+                "kind": "teach",
+                "tutor_prompt": original_prompt,
+                "rubric": "",
+                "pass_criteria": "The student says the passage is mostly about the fox finding a warm place to sleep.",
+            },
+        )
+        assert restored.status_code == 200
 
     saved = client.post(
         f"/sessions/{session_id}/messages",
@@ -234,3 +249,163 @@ def test_advance_rules_and_checkpoint_edits() -> None:
     assert again.json()["id"] == saved.json()["id"]
     admin = client.get(f"/sessions/{session_id}")
     assert len(admin.json()["messages"]) == 1
+
+
+def _wolverine_id() -> str:
+    students = client.get("/students").json()
+    return next(student["id"] for student in students if student["slug"] == "wolverine")
+
+
+def test_widget_grades_before_the_model_and_age_gate() -> None:
+    storm = _storm_id()
+    blocked = client.post(
+        "/sessions",
+        json={"student_id": storm, "lesson_plan_id": _plan_id("function-shifts"), "fresh": True},
+    )
+    assert blocked.status_code == 400
+    assert "15" in blocked.json()["detail"]
+
+    opened = client.post(
+        "/sessions",
+        json={"student_id": _wolverine_id(), "lesson_plan_id": _plan_id("function-shifts"), "fresh": True},
+    )
+    assert opened.status_code == 200
+    assert opened.json()["lesson_title"] == "Function shifts"
+
+    fractions = client.post(
+        "/sessions",
+        json={"student_id": storm, "lesson_plan_id": _plan_id("fractions"), "fresh": True},
+    )
+    assert fractions.status_code == 200
+    body = fractions.json()
+    session_id = body["id"]
+    kinds = [item["kind"] for item in body["topics"][0]["checkpoints"]]
+    assert kinds == ["discovery", "quiz", "teach_back"]
+    assert "equal parts" in body["topics"][0]["learning_goal"].lower()
+    assert body["current_block"]["kind"] == "discovery"
+    assert body["current_block"]["quiz"] is None
+    assert "pizza" in body["current_block"]["tutor_prompt"].lower()
+    assert len(body["steps"]) == 5
+    widgets = [
+        checkpoint
+        for topic in body["topics"]
+        for checkpoint in topic["checkpoints"]
+        if checkpoint["kind"] == "quiz"
+    ]
+    assert len(widgets) == 1
+
+    scored = client.post(
+        f"/sessions/{session_id}/turn-score",
+        json={
+            "rubric_met": ["fourths", "denominator"],
+            "misconception": None,
+            "hint_tier": "nudge",
+            "advance": True,
+        },
+    )
+    assert scored.json()["passed"] is True
+    assert scored.json()["advanced"] is True
+
+    board = client.get(f"/sessions/{session_id}/board").json()
+    quiz = board["current_block"]["quiz"]
+    assert quiz["type"] == "single"
+    assert "answer" not in quiz
+    assert all("misconception" not in choice for choice in quiz["choices"])
+    assert board["current_block"]["hint_tier"] == "nudge"
+
+    wrong = client.post(
+        f"/sessions/{session_id}/grade-widget",
+        json={"choice": "b", "explanation": "I flipped the numbers."},
+    )
+    assert wrong.json()["ok"] is True
+    assert wrong.json()["passed"] is False
+    assert "bottom number" in wrong.json()["misconception"].lower()
+
+    hinted = client.get(f"/sessions/{session_id}/board").json()
+    assert hinted["current_block"]["hint_tier"] == "analogy"
+
+    right = client.post(
+        f"/sessions/{session_id}/grade-widget",
+        json={"choice": "a", "explanation": "Two of the three equal pieces."},
+    )
+    assert right.json()["passed"] is True
+    assert right.json()["correct"] is True
+
+    context = client.get(f"/sessions/{session_id}/context").json()
+    assert context["current_checkpoint"]["quiz"]["answer"] == "a"
+    assert context["current_checkpoint"]["widget_grade"]["passed"] is True
+
+    moved = client.post(
+        f"/sessions/{session_id}/turn-score",
+        json={"rubric_met": ["choice", "why"], "misconception": None, "hint_tier": "analogy", "advance": True},
+    )
+    assert moved.json()["graded_by"] == "widget"
+    assert moved.json()["passed"] is True
+    assert moved.json()["advanced"] is True
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "teach_back"
+
+    prompts = client.post(
+        "/sessions",
+        json={"student_id": storm, "lesson_plan_id": _plan_id("super-prompts"), "fresh": True},
+    )
+    plan = client.get(f"/lesson-plans/{_plan_id('super-prompts')}").json()
+    quiz_types = [
+        checkpoint["quiz"]["type"]
+        for topic in plan["topics"]
+        for checkpoint in topic["checkpoints"]
+        if checkpoint["quiz"]
+    ]
+    assert quiz_types == ["flaw", "order"]
+    assert prompts.status_code == 200
+    older = client.post(
+        "/sessions",
+        json={
+            "student_id": _wolverine_id(),
+            "lesson_plan_id": _plan_id("super-prompts"),
+            "fresh": True,
+        },
+    )
+    assert older.status_code == 400
+
+
+def test_fractions_rewrites_in_place_under_an_open_class() -> None:
+    opened = client.post(
+        "/sessions",
+        json={"student_id": _storm_id(), "lesson_plan_id": _plan_id("fractions"), "fresh": True},
+    )
+    assert opened.status_code == 200
+    lesson_id = opened.json()["lesson_plan_id"]
+    session_id = opened.json()["id"]
+    current_id = opened.json()["current_checkpoint_id"]
+    db = SessionLocal()
+    try:
+        plan = db.get(LessonPlan, lesson_id)
+        for topic in plan.topics:
+            for checkpoint in topic.checkpoints:
+                checkpoint.kind = {1: "teach", 2: "practice"}.get(checkpoint.position, "quiz")
+                checkpoint.quiz = None
+                checkpoint.rubric_rows = []
+                checkpoint.objective = None
+                checkpoint.tutor_prompt = "OLD PROMPT that should be replaced."
+        db.commit()
+        rewritten = seed(db)
+        again = seed(db)
+    finally:
+        db.close()
+    assert rewritten["lesson_plans_rewritten"] == 1
+    assert again["lesson_plans_created"] == 0
+    assert again["lesson_plans_rewritten"] == 0
+    board = client.get(f"/sessions/{session_id}/board")
+    assert board.status_code == 200
+    body = board.json()
+    assert body["lesson_plan_id"] == lesson_id
+    assert body["current_checkpoint_id"] == current_id
+    assert body["current_block"]["kind"] == "discovery"
+    assert "pizza" in body["current_block"]["tutor_prompt"].lower()
+    quiz_blocks = [
+        checkpoint
+        for topic in body["topics"]
+        for checkpoint in topic["checkpoints"]
+        if checkpoint["kind"] == "quiz"
+    ]
+    assert len(quiz_blocks) == 1

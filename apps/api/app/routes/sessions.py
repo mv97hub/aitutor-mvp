@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
-from app.flow import advance, append_message, open_session, record_result
+from app.flow import advance, append_message, apply_turn_score, grade_widget, open_session, record_result
 from app.models import Session as TutorSession
 from app.present import board, context_out, current_step, message_out, session_admin, session_summary
 from app.queries import load_session
@@ -19,6 +19,8 @@ from app.schemas import (
     SessionAdminOut,
     SessionOpen,
     SessionSummary,
+    TurnScoreIn,
+    WidgetIn,
 )
 
 router = APIRouter()
@@ -93,3 +95,21 @@ def create_result(session_id: UUID, body: ResultIn, db: Session = Depends(get_db
 def advance_session(session_id: UUID, db: Session = Depends(get_db)) -> dict:
     tutor_session = load_session(db, session_id)
     return advance(db, tutor_session)
+
+
+@router.post("/sessions/{session_id}/grade-widget")
+def grade_widget_route(
+    session_id: UUID, body: WidgetIn, db: Session = Depends(get_db)
+) -> dict:
+    tutor_session = load_session(db, session_id)
+    return grade_widget(db, tutor_session, body.choice, body.explanation)
+
+
+@router.post("/sessions/{session_id}/turn-score")
+def turn_score_route(
+    session_id: UUID, body: TurnScoreIn, db: Session = Depends(get_db)
+) -> dict:
+    tutor_session = load_session(db, session_id)
+    return apply_turn_score(
+        db, tutor_session, body.rubric_met, body.misconception, body.advance
+    )

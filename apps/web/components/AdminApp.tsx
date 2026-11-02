@@ -7,21 +7,13 @@ import { api } from "@/lib/api";
 import type {
   AdminCheckpoint,
   AdminTopic,
+  HintLadder,
   LessonPlan,
   LessonPlanSummary,
-  SessionDetail,
-  SessionSummary,
-  Student,
+  QuizChoiceInput,
+  QuizInput,
+  RubricRowInput,
 } from "@/lib/types";
-
-function when(iso: string) {
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(iso));
-}
 
 function messageOf(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
@@ -29,26 +21,18 @@ function messageOf(error: unknown) {
 
 export function AdminApp({
   initialPlans,
-  initialStudents,
   initialPlan,
   initialError,
 }: {
   initialPlans: LessonPlanSummary[];
-  initialStudents: Student[];
   initialPlan: LessonPlan | null;
   initialError: string | null;
 }) {
   const [plans, setPlans] = useState(initialPlans);
-  const [students] = useState(initialStudents);
   const [planId, setPlanId] = useState<string | null>(
     initialPlan?.id ?? initialPlans.find((plan) => plan.is_active)?.id ?? initialPlans[0]?.id ?? null,
   );
   const [plan, setPlan] = useState<LessonPlan | null>(initialPlan);
-  const [studentFilter, setStudentFilter] = useState("");
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [session, setSession] = useState<SessionDetail | null>(null);
-  const [view, setView] = useState<"plan" | "session">("plan");
   const [error, setError] = useState(initialError);
 
   async function refreshPlans(selectId?: string) {
@@ -74,36 +58,6 @@ export function AdminApp({
       cancelled = true;
     };
   }, [planId]);
-
-  useEffect(() => {
-    const query = studentFilter ? `?student_id=${studentFilter}` : "";
-    let cancelled = false;
-    api<SessionSummary[]>(`/sessions${query}`)
-      .then((next) => {
-        if (!cancelled) setSessions(next);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(messageOf(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [studentFilter]);
-
-  useEffect(() => {
-    if (!sessionId) return;
-    let cancelled = false;
-    api<SessionDetail>(`/sessions/${sessionId}`)
-      .then((next) => {
-        if (!cancelled) setSession(next);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(messageOf(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId]);
 
   function applyPlan(next: LessonPlan) {
     setPlan(next);
@@ -136,7 +90,6 @@ export function AdminApp({
         }),
       });
       await refreshPlans(created.id);
-      setView("plan");
     } catch (err) {
       setError(messageOf(err));
     }
@@ -147,10 +100,13 @@ export function AdminApp({
       <aside className="side">
         <div className="side-head">
           <p className="eyebrow">Admin</p>
-          <Link className="top-link" href="/">Kid session</Link>
+          <span className="top-links">
+            <Link className="top-link" href="/viewchats">View chats</Link>
+            <Link className="top-link" href="/">Kid session</Link>
+          </span>
         </div>
         <h1>Lesson desk</h1>
-        <p className="lede">Edit the path the tutor follows, then open a session to read the transcript and scores.</p>
+        <p className="lede">Edit the blocks the tutor follows. Transcripts and scores live on View chats.</p>
         <div className="row-actions" style={{ marginTop: 16 }}>
           <button type="button" className="button" onClick={() => void createPlan()}>New plan</button>
         </div>
@@ -159,45 +115,12 @@ export function AdminApp({
             <button
               key={item.id}
               type="button"
-              className={`choice ${view === "plan" && item.id === planId ? "is-on" : ""}`}
-              onClick={() => {
-                setPlanId(item.id);
-                setView("plan");
-              }}
+              className={`choice ${item.id === planId ? "is-on" : ""}`}
+              onClick={() => setPlanId(item.id)}
             >
               <strong>{item.title}</strong>
               {item.is_active ? <span className="pill">Active</span> : null}
               <small style={{ display: "block" }}>{item.topic_count} topics</small>
-            </button>
-          ))}
-        </div>
-        <h2 style={{ marginTop: 28 }}>Sessions</h2>
-        <label>
-          Student
-          <select value={studentFilter} onChange={(event) => setStudentFilter(event.target.value)}>
-            <option value="">Everyone</option>
-            {students.map((student) => (
-              <option key={student.id} value={student.id}>{student.display_name}</option>
-            ))}
-          </select>
-        </label>
-        <div className="stack">
-          {sessions.length === 0 ? <p className="help">No sessions yet. Open a learner on the kid page.</p> : null}
-          {sessions.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`session-choice ${view === "session" && item.id === sessionId ? "is-on" : ""}`}
-              onClick={() => {
-                setSessionId(item.id);
-                setView("session");
-              }}
-            >
-              <strong>{item.student_display_name}</strong>
-              <small style={{ display: "block" }}>
-                {item.lesson_title} · {item.status.replace("_", " ")} · {when(item.updated_at)}
-              </small>
-              <small>{item.message_count} messages · {item.result_count} scores</small>
             </button>
           ))}
         </div>
@@ -208,9 +131,7 @@ export function AdminApp({
             <p>{error}</p>
           </div>
         ) : null}
-        {view === "session" && session ? (
-          <SessionView session={session} />
-        ) : plan ? (
+        {plan ? (
           <PlanEditor
             plan={plan}
             onChange={applyPlan}
@@ -250,12 +171,16 @@ function PlanEditor({
   const [title, setTitle] = useState(plan.title);
   const [preamble, setPreamble] = useState(plan.preamble);
   const [isActive, setIsActive] = useState(plan.is_active);
+  const [ageMin, setAgeMin] = useState(plan.age_min == null ? "" : String(plan.age_min));
+  const [ageMax, setAgeMax] = useState(plan.age_max == null ? "" : String(plan.age_max));
   const [note, setNote] = useState("");
 
   useEffect(() => {
     setTitle(plan.title);
     setPreamble(plan.preamble);
     setIsActive(plan.is_active);
+    setAgeMin(plan.age_min == null ? "" : String(plan.age_min));
+    setAgeMax(plan.age_max == null ? "" : String(plan.age_max));
   }, [plan]);
 
   async function savePlan() {
@@ -263,7 +188,13 @@ function PlanEditor({
     try {
       const next = await api<LessonPlan>(`/lesson-plans/${plan.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ title, preamble, is_active: isActive }),
+        body: JSON.stringify({
+          title,
+          preamble,
+          is_active: isActive,
+          age_min: ageMin.trim() === "" ? null : Number(ageMin),
+          age_max: ageMax.trim() === "" ? null : Number(ageMax),
+        }),
       });
       onChange(next);
       setNote("Plan saved. Students open whichever plan is active.");
@@ -322,6 +253,17 @@ function PlanEditor({
         <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
         Active lesson. Only one plan can be active.
       </label>
+      <div className="age-row">
+        <label>
+          Youngest age
+          <input value={ageMin} onChange={(event) => setAgeMin(event.target.value)} inputMode="numeric" />
+        </label>
+        <label>
+          Oldest age
+          <input value={ageMax} onChange={(event) => setAgeMax(event.target.value)} inputMode="numeric" />
+        </label>
+      </div>
+      <p className="help">Leave oldest blank for no upper limit. A lesson with youngest 15 or more stays off the shelf for a 9–11 learner.</p>
       {plan.topics.map((topic, index) => (
         <TopicEditor
           key={topic.id}
@@ -402,10 +344,19 @@ function TopicEditor({
       onChange(await api<LessonPlan>(`/topics/${topic.id}/checkpoints`, {
         method: "POST",
         body: JSON.stringify({
-          kind: "teach",
-          tutor_prompt: "Explain this idea, ask one short question, then wait.",
+          kind: "discovery",
+          tutor_prompt: "Ask one short question and wait.",
           rubric: "",
           pass_criteria: "",
+          objective: "What this block is for.",
+          rubric_rows: [{ id: "r1", text: "The answer matches the goal.", weight: 100 }],
+          hint_ladder: {
+            nudge: "Look again at the question.",
+            analogy: "Try a simpler picture.",
+            scaffold: "Say the first step out loud.",
+          },
+          pass_score: 70,
+          quiz: null,
         }),
       }));
     } catch (err) {
@@ -453,6 +404,36 @@ function TopicEditor({
   );
 }
 
+const BLOCK_KINDS = [
+  ["discovery", "Discovery"],
+  ["quiz", "Quiz"],
+  ["teach_back", "Teach the bot"],
+  ["teach", "Teach"],
+  ["practice", "Practice"],
+] as const;
+
+function emptyChoice(index: number): QuizChoiceInput {
+  return { id: String.fromCharCode(97 + index), text: "", misconception: "" };
+}
+
+function quizFrom(checkpoint: AdminCheckpoint): QuizInput | null {
+  const quiz = checkpoint.quiz;
+  if (!quiz) return null;
+  const answer = Array.isArray(quiz.answer) ? quiz.answer.map(String) : String(quiz.answer ?? "");
+  return {
+    type: quiz.type,
+    prompt: quiz.prompt ?? "",
+    choices: (quiz.choices ?? []).map((choice, index) => ({
+      id: choice.id || emptyChoice(index).id,
+      text: choice.text ?? "",
+      misconception: choice.misconception ?? "",
+    })),
+    answer,
+    explain: Boolean(quiz.explain),
+    misconception: quiz.misconception ?? "",
+  };
+}
+
 function CheckpointEditor({
   checkpoint,
   first,
@@ -467,21 +448,52 @@ function CheckpointEditor({
   onError: (message: string | null) => void;
 }) {
   const [kind, setKind] = useState(checkpoint.kind);
+  const [objective, setObjective] = useState(checkpoint.objective ?? "");
   const [prompt, setPrompt] = useState(checkpoint.tutor_prompt);
   const [rubric, setRubric] = useState(checkpoint.rubric ?? "");
   const [criteria, setCriteria] = useState(checkpoint.pass_criteria ?? "");
+  const [passScore, setPassScore] = useState(String(checkpoint.pass_score ?? 70));
+  const [rows, setRows] = useState<RubricRowInput[]>(checkpoint.rubric_rows ?? []);
+  const [hints, setHints] = useState<HintLadder>(checkpoint.hint_ladder ?? { nudge: "", analogy: "", scaffold: "" });
+  const [widget, setWidget] = useState<"none" | QuizInput["type"]>(checkpoint.quiz?.type ?? "none");
+  const [quiz, setQuiz] = useState<QuizInput | null>(quizFrom(checkpoint));
   const [note, setNote] = useState("");
 
   useEffect(() => {
     setKind(checkpoint.kind);
+    setObjective(checkpoint.objective ?? "");
     setPrompt(checkpoint.tutor_prompt);
     setRubric(checkpoint.rubric ?? "");
     setCriteria(checkpoint.pass_criteria ?? "");
+    setPassScore(String(checkpoint.pass_score ?? 70));
+    setRows(checkpoint.rubric_rows ?? []);
+    setHints(checkpoint.hint_ladder ?? { nudge: "", analogy: "", scaffold: "" });
+    setWidget(checkpoint.quiz?.type ?? "none");
+    setQuiz(quizFrom(checkpoint));
   }, [checkpoint]);
+
+  function ensureQuiz(type: QuizInput["type"]) {
+    setWidget(type);
+    setQuiz((current) => {
+      const choices = current?.choices?.length ? current.choices : [emptyChoice(0), emptyChoice(1)];
+      const answer = type === "multi" || type === "order"
+        ? (Array.isArray(current?.answer) ? current.answer : choices.map((choice) => choice.id))
+        : (typeof current?.answer === "string" && current.answer ? current.answer : choices[0]?.id ?? "a");
+      return {
+        type,
+        prompt: current?.prompt ?? "",
+        choices,
+        answer,
+        explain: current?.explain ?? false,
+        misconception: current?.misconception ?? "",
+      };
+    });
+  }
 
   async function save() {
     onError(null);
     setNote("");
+    const score = Number(passScore);
     try {
       onChange(await api<LessonPlan>(`/checkpoints/${checkpoint.id}`, {
         method: "PATCH",
@@ -490,9 +502,14 @@ function CheckpointEditor({
           tutor_prompt: prompt,
           rubric,
           pass_criteria: criteria,
+          objective,
+          rubric_rows: rows.filter((row) => row.text.trim()),
+          hint_ladder: hints,
+          pass_score: Number.isFinite(score) ? score : 70,
+          quiz: widget === "none" || !quiz ? null : { ...quiz, type: widget },
         }),
       }));
-      setNote("Saved. The tutor uses this the next time it teaches the step.");
+      setNote("Saved. The tutor uses this the next time it teaches the block.");
     } catch (err) {
       onError(messageOf(err));
     }
@@ -523,7 +540,7 @@ function CheckpointEditor({
   return (
     <section className="checkpoint-editor">
       <div className="inline-title">
-        <h3>Checkpoint {checkpoint.position}</h3>
+        <h3>Block {checkpoint.position}</h3>
         <div className="row-actions">
           <button type="button" className="ghost" disabled={first} onClick={() => void move("up")}>Up</button>
           <button type="button" className="ghost" disabled={last} onClick={() => void move("down")}>Down</button>
@@ -535,17 +552,209 @@ function CheckpointEditor({
       <label>
         Kind
         <select value={kind} onChange={(event) => setKind(event.target.value)}>
-          <option value="teach">Teach</option>
-          <option value="practice">Practice</option>
-          <option value="quiz">Quiz</option>
+          {BLOCK_KINDS.map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
         </select>
+      </label>
+      <label>
+        Objective
+        <input value={objective} onChange={(event) => setObjective(event.target.value)} />
       </label>
       <label>
         Tutor prompt
         <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} />
       </label>
       <label>
-        Rubric
+        Pass score
+        <input value={passScore} onChange={(event) => setPassScore(event.target.value)} inputMode="numeric" />
+      </label>
+      <div className="rubric-editor">
+        <p className="eyebrow">Rubric rows</p>
+        {rows.map((row, index) => (
+          <div key={`${row.id}-${index}`} className="rubric-edit-row">
+            <input
+              value={row.text}
+              aria-label={`Rubric row ${index + 1}`}
+              onChange={(event) => setRows(rows.map((item, itemIndex) => itemIndex === index ? { ...item, text: event.target.value } : item))}
+            />
+            <input
+              value={String(row.weight)}
+              aria-label={`Weight ${index + 1}`}
+              inputMode="numeric"
+              onChange={(event) => setRows(rows.map((item, itemIndex) => itemIndex === index ? { ...item, weight: Number(event.target.value) || 0 } : item))}
+            />
+            <button type="button" className="ghost" onClick={() => setRows(rows.filter((_, itemIndex) => itemIndex !== index))}>Remove</button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => setRows([...rows, { id: `r${rows.length + 1}`, text: "", weight: 1 }])}
+        >
+          Add row
+        </button>
+      </div>
+      <div className="hint-editor">
+        <p className="eyebrow">Hint ladder</p>
+        {(["nudge", "analogy", "scaffold"] as const).map((tier) => (
+          <label key={tier}>
+            {tier}
+            <input value={hints[tier] ?? ""} onChange={(event) => setHints({ ...hints, [tier]: event.target.value })} />
+          </label>
+        ))}
+      </div>
+      <label>
+        Widget
+        <select
+          value={widget}
+          onChange={(event) => {
+            const next = event.target.value as "none" | QuizInput["type"];
+            if (next === "none") {
+              setWidget("none");
+              setQuiz(null);
+              return;
+            }
+            ensureQuiz(next);
+          }}
+        >
+          <option value="none">None</option>
+          <option value="single">Single answer</option>
+          <option value="multi">Multi-select</option>
+          <option value="flaw">Spot the flaw</option>
+          <option value="order">Ordering</option>
+        </select>
+      </label>
+      {quiz && widget !== "none" ? (
+        <div className="quiz-editor">
+          <label>
+            Widget prompt
+            <textarea value={quiz.prompt} onChange={(event) => setQuiz({ ...quiz, prompt: event.target.value })} />
+          </label>
+          {quiz.choices.map((choice, index) => (
+            <div key={`${choice.id}-${index}`} className="choice-edit">
+              <input
+                value={choice.id}
+                aria-label={`Choice id ${index + 1}`}
+                onChange={(event) => {
+                  const choices = quiz.choices.map((item, itemIndex) => itemIndex === index ? { ...item, id: event.target.value } : item);
+                  setQuiz({ ...quiz, choices });
+                }}
+              />
+              <input
+                value={choice.text}
+                aria-label={`Choice text ${index + 1}`}
+                onChange={(event) => {
+                  const choices = quiz.choices.map((item, itemIndex) => itemIndex === index ? { ...item, text: event.target.value } : item);
+                  setQuiz({ ...quiz, choices });
+                }}
+              />
+              <input
+                value={choice.misconception}
+                aria-label={`Misconception ${index + 1}`}
+                placeholder="Misconception if they pick this"
+                onChange={(event) => {
+                  const choices = quiz.choices.map((item, itemIndex) => itemIndex === index ? { ...item, misconception: event.target.value } : item);
+                  setQuiz({ ...quiz, choices });
+                }}
+              />
+            </div>
+          ))}
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setQuiz({ ...quiz, choices: [...quiz.choices, emptyChoice(quiz.choices.length)] })}
+          >
+            Add choice
+          </button>
+          {widget === "single" || widget === "flaw" ? (
+            <label>
+              Correct choice
+              <select
+                value={typeof quiz.answer === "string" ? quiz.answer : ""}
+                onChange={(event) => setQuiz({ ...quiz, answer: event.target.value })}
+              >
+                {quiz.choices.map((choice) => (
+                  <option key={choice.id} value={choice.id}>{choice.id}: {choice.text || "Untitled"}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {widget === "multi" ? (
+            <div>
+              <p className="eyebrow">Correct choices</p>
+              {quiz.choices.map((choice) => {
+                const selected = Array.isArray(quiz.answer) ? quiz.answer : [];
+                const on = selected.includes(choice.id);
+                return (
+                  <label key={choice.id} className="check">
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => {
+                        const next = on ? selected.filter((id) => id !== choice.id) : [...selected, choice.id];
+                        setQuiz({ ...quiz, answer: next });
+                      }}
+                    />
+                    {choice.text || choice.id}
+                  </label>
+                );
+              })}
+            </div>
+          ) : null}
+          {widget === "order" ? (
+            <div>
+              <p className="eyebrow">Correct order</p>
+              {(Array.isArray(quiz.answer) ? quiz.answer : quiz.choices.map((choice) => choice.id)).map((id, index, answer) => (
+                <div key={`${id}-${index}`} className="row-actions">
+                  <span>{quiz.choices.find((choice) => choice.id === id)?.text || id}</span>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={index === 0}
+                    onClick={() => {
+                      const next = [...answer];
+                      [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                      setQuiz({ ...quiz, answer: next });
+                    }}
+                  >
+                    Up
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={index === answer.length - 1}
+                    onClick={() => {
+                      const next = [...answer];
+                      [next[index + 1], next[index]] = [next[index], next[index + 1]];
+                      setQuiz({ ...quiz, answer: next });
+                    }}
+                  >
+                    Down
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={quiz.explain}
+              onChange={(event) => setQuiz({ ...quiz, explain: event.target.checked })}
+            />
+            Ask for a short written explanation
+          </label>
+          <label>
+            Misconception if the set or the order is wrong
+            <input
+              value={quiz.misconception}
+              onChange={(event) => setQuiz({ ...quiz, misconception: event.target.value })}
+            />
+          </label>
+        </div>
+      ) : null}
+      <label>
+        Notes
         <textarea value={rubric} onChange={(event) => setRubric(event.target.value)} />
       </label>
       <label>
@@ -553,47 +762,5 @@ function CheckpointEditor({
         <textarea value={criteria} onChange={(event) => setCriteria(event.target.value)} />
       </label>
     </section>
-  );
-}
-
-function SessionView({ session }: { session: SessionDetail }) {
-  const current = session.lesson_plan.topics
-    .flatMap((topic) => topic.checkpoints.map((checkpoint) => ({ topic, checkpoint })))
-    .find((item) => item.checkpoint.id === session.current_checkpoint_id);
-  return (
-    <article className="transcript-view">
-      <p className="eyebrow">{session.student.display_name}</p>
-      <h2>{session.lesson_plan.title}</h2>
-      <p className="meta">
-        {session.status.replaceAll("_", " ")} · opened {when(session.created_at)}
-        {current ? ` · now on ${current.topic.title}, ${current.checkpoint.kind}` : " · lesson finished"}
-      </p>
-      <h3>Scores</h3>
-      {session.results.length === 0 ? <p className="help">No checkpoint scores stored yet.</p> : null}
-      <ul className="score-list">
-        {session.results.map((result) => (
-          <li key={result.id}>
-            <strong className={result.passed ? "pass" : "miss"}>
-              {result.passed ? "Passed" : "Not yet"} · {result.score}/100
-            </strong>
-            <span className="quiet">
-              {result.topic_title} · {result.checkpoint_kind} {result.checkpoint_position} · {when(result.created_at)}
-            </span>
-            <span>{result.feedback}</span>
-          </li>
-        ))}
-      </ul>
-      <h3>Transcript</h3>
-      {session.messages.length === 0 ? <p className="help">No messages stored yet.</p> : null}
-      <ol className="transcript-list">
-        {session.messages.map((message) => (
-          <li key={message.id} className={message.role}>
-            <strong>{message.role === "user" ? session.student.display_name : "Tutor"}</strong>
-            <span className="quiet">{when(message.created_at)}</span>
-            <p style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{message.content}</p>
-          </li>
-        ))}
-      </ol>
-    </article>
   );
 }

@@ -6,7 +6,7 @@ There is no login. The kid page is a name picker. Admin is a separate URL.
 
 ## Layout
 
-- `apps/web` — Next.js App Router. `/` is the kid session. `/admin` is the lesson desk. `POST /api/chat` streams the tutor with the Vercel AI SDK.
+- `apps/web` — Next.js App Router. `/` is the kid session. `/admin` edits lesson blocks. `/viewchats` reads transcripts. `POST /api/chat` streams the tutor with the Vercel AI SDK.
 - `apps/api` — FastAPI, SQLAlchemy, Alembic. The only writer to Postgres.
 - `docker-compose.yml` — local Postgres.
 
@@ -53,7 +53,7 @@ python -m app.seed
 uvicorn app.main:app --reload --port 8000
 ```
 
-`alembic upgrade head` and `python -m app.seed` are safe to run again. The seed inserts Iron Man, Storm, Spider-Man, Wolverine, and the Fractions, Reading, and Science lessons only when those rows are missing. It does not overwrite edits you made in admin.
+`alembic upgrade head` and `python -m app.seed` are safe to run again. The seed inserts Iron Man, Storm, Spider-Man, and Wolverine when they are missing, and fills an age only when it is blank. Lessons are Fractions, Reading, Science, Super prompts (ages 9–11), and Function shifts (ages 15–17). A new slug is inserted once. Fractions is rewritten in place into typed blocks with one choice widget, keeping the same lesson id, so a class that already points at it still opens. A second run leaves that rewrite alone. Other existing plans are left as edited, aside from a blank age range.
 
 Terminal 2, web:
 
@@ -64,20 +64,17 @@ npm run dev --workspace web
 
 - Kid session: http://localhost:3000
 - Lesson desk: http://localhost:3000/admin
+- Transcripts: http://localhost:3000/viewchats
 - API docs: http://localhost:8000/docs
 
 ## Try the lesson
 
-1. Open `/` and choose Storm. On the right, open a class notebook or press + for a new class and pick Fractions, Reading, or Science. The tutor greets Storm and starts the first checkpoint of that lesson. On Fractions that is a teach step about a pizza cut into 4 slices. It should not dump the rest of the lesson. The lesson desk on the left shows the score so far at the top and the lesson goals at the bottom.
-2. Answer the teach check, then the chocolate-bar practice, then the granola-bar quiz. Quiz scores show in the chat and in the lesson-desk score.
-3. Open `/admin`, filter sessions to Storm, and open the session. The transcript and checkpoint scores are the rows FastAPI stored.
-4. Edit that checkpoint's tutor prompt and save. Start a new session from the kid page. The next turn uses the new prompt.
+1. Open `/` and choose Storm. On the right, open a class notebook or press + for a new class. Storm can start Fractions, Reading, Science, or Super prompts. Function shifts stays off that shelf because it is for ages 15–17. Wolverine can start Function shifts.
+2. Inside a class, the block stepper shows the path. A choice widget sits under the tutor prompt. The rubric strip and the hint badge (nudge, analogy, or scaffold) sit above the composer. A wrong tap stores that choice's misconception before the model replies. The model writes the reply and grades a written explanation. It does not grade the taps.
+3. Open `/viewchats`, filter to Storm, and open the class. The transcript and checkpoint scores are the rows FastAPI stored. `/admin` edits blocks and does not list transcripts.
+4. Edit a block's objective, rubric rows, hint ladder, or widget and save. Start a new class from the kid page. The next turn uses the saved block.
 
-Server tools, called from the Next.js route and stored by FastAPI:
-
-- `get_current_step` — read the current checkpoint so the model cannot invent the syllabus
-- `record_checkpoint_result` — score, feedback, and pass/fail for the current step
-- `advance_checkpoint` — move on after a finished teach step, or after a passing practice or quiz. A quiz without a passing score cannot be skipped.
+The chat route asks the model for a turn score: rubric rows met, a misconception if any, the hint tier, and the tutor reply. Choice widgets are graded by FastAPI first. A scored block does not advance until it has a passing result.
 
 ## Render
 
