@@ -17,6 +17,7 @@ from app.models import (
     Student,
     Topic,
 )
+from app.blocks import apply_checkpoint
 from app.queries import (
     active_plan,
     checkpoint_in_use,
@@ -26,6 +27,10 @@ from app.queries import (
     latest_result,
     next_position,
 )
+from app.schemas import CheckpointWrite
+from app.widgets import choice_ids, grade_choice, hint_text, hint_tier_for
+
+SCORED_KINDS = {"practice", "quiz", "discovery", "teach_back"}
 
 
 def now() -> datetime:
@@ -75,6 +80,35 @@ def move_item(db: Session, items: list, item, direction: str) -> None:
     db.flush()
 
 
+def plan_fits(student: Student, plan: LessonPlan) -> bool:
+    if student.age is None:
+        return plan.age_min is None or plan.age_min < 15
+    if plan.age_min is not None and student.age < plan.age_min:
+        return False
+    if plan.age_max is not None and student.age > plan.age_max:
+        return False
+    return True
+
+
+def age_block_reason(student: Student, plan: LessonPlan) -> str | None:
+    if plan_fits(student, plan):
+        return None
+    if plan.age_min is not None and plan.age_max is not None:
+        band = f"ages {plan.age_min}–{plan.age_max}"
+    elif plan.age_min is not None:
+        band = f"ages {plan.age_min} and up"
+    elif plan.age_max is not None:
+        band = f"ages {plan.age_max} and under"
+    else:
+        band = "a different age"
+    who = (
+        f"{student.display_name} is {student.age}"
+        if student.age is not None
+        else f"{student.display_name} has no age on file"
+    )
+    return f"This lesson is for {band}. {who}."
+
+
 def open_session(
     db: Session,
     student_id: uuid.UUID,
@@ -85,6 +119,9 @@ def open_session(
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
     plan = active_plan(db) if lesson_plan_id is None else load_plan(db, lesson_plan_id)
+    reason = age_block_reason(student, plan)
+    if reason is not None:
+        raise HTTPException(status_code=400, detail=reason)
     if not fresh:
         existing = db.scalar(
             select(TutorSession)
@@ -156,6 +193,10 @@ def record_result(
     score: int,
     passed: bool,
     feedback: str,
+    rubric_met: list | None = None,
+    misconception: str | None = None,
+    hint_tier: str | None = None,
+    choice: dict | None = None,
 ) -> dict:
     if tutor_session.current_checkpoint_id is None:
         return {
@@ -178,10 +219,15 @@ def record_result(
         score=score,
         passed=passed,
         feedback=feedback.strip(),
+        rubric_met=list(rubric_met or []),
+        misconception=blank_to_none(misconception),
+        hint_tier=hint_tier,
+        choice=choice,
     )
     db.add(result)
     tutor_session.updated_at = now()
     db.flush()
+    db.expire(tutor_session, ["results"])
     return {
         "ok": True,
         "checkpoint_id": str(checkpoint.id),
@@ -203,15 +249,11 @@ def advance(db: Session, tutor_session: TutorSession) -> dict:
         return {"ok": False, "reason": "The current checkpoint is missing."}
     topic, checkpoint = located
     result = latest_result(tutor_session, checkpoint.id)
-    if checkpoint.kind == "quiz" and (result is None or not result.passed):
+    if checkpoint.kind in SCORED_KINDS and (result is None or not result.passed):
+        label = "quiz" if checkpoint.kind == "quiz" else checkpoint.kind.replace("_", " ")
         return {
             "ok": False,
-            "reason": "Refusing to skip this quiz until it has a passing score.",
-        }
-    if checkpoint.kind == "practice" and (result is None or not result.passed):
-        return {
-            "ok": False,
-            "reason": "This practice step needs a passing result before moving on.",
+            "reason": f"This {label} step needs a passing result before moving on.",
         }
     rows = flat_checkpoints(tutor_session.lesson_plan)
     index = next(
@@ -290,17 +332,151 @@ def append_topic(db: Session, plan: LessonPlan, title: str, goal: str, instructi
     return topic
 
 
-def append_checkpoint(db: Session, topic: Topic, kind: str, prompt: str, rubric: str, criteria: str) -> Checkpoint:
+def append_checkpoint(db: Session, topic: Topic, body: CheckpointWrite) -> Checkpoint:
     checkpoint = Checkpoint(
         topic_id=topic.id,
-        kind=kind,
-        tutor_prompt=prompt.strip(),
-        rubric=blank_to_none(rubric),
-        pass_criteria=blank_to_none(criteria),
+        kind=body.kind,
+        tutor_prompt=body.tutor_prompt.strip(),
         position=next_position([item.position for item in topic.checkpoints]),
     )
+    apply_checkpoint(checkpoint, body, None)
     topic.checkpoints.append(checkpoint)
     if topic.lesson_plan is not None:
         topic.lesson_plan.updated_at = now()
     db.flush()
     return checkpoint
+
+
+def failed_attempts(tutor_session: TutorSession, checkpoint_id: uuid.UUID) -> int:
+    return sum(
+        1
+        for result in tutor_session.results
+        if result.checkpoint_id == checkpoint_id and not result.passed
+    )
+
+
+def grade_widget(
+    db: Session,
+    tutor_session: TutorSession,
+    choice: str | list[str],
+    explanation: str,
+) -> dict:
+    if tutor_session.current_checkpoint_id is None:
+        return {"ok": False, "reason": "This lesson is finished, so there is nothing to score."}
+    located = locate(tutor_session.lesson_plan, tutor_session.current_checkpoint_id)
+    if located is None:
+        return {"ok": False, "reason": "The current checkpoint is missing."}
+    _topic, checkpoint = located
+    quiz = checkpoint.quiz if isinstance(checkpoint.quiz, dict) else None
+    if quiz is None:
+        return {"ok": False, "reason": "This block is a typed reply, not a choice widget."}
+    ids = choice_ids(choice)
+    if not ids:
+        return {"ok": False, "reason": "Choose an answer before sending."}
+    graded = grade_choice(quiz, ids if quiz.get("type") in {"multi", "order"} else ids[0])
+    passed = graded["score"] >= (checkpoint.pass_score or 70)
+    tier = hint_tier_for(failed_attempts(tutor_session, checkpoint.id))
+    feedback = "That choice is right." if graded["correct"] else "That choice is not right."
+    if graded["misconception"]:
+        feedback = f"{feedback} {graded['misconception']}"
+    recorded = record_result(
+        db,
+        tutor_session,
+        graded["score"],
+        passed,
+        feedback.strip(),
+        misconception=graded["misconception"],
+        hint_tier=tier,
+        choice={"ids": ids, "explanation": explanation.strip()},
+    )
+    return {
+        **recorded,
+        "correct": graded["correct"],
+        "misconception": graded["misconception"],
+        "hint_tier": tier,
+        "hint_text": hint_text(checkpoint.hint_ladder, tier),
+    }
+
+
+def _row_ids(checkpoint: Checkpoint) -> dict[str, int]:
+    weights: dict[str, int] = {}
+    for row in checkpoint.rubric_rows or []:
+        if isinstance(row, dict) and row.get("id"):
+            weights[str(row["id"])] = int(row.get("weight") or 0)
+    return weights
+
+
+def apply_turn_score(
+    db: Session,
+    tutor_session: TutorSession,
+    rubric_met: list[str],
+    misconception: str | None,
+    advance_flag: bool,
+) -> dict:
+    if tutor_session.current_checkpoint_id is None:
+        return {"ok": False, "reason": "This lesson is finished.", "advanced": False}
+    located = locate(tutor_session.lesson_plan, tutor_session.current_checkpoint_id)
+    if located is None:
+        return {"ok": False, "reason": "The current checkpoint is missing.", "advanced": False}
+    _topic, checkpoint = located
+    weights = _row_ids(checkpoint)
+    met = [row_id for row_id in rubric_met if row_id in weights]
+    latest = latest_result(tutor_session, checkpoint.id)
+    quiz = checkpoint.quiz if isinstance(checkpoint.quiz, dict) else None
+    note = blank_to_none(misconception)
+
+    if quiz is not None and latest is not None and isinstance(latest.choice, dict):
+        latest.rubric_met = met
+        if not latest.misconception and note and not latest.passed:
+            latest.misconception = note
+        tutor_session.updated_at = now()
+        db.flush()
+        should_advance = bool(advance_flag and latest.passed) or (
+            latest.passed and not quiz.get("explain")
+        )
+        advanced = False
+        if should_advance:
+            moved = advance(db, tutor_session)
+            advanced = bool(moved.get("ok"))
+        return {
+            "ok": True,
+            "graded_by": "widget",
+            "score": latest.score,
+            "passed": latest.passed,
+            "advanced": advanced,
+            "misconception": latest.misconception,
+        }
+
+    if quiz is not None:
+        recorded = record_result(
+            db,
+            tutor_session,
+            0,
+            False,
+            "Choose an answer on the widget.",
+            rubric_met=met,
+            hint_tier=hint_tier_for(failed_attempts(tutor_session, checkpoint.id)),
+        )
+        return {**recorded, "advanced": False, "graded_by": "widget"}
+
+    total = sum(weights.values()) or 0
+    earned = sum(weights[row_id] for row_id in met)
+    score = round(100 * earned / total) if total else 0
+    passed = score >= (checkpoint.pass_score or 70)
+    tier = hint_tier_for(failed_attempts(tutor_session, checkpoint.id))
+    feedback = "That meets this step." if passed else "Not yet. Use the hint and try again."
+    recorded = record_result(
+        db,
+        tutor_session,
+        score,
+        passed,
+        feedback,
+        rubric_met=met,
+        misconception=None if passed else note,
+        hint_tier=tier,
+    )
+    advanced = False
+    if advance_flag and passed:
+        moved = advance(db, tutor_session)
+        advanced = bool(moved.get("ok"))
+    return {**recorded, "advanced": advanced, "graded_by": "model"}

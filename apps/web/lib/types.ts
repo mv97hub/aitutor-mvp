@@ -2,6 +2,7 @@ export type Student = {
   id: string;
   slug: string;
   display_name: string;
+  age: number | null;
 };
 
 export type BoardResult = {
@@ -47,6 +48,47 @@ export type Board = {
   current_checkpoint_id: string | null;
   topics: BoardTopic[];
   messages: StoredMessage[];
+  steps: BlockStep[];
+  current_block: CurrentBlock | null;
+};
+
+export type RubricRow = {
+  id: string;
+  text: string;
+  weight: number;
+  met: boolean;
+};
+
+export type QuizChoice = {
+  id: string;
+  text: string;
+};
+
+export type KidQuiz = {
+  type: "single" | "multi" | "flaw" | "order";
+  prompt: string;
+  choices: QuizChoice[];
+  explain: boolean;
+};
+
+export type BlockStep = {
+  id: string;
+  position: number;
+  kind: string;
+  title: string;
+  state: string;
+};
+
+export type CurrentBlock = {
+  id: string;
+  kind: string;
+  title: string;
+  objective: string;
+  tutor_prompt: string;
+  rubric: RubricRow[];
+  hint_tier: "nudge" | "analogy" | "scaffold";
+  hint_text: string;
+  quiz: KidQuiz | null;
 };
 
 export type LessonPlanSummary = {
@@ -56,6 +98,35 @@ export type LessonPlanSummary = {
   is_active: boolean;
   updated_at: string;
   topic_count: number;
+  age_min: number | null;
+  age_max: number | null;
+};
+
+export type RubricRowInput = {
+  id: string;
+  text: string;
+  weight: number;
+};
+
+export type HintLadder = {
+  nudge: string;
+  analogy: string;
+  scaffold: string;
+};
+
+export type QuizChoiceInput = {
+  id: string;
+  text: string;
+  misconception: string;
+};
+
+export type QuizInput = {
+  type: "single" | "multi" | "flaw" | "order";
+  prompt: string;
+  choices: QuizChoiceInput[];
+  answer: string | string[];
+  explain: boolean;
+  misconception: string;
 };
 
 export type AdminCheckpoint = {
@@ -65,6 +136,11 @@ export type AdminCheckpoint = {
   tutor_prompt: string;
   rubric: string | null;
   pass_criteria: string | null;
+  objective: string | null;
+  rubric_rows: RubricRowInput[];
+  hint_ladder: HintLadder;
+  pass_score: number;
+  quiz: QuizInput | null;
 };
 
 export type AdminTopic = {
@@ -82,6 +158,8 @@ export type LessonPlan = {
   title: string;
   preamble: string;
   is_active: boolean;
+  age_min: number | null;
+  age_max: number | null;
   created_at: string;
   updated_at: string;
   topics: AdminTopic[];
@@ -96,6 +174,8 @@ export type ResultRow = {
   score: number;
   passed: boolean;
   feedback: string;
+  misconception: string | null;
+  hint_tier: string | null;
   created_at: string;
 };
 
@@ -158,5 +238,19 @@ export type LessonContext = {
     tutor_prompt: string;
     rubric: string | null;
     pass_criteria: string | null;
+    objective: string | null;
+    rubric_rows: { id: string; text: string; weight: number }[];
+    hint_tier: string | null;
+    hint_text: string;
+    pass_score: number;
+    quiz: (QuizInput & { choices: { id: string; text: string; misconception?: string }[] }) | null;
+    widget_grade: {
+      correct: boolean;
+      score: number;
+      passed: boolean;
+      misconception: string | null;
+      choice_ids: string[];
+      explanation: string;
+    } | null;
   } | null;
 };

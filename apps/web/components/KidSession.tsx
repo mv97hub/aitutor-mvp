@@ -5,9 +5,10 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { BlockStepper, ChoiceWidget, RubricStrip } from "@/components/LessonBlocks";
 import { api } from "@/lib/api";
 import { KICKOFF } from "@/lib/kickoff";
-import type { Board, LessonPlanSummary, SessionSummary, Student, StoredMessage } from "@/lib/types";
+import type { Board, CurrentBlock, LessonPlanSummary, SessionSummary, Student, StoredMessage } from "@/lib/types";
 
 const LOOKS: Record<string, { ink: string; wash: string; mark: string }> = {
   "iron-man": { ink: "#7c2d12", wash: "#f6d7a8", mark: "IM" },
@@ -99,9 +100,16 @@ function MessageView({ message, studentName }: { message: UIMessage; studentName
 function lessonScore(board: Board) {
   const scored = board.topics
     .flatMap((topic) => topic.checkpoints)
-    .filter((checkpoint) => checkpoint.kind === "practice" || checkpoint.kind === "quiz");
+    .filter((checkpoint) => checkpoint.kind === "practice" || checkpoint.kind === "quiz" || checkpoint.kind === "discovery" || checkpoint.kind === "teach_back");
   const earned = scored.reduce((sum, checkpoint) => sum + (checkpoint.latest_result?.score ?? 0), 0);
   return { earned, possible: scored.length * 100 };
+}
+
+function planFits(student: Student, plan: LessonPlanSummary) {
+  if (student.age == null) return plan.age_min == null || plan.age_min < 15;
+  if (plan.age_min != null && student.age < plan.age_min) return false;
+  if (plan.age_max != null && student.age > plan.age_max) return false;
+  return true;
 }
 
 function classDate(value: string) {
@@ -116,6 +124,8 @@ function ChatPanel({
   initialMessages,
   studentName,
   wash,
+  block,
+  quizLocked,
   onTurn,
 }: {
   sessionId: string;
@@ -123,6 +133,8 @@ function ChatPanel({
   initialMessages: StoredMessage[];
   studentName: string;
   wash: string;
+  block: CurrentBlock | null;
+  quizLocked: boolean;
   onTurn: () => void;
 }) {
   const [seed] = useState(initialMessages);
@@ -184,6 +196,18 @@ function ChatPanel({
           </button>
         </div>
       ) : null}
+      {block?.quiz && lessonStatus !== "completed" && !quizLocked ? (
+        <ChoiceWidget
+          key={block.id}
+          quiz={block.quiz}
+          busy={busy}
+          onSubmit={(choice, explanation, transcript) => {
+            clearError();
+            void sendMessage({ text: transcript }, { body: { widget: { choice, explanation } } });
+          }}
+        />
+      ) : null}
+      {block && lessonStatus !== "completed" ? <RubricStrip block={block} /> : null}
       <form
         className="composer"
         onSubmit={(event) => {
@@ -212,8 +236,8 @@ function ChatPanel({
   );
 }
 
-function startablePlans(plans: LessonPlanSummary[]): LessonPlanSummary[] {
-  return plans.filter((plan) => plan.topic_count > 0);
+function startablePlans(plans: LessonPlanSummary[], student: Student | null): LessonPlanSummary[] {
+  return plans.filter((plan) => plan.topic_count > 0 && (student == null || planFits(student, plan)));
 }
 
 export function KidSession({
@@ -233,7 +257,7 @@ export function KidSession({
   const [error, setError] = useState(initialError);
   const [board, setBoard] = useState<Board | null>(null);
   const [opening, setOpening] = useState(false);
-  const choices = startablePlans(plans);
+  const choices = startablePlans(plans, learner);
 
   async function loadNotebooks(studentId: string) {
     const rows = await api<SessionSummary[]>(`/sessions?student_id=${studentId}`);
@@ -418,8 +442,9 @@ export function KidSession({
         <section className="stage">
           <div className="stage-head">
             <h1>{board.lesson_title}</h1>
-            <p className="quiet">{board.status === "completed" ? "Finished" : "One step at a time"}</p>
+            <p className="quiet">{board.status === "completed" ? "Finished" : board.current_block?.objective || "One step at a time"}</p>
           </div>
+          <BlockStepper steps={board.steps ?? []} />
           <ChatPanel
             key={board.id}
             sessionId={board.id}
@@ -427,6 +452,12 @@ export function KidSession({
             initialMessages={board.messages}
             studentName={board.student.display_name}
             wash={look.wash}
+            block={board.current_block}
+            quizLocked={
+              board.topics
+                .flatMap((topic) => topic.checkpoints)
+                .find((checkpoint) => checkpoint.id === board.current_checkpoint_id)?.latest_result?.passed === true
+            }
             onTurn={() => {
               void api<Board>(`/sessions/${board.id}/board`).then(setBoard).catch(() => undefined);
             }}

@@ -5,10 +5,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
+from app.blocks import apply_checkpoint
 from app.flow import (
     append_checkpoint,
     append_topic,
-    blank_to_none,
     clear_active,
     move_item,
     now,
@@ -60,6 +60,8 @@ def create_plan(body: LessonPlanCreate, db: Session = Depends(get_db)) -> Lesson
         title=body.title.strip(),
         preamble=body.preamble.strip(),
         is_active=body.is_active,
+        age_min=body.age_min,
+        age_max=body.age_max,
         updated_at=now(),
     )
     db.add(plan)
@@ -82,6 +84,10 @@ def patch_plan(
     plan.title = body.title.strip()
     plan.preamble = body.preamble.strip()
     plan.is_active = body.is_active
+    if "age_min" in body.model_fields_set:
+        plan.age_min = body.age_min
+    if "age_max" in body.model_fields_set:
+        plan.age_max = body.age_max
     plan.updated_at = now()
     db.flush()
     return lesson_plan_out(plan)
@@ -169,9 +175,7 @@ def create_checkpoint(
         raise HTTPException(status_code=404, detail="Topic not found")
     plan = load_plan(db, topic.lesson_plan_id)
     current = next(item for item in plan.topics if item.id == topic.id)
-    append_checkpoint(
-        db, current, body.kind, body.tutor_prompt, body.rubric, body.pass_criteria
-    )
+    append_checkpoint(db, current, body)
     return lesson_plan_out(plan)
 
 
@@ -185,10 +189,7 @@ def patch_checkpoint(
     topic = db.get(Topic, checkpoint.topic_id)
     plan = load_plan(db, topic.lesson_plan_id)
     current = _checkpoint_on(plan, checkpoint.id)
-    current.kind = body.kind
-    current.tutor_prompt = body.tutor_prompt.strip()
-    current.rubric = blank_to_none(body.rubric)
-    current.pass_criteria = blank_to_none(body.pass_criteria)
+    apply_checkpoint(current, body, body.model_fields_set)
     plan.updated_at = now()
     return lesson_plan_out(plan)
 

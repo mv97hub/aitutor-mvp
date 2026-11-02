@@ -1,25 +1,34 @@
-"""Idempotent seed: four students and three short lessons.
+"""Idempotent seed: four students and the lesson blocks.
 
-Running this twice does not duplicate rows. Existing rows are left as edited.
+Running this twice does not duplicate rows. An existing plan is left as edited,
+except Fractions, which is rewritten into blocks only when no session uses it.
 """
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import Checkpoint, LessonPlan, Student, Topic
+from app.models import Checkpoint, LessonPlan, Session as TutorSession, Student, Topic
 
 STUDENTS = [
-    {"slug": "iron-man", "display_name": "Iron Man"},
-    {"slug": "storm", "display_name": "Storm"},
-    {"slug": "spider-man", "display_name": "Spider-Man"},
-    {"slug": "wolverine", "display_name": "Wolverine"},
+    {"slug": "iron-man", "display_name": "Iron Man", "age": 10},
+    {"slug": "storm", "display_name": "Storm", "age": 10},
+    {"slug": "spider-man", "display_name": "Spider-Man", "age": 11},
+    {"slug": "wolverine", "display_name": "Wolverine", "age": 16},
 ]
 
 PREAMBLE = (
     "You are a warm, patient math tutor for a child who is about 8 to 10 years old. "
     "Use everyday objects, short sentences, and encouragement. One step at a time."
 )
+
+def _rows(*rows: tuple[str, str, int]) -> list[dict]:
+    return [{"id": row_id, "text": text, "weight": weight} for row_id, text, weight in rows]
+
+
+def _hints(nudge: str, analogy: str, scaffold: str) -> dict:
+    return {"nudge": nudge, "analogy": analogy, "scaffold": scaffold}
+
 
 TOPICS = [
     {
@@ -29,64 +38,91 @@ TOPICS = [
             "parts the whole was split into. The numerator is how many of those parts we mean."
         ),
         "tutor_instructions": (
-            "Use one pizza or one chocolate bar. Do not introduce different denominators. "
-            "Explain, then ask one short question, then wait."
+            "Use one pizza, then one chocolate bar. Do not give the answer before they try. "
+            "The chocolate-bar block is a choice widget: the taps are already graded."
         ),
         "checkpoints": [
             {
-                "kind": "teach",
+                "kind": "discovery",
+                "objective": "A fraction names equal parts of one whole.",
                 "tutor_prompt": (
-                    "Explain that a fraction is part of a whole, using a pizza cut into equal "
-                    "slices. Teach the words numerator and denominator. Then ask this check "
-                    "question and wait: a pizza is cut into 4 equal slices and the student eats "
-                    "1 slice. What fraction did they eat? When they say 1/4 (or one fourth) and "
-                    "can say the denominator is 4, the teach step is complete: call "
-                    "advance_checkpoint. If they mix it up, explain once more with the same pizza "
-                    "and ask again. Do not move on until they show they understand."
+                    "A pizza is cut into 4 equal slices. You eat 1 slice. What fraction did you "
+                    "eat, and what does the bottom number mean?"
                 ),
-                "rubric": "",
-                "pass_criteria": (
-                    "The student says 1/4 or one fourth, and knows the bottom number is how many "
-                    "equal slices the pizza was cut into."
+                "rubric": "1/4, and the bottom number is the 4 equal slices.",
+                "pass_criteria": "Says 1/4 or one fourth, and knows the bottom number counts the equal slices.",
+                "rubric_rows": _rows(
+                    ("fourths", "Says 1/4 or one fourth.", 60),
+                    ("denominator", "Says the bottom number is the 4 equal slices.", 40),
                 ),
-            },
-            {
-                "kind": "practice",
-                "tutor_prompt": (
-                    "Stay on this guided problem: a chocolate bar has 3 equal pieces and the "
-                    "student has 2 of them. What fraction do they have? Hints are allowed. First "
-                    "hint: the denominator is the number of equal pieces. Second hint: the "
-                    "numerator is how many they have. When they answer 2/3, call "
-                    "record_checkpoint_result with a passing score and short feedback, then call "
-                    "advance_checkpoint. If they miss, give one hint and let them try again. Do "
-                    "not record a pass until 2/3 is clear."
+                "hint_ladder": _hints(
+                    "How many equal slices is the whole pizza?",
+                    "The bottom number is the number of equal slices. The top is how many you ate.",
+                    "The pizza has 4 equal slices and you ate 1, so it is 1/4. The bottom number is the denominator.",
                 ),
-                "rubric": (
-                    "The correct fraction is 2/3. The denominator 3 is the equal pieces. The "
-                    "numerator 2 is the pieces they have."
-                ),
-                "pass_criteria": "The student says 2/3 or two thirds.",
+                "pass_score": 70,
             },
             {
                 "kind": "quiz",
+                "objective": "Name the fraction for part of a chocolate bar.",
+                "tutor_prompt": "A chocolate bar has 3 equal pieces and you have 2 of them. Pick the fraction.",
+                "rubric": "The choice 2/3 is correct. The written line should say the bottom number is the 3 equal pieces.",
+                "pass_criteria": "Chooses 2/3.",
+                "rubric_rows": _rows(
+                    ("choice", "The choice is 2/3.", 70),
+                    ("why", "The explanation says the denominator is the 3 equal pieces.", 30),
+                ),
+                "hint_ladder": _hints(
+                    "The bottom number is how many equal pieces the bar was split into.",
+                    "If a bar is 3 equal squares and you hold 2, you hold two of the three.",
+                    "You have 2 of 3 equal pieces, which is 2/3.",
+                ),
+                "pass_score": 70,
+                "quiz": {
+                    "type": "single",
+                    "prompt": "What fraction of the bar do you have?",
+                    "choices": [
+                        {"id": "a", "text": "2/3", "misconception": ""},
+                        {
+                            "id": "b",
+                            "text": "3/2",
+                            "misconception": "That puts the whole bar on top. The bottom number is how many equal pieces.",
+                        },
+                        {
+                            "id": "c",
+                            "text": "1/3",
+                            "misconception": "The top number is how many pieces you have, not how many are left.",
+                        },
+                        {
+                            "id": "d",
+                            "text": "2/5",
+                            "misconception": "The bottom number is the equal pieces of this bar, which is 3.",
+                        },
+                    ],
+                    "answer": "a",
+                    "explain": True,
+                    "misconception": "Check which number counts the equal pieces.",
+                },
+            },
+            {
+                "kind": "teach_back",
+                "objective": "Teach the bot what the numerator and the denominator mean.",
                 "tutor_prompt": (
-                    "This is a scored quiz. Ask only this question and do not hint at the answer "
-                    "first: a granola bar is split into 8 equal pieces and Maya eats 3. What "
-                    "fraction did she eat, and which number is the numerator? After they answer, "
-                    "grade with the rubric. Call record_checkpoint_result with a score from 0 to "
-                    "100, feedback in one or two sentences, and passed true or false. If they "
-                    "pass, congratulate them and call advance_checkpoint. If they do not pass, "
-                    "they may try once more, then grade again. Do not say 3/8 until after their "
-                    "first try. Never skip this quiz."
+                    "Pretend I don't know fractions. Explain what the numerator and the denominator "
+                    "mean, using the pizza."
                 ),
-                "rubric": (
-                    "Full credit, passed true, score 100: the fraction is 3/8 and the numerator "
-                    "is 3. Partial, passed false, score 50: the fraction is 3/8 but the numerator "
-                    "is missing or wrong, or they swap the numbers to 8/3. No credit, passed "
-                    "false, score 0: a different fraction. Pass only when the fraction is 3/8 and "
-                    "the numerator is 3."
+                "rubric": "Denominator is how many equal parts. Numerator is how many of those parts we mean.",
+                "pass_criteria": "Both words are explained with the pizza.",
+                "rubric_rows": _rows(
+                    ("denominator", "The denominator is how many equal parts.", 50),
+                    ("numerator", "The numerator is how many of those parts we mean.", 50),
                 ),
-                "pass_criteria": "The answer is 3/8 and the numerator is 3.",
+                "hint_ladder": _hints(
+                    "Which number tells how many slices the pizza was cut into?",
+                    "The bottom number names the equal slices. The top number names how many you mean.",
+                    "Denominator: 4 equal slices. Numerator: the 1 slice you ate.",
+                ),
+                "pass_score": 70,
             },
         ],
     },
@@ -100,43 +136,38 @@ TOPICS = [
         ),
         "checkpoints": [
             {
-                "kind": "teach",
-                "tutor_prompt": (
-                    "Explain that if the slices are the same size, more slices is more pizza. "
-                    "Example: 1/4 is less than 3/4. Then ask: which is more, 1/4 or 3/4, and why? "
-                    "When they choose 3/4 because 3 is more than 1 and the slices match, call "
-                    "advance_checkpoint."
+                "kind": "discovery",
+                "objective": "Compare fractions that share a denominator.",
+                "tutor_prompt": "Which is more pizza, 1/4 or 3/4, and why?",
+                "rubric": "3/4, because the slices are the same size and 3 is more than 1.",
+                "pass_criteria": "Chooses 3/4 and gives a reason about more equal parts.",
+                "rubric_rows": _rows(
+                    ("choice", "Chooses 3/4.", 60),
+                    ("reason", "Says the slices match, so more slices is more pizza.", 40),
                 ),
-                "rubric": "",
-                "pass_criteria": (
-                    "The student chooses 3/4 and gives a reason about more equal parts."
+                "hint_ladder": _hints(
+                    "Are the slices the same size in both fractions?",
+                    "Same size slices: the bigger top number is more pizza.",
+                    "3/4 is more than 1/4 because you have three of the same slices instead of one.",
                 ),
+                "pass_score": 70,
             },
             {
-                "kind": "practice",
-                "tutor_prompt": (
-                    "Ask: which is bigger, 2/5 or 4/5? Hints are allowed. Pass when they say 4/5 "
-                    "because both are fifths and 4 is more than 2. Then call "
-                    "record_checkpoint_result with passed true and advance_checkpoint."
+                "kind": "teach_back",
+                "objective": "Explain how to compare fractions with the same denominator.",
+                "tutor_prompt": "Teach me how to tell which is bigger, 2/5 or 4/5, without a trick.",
+                "rubric": "4/5, because both are fifths and 4 is more than 2.",
+                "pass_criteria": "Says 4/5 and why the equal parts make the numerator decide.",
+                "rubric_rows": _rows(
+                    ("choice", "Says 4/5 is bigger.", 50),
+                    ("reason", "Says the fifths are the same size and 4 is more than 2.", 50),
                 ),
-                "rubric": "The correct choice is 4/5, with a reason that the parts are the same size.",
-                "pass_criteria": "The student chooses 4/5 and says why.",
-            },
-            {
-                "kind": "quiz",
-                "tutor_prompt": (
-                    "Scored quiz. Ask: which is bigger, 2/6 or 5/6, and how do you know? Do not "
-                    "say the answer first. Grade with the rubric, call record_checkpoint_result, "
-                    "and call advance_checkpoint only if they passed."
+                "hint_ladder": _hints(
+                    "What does the 5 on the bottom tell you about the pieces?",
+                    "Both fractions are fifths. Compare how many fifths.",
+                    "4/5 is bigger because four same-size pieces is more than two.",
                 ),
-                "rubric": (
-                    "Pass, score 100, only if they choose 5/6 and explain that the denominators "
-                    "match so the larger numerator is bigger. If they choose 5/6 with no reason, "
-                    "score 60 and passed false. If they choose 2/6, score 0 and passed false."
-                ),
-                "pass_criteria": (
-                    "5/6, because the sixths are the same size and 5 is greater than 2."
-                ),
+                "pass_score": 70,
             },
         ],
     },
@@ -262,6 +293,232 @@ SCIENCE_TOPICS = [
     },
 ]
 
+SUPER_PREAMBLE = (
+    "You are a warm writing tutor for a child who is about 9 to 11. "
+    "Talk about prompts: the job, who it is for, and what good looks like. Short sentences."
+)
+
+SUPER_TOPICS = [
+    {
+        "title": "A prompt that helps",
+        "learning_goal": "A strong prompt says the job, the audience, and what good looks like.",
+        "tutor_instructions": (
+            "Stay on one story prompt about a dog who is afraid of rain. "
+            "The spot-the-flaw and ordering blocks grade themselves."
+        ),
+        "checkpoints": [
+            {
+                "kind": "discovery",
+                "objective": "Name the job, the reader, and what good looks like.",
+                "tutor_prompt": (
+                    "You want a story about a dog who is afraid of rain, for a 9 year old, with a "
+                    "happy ending. What would you type so a bot knows the job, who it is for, and "
+                    "what good looks like?"
+                ),
+                "rubric": "Names the job, the 9 year old reader, and a happy ending.",
+                "pass_criteria": "The reply includes the job, the audience, and what good looks like.",
+                "rubric_rows": _rows(
+                    ("job", "Asks for a story about a dog who is afraid of rain.", 40),
+                    ("audience", "Says it is for a 9 year old.", 30),
+                    ("good", "Says what good looks like, such as a happy ending.", 30),
+                ),
+                "hint_ladder": _hints(
+                    "What do you want the bot to make?",
+                    "A prompt can say: write a story, for a 9 year old, and end it happily.",
+                    "Job: a story about a dog afraid of rain. Audience: a 9 year old. Good: a happy ending.",
+                ),
+                "pass_score": 70,
+            },
+            {
+                "kind": "quiz",
+                "objective": "Spot the prompt that leaves the job, the reader, and the finish line out.",
+                "tutor_prompt": "Read the three prompts. One of them has the flaw. Pick that one.",
+                "rubric": "The flaw is the prompt that never names the job, the reader, or what good looks like.",
+                "pass_criteria": "Selects the empty prompt.",
+                "rubric_rows": _rows(
+                    ("flaw", "Selects the prompt that says only 'Write something good.'", 100),
+                ),
+                "hint_ladder": _hints(
+                    "Which prompt never says what to make?",
+                    "A strong prompt names the job, the reader, and the finish line. One of these names none of them.",
+                    "'Write something good' is the flaw. It has no job, no reader, and no finish line.",
+                ),
+                "pass_score": 70,
+                "quiz": {
+                    "type": "flaw",
+                    "prompt": "Which prompt has the flaw?",
+                    "choices": [
+                        {
+                            "id": "clear",
+                            "text": "Write a 6 sentence story for a 9 year old about a dog who is afraid of rain. End with the dog stepping outside.",
+                            "misconception": "That prompt names the job, the reader, and the ending.",
+                        },
+                        {
+                            "id": "empty",
+                            "text": "Write something good.",
+                            "misconception": "This prompt never says the job, the reader, or what good looks like.",
+                        },
+                        {
+                            "id": "thin",
+                            "text": "Write a story.",
+                            "misconception": "A job without an audience or a finish line is thin, but it still names the job.",
+                        },
+                    ],
+                    "answer": "empty",
+                    "explain": True,
+                    "misconception": "Look for the prompt that leaves out the job, the reader, and the finish line.",
+                },
+            },
+            {
+                "kind": "quiz",
+                "objective": "Order the parts of a prompt.",
+                "tutor_prompt": "Put the parts of a super prompt in the order you would give them.",
+                "rubric": "Job, then audience, then what good looks like.",
+                "pass_criteria": "The order is job, audience, then what good looks like.",
+                "rubric_rows": _rows(
+                    ("order", "The order is the job, then who it is for, then what good looks like.", 100),
+                ),
+                "hint_ladder": _hints(
+                    "What should the bot hear first: the job, or the ending?",
+                    "Tell the bot what to make, then who it is for, then what good looks like.",
+                    "Order: the job, then the 9 year old, then the happy ending.",
+                ),
+                "pass_score": 70,
+                "quiz": {
+                    "type": "order",
+                    "prompt": "Put these prompt parts in the order you would give them.",
+                    "choices": [
+                        {"id": "good", "text": "What good looks like: a happy ending, in 6 sentences.", "misconception": ""},
+                        {"id": "job", "text": "The job: write a story about a dog who is afraid of rain.", "misconception": ""},
+                        {"id": "who", "text": "Who it is for: a 9 year old.", "misconception": ""},
+                    ],
+                    "answer": ["job", "who", "good"],
+                    "explain": False,
+                    "misconception": "Start with the job, then who it is for, then what good looks like.",
+                },
+            },
+            {
+                "kind": "teach_back",
+                "objective": "Teach the three parts of a super prompt.",
+                "tutor_prompt": "Teach me the three parts of a super prompt, in your own words.",
+                "rubric": "Job, audience, and what good looks like.",
+                "pass_criteria": "Names all three parts.",
+                "rubric_rows": _rows(
+                    ("job", "The job is what you want made.", 34),
+                    ("audience", "The audience is who it is for.", 33),
+                    ("good", "What good looks like is how you will know it worked.", 33),
+                ),
+                "hint_ladder": _hints(
+                    "What are you asking the bot to make?",
+                    "Three parts: the job, who reads it, and what good looks like.",
+                    "Job, audience, and a finish line you can check.",
+                ),
+                "pass_score": 70,
+            },
+        ],
+    },
+]
+
+SHIFTS_PREAMBLE = (
+    "You are a patient math tutor for a student who is about 15 to 17. "
+    "Use precise language and short steps. This lesson is function shifts, not elementary arithmetic."
+)
+
+SHIFTS_TOPICS = [
+    {
+        "title": "Shifts of a function",
+        "learning_goal": (
+            "Adding a number outside the function shifts the graph vertically. "
+            "A change inside the parentheses shifts the graph horizontally the other way."
+        ),
+        "tutor_instructions": (
+            "Do not assign this to a younger student. The multiple choice grades itself. "
+            "Use the stored misconception when a choice is wrong. Do not regrade the tap."
+        ),
+        "checkpoints": [
+            {
+                "kind": "discovery",
+                "objective": "Describe a vertical shift.",
+                "tutor_prompt": (
+                    "The graph of y = f(x) is a parabola opening up with its vertex at the origin. "
+                    "What happens to the graph when the equation becomes y = f(x) + 3?"
+                ),
+                "rubric": "The graph moves up 3.",
+                "pass_criteria": "Says the graph shifts up by 3.",
+                "rubric_rows": _rows(
+                    ("direction", "Says the graph moves up.", 50),
+                    ("amount", "Says the shift is 3 units.", 50),
+                ),
+                "hint_ladder": _hints(
+                    "Does the +3 change the input or the output?",
+                    "A number added outside the function moves every output by that amount.",
+                    "y = f(x) + 3 shifts the graph up 3.",
+                ),
+                "pass_score": 70,
+            },
+            {
+                "kind": "quiz",
+                "objective": "Read a horizontal shift from a point.",
+                "tutor_prompt": "A point on y = f(x) is (2, 5). Decide where it goes on y = f(x - 4).",
+                "rubric": "(6, 5). A change inside the parentheses moves the input the other way.",
+                "pass_criteria": "Chooses (6, 5).",
+                "rubric_rows": _rows(
+                    ("point", "The image of (2, 5) is (6, 5).", 70),
+                    ("why", "The explanation says x - 4 shifts the graph right by 4.", 30),
+                ),
+                "hint_ladder": _hints(
+                    "Is the 4 inside the parentheses or outside the function?",
+                    "Inside the parentheses, the graph moves the opposite direction of the sign.",
+                    "f(x - 4) shifts right 4, so (2, 5) goes to (6, 5).",
+                ),
+                "pass_score": 70,
+                "quiz": {
+                    "type": "single",
+                    "prompt": "The graph of y = f(x) has a point at (2, 5). Where does that point go on y = f(x - 4)?",
+                    "choices": [
+                        {"id": "right", "text": "(6, 5)", "misconception": ""},
+                        {
+                            "id": "down",
+                            "text": "(2, 1)",
+                            "misconception": "That subtracts 4 from the output. A change inside the parentheses moves the input, not the height.",
+                        },
+                        {
+                            "id": "left",
+                            "text": "(-2, 5)",
+                            "misconception": "The graph shifts the opposite direction of the sign inside. x - 4 moves right, not left.",
+                        },
+                        {
+                            "id": "up",
+                            "text": "(2, 9)",
+                            "misconception": "Adding outside the function changes height. Here the 4 is inside.",
+                        },
+                    ],
+                    "answer": "right",
+                    "explain": True,
+                    "misconception": "Look at whether the 4 changes the input or the output.",
+                },
+            },
+            {
+                "kind": "teach_back",
+                "objective": "Explain the direction of an inside shift.",
+                "tutor_prompt": "Explain why y = f(x - 4) shifts the graph to the right even though the sign looks negative.",
+                "rubric": "The same output now happens at a larger input, so the graph moves right.",
+                "pass_criteria": "Explains that the input must be 4 larger to match the old output.",
+                "rubric_rows": _rows(
+                    ("input", "Says the input has to be 4 larger to get the old output.", 60),
+                    ("direction", "Says that is a shift to the right.", 40),
+                ),
+                "hint_ladder": _hints(
+                    "What x makes (x - 4) equal the old input?",
+                    "To get the output that used to happen at 2, x - 4 must be 2, so x is 6.",
+                    "The graph moves right because each output is delayed until a larger input.",
+                ),
+                "pass_score": 70,
+            },
+        ],
+    },
+]
+
 LESSONS = [
     {
         "slug": "fractions",
@@ -269,6 +526,9 @@ LESSONS = [
         "preamble": PREAMBLE,
         "topics": TOPICS,
         "activate_if_none": True,
+        "age_min": 8,
+        "age_max": 12,
+        "rewrite_if_unused": True,
     },
     {
         "slug": "reading",
@@ -276,6 +536,9 @@ LESSONS = [
         "preamble": READING_PREAMBLE,
         "topics": READING_TOPICS,
         "activate_if_none": False,
+        "age_min": 8,
+        "age_max": None,
+        "rewrite_if_unused": False,
     },
     {
         "slug": "science",
@@ -283,24 +546,35 @@ LESSONS = [
         "preamble": SCIENCE_PREAMBLE,
         "topics": SCIENCE_TOPICS,
         "activate_if_none": False,
+        "age_min": 8,
+        "age_max": None,
+        "rewrite_if_unused": False,
+    },
+    {
+        "slug": "super-prompts",
+        "title": "Super prompts",
+        "preamble": SUPER_PREAMBLE,
+        "topics": SUPER_TOPICS,
+        "activate_if_none": False,
+        "age_min": 9,
+        "age_max": 11,
+        "rewrite_if_unused": False,
+    },
+    {
+        "slug": "function-shifts",
+        "title": "Function shifts",
+        "preamble": SHIFTS_PREAMBLE,
+        "topics": SHIFTS_TOPICS,
+        "activate_if_none": False,
+        "age_min": 15,
+        "age_max": 17,
+        "rewrite_if_unused": False,
     },
 ]
 
 
-def _insert_plan(db: Session, spec: dict) -> bool:
-    existing = db.scalar(select(LessonPlan).where(LessonPlan.slug == spec["slug"]))
-    if existing is not None:
-        return False
-    already_active = db.scalar(select(LessonPlan.id).where(LessonPlan.is_active.is_(True)))
-    plan = LessonPlan(
-        slug=spec["slug"],
-        title=spec["title"],
-        preamble=spec["preamble"],
-        is_active=bool(spec["activate_if_none"]) and already_active is None,
-    )
-    db.add(plan)
-    db.flush()
-    for topic_index, topic_spec in enumerate(spec["topics"], start=1):
+def _add_topics(db: Session, plan: LessonPlan, topics: list[dict]) -> None:
+    for topic_index, topic_spec in enumerate(topics, start=1):
         topic = Topic(
             lesson_plan_id=plan.id,
             title=topic_spec["title"],
@@ -316,12 +590,65 @@ def _insert_plan(db: Session, spec: dict) -> bool:
                     topic_id=topic.id,
                     kind=checkpoint_spec["kind"],
                     tutor_prompt=checkpoint_spec["tutor_prompt"],
-                    rubric=checkpoint_spec["rubric"] or None,
-                    pass_criteria=checkpoint_spec["pass_criteria"] or None,
+                    rubric=checkpoint_spec.get("rubric") or None,
+                    pass_criteria=checkpoint_spec.get("pass_criteria") or None,
+                    objective=checkpoint_spec.get("objective"),
+                    rubric_rows=checkpoint_spec.get("rubric_rows") or [],
+                    hint_ladder=checkpoint_spec.get("hint_ladder")
+                    or {"nudge": "", "analogy": "", "scaffold": ""},
+                    pass_score=checkpoint_spec.get("pass_score", 70),
+                    quiz=checkpoint_spec.get("quiz"),
                     position=checkpoint_index,
                 )
             )
-    return True
+
+
+def _plan_in_use(db: Session, plan: LessonPlan) -> bool:
+    count = db.scalar(
+        select(func.count()).select_from(TutorSession).where(TutorSession.lesson_plan_id == plan.id)
+    )
+    return bool(count)
+
+
+def _needs_block_rewrite(plan: LessonPlan) -> bool:
+    kinds = {checkpoint.kind for topic in plan.topics for checkpoint in topic.checkpoints}
+    return "discovery" not in kinds and "teach_back" not in kinds
+
+
+def _fill_ages(plan: LessonPlan, spec: dict) -> None:
+    if plan.age_min is None and spec.get("age_min") is not None:
+        plan.age_min = spec["age_min"]
+        plan.age_max = spec.get("age_max")
+
+
+def _insert_plan(db: Session, spec: dict) -> str:
+    existing = db.scalar(select(LessonPlan).where(LessonPlan.slug == spec["slug"]))
+    if existing is not None:
+        if spec.get("rewrite_if_unused") and _needs_block_rewrite(existing) and not _plan_in_use(db, existing):
+            for topic in list(existing.topics):
+                db.delete(topic)
+            db.flush()
+            existing.title = spec["title"]
+            existing.preamble = spec["preamble"]
+            existing.age_min = spec.get("age_min")
+            existing.age_max = spec.get("age_max")
+            _add_topics(db, existing, spec["topics"])
+            return "rewritten"
+        _fill_ages(existing, spec)
+        return "kept"
+    already_active = db.scalar(select(LessonPlan.id).where(LessonPlan.is_active.is_(True)))
+    plan = LessonPlan(
+        slug=spec["slug"],
+        title=spec["title"],
+        preamble=spec["preamble"],
+        age_min=spec.get("age_min"),
+        age_max=spec.get("age_max"),
+        is_active=bool(spec["activate_if_none"]) and already_active is None,
+    )
+    db.add(plan)
+    db.flush()
+    _add_topics(db, plan, spec["topics"])
+    return "created"
 
 
 def seed(db: Session) -> dict[str, int]:
@@ -329,13 +656,19 @@ def seed(db: Session) -> dict[str, int]:
     for spec in STUDENTS:
         exists = db.scalar(select(Student).where(Student.slug == spec["slug"]))
         if exists is None:
-            db.add(Student(**spec))
+            db.add(Student(slug=spec["slug"], display_name=spec["display_name"], age=spec["age"]))
             created_students += 1
+        elif exists.age is None:
+            exists.age = spec["age"]
     db.flush()
 
-    created_plans = sum(1 for spec in LESSONS if _insert_plan(db, spec))
+    outcomes = [_insert_plan(db, spec) for spec in LESSONS]
     db.commit()
-    return {"students_created": created_students, "lesson_plans_created": created_plans}
+    return {
+        "students_created": created_students,
+        "lesson_plans_created": outcomes.count("created"),
+        "lesson_plans_rewritten": outcomes.count("rewritten"),
+    }
 
 
 def main() -> None:
@@ -345,9 +678,8 @@ def main() -> None:
     finally:
         db.close()
     print(
-        "students_created={students_created} lesson_plans_created={lesson_plans_created}".format(
-            **result
-        )
+        "students_created={students_created} lesson_plans_created={lesson_plans_created} "
+        "lesson_plans_rewritten={lesson_plans_rewritten}".format(**result)
     )
 
 

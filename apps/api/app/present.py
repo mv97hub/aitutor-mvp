@@ -1,33 +1,45 @@
 from __future__ import annotations
 
-from app.flow import checkpoint_state
+from app.flow import checkpoint_state, failed_attempts
 from app.models import Checkpoint, CheckpointResult, LessonPlan, Message, Session as TutorSession, Topic
 from app.queries import flat_checkpoints, locate, latest_result
 from app.schemas import (
     AdminCheckpoint,
     AdminTopic,
+    BlockStep,
     BoardCheckpoint,
     BoardOut,
     BoardResult,
     BoardTopic,
     CheckpointContext,
     ContextOut,
+    CurrentBlock,
     CurrentStepOut,
     LessonPlanOut,
     LessonPlanSummary,
     MessageOut,
     OutlineCheckpoint,
     OutlineTopic,
+    QuizChoiceOut,
+    QuizOut,
     ResultOut,
+    RubricRowOut,
     SessionAdminOut,
     SessionSummary,
     StudentOut,
     TopicContext,
+    WidgetGradeOut,
 )
+from app.widgets import hint_text, hint_tier_for, public_quiz
 
 
 def student_out(student) -> StudentOut:
-    return StudentOut(id=student.id, slug=student.slug, display_name=student.display_name)
+    return StudentOut(
+        id=student.id,
+        slug=student.slug,
+        display_name=student.display_name,
+        age=student.age,
+    )
 
 
 def message_out(message: Message) -> MessageOut:
@@ -48,6 +60,11 @@ def admin_checkpoint(checkpoint: Checkpoint) -> AdminCheckpoint:
         tutor_prompt=checkpoint.tutor_prompt,
         rubric=checkpoint.rubric,
         pass_criteria=checkpoint.pass_criteria,
+        objective=checkpoint.objective,
+        rubric_rows=list(checkpoint.rubric_rows or []),
+        hint_ladder=dict(checkpoint.hint_ladder or {}),
+        pass_score=checkpoint.pass_score or 70,
+        quiz=checkpoint.quiz if isinstance(checkpoint.quiz, dict) else None,
     )
 
 
@@ -72,6 +89,8 @@ def lesson_plan_out(plan: LessonPlan) -> LessonPlanOut:
         title=plan.title,
         preamble=plan.preamble,
         is_active=plan.is_active,
+        age_min=plan.age_min,
+        age_max=plan.age_max,
         created_at=plan.created_at,
         updated_at=plan.updated_at,
         topics=[
@@ -89,6 +108,8 @@ def lesson_summary(plan: LessonPlan) -> LessonPlanSummary:
         is_active=plan.is_active,
         updated_at=plan.updated_at,
         topic_count=len(plan.topics),
+        age_min=plan.age_min,
+        age_max=plan.age_max,
     )
 
 
@@ -125,6 +146,7 @@ def board(tutor_session: TutorSession) -> BoardOut:
                 checkpoints=checkpoints,
             )
         )
+    steps, current = _board_blocks(tutor_session)
     return BoardOut(
         id=tutor_session.id,
         status=tutor_session.status,
@@ -137,7 +159,82 @@ def board(tutor_session: TutorSession) -> BoardOut:
         current_checkpoint_id=tutor_session.current_checkpoint_id,
         topics=topics,
         messages=[message_out(message) for message in tutor_session.messages],
+        steps=steps,
+        current_block=current,
     )
+
+
+def _rubric_rows(checkpoint: Checkpoint, met_ids: set[str]) -> list[RubricRowOut]:
+    rows: list[RubricRowOut] = []
+    for row in checkpoint.rubric_rows or []:
+        if not isinstance(row, dict):
+            continue
+        row_id = str(row.get("id") or "")
+        if not row_id:
+            continue
+        rows.append(
+            RubricRowOut(
+                id=row_id,
+                text=str(row.get("text") or ""),
+                weight=int(row.get("weight") or 0),
+                met=row_id in met_ids,
+            )
+        )
+    return rows
+
+
+def _quiz_out(quiz: dict | None) -> QuizOut | None:
+    public = public_quiz(quiz)
+    if public is None:
+        return None
+    return QuizOut(
+        type=public["type"],
+        prompt=public["prompt"],
+        choices=[QuizChoiceOut(id=item["id"], text=item["text"]) for item in public["choices"]],
+        explain=public["explain"],
+    )
+
+
+def _board_blocks(tutor_session: TutorSession) -> tuple[list[BlockStep], CurrentBlock | None]:
+    rows = flat_checkpoints(tutor_session.lesson_plan)
+    lesson_complete = tutor_session.current_checkpoint_id is None
+    seen_current = False
+    steps: list[BlockStep] = []
+    current: CurrentBlock | None = None
+    for index, (topic, checkpoint) in enumerate(rows, start=1):
+        result = latest_result(tutor_session, checkpoint.id)
+        state = checkpoint_state(
+            checkpoint,
+            tutor_session.current_checkpoint_id,
+            result,
+            seen_current,
+            lesson_complete,
+        )
+        if checkpoint.id == tutor_session.current_checkpoint_id:
+            seen_current = True
+            tier = hint_tier_for(failed_attempts(tutor_session, checkpoint.id))
+            met = set(result.rubric_met or []) if result is not None else set()
+            current = CurrentBlock(
+                id=checkpoint.id,
+                kind=checkpoint.kind,
+                title=topic.title,
+                objective=(checkpoint.objective or "").strip(),
+                tutor_prompt=checkpoint.tutor_prompt,
+                rubric=_rubric_rows(checkpoint, met),
+                hint_tier=tier,  # type: ignore[arg-type]
+                hint_text=hint_text(checkpoint.hint_ladder, tier),
+                quiz=_quiz_out(checkpoint.quiz if isinstance(checkpoint.quiz, dict) else None),
+            )
+        steps.append(
+            BlockStep(
+                id=checkpoint.id,
+                position=index,
+                kind=checkpoint.kind,
+                title=topic.title,
+                state=state,
+            )
+        )
+    return steps, current
 
 
 def result_out(result: CheckpointResult) -> ResultOut:
@@ -152,6 +249,8 @@ def result_out(result: CheckpointResult) -> ResultOut:
         score=result.score,
         passed=result.passed,
         feedback=result.feedback,
+        misconception=result.misconception,
+        hint_tier=result.hint_tier,
         created_at=result.created_at,
     )
 
@@ -222,6 +321,19 @@ def context_out(tutor_session: TutorSession) -> ContextOut:
             learning_goal=topic.learning_goal,
             tutor_instructions=topic.tutor_instructions,
         )
+        result = latest_result(tutor_session, checkpoint.id)
+        tier = hint_tier_for(failed_attempts(tutor_session, checkpoint.id))
+        grade = None
+        if result is not None and isinstance(result.choice, dict):
+            ids = [str(item) for item in result.choice.get("ids") or []]
+            grade = WidgetGradeOut(
+                correct=result.passed,
+                score=result.score,
+                passed=result.passed,
+                misconception=result.misconception,
+                choice_ids=ids,
+                explanation=str(result.choice.get("explanation") or ""),
+            )
         current_checkpoint = CheckpointContext(
             kind=checkpoint.kind,
             position=checkpoint.position,
@@ -229,6 +341,13 @@ def context_out(tutor_session: TutorSession) -> ContextOut:
             tutor_prompt=checkpoint.tutor_prompt,
             rubric=checkpoint.rubric,
             pass_criteria=checkpoint.pass_criteria,
+            objective=checkpoint.objective,
+            rubric_rows=list(checkpoint.rubric_rows or []),
+            hint_tier=tier,
+            hint_text=hint_text(checkpoint.hint_ladder, tier),
+            pass_score=checkpoint.pass_score or 70,
+            quiz=checkpoint.quiz if isinstance(checkpoint.quiz, dict) else None,
+            widget_grade=grade,
         )
     return ContextOut(
         session_id=tutor_session.id,

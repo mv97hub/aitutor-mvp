@@ -348,7 +348,94 @@ h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1.05; }
 }
 
 .stage > .typing,
-.stage > .banner { flex: 0 0 auto; }
+.stage > .banner,
+.stage > .block-map { flex: 0 0 auto; }
+
+.stage > .widget,
+.stage > .rubric-strip {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.stage > .widget { max-height: 38%; }
+.stage > .rubric-strip { max-height: 24%; }
+.widget textarea { min-height: 56px; }
+
+.block-map {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+}
+
+.block-pip {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 140px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: white;
+}
+
+.block-pip strong { display: block; font-size: 0.92rem; }
+.block-pip .quiet { font-size: 0.78rem; }
+.block-pip.is-current { border-color: var(--teal); }
+.block-pip.is-passed { background: var(--good-wash); }
+.block-pip.is-failed { background: var(--miss-wash); }
+.block-pip.is-upcoming { opacity: 0.62; }
+.block-index {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--paper);
+  font-weight: 700;
+}
+
+.widget {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: white;
+}
+
+.widget-prompt { margin: 6px 0 10px; }
+.choice-list, .order-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.widget-choice, .order-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.widget-choice.is-on { border-color: var(--teal); background: #f3fbfa; }
+.widget-choice input { width: auto; }
+
+.rubric-strip { display: grid; gap: 6px; margin-top: 8px; }
+.rubric-chip, .hint-badge {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--paper);
+  font-size: 0.92rem;
+}
+.rubric-chip span, .hint-badge span { display: block; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.rubric-chip.is-met { background: var(--good-wash); }
+.hint-badge { background: #fff6e8; }
+
+.top-links { display: flex; gap: 12px; }
+.age-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.rubric-edit-row, .choice-edit { display: grid; grid-template-columns: 1fr 90px auto; gap: 8px; margin-top: 8px; }
+.choice-edit { grid-template-columns: 72px 1fr 1fr; }
 
 .composer input {
   flex: 1;
