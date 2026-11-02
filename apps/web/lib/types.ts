@@ -23,6 +23,7 @@ export type BoardTopic = {
   id: string;
   title: string;
   position: number;
+  learning_goal: string;
   checkpoints: BoardCheckpoint[];
 };
 

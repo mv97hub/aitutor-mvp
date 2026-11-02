@@ -74,6 +74,7 @@ class BoardTopic(BaseModel):
     id: UUID
     title: str
     position: int
+    learning_goal: str
     checkpoints: list[BoardCheckpoint]
 
 

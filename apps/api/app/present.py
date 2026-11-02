@@ -121,6 +121,7 @@ def board(tutor_session: TutorSession) -> BoardOut:
                 id=topic.id,
                 title=topic.title,
                 position=topic.position,
+                learning_goal=topic.learning_goal,
                 checkpoints=checkpoints,
             )
         )
