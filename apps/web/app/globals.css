@@ -1207,6 +1207,174 @@ body:has(.ds-shell) {
 .ds-shell .ghost:hover { background: rgba(38, 49, 72, 0.06); }
 .ds-shell textarea { min-height: 0; }
 
+a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
+
+.ds-desk .ds-foot { display: grid; gap: 2px; }
+
+.ds-work {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: #fff;
+}
+
+.ds-row {
+  display: grid;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: rgb(15, 17, 21);
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ds-row strong { font-weight: 500; }
+.ds-row small { color: rgb(129, 133, 140); font-size: 12px; line-height: 18px; }
+.ds-row:hover,
+.ds-row.is-on { background: rgba(38, 49, 72, 0.06); }
+
+.ds-desk .ds-side label {
+  margin: 0 8px 8px;
+  color: rgb(129, 133, 140);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.ds-desk .ds-side select {
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
+.ds-desk .editor,
+.ds-desk .transcript-view {
+  margin: 0;
+  max-width: none;
+  padding: 24px 28px 48px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+
+.ds-desk .editor h2,
+.ds-desk .transcript-view h2 {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.ds-desk .editor h3,
+.ds-desk .transcript-view h3 {
+  margin: 20px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.ds-desk label {
+  color: rgb(15, 17, 21);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.ds-desk input[type="text"],
+.ds-desk input[type="number"],
+.ds-desk textarea,
+.ds-desk select {
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  color: rgb(15, 17, 21);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
+.ds-desk textarea { min-height: 88px; resize: vertical; }
+
+.ds-desk .help,
+.ds-desk .meta,
+.ds-desk .quiet,
+.ds-desk .choice small,
+.ds-desk .session-choice small {
+  color: rgb(129, 133, 140);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.ds-desk .note { color: rgb(15, 17, 21); font-size: 13px; }
+
+.ds-desk .pill {
+  margin-left: 8px;
+  background: rgb(65, 118, 230);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 16px;
+  text-transform: none;
+}
+
+.ds-desk .topic-editor,
+.ds-desk .checkpoint-editor { border-color: rgba(0, 0, 0, 0.12); }
+
+.ds-desk .checkpoint-editor {
+  border-style: solid;
+  border-width: 0.5px;
+  border-radius: 12px;
+  background: rgb(249, 250, 251);
+}
+
+.ds-desk .danger {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgb(236, 19, 19);
+  font-size: 13px;
+}
+
+.ds-desk .danger:hover { background: rgb(254, 242, 242); }
+
+.ds-desk .banner {
+  margin: 16px 28px 0;
+  border-radius: 12px;
+  background: rgb(254, 242, 242);
+  color: rgb(236, 19, 19);
+}
+
+.ds-desk .score-list li,
+.ds-desk .transcript-list li {
+  background: transparent;
+  border-radius: 12px;
+}
+
+.ds-desk .score-list li { background: rgb(249, 250, 251); }
+
+.ds-desk .transcript-list .user {
+  background: rgb(237, 243, 254);
+  color: rgb(15, 17, 21);
+}
+
+.ds-desk .prompt-icon:hover { background: rgba(38, 49, 72, 0.06); color: rgb(15, 17, 21); }
+
+.ds-desk .prompt-dialog,
+.ds-desk .prompt-dialog header h2 {
+  color: rgb(15, 17, 21);
+  font-family: inherit;
+}
+
+.ds-desk .prompt-dialog header p,
+.ds-desk .prompt-messages li strong { color: rgb(129, 133, 140); }
+
 @media (max-width: 860px) {
   .ds-shell {
     grid-template-columns: 1fr;

@@ -98,17 +98,11 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
   }, [sessionId]);
 
   return (
-    <main className="desk">
-      <aside className="side">
-        <div className="side-head">
-          <p className="eyebrow">Transcripts</p>
-          <span className="top-links">
-            <Link className="top-link" href="/admin">Edit lessons</Link>
-            <Link className="top-link" href="/">Kid session</Link>
-          </span>
+    <main className="ds-shell ds-desk">
+      <aside className="ds-side">
+        <div className="ds-logo">
+          <span className="ds-logo-name">View chats</span>
         </div>
-        <h1>View chats</h1>
-        <p className="lede">Filter by student, open a class, and read the messages and checkpoint scores.</p>
         <label>
           Student
           <select value={studentFilter} onChange={(event) => setStudentFilter(event.target.value)}>
@@ -118,25 +112,30 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
             ))}
           </select>
         </label>
-        <div className="stack">
-          {sessions.length === 0 ? <p className="help">No classes yet. Open a learner on the kid page.</p> : null}
+        <ul className="ds-list" aria-label="Classes">
+          {sessions.length === 0 ? <li className="ds-quiet">No classes yet. Open a learner on the kid page.</li> : null}
           {sessions.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`session-choice ${item.id === sessionId ? "is-on" : ""}`}
-              onClick={() => setSessionId(item.id)}
-            >
-              <strong>{item.student_display_name}</strong>
-              <small style={{ display: "block" }}>
-                {item.lesson_title} · {item.status.replace("_", " ")} · {when(item.updated_at)}
-              </small>
-              <small>{item.message_count} messages · {item.result_count} scores</small>
-            </button>
+            <li key={item.id}>
+              <button
+                type="button"
+                className={`ds-row ${item.id === sessionId ? "is-on" : ""}`}
+                onClick={() => setSessionId(item.id)}
+              >
+                <strong>{item.student_display_name}</strong>
+                <small>
+                  {item.lesson_title} · {item.status.replace("_", " ")} · {when(item.updated_at)}
+                </small>
+                <small>{item.message_count} messages · {item.result_count} scores</small>
+              </button>
+            </li>
           ))}
+        </ul>
+        <div className="ds-foot">
+          <Link className="ds-settings" href="/admin">Edit lessons</Link>
+          <Link className="ds-settings" href="/">Kid session</Link>
         </div>
       </aside>
-      <section>
+      <section className="ds-work">
         {error ? (
           <div className="banner" role="alert" style={{ margin: 18 }}>
             <p>{error}</p>

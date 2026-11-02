@@ -167,6 +167,7 @@ function ChatPanel({
   const [input, setInput] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
+  const awaitingReply = useRef(false);
   const busy = status === "submitted" || status === "streaming";
 
   function growDraft(element: HTMLTextAreaElement) {
@@ -191,6 +192,20 @@ function ChatPanel({
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [messages, status, block?.id]);
+
+  useEffect(() => {
+    if (busy) {
+      awaitingReply.current = true;
+      return;
+    }
+    if (!awaitingReply.current) return;
+    awaitingReply.current = false;
+    const field = draftRef.current;
+    if (!field || field.disabled) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== field && isTyping(active)) return;
+    field.focus({ preventScroll: true });
+  }, [busy]);
 
   return (
     <>
@@ -274,6 +289,11 @@ function ChatPanel({
       </form>
     </>
   );
+}
+
+function isTyping(element: HTMLElement) {
+  if (element.isContentEditable) return true;
+  return element.tagName === "INPUT" || element.tagName === "TEXTAREA" || element.tagName === "SELECT";
 }
 
 function startablePlans(plans: LessonPlanSummary[], student: Student | null): LessonPlanSummary[] {
