@@ -80,6 +80,8 @@ class Layer1Beat:
     pass_score: int
     gate_cleared: bool
     finished: bool
+    quest_objective: str = ""
+    beat_objectives: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

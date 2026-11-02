@@ -8,8 +8,8 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.engine.assemble import hint_tier_for
-from app.engine.defaults import age_band_for, profile_for_age
+from app.engine.assemble import hint_tier_for, struggle_limit
+from app.engine.defaults import profile_for_age
 from app.models import Beat, BeatResult, Course, Message, ModelPrompt, Quest, Session as TutorSession, Student
 from app.prompt_loader import PASS_SCORE
 from app.queries import latest_result, locate_beat, next_position, ordered_beats
@@ -79,18 +79,6 @@ def apply_student_profile(student: Student, *, provided: set[str]) -> None:
         student.tutor_pacing = profile.pacing
 
 
-def age_block_reason(student: Student, course: Course) -> str | None:
-    band = age_band_for(student.age)
-    if band == course.age_band:
-        return None
-    who = (
-        f"{student.display_name} is {student.age}"
-        if student.age is not None
-        else f"{student.display_name} has no age on file"
-    )
-    return f"This course is for ages {course.age_band}. {who}."
-
-
 def open_session(db: Session, student_id: uuid.UUID, quest_id: uuid.UUID, fresh: bool) -> TutorSession:
     student = db.get(Student, student_id)
     if student is None:
@@ -98,9 +86,6 @@ def open_session(db: Session, student_id: uuid.UUID, quest_id: uuid.UUID, fresh:
     from app.queries import load_quest
 
     quest = load_quest(db, quest_id)
-    reason = age_block_reason(student, quest.unit.course)
-    if reason is not None:
-        raise HTTPException(status_code=400, detail=reason)
     if not fresh:
         existing = db.scalar(
             select(TutorSession)
@@ -233,12 +218,12 @@ def record_result(
     }
 
 
-def advance(db: Session, tutor_session: TutorSession) -> dict:
+def advance(db: Session, tutor_session: TutorSession, *, allow_unpassed: bool = False) -> dict:
     beat = locate_beat(tutor_session.quest, tutor_session.current_beat_id)
     if tutor_session.status == "completed" or beat is None:
         return {"ok": False, "reason": "This quest is already finished."}
     result = latest_result(tutor_session, beat.id)
-    if result is None or not result.passed:
+    if result is None or (not result.passed and not allow_unpassed):
         return {"ok": False, "reason": "This beat needs a passing result before moving on."}
     beats = ordered_beats(tutor_session.quest)
     index = next(i for i, item in enumerate(beats) if item.id == beat.id)
@@ -323,6 +308,12 @@ def grade_widget(
     }
 
 
+def _window_closed(tutor_session: TutorSession, beat: Beat) -> bool:
+    return failed_attempts(tutor_session, beat.id) >= struggle_limit(
+        tutor_session.student.tutor_struggle_window
+    )
+
+
 def _weights(beat: Beat) -> dict[str, int]:
     weights: dict[str, int] = {}
     for row in beat.rubric or []:
@@ -346,18 +337,21 @@ def apply_turn_score(
     latest = latest_result(tutor_session, beat.id)
     quiz = beat.widget if isinstance(beat.widget, dict) else None
     note = blank_to_none(misconception)
+    reveal = _window_closed(tutor_session, beat)
     if quiz is not None and latest is not None and isinstance(latest.choice, dict):
         latest.rubric_met = met
         if not latest.misconception and note and not latest.passed:
             latest.misconception = note
         tutor_session.updated_at = now()
         db.flush()
-        should_advance = bool(advance_flag and latest.passed) or (
-            latest.passed and not quiz.get("explain")
+        should_advance = (
+            bool(advance_flag and latest.passed)
+            or (latest.passed and not quiz.get("explain"))
+            or bool(advance_flag and reveal)
         )
         advanced = False
         if should_advance:
-            moved = advance(db, tutor_session)
+            moved = advance(db, tutor_session, allow_unpassed=bool(reveal and not latest.passed))
             advanced = bool(moved.get("ok"))
         return {
             "ok": True,
@@ -384,6 +378,8 @@ def apply_turn_score(
     passed = score >= PASS_SCORE
     tier = hint_tier_for(failed_attempts(tutor_session, beat.id))
     feedback = "That meets this beat." if passed else "Not yet. Use the hint and try again."
+    if reveal and not passed:
+        feedback = "The struggle window is over. A worked answer can move this beat on."
     recorded = record_result(
         db,
         tutor_session,
@@ -395,8 +391,8 @@ def apply_turn_score(
         hint_tier=tier,
     )
     advanced = False
-    if advance_flag and passed:
-        moved = advance(db, tutor_session)
+    if advance_flag and (passed or reveal):
+        moved = advance(db, tutor_session, allow_unpassed=bool(reveal and not passed))
         advanced = bool(moved.get("ok"))
     return {**recorded, "advanced": advanced, "graded_by": "model"}
 

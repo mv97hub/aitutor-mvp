@@ -71,12 +71,12 @@ npm run dev --workspace web
 
 ## Try a quest
 
-1. Open `/` and choose Storm. On the right, open a class notebook or press + for a new class. The course list is filtered to Storm's age band (9–11), so Ancient Rome is offered and AP Macroeconomics is not. Wolverine (15–17) sees Macroeconomics and not Rome. Pick a course, then a quest. Prerequisite codes are shown and do not lock the quest.
-2. Inside a class, the stepper shows the four beats: mystery hook, interactive toy, diagnostic gate, and Feynman flip. A choice widget sits under the tutor prompt when the beat has one. A wrong tap stores that choice's misconception before the model replies. The model writes the reply and grades a written explanation. It does not grade the taps.
+1. Open `/` and choose Storm. On the right, open a class notebook or press + for a new class. Every course is in the dropdown for every age, so Storm can start Ancient Rome, Euclidean geometry, or AP Macroeconomics. The course still stores its age band. Pick a course, then a quest. Prerequisite codes are shown and do not lock the quest. On a narrow screen, the class list sits behind a Classes pulldown.
+2. Inside a class, the chat and the composer fill the page. The four beat boxes and the score strip are not shown. A choice widget sits in the chat when the beat has one. A wrong tap stores that choice's misconception before the model replies. The model writes the reply and grades a written explanation. It does not grade the taps. The opening reply summarizes what this quest will teach. After the struggle window, the tutor states a worked answer and the quest can move to the next beat.
 3. Open `/viewchats`, filter to Storm, and open the class. The transcript and beat scores are the rows FastAPI stored. The prompt button on a turn opens the system prompt and the messages that turn sent to the model. `/admin` is the course tree and does not list transcripts.
 4. On `/admin`, expand a course to its units and quests. Open a quest to edit the four beats, rubric, hints, and widget. Import and export move one Tier 1 course, including units, quests, and beats. Uploading a file replaces that course code. An invalid file is rejected with the field that failed.
 
-Add child has a Student group and a Tutor agent settings group. Both start from the age band and can be changed before save. The chat route asks FastAPI for the prompt bundle on every turn, then asks the model for a turn score: rubric rows met, a misconception if any, the hint tier, and the tutor reply. Choice widgets are graded by FastAPI first. A beat does not advance until it has a passing result.
+Add child asks for a name and an age. Reading level, modality, interests, and the tutor agent settings are edited from Settings after the child is selected, and they save on that student. The chat route asks FastAPI for the prompt bundle on every turn, then asks the model for a turn score: rubric rows met, a misconception if any, the hint tier, and the tutor reply. Choice widgets are graded by FastAPI first. A beat advances on a passing result, or after the struggle window when the tutor sets advance so the student is not stuck.
 
 ## Render
 
