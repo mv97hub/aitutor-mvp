@@ -12,7 +12,7 @@ from app.engine.assemble import hint_tier_for, struggle_limit
 from app.engine.defaults import profile_for_age
 from app.models import Beat, BeatResult, Course, Message, ModelPrompt, Quest, Session as TutorSession, Student
 from app.prompt_loader import PASS_SCORE
-from app.queries import latest_result, locate_beat, next_position, ordered_beats
+from app.queries import choice_widget_visible, latest_result, locate_beat, next_position, ordered_beats
 from app.widgets import choice_ids, grade_choice, hint_text
 
 def now() -> datetime:
@@ -381,6 +381,15 @@ def apply_turn_score(
     quiz = beat.widget if isinstance(beat.widget, dict) else None
     note = blank_to_none(misconception)
     reveal = _window_closed(tutor_session, beat)
+    if quiz is not None and not choice_widget_visible(tutor_session, beat):
+        return {
+            "ok": True,
+            "advanced": False,
+            "graded_by": "opening",
+            "passed": False,
+            "score": 0,
+            "feedback": "The opening discussion is still going.",
+        }
     if beat.role == "name":
         recorded = record_result(
             db,

@@ -75,6 +75,45 @@ def latest_result(tutor_session: TutorSession, beat_id: uuid.UUID) -> BeatResult
     return max(matches, key=lambda result: result.seq)
 
 
+def _spoken(tutor_session: TutorSession) -> tuple[int, int]:
+    users = 0
+    assistants = 0
+    for message in tutor_session.messages:
+        text = (message.content or "").strip()
+        if not text:
+            continue
+        if message.role == "user":
+            users += 1
+        elif message.role == "assistant":
+            assistants += 1
+    return users, assistants
+
+
+def opening_exchange_done(tutor_session: TutorSession) -> bool:
+    """Kickoff plus the student's reply, and the tutor's answer to that reply."""
+    users, assistants = _spoken(tutor_session)
+    return users >= 2 and assistants >= 2
+
+
+def choice_widget_visible(tutor_session: TutorSession, beat: Beat) -> bool:
+    """The choice box waits until Try, after Engage and the opening exchange.
+
+    A Show quiz is the last check. It is not the first thing on screen.
+    """
+    quiz = beat.widget if isinstance(beat.widget, dict) else None
+    if not quiz or beat.role == "engage":
+        return False
+    result = latest_result(tutor_session, beat.id)
+    if result is not None and isinstance(result.choice, dict) and result.choice.get("ids"):
+        return True
+    beats = ordered_beats(tutor_session.quest)
+    if beats and beat.id != beats[0].id:
+        return beat.role in {"try", "show"}
+    if beat.role not in {"try", "show"}:
+        return False
+    return opening_exchange_done(tutor_session)
+
+
 def next_position(values: list[int]) -> int:
     return (max(values) if values else 0) + 1
 
