@@ -9,7 +9,16 @@ import { BrandMark } from "@/components/BrandMark";
 import { BlockStepper, ChoiceWidget } from "@/components/LessonBlocks";
 import { api } from "@/lib/api";
 import { KICKOFF } from "@/lib/kickoff";
-import type { Board, CurrentBlock, LessonPlanSummary, SessionSummary, Student, StoredMessage } from "@/lib/types";
+import type {
+  Board,
+  CourseSummary,
+  CurrentBlock,
+  ProfileDefaults,
+  QuestListItem,
+  SessionSummary,
+  Student,
+  StoredMessage,
+} from "@/lib/types";
 
 const greeted = new Set<string>();
 
@@ -61,20 +70,13 @@ function MessageView({ message, studentName }: { message: UIMessage; studentName
         return <p key={key} className="result-card miss">{output.reason}</p>;
       }
       const passed = output.passed === true;
-      const label = output.kind === "quiz" ? "Quiz result" : "Practice result";
       return (
         <p key={key} className={`result-card ${passed ? "pass" : "miss"}`}>
-          {label}: {passed ? "Passed" : "Not yet"}
+          Beat result: {passed ? "Passed" : "Not yet"}
           {output.score != null ? ` · ${output.score}/100` : ""}
           {output.feedback ? <span>{output.feedback}</span> : null}
         </p>
       );
-    }
-    if (part.type === "tool-advance_checkpoint" && part.state === "output-available") {
-      const output = readOutput(part.output);
-      if (output?.ok === false && output.reason) {
-        return <p key={key} className="advance-note">{output.reason}</p>;
-      }
     }
     return null;
   });
@@ -86,25 +88,49 @@ function MessageView({ message, studentName }: { message: UIMessage; studentName
   );
 }
 
-function lessonScore(board: Board) {
-  const scored = board.topics
-    .flatMap((topic) => topic.checkpoints)
-    .filter((checkpoint) => checkpoint.kind === "practice" || checkpoint.kind === "quiz" || checkpoint.kind === "discovery" || checkpoint.kind === "teach_back");
-  const earned = scored.reduce((sum, checkpoint) => sum + (checkpoint.latest_result?.score ?? 0), 0);
-  return { earned, possible: scored.length * 100 };
-}
-
-function planFits(student: Student, plan: LessonPlanSummary) {
-  if (student.age == null) return plan.age_min == null || plan.age_min < 15;
-  if (plan.age_min != null && student.age < plan.age_min) return false;
-  if (plan.age_max != null && student.age > plan.age_max) return false;
-  return true;
+function questScore(board: Board) {
+  const earned = board.beats.reduce((sum, beat) => sum + (beat.latest_result?.score ?? 0), 0);
+  return { earned, possible: board.beats.length * 100 };
 }
 
 function classDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+type ChildDraft = {
+  name: string;
+  age: string;
+  reading_level: string;
+  modality: string;
+  interests: string;
+  tutor_persona: string;
+  tutor_lexicon: string;
+  tutor_metaphors: string;
+  tutor_sidekick: string;
+  tutor_socratic_strictness: string;
+  tutor_struggle_window: string;
+  tutor_anti_spoiler: boolean;
+  tutor_pacing: string;
+};
+
+function blankChild(): ChildDraft {
+  return {
+    name: "",
+    age: "10",
+    reading_level: "",
+    modality: "",
+    interests: "",
+    tutor_persona: "",
+    tutor_lexicon: "",
+    tutor_metaphors: "",
+    tutor_sidekick: "",
+    tutor_socratic_strictness: "balanced",
+    tutor_struggle_window: "minimum",
+    tutor_anti_spoiler: true,
+    tutor_pacing: "short-turns-one-question",
+  };
 }
 
 function SendIcon() {
@@ -297,25 +323,18 @@ function isTyping(element: HTMLElement) {
   return element.tagName === "INPUT" || element.tagName === "TEXTAREA" || element.tagName === "SELECT";
 }
 
-function startablePlans(plans: LessonPlanSummary[], student: Student | null): LessonPlanSummary[] {
-  return plans.filter((plan) => plan.topic_count > 0 && (student == null || planFits(student, plan)));
-}
-
 function childLabel(student: Student) {
   return student.age == null ? student.display_name : `${student.display_name} · age ${student.age}`;
 }
 
 export function KidSession({
   initialStudents,
-  initialPlans,
   initialError,
 }: {
   initialStudents: Student[];
-  initialPlans: LessonPlanSummary[];
   initialError: string | null;
 }) {
   const [students, setStudents] = useState(initialStudents);
-  const [plans, setPlans] = useState(initialPlans);
   const [learner, setLearner] = useState<Student | null>(null);
   const [notebooks, setNotebooks] = useState<SessionSummary[]>([]);
   const [making, setMaking] = useState(false);
@@ -323,12 +342,14 @@ export function KidSession({
   const [board, setBoard] = useState<Board | null>(null);
   const [opening, setOpening] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [draftName, setDraftName] = useState("");
-  const [draftAge, setDraftAge] = useState("");
+  const [child, setChild] = useState<ChildDraft>(blankChild);
   const [savingChild, setSavingChild] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [courses, setCourses] = useState<CourseSummary[]>([]);
+  const [quests, setQuests] = useState<QuestListItem[]>([]);
+  const [courseId, setCourseId] = useState("");
+  const [questId, setQuestId] = useState("");
   const settingsRef = useRef<HTMLDivElement>(null);
-  const choices = startablePlans(plans, learner);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -345,6 +366,72 @@ export function KidSession({
       window.removeEventListener("keydown", onKey);
     };
   }, [settingsOpen]);
+
+  useEffect(() => {
+    if (!adding) return;
+    const age = Number(child.age);
+    if (!Number.isInteger(age) || age < 4 || age > 18) return;
+    let cancelled = false;
+    api<ProfileDefaults>(`/profile-defaults?age=${age}`)
+      .then((profile) => {
+        if (cancelled) return;
+        setChild((current) => ({
+          ...current,
+          reading_level: profile.reading_level,
+          modality: profile.modality,
+          tutor_persona: profile.tutor_persona,
+          tutor_lexicon: profile.tutor_lexicon,
+          tutor_metaphors: profile.tutor_metaphors,
+          tutor_sidekick: profile.tutor_sidekick,
+          tutor_socratic_strictness: profile.tutor_socratic_strictness,
+          tutor_struggle_window: profile.tutor_struggle_window,
+          tutor_anti_spoiler: profile.tutor_anti_spoiler,
+          tutor_pacing: profile.tutor_pacing,
+        }));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [adding, child.age]);
+
+  useEffect(() => {
+    if (!making || !learner) return;
+    let cancelled = false;
+    api<CourseSummary[]>(`/courses?age_band=${encodeURIComponent(learner.age_band)}`)
+      .then((rows) => {
+        if (cancelled) return;
+        setCourses(rows);
+        setCourseId(rows[0]?.id ?? "");
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load courses.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [making, learner]);
+
+  useEffect(() => {
+    if (!courseId) {
+      setQuests([]);
+      setQuestId("");
+      return;
+    }
+    let cancelled = false;
+    api<QuestListItem[]>(`/courses/${courseId}/quests`)
+      .then((rows) => {
+        if (cancelled) return;
+        setQuests(rows);
+        setQuestId(rows[0]?.id ?? "");
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load quests.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [courseId]);
 
   async function loadNotebooks(studentId: string) {
     const rows = await api<SessionSummary[]>(`/sessions?student_id=${studentId}`);
@@ -367,14 +454,15 @@ export function KidSession({
     }
   }
 
-  async function startClass(lessonPlanId: string) {
-    if (!learner) return;
+  async function startClass(event: FormEvent) {
+    event.preventDefault();
+    if (!learner || !questId) return;
     setOpening(true);
     setError(null);
     try {
       const next = await api<Board>("/sessions", {
         method: "POST",
-        body: JSON.stringify({ student_id: learner.id, lesson_plan_id: lessonPlanId, fresh: true }),
+        body: JSON.stringify({ student_id: learner.id, quest_id: questId, fresh: true }),
       });
       setBoard(next);
       setMaking(false);
@@ -414,8 +502,8 @@ export function KidSession({
 
   async function createChild(event: FormEvent) {
     event.preventDefault();
-    const name = draftName.trim();
-    const age = Number(draftAge);
+    const name = child.name.trim();
+    const age = Number(child.age);
     if (!name || !Number.isInteger(age) || age < 4 || age > 18) {
       setError("Enter a name and an age from 4 to 18.");
       return;
@@ -425,12 +513,25 @@ export function KidSession({
     try {
       const student = await api<Student>("/students", {
         method: "POST",
-        body: JSON.stringify({ display_name: name, age }),
+        body: JSON.stringify({
+          display_name: name,
+          age,
+          reading_level: child.reading_level,
+          modality: child.modality,
+          interests: child.interests.split(",").map((item) => item.trim()).filter(Boolean),
+          tutor_persona: child.tutor_persona,
+          tutor_lexicon: child.tutor_lexicon,
+          tutor_metaphors: child.tutor_metaphors,
+          tutor_sidekick: child.tutor_sidekick,
+          tutor_socratic_strictness: child.tutor_socratic_strictness,
+          tutor_struggle_window: child.tutor_struggle_window,
+          tutor_anti_spoiler: child.tutor_anti_spoiler,
+          tutor_pacing: child.tutor_pacing,
+        }),
       });
       const nextStudents = await api<Student[]>("/students");
       setStudents(nextStudents);
-      setDraftName("");
-      setDraftAge("");
+      setChild(blankChild());
       await chooseStudent(student);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add that child.");
@@ -441,17 +542,14 @@ export function KidSession({
 
   async function reloadRoster() {
     try {
-      const [nextStudents, nextPlans] = await Promise.all([
-        api<Student[]>("/students"),
-        api<LessonPlanSummary[]>("/lesson-plans"),
-      ]);
-      setStudents(nextStudents);
-      setPlans(nextPlans);
+      setStudents(await api<Student[]>("/students"));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The tutor service is not reachable.");
     }
   }
+
+  const selectedQuest = quests.find((item) => item.id === questId) ?? null;
 
   if (!learner) {
     return (
@@ -460,7 +558,7 @@ export function KidSession({
           <Link href="/admin">Configure Lessons</Link>
           <Link href="/viewchats">View Chats / Debug</Link>
         </nav>
-        <section className="ds-landing-card">
+        <section className={`ds-landing-card${adding ? " is-wide" : ""}`}>
           <BrandMark />
           <h1>Who&apos;s learning today?</h1>
           <p>Choose a child, or add a new one. Then open a class.</p>
@@ -482,17 +580,25 @@ export function KidSession({
             </select>
           </label>
           <div className="rail-actions">
-            <button type="button" className="button ds-add-child" onClick={() => { setAdding((open) => !open); setError(null); }}>
+            <button
+              type="button"
+              className="button ds-add-child"
+              onClick={() => {
+                setAdding((open) => !open);
+                setError(null);
+              }}
+            >
               Add child
             </button>
           </div>
           {adding ? (
             <form className="child-form" onSubmit={(event) => void createChild(event)}>
+              <h2>Student</h2>
               <label>
                 Name
                 <input
-                  value={draftName}
-                  onChange={(event) => setDraftName(event.target.value)}
+                  value={child.name}
+                  onChange={(event) => setChild({ ...child, name: event.target.value })}
                   required
                   maxLength={120}
                   autoComplete="off"
@@ -506,10 +612,92 @@ export function KidSession({
                   min={4}
                   max={18}
                   required
-                  value={draftAge}
-                  onChange={(event) => setDraftAge(event.target.value)}
+                  value={child.age}
+                  onChange={(event) => setChild({ ...child, age: event.target.value })}
                 />
               </label>
+              <label>
+                Reading level
+                <input
+                  value={child.reading_level}
+                  onChange={(event) => setChild({ ...child, reading_level: event.target.value })}
+                />
+              </label>
+              <label>
+                Modality
+                <input
+                  value={child.modality}
+                  onChange={(event) => setChild({ ...child, modality: event.target.value })}
+                />
+              </label>
+              <label>
+                Interests
+                <input
+                  value={child.interests}
+                  onChange={(event) => setChild({ ...child, interests: event.target.value })}
+                  placeholder="cities, fairness"
+                />
+              </label>
+              <div className="tutor-group">
+                <h2>Tutor agent settings</h2>
+                <label>
+                  Persona
+                  <input
+                    value={child.tutor_persona}
+                    onChange={(event) => setChild({ ...child, tutor_persona: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Lexicon
+                  <textarea
+                    value={child.tutor_lexicon}
+                    onChange={(event) => setChild({ ...child, tutor_lexicon: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Metaphors
+                  <textarea
+                    value={child.tutor_metaphors}
+                    onChange={(event) => setChild({ ...child, tutor_metaphors: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Sidekick
+                  <textarea
+                    value={child.tutor_sidekick}
+                    onChange={(event) => setChild({ ...child, tutor_sidekick: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Socratic strictness
+                  <input
+                    value={child.tutor_socratic_strictness}
+                    onChange={(event) => setChild({ ...child, tutor_socratic_strictness: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Struggle window
+                  <input
+                    value={child.tutor_struggle_window}
+                    onChange={(event) => setChild({ ...child, tutor_struggle_window: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Pacing
+                  <input
+                    value={child.tutor_pacing}
+                    onChange={(event) => setChild({ ...child, tutor_pacing: event.target.value })}
+                  />
+                </label>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={child.tutor_anti_spoiler}
+                    onChange={(event) => setChild({ ...child, tutor_anti_spoiler: event.target.checked })}
+                  />
+                  Do not state the answer before the gate is passed
+                </label>
+              </div>
               <div className="rail-actions">
                 <button className="button" type="submit" disabled={savingChild}>Save child</button>
                 <button type="button" className="ghost" onClick={() => setAdding(false)}>Cancel</button>
@@ -528,8 +716,8 @@ export function KidSession({
     );
   }
 
-  const score = board && !making ? lessonScore(board) : null;
-  const crumb = board && !making ? board.lesson_title : making ? "New class" : "Classes";
+  const score = board && !making ? questScore(board) : null;
+  const crumb = board && !making ? board.quest_title : making ? "New class" : "Classes";
 
   return (
     <main className="ds-shell">
@@ -557,7 +745,7 @@ export function KidSession({
                 disabled={opening}
                 onClick={() => void openNotebook(session.id)}
               >
-                <span className="ds-session-title">{session.lesson_title}</span>
+                <span className="ds-session-title">{session.quest_title}</span>
                 <span className="ds-session-time">{classDate(session.updated_at)}</span>
               </button>
             </li>
@@ -587,15 +775,8 @@ export function KidSession({
               </Link>
               {board && !making ? (
                 <div className="ds-menu-goals">
-                  <p>Lesson goals</p>
-                  <ul>
-                    {board.topics.map((topic) => (
-                      <li key={topic.id}>
-                        <strong>{topic.position}. {topic.title}</strong>
-                        <span>{topic.learning_goal}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <p>Enduring understanding</p>
+                  <span>{board.enduring_understanding}</span>
                 </div>
               ) : null}
             </div>
@@ -643,9 +824,7 @@ export function KidSession({
               studentName={board.student.display_name}
               block={board.current_block}
               quizLocked={
-                board.topics
-                  .flatMap((topic) => topic.checkpoints)
-                  .find((checkpoint) => checkpoint.id === board.current_checkpoint_id)?.latest_result?.passed === true
+                board.beats.find((beat) => beat.id === board.current_beat_id)?.latest_result?.passed === true
               }
               onTurn={() => {
                 void api<Board>(`/sessions/${board.id}/board`).then(setBoard).catch(() => undefined);
@@ -653,25 +832,48 @@ export function KidSession({
             />
           </>
         ) : making ? (
-          <div className="ds-picker">
+          <form className="ds-picker" onSubmit={(event) => void startClass(event)}>
             <h1>New class</h1>
-            <p>Choose a lesson. Other classes stay in the list.</p>
-            <div className="ds-lesson-list" role="group" aria-label="Choose a lesson">
-              {choices.map((plan) => (
-                <button
-                  key={plan.id}
-                  type="button"
-                  className="ds-lesson"
-                  disabled={opening}
-                  onClick={() => void startClass(plan.id)}
-                >
-                  {plan.title}
-                </button>
-              ))}
+            <p>Choose a course, then a quest. Other classes stay in the list.</p>
+            <label>
+              Course
+              <select
+                aria-label="Choose a course"
+                value={courseId}
+                onChange={(event) => setCourseId(event.target.value)}
+              >
+                {courses.length === 0 ? <option value="">No courses for this age</option> : null}
+                {courses.map((course) => (
+                  <option key={course.id} value={course.id}>
+                    {course.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Quest
+              <select
+                aria-label="Choose a quest"
+                value={questId}
+                disabled={quests.length === 0}
+                onChange={(event) => setQuestId(event.target.value)}
+              >
+                {quests.length === 0 ? <option value="">No quests in this course</option> : null}
+                {quests.map((quest) => (
+                  <option key={quest.id} value={quest.id}>
+                    {quest.code} · {quest.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {selectedQuest && selectedQuest.prerequisite_codes.length > 0 ? (
+              <p>Comes after {selectedQuest.prerequisite_codes.join(", ")}. You can still start here.</p>
+            ) : null}
+            <div className="rail-actions">
+              <button className="button" type="submit" disabled={opening || !questId}>Start class</button>
+              <button type="button" className="ds-text" onClick={() => setMaking(false)}>Cancel</button>
             </div>
-            {choices.length === 0 ? <p>No lessons match this age.</p> : null}
-            <button type="button" className="ds-text" onClick={() => setMaking(false)}>Cancel</button>
-          </div>
+          </form>
         ) : (
           <div className="ds-empty">
             <p>Choose a class, or start a new one.</p>

@@ -115,7 +115,7 @@ export function ViewChats({ initialStudents, initialError }: { initialStudents: 
               >
                 <strong>{item.student_display_name}</strong>
                 <small>
-                  {item.lesson_title} · {item.status.replace("_", " ")} · {when(item.updated_at)}
+                  {item.quest_title} · {item.status.replace("_", " ")} · {when(item.updated_at)}
                 </small>
                 <small>{item.message_count} messages · {item.result_count} scores</small>
               </button>
@@ -248,19 +248,23 @@ function SessionView({ session }: { session: SessionDetail }) {
   useEffect(() => {
     setPrompt(null);
   }, [session.id]);
-  const current = session.lesson_plan.topics
-    .flatMap((topic) => topic.checkpoints.map((checkpoint) => ({ topic, checkpoint })))
-    .find((item) => item.checkpoint.id === session.current_checkpoint_id);
+  const current = session.beats.find((beat) => beat.id === session.current_beat_id);
+  const roleLabel: Record<string, string> = {
+    mystery_hook: "mystery hook",
+    interactive_toy: "interactive toy",
+    diagnostic_gate: "diagnostic gate",
+    feynman_flip: "Feynman flip",
+  };
   return (
     <article className="transcript-view">
       <p className="eyebrow">{session.student.display_name}</p>
-      <h2>{session.lesson_plan.title}</h2>
+      <h2>{session.quest.title}</h2>
       <p className="meta">
-        {session.status.replaceAll("_", " ")} · opened {when(session.created_at)}
-        {current ? ` · now on ${current.topic.title}, ${current.checkpoint.kind}` : " · lesson finished"}
+        {session.quest.code} · {session.quest.course_title} · {session.status.replaceAll("_", " ")} · opened {when(session.created_at)}
+        {current ? ` · now on ${roleLabel[current.role] ?? current.role}` : " · quest finished"}
       </p>
       <h3>Scores</h3>
-      {session.results.length === 0 ? <p className="help">No checkpoint scores stored yet.</p> : null}
+      {session.results.length === 0 ? <p className="help">No beat scores stored yet.</p> : null}
       <ul className="score-list">
         {session.results.map((result) => (
           <li key={result.id}>
@@ -268,7 +272,7 @@ function SessionView({ session }: { session: SessionDetail }) {
               {result.passed ? "Passed" : "Not yet"} · {result.score}/100
             </strong>
             <span className="quiet">
-              {result.topic_title} · {result.checkpoint_kind} {result.checkpoint_position} · {when(result.created_at)}
+              {result.quest_title} · {roleLabel[result.beat_role] ?? result.beat_role} {result.beat_position} · {when(result.created_at)}
               {result.hint_tier ? ` · hint ${result.hint_tier}` : ""}
             </span>
             <span>{result.feedback}</span>
@@ -306,7 +310,7 @@ function SessionView({ session }: { session: SessionDetail }) {
       {prompt ? (
         <PromptDialog
           prompt={prompt}
-          subtitle={`${session.student.display_name} · ${session.lesson_plan.title}`}
+          subtitle={`${session.student.display_name} · ${session.quest.title}`}
           onClose={() => setPrompt(null)}
         />
       ) : null}

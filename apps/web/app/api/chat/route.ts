@@ -4,18 +4,18 @@ import {
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
+  jsonSchema,
   streamText,
   wrapLanguageModel,
+  type JSONSchema7,
   type LanguageModelMiddleware,
   type UIMessage,
 } from "ai";
-import { z } from "zod";
 
 import { api } from "@/lib/api";
 import { KICKOFF } from "@/lib/kickoff";
 import { openaiModelName } from "@/lib/model";
-import { buildSystemPrompt } from "@/lib/prompt";
-import type { LessonContext } from "@/lib/types";
+import type { PromptBundle } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -23,13 +23,13 @@ export const maxDuration = 60;
 const MISSING_KEY =
   "OPENAI_API_KEY is not set. Copy .env.example to apps/web/.env.local, set OPENAI_API_KEY to your real key, and restart the Next.js server.";
 
-const turnScore = z.object({
-  reply: z.string(),
-  rubric_met: z.array(z.string()),
-  misconception: z.string().nullable(),
-  hint_tier: z.enum(["nudge", "analogy", "scaffold"]),
-  advance: z.boolean(),
-});
+type TurnScore = {
+  reply: string;
+  rubric_met: string[];
+  misconception: string | null;
+  hint_tier: "nudge" | "analogy" | "scaffold";
+  advance: boolean;
+};
 
 type WidgetBody = {
   choice?: string | string[];
@@ -171,15 +171,17 @@ export async function POST(req: Request) {
     lastUser != null &&
     textOf(lastUser) === KICKOFF;
 
-  let context: LessonContext;
+  let bundle: PromptBundle;
   try {
-    context = await api<LessonContext>(`/sessions/${sessionId}/context`);
+    bundle = await api<PromptBundle>(
+      `/sessions/${sessionId}/prompt?kickoff=${kickoff ? "true" : "false"}`,
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not load the lesson.";
+    const message = error instanceof Error ? error.message : "Could not load the prompt.";
     return new Response(message, { status: 502 });
   }
 
-  const system = buildSystemPrompt(context, { kickoff });
+  const system = bundle.system_prompt;
   const modelMessages = await convertToModelMessages(messages);
   const modelName = openaiModelName();
   const captureRequest: LanguageModelMiddleware = {
@@ -208,13 +210,13 @@ export async function POST(req: Request) {
   const result = streamText({
     model: wrapLanguageModel({ model: openai(modelName), middleware: captureRequest }),
     output: Output.object({
-      schema: turnScore,
+      schema: jsonSchema(bundle.response_schema as JSONSchema7),
       name: "turn_score",
       description: "Rubric rows met, misconception if any, hint tier, and the tutor reply.",
     }),
     instructions: system,
     messages: modelMessages,
-    temperature: 0.4,
+    temperature: bundle.temperature,
   });
 
   const stream = createUIMessageStream({
@@ -223,14 +225,15 @@ export async function POST(req: Request) {
       writer.write({ type: "text-start", id });
       let sent = "";
       for await (const partial of result.partialOutputStream) {
-        const reply = typeof partial?.reply === "string" ? partial.reply : "";
+        const piece = partial as Partial<TurnScore>;
+        const reply = typeof piece.reply === "string" ? piece.reply : "";
         if (!reply.startsWith(sent)) continue;
         const delta = reply.slice(sent.length);
         if (delta) writer.write({ type: "text-delta", id, delta });
         sent = reply;
       }
       writer.write({ type: "text-end", id });
-      const finalScore = await result.output;
+      const finalScore = (await result.output) as TurnScore;
       if (!kickoff) {
         try {
           await api(`/sessions/${sessionId}/turn-score`, {

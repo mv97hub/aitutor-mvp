@@ -5,34 +5,15 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import (
-    Checkpoint,
-    CheckpointResult,
-    LessonPlan,
-    Message,
-    ModelPrompt,
-    Session as TutorSession,
-    Student,
-    Topic,
-)
-from app.blocks import apply_checkpoint
-from app.queries import (
-    active_plan,
-    checkpoint_in_use,
-    flat_checkpoints,
-    load_plan,
-    locate,
-    latest_result,
-    next_position,
-)
-from app.schemas import CheckpointWrite
-from app.widgets import choice_ids, grade_choice, hint_text, hint_tier_for
-
-SCORED_KINDS = {"practice", "quiz", "discovery", "teach_back"}
-
+from app.engine.assemble import hint_tier_for
+from app.engine.defaults import age_band_for, profile_for_age
+from app.models import Beat, BeatResult, Course, Message, ModelPrompt, Quest, Session as TutorSession, Student
+from app.prompt_loader import PASS_SCORE
+from app.queries import latest_result, locate_beat, next_position, ordered_beats
+from app.widgets import choice_ids, grade_choice, hint_text
 
 def now() -> datetime:
     return datetime.now(timezone.utc)
@@ -55,14 +36,6 @@ def _unique_slug(taken, title: str, fallback: str) -> str:
     return slug
 
 
-def unique_slug(db: Session, title: str) -> str:
-    return _unique_slug(
-        lambda slug: db.scalar(select(LessonPlan.id).where(LessonPlan.slug == slug)) is not None,
-        title,
-        "lesson",
-    )
-
-
 def unique_student_slug(db: Session, name: str) -> str:
     return _unique_slug(
         lambda slug: db.scalar(select(Student.id).where(Student.slug == slug)) is not None,
@@ -71,72 +44,61 @@ def unique_student_slug(db: Session, name: str) -> str:
     )
 
 
-def clear_active(db: Session) -> None:
-    db.execute(
-        update(LessonPlan)
-        .where(LessonPlan.is_active.is_(True))
-        .values(is_active=False, updated_at=now())
+def unique_course_code(db: Session, title: str) -> str:
+    return _unique_slug(
+        lambda code: db.scalar(select(Course.id).where(Course.code == code)) is not None,
+        title,
+        "course",
     )
-    db.flush()
 
 
-def move_item(db: Session, items: list, item, direction: str) -> None:
-    ordered = sorted(items, key=lambda row: row.position)
-    index = next(i for i, row in enumerate(ordered) if row.id == item.id)
-    other_index = index - 1 if direction == "up" else index + 1
-    if other_index < 0 or other_index >= len(ordered):
-        return
-    other = ordered[other_index]
-    item_position = item.position
-    other_position = other.position
-    item.position = -1
-    db.flush()
-    other.position = item_position
-    db.flush()
-    item.position = other_position
-    db.flush()
+def apply_student_profile(student: Student, *, provided: set[str]) -> None:
+    """Fill any layer field the request left out from the age-band defaults."""
+    profile = profile_for_age(student.age)
+    if "reading_level" not in provided:
+        student.reading_level = profile.reading_level
+    if "modality" not in provided:
+        student.modality = profile.modality
+    if "interests" not in provided:
+        student.interests = []
+    if "tutor_persona" not in provided:
+        student.tutor_persona = profile.persona
+    if "tutor_lexicon" not in provided:
+        student.tutor_lexicon = profile.lexicon
+    if "tutor_metaphors" not in provided:
+        student.tutor_metaphors = profile.metaphors
+    if "tutor_sidekick" not in provided:
+        student.tutor_sidekick = profile.sidekick
+    if "tutor_socratic_strictness" not in provided:
+        student.tutor_socratic_strictness = profile.socratic_strictness
+    if "tutor_struggle_window" not in provided:
+        student.tutor_struggle_window = profile.struggle_window
+    if "tutor_anti_spoiler" not in provided:
+        student.tutor_anti_spoiler = profile.anti_spoiler
+    if "tutor_pacing" not in provided:
+        student.tutor_pacing = profile.pacing
 
 
-def plan_fits(student: Student, plan: LessonPlan) -> bool:
-    if student.age is None:
-        return plan.age_min is None or plan.age_min < 15
-    if plan.age_min is not None and student.age < plan.age_min:
-        return False
-    if plan.age_max is not None and student.age > plan.age_max:
-        return False
-    return True
-
-
-def age_block_reason(student: Student, plan: LessonPlan) -> str | None:
-    if plan_fits(student, plan):
+def age_block_reason(student: Student, course: Course) -> str | None:
+    band = age_band_for(student.age)
+    if band == course.age_band:
         return None
-    if plan.age_min is not None and plan.age_max is not None:
-        band = f"ages {plan.age_min}–{plan.age_max}"
-    elif plan.age_min is not None:
-        band = f"ages {plan.age_min} and up"
-    elif plan.age_max is not None:
-        band = f"ages {plan.age_max} and under"
-    else:
-        band = "a different age"
     who = (
         f"{student.display_name} is {student.age}"
         if student.age is not None
         else f"{student.display_name} has no age on file"
     )
-    return f"This lesson is for {band}. {who}."
+    return f"This course is for ages {course.age_band}. {who}."
 
 
-def open_session(
-    db: Session,
-    student_id: uuid.UUID,
-    fresh: bool,
-    lesson_plan_id: uuid.UUID | None = None,
-) -> TutorSession:
+def open_session(db: Session, student_id: uuid.UUID, quest_id: uuid.UUID, fresh: bool) -> TutorSession:
     student = db.get(Student, student_id)
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
-    plan = active_plan(db) if lesson_plan_id is None else load_plan(db, lesson_plan_id)
-    reason = age_block_reason(student, plan)
+    from app.queries import load_quest
+
+    quest = load_quest(db, quest_id)
+    reason = age_block_reason(student, quest.unit.course)
     if reason is not None:
         raise HTTPException(status_code=400, detail=reason)
     if not fresh:
@@ -144,25 +106,20 @@ def open_session(
             select(TutorSession)
             .where(
                 TutorSession.student_id == student.id,
-                TutorSession.lesson_plan_id == plan.id,
+                TutorSession.quest_id == quest.id,
                 TutorSession.status == "in_progress",
             )
             .order_by(TutorSession.updated_at.desc())
         )
         if existing is not None:
             return existing
-    rows = flat_checkpoints(plan)
-    if not rows:
-        raise HTTPException(
-            status_code=400,
-            detail="This lesson has no checkpoints.",
-        )
-    topic, checkpoint = rows[0]
+    beats = ordered_beats(quest)
+    if len(beats) != 4:
+        raise HTTPException(status_code=400, detail="This quest does not have four beats.")
     tutor_session = TutorSession(
         student_id=student.id,
-        lesson_plan_id=plan.id,
-        current_topic_id=topic.id,
-        current_checkpoint_id=checkpoint.id,
+        quest_id=quest.id,
+        current_beat_id=beats[0].id,
         status="in_progress",
         updated_at=now(),
     )
@@ -182,15 +139,11 @@ def append_message(
         existing = db.scalar(select(Message).where(Message.client_id == client_id))
         if existing is not None:
             if existing.session_id != tutor_session.id:
-                raise HTTPException(
-                    status_code=409, detail="That client_id belongs to another session."
-                )
+                raise HTTPException(status_code=409, detail="That client_id belongs to another session.")
             existing.content = content
             tutor_session.updated_at = now()
             return existing
-    seq = db.scalar(
-        select(func.max(Message.seq)).where(Message.session_id == tutor_session.id)
-    )
+    seq = db.scalar(select(func.max(Message.seq)).where(Message.session_id == tutor_session.id))
     message = Message(
         session_id=tutor_session.id,
         role=role,
@@ -233,6 +186,10 @@ def append_model_prompt(
     return row
 
 
+def failed_attempts(tutor_session: TutorSession, beat_id: uuid.UUID) -> int:
+    return sum(1 for result in tutor_session.results if result.beat_id == beat_id and not result.passed)
+
+
 def record_result(
     db: Session,
     tutor_session: TutorSession,
@@ -244,23 +201,15 @@ def record_result(
     hint_tier: str | None = None,
     choice: dict | None = None,
 ) -> dict:
-    if tutor_session.current_checkpoint_id is None:
-        return {
-            "ok": False,
-            "reason": "This lesson is finished, so there is nothing to score.",
-        }
-    located = locate(tutor_session.lesson_plan, tutor_session.current_checkpoint_id)
-    if located is None:
-        return {"ok": False, "reason": "The current checkpoint is missing."}
-    _topic, checkpoint = located
+    beat = locate_beat(tutor_session.quest, tutor_session.current_beat_id)
+    if beat is None:
+        return {"ok": False, "reason": "This quest is finished, so there is nothing to score."}
     seq = db.scalar(
-        select(func.max(CheckpointResult.seq)).where(
-            CheckpointResult.session_id == tutor_session.id
-        )
+        select(func.max(BeatResult.seq)).where(BeatResult.session_id == tutor_session.id)
     )
-    result = CheckpointResult(
+    result = BeatResult(
         session_id=tutor_session.id,
-        checkpoint_id=checkpoint.id,
+        beat_id=beat.id,
         seq=(seq or 0) + 1,
         score=score,
         passed=passed,
@@ -276,8 +225,8 @@ def record_result(
     db.expire(tutor_session, ["results"])
     return {
         "ok": True,
-        "checkpoint_id": str(checkpoint.id),
-        "kind": checkpoint.kind,
+        "beat_id": str(beat.id),
+        "role": beat.role,
         "score": score,
         "passed": passed,
         "feedback": result.feedback,
@@ -285,64 +234,45 @@ def record_result(
 
 
 def advance(db: Session, tutor_session: TutorSession) -> dict:
-    if (
-        tutor_session.status == "completed"
-        or tutor_session.current_checkpoint_id is None
-    ):
-        return {"ok": False, "reason": "This lesson is already finished."}
-    located = locate(tutor_session.lesson_plan, tutor_session.current_checkpoint_id)
-    if located is None:
-        return {"ok": False, "reason": "The current checkpoint is missing."}
-    topic, checkpoint = located
-    result = latest_result(tutor_session, checkpoint.id)
-    if checkpoint.kind in SCORED_KINDS and (result is None or not result.passed):
-        label = "quiz" if checkpoint.kind == "quiz" else checkpoint.kind.replace("_", " ")
-        return {
-            "ok": False,
-            "reason": f"This {label} step needs a passing result before moving on.",
-        }
-    rows = flat_checkpoints(tutor_session.lesson_plan)
-    index = next(
-        i for i, (_topic, item) in enumerate(rows) if item.id == checkpoint.id
-    )
+    beat = locate_beat(tutor_session.quest, tutor_session.current_beat_id)
+    if tutor_session.status == "completed" or beat is None:
+        return {"ok": False, "reason": "This quest is already finished."}
+    result = latest_result(tutor_session, beat.id)
+    if result is None or not result.passed:
+        return {"ok": False, "reason": "This beat needs a passing result before moving on."}
+    beats = ordered_beats(tutor_session.quest)
+    index = next(i for i, item in enumerate(beats) if item.id == beat.id)
     tutor_session.updated_at = now()
-    if index + 1 >= len(rows):
-        tutor_session.current_topic_id = None
-        tutor_session.current_checkpoint_id = None
+    if index + 1 >= len(beats):
+        tutor_session.current_beat_id = None
         tutor_session.status = "completed"
         db.flush()
-        return {"ok": True, "completed": True, "current_step": None}
-    next_topic, next_checkpoint = rows[index + 1]
-    tutor_session.current_topic_id = next_topic.id
-    tutor_session.current_checkpoint_id = next_checkpoint.id
+        return {"ok": True, "completed": True, "current_beat": None}
+    nxt = beats[index + 1]
+    tutor_session.current_beat_id = nxt.id
     db.flush()
     return {
         "ok": True,
         "completed": False,
-        "from_kind": checkpoint.kind,
-        "current_step": {
-            "topic_title": next_topic.title,
-            "topic_position": next_topic.position,
-            "checkpoint_kind": next_checkpoint.kind,
-            "checkpoint_position": next_checkpoint.position,
-        },
+        "from_role": beat.role,
+        "current_beat": {"role": nxt.role, "position": nxt.position},
     }
 
 
-def checkpoint_state(
-    checkpoint: Checkpoint,
+def beat_state(
+    beat: Beat,
     current_id: uuid.UUID | None,
-    result: CheckpointResult | None,
+    result: BeatResult | None,
     seen_current: bool,
-    lesson_complete: bool,
+    quest_complete: bool,
 ) -> str:
-    if lesson_complete:
+    if quest_complete:
         if result is not None and result.passed:
             return "passed"
         if result is not None:
             return "failed"
         return "done"
-    if checkpoint.id == current_id:
+    if beat.id == current_id:
         return "current"
     if seen_current:
         return "upcoming"
@@ -353,75 +283,24 @@ def checkpoint_state(
     return "done"
 
 
-def topic_in_use(db: Session, topic: Topic) -> bool:
-    current = db.scalar(
-        select(func.count())
-        .select_from(TutorSession)
-        .where(TutorSession.current_topic_id == topic.id)
-    )
-    if current:
-        return True
-    return any(checkpoint_in_use(db, checkpoint.id) for checkpoint in topic.checkpoints)
-
-
-def append_topic(db: Session, plan: LessonPlan, title: str, goal: str, instructions: str) -> Topic:
-    topic = Topic(
-        lesson_plan_id=plan.id,
-        title=title.strip(),
-        learning_goal=goal.strip(),
-        tutor_instructions=instructions.strip(),
-        position=next_position([item.position for item in plan.topics]),
-    )
-    plan.topics.append(topic)
-    plan.updated_at = now()
-    db.flush()
-    return topic
-
-
-def append_checkpoint(db: Session, topic: Topic, body: CheckpointWrite) -> Checkpoint:
-    checkpoint = Checkpoint(
-        topic_id=topic.id,
-        kind=body.kind,
-        tutor_prompt=body.tutor_prompt.strip(),
-        position=next_position([item.position for item in topic.checkpoints]),
-    )
-    apply_checkpoint(checkpoint, body, None)
-    topic.checkpoints.append(checkpoint)
-    if topic.lesson_plan is not None:
-        topic.lesson_plan.updated_at = now()
-    db.flush()
-    return checkpoint
-
-
-def failed_attempts(tutor_session: TutorSession, checkpoint_id: uuid.UUID) -> int:
-    return sum(
-        1
-        for result in tutor_session.results
-        if result.checkpoint_id == checkpoint_id and not result.passed
-    )
-
-
 def grade_widget(
     db: Session,
     tutor_session: TutorSession,
     choice: str | list[str],
     explanation: str,
 ) -> dict:
-    if tutor_session.current_checkpoint_id is None:
-        return {"ok": False, "reason": "This lesson is finished, so there is nothing to score."}
-    located = locate(tutor_session.lesson_plan, tutor_session.current_checkpoint_id)
-    if located is None:
-        return {"ok": False, "reason": "The current checkpoint is missing."}
-    _topic, checkpoint = located
-    quiz = checkpoint.quiz if isinstance(checkpoint.quiz, dict) else None
+    beat = locate_beat(tutor_session.quest, tutor_session.current_beat_id)
+    if beat is None:
+        return {"ok": False, "reason": "This quest is finished, so there is nothing to score."}
+    quiz = beat.widget if isinstance(beat.widget, dict) else None
     if quiz is None:
-        return {"ok": False, "reason": "This block is a typed reply, not a choice widget."}
+        return {"ok": False, "reason": "This beat is a typed reply, not a choice widget."}
     ids = choice_ids(choice)
     if not ids:
         return {"ok": False, "reason": "Choose an answer before sending."}
-    graded = grade_choice(quiz, ids if quiz.get("type") in {"multi", "order"} else ids[0])
-    passed = graded["score"] >= (checkpoint.pass_score or 70)
-    tier = hint_tier_for(failed_attempts(tutor_session, checkpoint.id))
+    graded = grade_choice(quiz, ids if quiz.get("type") == "order" else ids[0])
+    passed = graded["score"] >= PASS_SCORE
+    tier = hint_tier_for(failed_attempts(tutor_session, beat.id))
     feedback = "That choice is right." if graded["correct"] else "That choice is not right."
     if graded["misconception"]:
         feedback = f"{feedback} {graded['misconception']}"
@@ -440,13 +319,13 @@ def grade_widget(
         "correct": graded["correct"],
         "misconception": graded["misconception"],
         "hint_tier": tier,
-        "hint_text": hint_text(checkpoint.hint_ladder, tier),
+        "hint_text": hint_text(beat.hint_ladder, tier),
     }
 
 
-def _row_ids(checkpoint: Checkpoint) -> dict[str, int]:
+def _weights(beat: Beat) -> dict[str, int]:
     weights: dict[str, int] = {}
-    for row in checkpoint.rubric_rows or []:
+    for row in beat.rubric or []:
         if isinstance(row, dict) and row.get("id"):
             weights[str(row["id"])] = int(row.get("weight") or 0)
     return weights
@@ -459,18 +338,14 @@ def apply_turn_score(
     misconception: str | None,
     advance_flag: bool,
 ) -> dict:
-    if tutor_session.current_checkpoint_id is None:
-        return {"ok": False, "reason": "This lesson is finished.", "advanced": False}
-    located = locate(tutor_session.lesson_plan, tutor_session.current_checkpoint_id)
-    if located is None:
-        return {"ok": False, "reason": "The current checkpoint is missing.", "advanced": False}
-    _topic, checkpoint = located
-    weights = _row_ids(checkpoint)
+    beat = locate_beat(tutor_session.quest, tutor_session.current_beat_id)
+    if beat is None:
+        return {"ok": False, "reason": "This quest is finished.", "advanced": False}
+    weights = _weights(beat)
     met = [row_id for row_id in rubric_met if row_id in weights]
-    latest = latest_result(tutor_session, checkpoint.id)
-    quiz = checkpoint.quiz if isinstance(checkpoint.quiz, dict) else None
+    latest = latest_result(tutor_session, beat.id)
+    quiz = beat.widget if isinstance(beat.widget, dict) else None
     note = blank_to_none(misconception)
-
     if quiz is not None and latest is not None and isinstance(latest.choice, dict):
         latest.rubric_met = met
         if not latest.misconception and note and not latest.passed:
@@ -492,7 +367,6 @@ def apply_turn_score(
             "advanced": advanced,
             "misconception": latest.misconception,
         }
-
     if quiz is not None:
         recorded = record_result(
             db,
@@ -501,16 +375,15 @@ def apply_turn_score(
             False,
             "Choose an answer on the widget.",
             rubric_met=met,
-            hint_tier=hint_tier_for(failed_attempts(tutor_session, checkpoint.id)),
+            hint_tier=hint_tier_for(failed_attempts(tutor_session, beat.id)),
         )
         return {**recorded, "advanced": False, "graded_by": "widget"}
-
     total = sum(weights.values()) or 0
     earned = sum(weights[row_id] for row_id in met)
     score = round(100 * earned / total) if total else 0
-    passed = score >= (checkpoint.pass_score or 70)
-    tier = hint_tier_for(failed_attempts(tutor_session, checkpoint.id))
-    feedback = "That meets this step." if passed else "Not yet. Use the hint and try again."
+    passed = score >= PASS_SCORE
+    tier = hint_tier_for(failed_attempts(tutor_session, beat.id))
+    feedback = "That meets this beat." if passed else "Not yet. Use the hint and try again."
     recorded = record_result(
         db,
         tutor_session,
@@ -526,3 +399,59 @@ def apply_turn_score(
         moved = advance(db, tutor_session)
         advanced = bool(moved.get("ok"))
     return {**recorded, "advanced": advanced, "graded_by": "model"}
+
+
+def blank_beats() -> list[dict]:
+    roles = (
+        ("mystery_hook", "understand", "Ask one question that opens the mystery of this quest."),
+        ("interactive_toy", "apply", "Which choice matches the idea this quest is building?"),
+        ("diagnostic_gate", "analyze", "Explain the idea in two parts the rubric can score."),
+        ("feynman_flip", "evaluate", "Teach the sidekick who states the misconception."),
+    )
+    beats = []
+    for role, bloom, prompt in roles:
+        widget = None
+        if role == "interactive_toy":
+            widget = {
+                "type": "single",
+                "prompt": prompt,
+                "choices": [
+                    {"id": "match", "text": "The choice that matches the quest idea.", "misconception": ""},
+                    {
+                        "id": "trap",
+                        "text": "A nearby idea that does not answer this question.",
+                        "misconception": "That choice belongs to a different question.",
+                    },
+                ],
+                "answer": "match",
+                "explain": False,
+                "misconception": "Stay on the question this quest asked.",
+            }
+        beats.append(
+            {
+                "role": role,
+                "bloom_level": bloom,
+                "cognitive_load": "medium",
+                "prompt": prompt,
+                "rubric": [
+                    {"id": "part-a", "text": "Names the first part of the idea.", "weight": 50},
+                    {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
+                ]
+                if role != "interactive_toy"
+                else [{"id": "choice", "text": "Selects the choice that matches the quest idea.", "weight": 100}],
+                "misconception_map": [
+                    {
+                        "id": "nearby",
+                        "trap": "A nearby idea answers this question.",
+                        "note": "Stay on the idea named in the quest.",
+                    }
+                ],
+                "hint_ladder": {
+                    "nudge": "What is the question actually asking?",
+                    "analogy": "Picture the idea with one concrete object.",
+                    "scaffold": "The first part is ____. The second part is ____.",
+                },
+                "widget": widget,
+            }
+        )
+    return beats

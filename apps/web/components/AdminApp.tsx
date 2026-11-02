@@ -1,97 +1,231 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { BrandMark } from "@/components/BrandMark";
 import { DeskSwitch } from "@/components/DeskSwitch";
 import { api } from "@/lib/api";
 import type {
-  AdminCheckpoint,
-  AdminTopic,
+  BeatOut,
+  Competency,
+  CourseSummary,
+  CourseTree,
   HintLadder,
-  LessonPlan,
-  LessonPlanSummary,
-  QuizChoiceInput,
+  QuestDetail,
   QuizInput,
   RubricRowInput,
+  TrapInput,
+  UnitNode,
 } from "@/lib/types";
+
+const ROLES = ["mystery_hook", "interactive_toy", "diagnostic_gate", "feynman_flip"] as const;
+const ROLE_LABEL: Record<string, string> = {
+  mystery_hook: "Mystery hook",
+  interactive_toy: "Interactive toy",
+  diagnostic_gate: "Diagnostic gate",
+  feynman_flip: "Feynman flip",
+};
+const BLOOMS = ["remember", "understand", "apply", "analyze", "evaluate", "create"];
+const LOADS = ["low", "medium", "high"];
+const BANDS = ["6-8", "9-11", "12-14", "15-17"];
 
 function messageOf(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
 }
 
+function emptyChoice() {
+  return { id: "", text: "", misconception: "" };
+}
+
+function widgetFrom(beat: BeatOut): QuizInput | null {
+  const widget = beat.widget;
+  if (!widget) return null;
+  return {
+    type: widget.type === "flaw" || widget.type === "order" ? widget.type : "single",
+    prompt: widget.prompt ?? "",
+    choices: (widget.choices ?? []).map((choice) => ({
+      id: choice.id ?? "",
+      text: choice.text ?? "",
+      misconception: choice.misconception ?? "",
+    })),
+    answer: widget.answer ?? (widget.type === "order" ? [] : ""),
+    explain: Boolean(widget.explain),
+    misconception: widget.misconception ?? "",
+  };
+}
+
+function answerText(answer: string | string[]) {
+  return Array.isArray(answer) ? answer.join(", ") : answer;
+}
+
+type BeatDraft = {
+  role: string;
+  bloom_level: string;
+  cognitive_load: string;
+  prompt: string;
+  rubric: RubricRowInput[];
+  misconception_map: TrapInput[];
+  hint_ladder: HintLadder;
+  widget: QuizInput | null;
+  useWidget: boolean;
+};
+
+function draftBeat(beat: BeatOut, index: number): BeatDraft {
+  const role = ROLES[index] ?? beat.role;
+  const widget = role === "mystery_hook" || role === "feynman_flip" ? null : widgetFrom(beat);
+  return {
+    role,
+    bloom_level: beat.bloom_level || "understand",
+    cognitive_load: beat.cognitive_load || "medium",
+    prompt: beat.prompt ?? "",
+    rubric: (beat.rubric ?? []).map((row) => ({ id: row.id, text: row.text, weight: row.weight })),
+    misconception_map: (beat.misconception_map ?? []).map((trap) => ({
+      id: trap.id,
+      trap: trap.trap,
+      note: trap.note,
+    })),
+    hint_ladder: {
+      nudge: beat.hint_ladder?.nudge ?? "",
+      analogy: beat.hint_ladder?.analogy ?? "",
+      scaffold: beat.hint_ladder?.scaffold ?? "",
+    },
+    widget,
+    useWidget: role === "interactive_toy" || widget != null,
+  };
+}
+
+function payloadBeat(draft: BeatDraft) {
+  let widget: QuizInput | null = null;
+  if (draft.role === "interactive_toy" || (draft.role === "diagnostic_gate" && draft.useWidget && draft.widget)) {
+    const source = draft.widget ?? {
+      type: "single" as const,
+      prompt: draft.prompt,
+      choices: [emptyChoice(), emptyChoice()],
+      answer: "",
+      explain: false,
+      misconception: "",
+    };
+    const answer =
+      source.type === "order"
+        ? answerText(source.answer)
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : answerText(source.answer).trim();
+    widget = { ...source, answer };
+  }
+  return {
+    role: draft.role,
+    bloom_level: draft.bloom_level,
+    cognitive_load: draft.cognitive_load,
+    prompt: draft.prompt,
+    rubric: draft.rubric,
+    misconception_map: draft.misconception_map,
+    hint_ladder: draft.hint_ladder,
+    widget,
+  };
+}
+
 export function AdminApp({
-  initialPlans,
-  initialPlan,
+  initialCourses,
+  initialTree,
   initialError,
 }: {
-  initialPlans: LessonPlanSummary[];
-  initialPlan: LessonPlan | null;
+  initialCourses: CourseSummary[];
+  initialTree: CourseTree | null;
   initialError: string | null;
 }) {
-  const [plans, setPlans] = useState(initialPlans);
-  const [planId, setPlanId] = useState<string | null>(
-    initialPlan?.id ?? initialPlans.find((plan) => plan.is_active)?.id ?? initialPlans[0]?.id ?? null,
-  );
-  const [plan, setPlan] = useState<LessonPlan | null>(initialPlan);
+  const [courses, setCourses] = useState(initialCourses);
+  const [tree, setTree] = useState<CourseTree | null>(initialTree);
+  const [openUnits, setOpenUnits] = useState<string[]>(initialTree?.units.map((unit) => unit.id) ?? []);
+  const [quest, setQuest] = useState<QuestDetail | null>(null);
   const [error, setError] = useState(initialError);
+  const [busy, setBusy] = useState(false);
 
-  async function refreshPlans(selectId?: string) {
-    const next = await api<LessonPlanSummary[]>("/lesson-plans");
-    setPlans(next);
-    const id = selectId ?? planId ?? next.find((item) => item.is_active)?.id ?? next[0]?.id ?? null;
-    setPlanId(id);
-    if (id) setPlan(await api<LessonPlan>(`/lesson-plans/${id}`));
-    else setPlan(null);
+  async function refreshCourses(selectId?: string) {
+    const next = await api<CourseSummary[]>("/courses");
+    setCourses(next);
+    const id = selectId ?? tree?.id ?? next[0]?.id ?? null;
+    if (!id) {
+      setTree(null);
+      setQuest(null);
+      return;
+    }
+    const loaded = await api<CourseTree>(`/courses/${id}`);
+    setTree(loaded);
+    setOpenUnits(loaded.units.map((unit) => unit.id));
   }
 
-  useEffect(() => {
-    if (!planId) return;
-    let cancelled = false;
-    api<LessonPlan>(`/lesson-plans/${planId}`)
-      .then((next) => {
-        if (!cancelled) setPlan(next);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(messageOf(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [planId]);
-
-  function applyPlan(next: LessonPlan) {
-    setPlan(next);
-    setPlanId(next.id);
-    setPlans((current) =>
-      current.map((item) => {
-        if (item.id === next.id) {
-          return {
-            ...item,
-            title: next.title,
-            is_active: next.is_active,
-            topic_count: next.topics.length,
-            updated_at: next.updated_at,
-          };
-        }
-        return next.is_active ? { ...item, is_active: false } : item;
-      }),
-    );
+  async function openCourse(courseId: string) {
+    setError(null);
+    setQuest(null);
+    try {
+      const loaded = await api<CourseTree>(`/courses/${courseId}`);
+      setTree(loaded);
+      setOpenUnits(loaded.units.map((unit) => unit.id));
+    } catch (err) {
+      setError(messageOf(err));
+    }
   }
 
-  async function createPlan() {
+  async function openQuest(questId: string) {
     setError(null);
     try {
-      const created = await api<LessonPlan>("/lesson-plans", {
+      setQuest(await api<QuestDetail>(`/quests/${questId}`));
+    } catch (err) {
+      setError(messageOf(err));
+    }
+  }
+
+  async function createCourse() {
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await api<CourseTree>("/courses", {
         method: "POST",
-        body: JSON.stringify({
-          title: "New lesson",
-          preamble: "You are a warm, patient tutor. One step at a time.",
-          is_active: false,
-        }),
+        body: JSON.stringify({ title: "New course", age_band: "9-11", standards_alignment: "" }),
       });
-      await refreshPlans(created.id);
+      await refreshCourses(created.id);
+      setQuest(null);
+    } catch (err) {
+      setError(messageOf(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importFile(file: File) {
+    setBusy(true);
+    setError(null);
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text) as unknown;
+      const created = await api<CourseTree>("/courses/import", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      await refreshCourses(created.id);
+      setQuest(null);
+    } catch (err) {
+      setError(messageOf(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportCourse() {
+    if (!tree) return;
+    setError(null);
+    try {
+      const file = await api<unknown>(`/courses/${tree.id}/export`);
+      const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${tree.code}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
     } catch (err) {
       setError(messageOf(err));
     }
@@ -104,27 +238,68 @@ export function AdminApp({
           <BrandMark />
         </div>
         <DeskSwitch current="admin" />
-        <button type="button" className="ds-new" onClick={() => void createPlan()}>
+        <button type="button" className="ds-new" disabled={busy} onClick={() => void createCourse()}>
           <span aria-hidden="true">+</span>
-          New plan
+          New course
         </button>
-        <p className="ds-quiet">Edit the blocks the tutor follows.</p>
-        <ul className="ds-list" aria-label="Lesson plans">
-          {plans.map((item) => (
-            <li key={item.id}>
-              <button
-                type="button"
-                className={`ds-row ${item.id === planId ? "is-on" : ""}`}
-                onClick={() => setPlanId(item.id)}
-              >
-                <strong>
-                  {item.title}
-                  {item.is_active ? <span className="pill">Active</span> : null}
-                </strong>
-                <small>{item.topic_count} topics</small>
-              </button>
-            </li>
-          ))}
+        <div className="ds-file-row">
+          <label className="ds-file">
+            Import course
+            <input
+              type="file"
+              accept="application/json,.json"
+              aria-label="Import a course file"
+              disabled={busy}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) void importFile(file);
+              }}
+            />
+          </label>
+          <button type="button" className="ghost" disabled={!tree || busy} onClick={() => void exportCourse()}>
+            Export course
+          </button>
+        </div>
+        <p className="ds-quiet">One file is one course. Upload replaces that course code.</p>
+        <ul className="ds-list" aria-label="Courses">
+          {courses.map((course) => {
+            const open = tree?.id === course.id;
+            return (
+              <li key={course.id}>
+                <button
+                  type="button"
+                  className={`ds-row ${open && !quest ? "is-on" : ""}`}
+                  onClick={() => void openCourse(course.id)}
+                >
+                  <strong>{course.title}</strong>
+                  <small>
+                    {course.code} · ages {course.age_band} · {course.quest_count} quests
+                  </small>
+                </button>
+                {open && tree ? (
+                  <ul className="ds-tree">
+                    {tree.units.map((unit) => (
+                      <UnitBranch
+                        key={unit.id}
+                        unit={unit}
+                        open={openUnits.includes(unit.id)}
+                        activeQuestId={quest?.id ?? null}
+                        onToggle={() =>
+                          setOpenUnits((current) =>
+                            current.includes(unit.id)
+                              ? current.filter((id) => id !== unit.id)
+                              : [...current, unit.id],
+                          )
+                        }
+                        onQuest={(questId) => void openQuest(questId)}
+                      />
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
         <div className="ds-foot">
           <Link className="ds-settings" href="/viewchats">View chats</Link>
@@ -137,25 +312,50 @@ export function AdminApp({
             <p>{error}</p>
           </div>
         ) : null}
-        {plan ? (
-          <PlanEditor
-            plan={plan}
-            onChange={applyPlan}
+        {quest ? (
+          <QuestEditor
+            key={quest.id}
+            quest={quest}
+            onChange={setQuest}
+            onClose={() => setQuest(null)}
             onError={setError}
-            onDeleted={async () => {
-              setPlanId(null);
-              setPlan(null);
-              await refreshPlans();
+            onSaved={async () => {
+              if (tree) await refreshCourses(tree.id);
             }}
           />
-        ) : planId ? (
-          <article className="editor">
-            <h2>Loading the plan…</h2>
-          </article>
+        ) : tree ? (
+          <CourseEditor
+            key={tree.id}
+            tree={tree}
+            onChange={(next) => {
+              setTree(next);
+              setCourses((current) =>
+                current.map((item) =>
+                  item.id === next.id
+                    ? {
+                        ...item,
+                        code: next.code,
+                        title: next.title,
+                        age_band: next.age_band,
+                        standards_alignment: next.standards_alignment,
+                        unit_count: next.units.length,
+                        quest_count: next.units.reduce((sum, unit) => sum + unit.quests.length, 0),
+                      }
+                    : item,
+                ),
+              );
+            }}
+            onError={setError}
+            onDeleted={async () => {
+              setTree(null);
+              setQuest(null);
+              await refreshCourses();
+            }}
+          />
         ) : (
           <article className="editor">
-            <h2>No lesson plan yet</h2>
-            <p className="help">Create one, or start the API and run the seed script.</p>
+            <h2>Course tree</h2>
+            <p className="help">Import a course file, or add a course, then open a quest to edit its four beats.</p>
           </article>
         )}
       </section>
@@ -163,74 +363,252 @@ export function AdminApp({
   );
 }
 
-function PlanEditor({
-  plan,
+function UnitBranch({
+  unit,
+  open,
+  activeQuestId,
+  onToggle,
+  onQuest,
+}: {
+  unit: UnitNode;
+  open: boolean;
+  activeQuestId: string | null;
+  onToggle: () => void;
+  onQuest: (questId: string) => void;
+}) {
+  return (
+    <li>
+      <button type="button" className="ds-row ds-indent" aria-expanded={open} onClick={onToggle}>
+        <strong>
+          Unit {unit.number}. {unit.title}
+        </strong>
+        <small>{unit.quests.length} quests</small>
+      </button>
+      {open ? (
+        <ul>
+          {unit.quests.map((item) => (
+            <li key={item.id}>
+              <button
+                type="button"
+                className={`ds-row ds-indent-2 ${item.id === activeQuestId ? "is-on" : ""}`}
+                onClick={() => onQuest(item.id)}
+              >
+                <strong>{item.title}</strong>
+                <small>
+                  {item.code} · {item.quest_type}
+                </small>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </li>
+  );
+}
+
+function CourseEditor({
+  tree,
   onChange,
   onError,
   onDeleted,
 }: {
-  plan: LessonPlan;
-  onChange: (plan: LessonPlan) => void;
+  tree: CourseTree;
+  onChange: (tree: CourseTree) => void;
   onError: (message: string | null) => void;
   onDeleted: () => Promise<void>;
 }) {
-  const [title, setTitle] = useState(plan.title);
-  const [preamble, setPreamble] = useState(plan.preamble);
-  const [isActive, setIsActive] = useState(plan.is_active);
-  const [ageMin, setAgeMin] = useState(plan.age_min == null ? "" : String(plan.age_min));
-  const [ageMax, setAgeMax] = useState(plan.age_max == null ? "" : String(plan.age_max));
-  const [note, setNote] = useState("");
+  const [draft, setDraft] = useState(tree);
+  const [unitTitle, setUnitTitle] = useState("");
+  const current = draft.id === tree.id ? draft : tree;
 
-  useEffect(() => {
-    setTitle(plan.title);
-    setPreamble(plan.preamble);
-    setIsActive(plan.is_active);
-    setAgeMin(plan.age_min == null ? "" : String(plan.age_min));
-    setAgeMax(plan.age_max == null ? "" : String(plan.age_max));
-  }, [plan]);
-
-  async function savePlan() {
+  async function saveCourse() {
     onError(null);
     try {
-      const next = await api<LessonPlan>(`/lesson-plans/${plan.id}`, {
+      const next = await api<CourseTree>(`/courses/${tree.id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          title,
-          preamble,
-          is_active: isActive,
-          age_min: ageMin.trim() === "" ? null : Number(ageMin),
-          age_max: ageMax.trim() === "" ? null : Number(ageMax),
+          title: current.title,
+          code: current.code,
+          age_band: current.age_band,
+          standards_alignment: current.standards_alignment,
+          competency_dictionary: current.competency_dictionary,
         }),
       });
+      setDraft(next);
       onChange(next);
-      setNote("Plan saved. Students open whichever plan is active.");
     } catch (err) {
       onError(messageOf(err));
     }
   }
 
-  async function removePlan() {
-    if (!window.confirm(`Delete “${plan.title}”?`)) return;
+  async function addUnit() {
+    const title = unitTitle.trim();
+    if (!title) return;
     onError(null);
     try {
-      await api(`/lesson-plans/${plan.id}`, { method: "DELETE" });
+      const next = await api<CourseTree>(`/courses/${tree.id}/units`, {
+        method: "POST",
+        body: JSON.stringify({
+          title,
+          enduring_understanding: "Students can explain the idea this unit is built around.",
+          continuity_summary: "This unit carries an idea forward. The next quest uses that idea.",
+        }),
+      });
+      setUnitTitle("");
+      setDraft(next);
+      onChange(next);
+    } catch (err) {
+      onError(messageOf(err));
+    }
+  }
+
+  async function removeCourse() {
+    onError(null);
+    try {
+      await api(`/courses/${tree.id}`, { method: "DELETE" });
       await onDeleted();
     } catch (err) {
       onError(messageOf(err));
     }
   }
 
-  async function addTopic() {
+  function setCompetency(index: number, patch: Partial<Competency>) {
+    const competency_dictionary = current.competency_dictionary.map((item, itemIndex) =>
+      itemIndex === index ? { ...item, ...patch } : item,
+    );
+    setDraft({ ...current, competency_dictionary });
+  }
+
+  return (
+    <article className="editor">
+      <p className="eyebrow">Tier 1 course</p>
+      <h2>{tree.title}</h2>
+      <div className="split">
+        <label>
+          Title
+          <input value={current.title} onChange={(event) => setDraft({ ...current, title: event.target.value })} />
+        </label>
+        <label>
+          Code
+          <input value={current.code} onChange={(event) => setDraft({ ...current, code: event.target.value })} />
+        </label>
+      </div>
+      <label>
+        Age band
+        <select value={current.age_band} onChange={(event) => setDraft({ ...current, age_band: event.target.value })}>
+          {BANDS.map((band) => (
+            <option key={band} value={band}>{band}</option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Standards alignment
+        <textarea
+          value={current.standards_alignment}
+          onChange={(event) => setDraft({ ...current, standards_alignment: event.target.value })}
+        />
+      </label>
+      <h3>Competency dictionary</h3>
+      {current.competency_dictionary.map((item, index) => (
+        <div className="split" key={`${item.code}-${index}`}>
+          <label>
+            Code
+            <input value={item.code} onChange={(event) => setCompetency(index, { code: event.target.value })} />
+          </label>
+          <label>
+            Description
+            <input
+              value={item.description}
+              onChange={(event) => setCompetency(index, { description: event.target.value })}
+            />
+          </label>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="ghost"
+        onClick={() =>
+          setDraft({
+            ...current,
+            competency_dictionary: [...current.competency_dictionary, { code: "", description: "" }],
+          })
+        }
+      >
+        Add competency
+      </button>
+      <div className="rail-actions">
+        <button type="button" className="button" onClick={() => void saveCourse()}>Save course</button>
+        <button type="button" className="ghost" onClick={() => void removeCourse()}>Delete course</button>
+      </div>
+      <h3>Add a unit</h3>
+      <div className="split">
+        <label>
+          Unit title
+          <input value={unitTitle} onChange={(event) => setUnitTitle(event.target.value)} />
+        </label>
+        <button type="button" className="button" onClick={() => void addUnit()}>Add unit</button>
+      </div>
+      <p className="help">Open a quest in the tree to edit its four beats, rubric, hints, and widget.</p>
+    </article>
+  );
+}
+
+function QuestEditor({
+  quest,
+  onChange,
+  onClose,
+  onError,
+  onSaved,
+}: {
+  quest: QuestDetail;
+  onChange: (quest: QuestDetail) => void;
+  onClose: () => void;
+  onError: (message: string | null) => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [meta, setMeta] = useState(quest);
+  const [beats, setBeats] = useState<BeatDraft[]>(() => {
+    const ordered = [...quest.beats].sort((left, right) => left.position - right.position);
+    return ROLES.map((role, index) => draftBeat(ordered[index] ?? ordered.find((beat) => beat.role === role) ?? ordered[0], index));
+  });
+  const shown = meta.id === quest.id ? meta : quest;
+
+  function setBeat(index: number, patch: Partial<BeatDraft>) {
+    setBeats((current) => current.map((beat, beatIndex) => (beatIndex === index ? { ...beat, ...patch } : beat)));
+  }
+
+  async function saveMeta() {
     onError(null);
     try {
-      onChange(await api<LessonPlan>(`/lesson-plans/${plan.id}/topics`, {
-        method: "POST",
+      const next = await api<QuestDetail>(`/quests/${quest.id}`, {
+        method: "PATCH",
         body: JSON.stringify({
-          title: "New topic",
-          learning_goal: "Say what the student should understand.",
-          tutor_instructions: "How the tutor should handle this topic.",
+          title: shown.title,
+          code: shown.code,
+          quest_type: shown.quest_type,
+          prerequisite_codes: shown.prerequisite_codes,
+          competency_tags: shown.competency_tags,
+          dinner_prompt: shown.dinner_prompt,
         }),
-      }));
+      });
+      setMeta(next);
+      onChange(next);
+      await onSaved();
+    } catch (err) {
+      onError(messageOf(err));
+    }
+  }
+
+  async function saveBeats() {
+    onError(null);
+    try {
+      const next = await api<QuestDetail>(`/quests/${quest.id}/beats`, {
+        method: "PUT",
+        body: JSON.stringify({ beats: beats.map(payloadBeat) }),
+      });
+      setMeta(next);
+      setBeats(ROLES.map((role, index) => draftBeat(next.beats[index], index)));
+      onChange(next);
     } catch (err) {
       onError(messageOf(err));
     }
@@ -238,535 +616,322 @@ function PlanEditor({
 
   return (
     <article className="editor">
-      <div className="inline-title">
-        <h2>{plan.title}</h2>
-        <div className="row-actions">
-          <button type="button" className="button" onClick={() => void savePlan()}>Save plan</button>
-          <button type="button" className="danger" onClick={() => void removePlan()}>Delete</button>
-        </div>
-      </div>
-      <p className="help">Checkpoint text is read the next time the tutor speaks on that step. Start a new kid session after a big edit.</p>
-      {note ? <p className="note">{note}</p> : null}
-      <label>
-        Title
-        <input value={title} onChange={(event) => setTitle(event.target.value)} />
-      </label>
-      <label>
-        Preamble
-        <textarea value={preamble} onChange={(event) => setPreamble(event.target.value)} />
-      </label>
-      <label className="check">
-        <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
-        Active lesson. Only one plan can be active.
-      </label>
-      <div className="age-row">
+      <p className="eyebrow">Tier 3 quest</p>
+      <h2>{quest.title}</h2>
+      <button type="button" className="ghost" onClick={onClose}>Back to course</button>
+      <div className="split">
         <label>
-          Youngest age
-          <input value={ageMin} onChange={(event) => setAgeMin(event.target.value)} inputMode="numeric" />
+          Title
+          <input value={shown.title} onChange={(event) => setMeta({ ...shown, title: event.target.value })} />
         </label>
         <label>
-          Oldest age
-          <input value={ageMax} onChange={(event) => setAgeMax(event.target.value)} inputMode="numeric" />
+          Code
+          <input value={shown.code} onChange={(event) => setMeta({ ...shown, code: event.target.value })} />
         </label>
       </div>
-      <p className="help">Leave oldest blank for no upper limit. A lesson with youngest 15 or more stays off the shelf for a 9–11 learner.</p>
-      {plan.topics.map((topic, index) => (
-        <TopicEditor
-          key={topic.id}
-          topic={topic}
-          first={index === 0}
-          last={index === plan.topics.length - 1}
-          onChange={onChange}
-          onError={onError}
+      <label>
+        Type
+        <select
+          value={shown.quest_type}
+          onChange={(event) => setMeta({ ...shown, quest_type: event.target.value })}
+        >
+          <option value="core">core</option>
+          <option value="branch">branch</option>
+          <option value="capstone">capstone</option>
+        </select>
+      </label>
+      <label>
+        Prerequisite quest codes
+        <input
+          value={shown.prerequisite_codes.join(", ")}
+          onChange={(event) =>
+            setMeta({
+              ...shown,
+              prerequisite_codes: event.target.value.split(",").map((item) => item.trim()).filter(Boolean),
+            })
+          }
         />
+      </label>
+      <label>
+        Competency tags
+        <input
+          value={shown.competency_tags.join(", ")}
+          onChange={(event) =>
+            setMeta({
+              ...shown,
+              competency_tags: event.target.value.split(",").map((item) => item.trim()).filter(Boolean),
+            })
+          }
+        />
+      </label>
+      <label>
+        Parent dinner-table prompt
+        <textarea
+          value={shown.dinner_prompt}
+          onChange={(event) => setMeta({ ...shown, dinner_prompt: event.target.value })}
+        />
+      </label>
+      <p className="help">The dinner-table prompt is stored only. It is not sent to the child.</p>
+      <button type="button" className="button" onClick={() => void saveMeta()}>Save quest</button>
+      <h3>Four beats</h3>
+      {beats.map((beat, index) => (
+        <BeatFields key={beat.role} beat={beat} onChange={(patch) => setBeat(index, patch)} />
       ))}
-      <div className="row-actions" style={{ marginTop: 18 }}>
-        <button type="button" className="ghost" onClick={() => void addTopic()}>Add topic</button>
-      </div>
+      <button type="button" className="button" onClick={() => void saveBeats()}>Save beats</button>
     </article>
   );
 }
 
-function TopicEditor({
-  topic,
-  first,
-  last,
-  onChange,
-  onError,
-}: {
-  topic: AdminTopic;
-  first: boolean;
-  last: boolean;
-  onChange: (plan: LessonPlan) => void;
-  onError: (message: string | null) => void;
-}) {
-  const [title, setTitle] = useState(topic.title);
-  const [goal, setGoal] = useState(topic.learning_goal);
-  const [instructions, setInstructions] = useState(topic.tutor_instructions);
-
-  useEffect(() => {
-    setTitle(topic.title);
-    setGoal(topic.learning_goal);
-    setInstructions(topic.tutor_instructions);
-  }, [topic]);
-
-  async function save() {
-    onError(null);
-    try {
-      onChange(await api<LessonPlan>(`/topics/${topic.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ title, learning_goal: goal, tutor_instructions: instructions }),
-      }));
-    } catch (err) {
-      onError(messageOf(err));
-    }
-  }
-
-  async function move(direction: "up" | "down") {
-    onError(null);
-    try {
-      onChange(await api<LessonPlan>(`/topics/${topic.id}/move`, {
-        method: "POST",
-        body: JSON.stringify({ direction }),
-      }));
-    } catch (err) {
-      onError(messageOf(err));
-    }
-  }
-
-  async function remove() {
-    if (!window.confirm(`Delete topic “${topic.title}”?`)) return;
-    onError(null);
-    try {
-      onChange(await api<LessonPlan>(`/topics/${topic.id}`, { method: "DELETE" }));
-    } catch (err) {
-      onError(messageOf(err));
-    }
-  }
-
-  async function addCheckpoint() {
-    onError(null);
-    try {
-      onChange(await api<LessonPlan>(`/topics/${topic.id}/checkpoints`, {
-        method: "POST",
-        body: JSON.stringify({
-          kind: "discovery",
-          tutor_prompt: "Ask one short question and wait.",
-          rubric: "",
-          pass_criteria: "",
-          objective: "What this block is for.",
-          rubric_rows: [{ id: "r1", text: "The answer matches the goal.", weight: 100 }],
-          hint_ladder: {
-            nudge: "Look again at the question.",
-            analogy: "Try a simpler picture.",
-            scaffold: "Say the first step out loud.",
-          },
-          pass_score: 70,
-          quiz: null,
-        }),
-      }));
-    } catch (err) {
-      onError(messageOf(err));
-    }
-  }
-
+function BeatFields({ beat, onChange }: { beat: BeatDraft; onChange: (patch: Partial<BeatDraft>) => void }) {
+  const typed = beat.role === "mystery_hook" || beat.role === "feynman_flip";
   return (
-    <section className="topic-editor">
-      <div className="inline-title">
-        <h3>Topic {topic.position}</h3>
-        <div className="row-actions">
-          <button type="button" className="ghost" disabled={first} onClick={() => void move("up")}>Up</button>
-          <button type="button" className="ghost" disabled={last} onClick={() => void move("down")}>Down</button>
-          <button type="button" className="ghost" onClick={() => void save()}>Save topic</button>
-          <button type="button" className="danger" onClick={() => void remove()}>Delete</button>
+    <fieldset className="beat-fields">
+      <legend>{ROLE_LABEL[beat.role] ?? beat.role}</legend>
+      <div className="split">
+        <label>
+          Bloom level
+          <select value={beat.bloom_level} onChange={(event) => onChange({ bloom_level: event.target.value })}>
+            {BLOOMS.map((level) => (
+              <option key={level} value={level}>{level}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Cognitive load
+          <select value={beat.cognitive_load} onChange={(event) => onChange({ cognitive_load: event.target.value })}>
+            {LOADS.map((load) => (
+              <option key={load} value={load}>{load}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label>
+        Prompt
+        <textarea value={beat.prompt} onChange={(event) => onChange({ prompt: event.target.value })} />
+      </label>
+      <h4>Rubric</h4>
+      {beat.rubric.map((row, index) => (
+        <div className="split" key={`${beat.role}-rubric-${index}`}>
+          <label>
+            Id
+            <input
+              value={row.id}
+              onChange={(event) => {
+                const rubric = beat.rubric.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, id: event.target.value } : item,
+                );
+                onChange({ rubric });
+              }}
+            />
+          </label>
+          <label>
+            Text
+            <input
+              value={row.text}
+              onChange={(event) => {
+                const rubric = beat.rubric.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, text: event.target.value } : item,
+                );
+                onChange({ rubric });
+              }}
+            />
+          </label>
+          <label>
+            Weight
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={row.weight}
+              onChange={(event) => {
+                const rubric = beat.rubric.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, weight: Number(event.target.value) } : item,
+                );
+                onChange({ rubric });
+              }}
+            />
+          </label>
         </div>
-      </div>
-      <label>
-        Title
-        <input value={title} onChange={(event) => setTitle(event.target.value)} />
-      </label>
-      <label>
-        Learning goal
-        <textarea value={goal} onChange={(event) => setGoal(event.target.value)} />
-      </label>
-      <label>
-        Tutor instructions
-        <textarea value={instructions} onChange={(event) => setInstructions(event.target.value)} />
-      </label>
-      {topic.checkpoints.map((checkpoint, index) => (
-        <CheckpointEditor
-          key={checkpoint.id}
-          checkpoint={checkpoint}
-          first={index === 0}
-          last={index === topic.checkpoints.length - 1}
-          onChange={onChange}
-          onError={onError}
-        />
       ))}
-      <div className="row-actions" style={{ marginTop: 10 }}>
-        <button type="button" className="ghost" onClick={() => void addCheckpoint()}>Add checkpoint</button>
-      </div>
-    </section>
+      <h4>Misconception map</h4>
+      {beat.misconception_map.map((trap, index) => (
+        <div className="split" key={`${beat.role}-trap-${index}`}>
+          <label>
+            Id
+            <input
+              value={trap.id}
+              onChange={(event) => {
+                const misconception_map = beat.misconception_map.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, id: event.target.value } : item,
+                );
+                onChange({ misconception_map });
+              }}
+            />
+          </label>
+          <label>
+            Trap
+            <input
+              value={trap.trap}
+              onChange={(event) => {
+                const misconception_map = beat.misconception_map.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, trap: event.target.value } : item,
+                );
+                onChange({ misconception_map });
+              }}
+            />
+          </label>
+          <label>
+            Note
+            <input
+              value={trap.note}
+              onChange={(event) => {
+                const misconception_map = beat.misconception_map.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, note: event.target.value } : item,
+                );
+                onChange({ misconception_map });
+              }}
+            />
+          </label>
+        </div>
+      ))}
+      <h4>Hint ladder</h4>
+      <label>
+        Nudge
+        <input
+          value={beat.hint_ladder.nudge}
+          onChange={(event) => onChange({ hint_ladder: { ...beat.hint_ladder, nudge: event.target.value } })}
+        />
+      </label>
+      <label>
+        Analogy
+        <input
+          value={beat.hint_ladder.analogy}
+          onChange={(event) => onChange({ hint_ladder: { ...beat.hint_ladder, analogy: event.target.value } })}
+        />
+      </label>
+      <label>
+        Scaffold
+        <input
+          value={beat.hint_ladder.scaffold}
+          onChange={(event) => onChange({ hint_ladder: { ...beat.hint_ladder, scaffold: event.target.value } })}
+        />
+      </label>
+      {typed ? <p className="help">This beat stays a typed reply.</p> : (
+        <WidgetFields beat={beat} onChange={onChange} />
+      )}
+    </fieldset>
   );
 }
 
-const BLOCK_KINDS = [
-  ["discovery", "Discovery"],
-  ["quiz", "Quiz"],
-  ["teach_back", "Teach the bot"],
-  ["teach", "Teach"],
-  ["practice", "Practice"],
-] as const;
-
-function emptyChoice(index: number): QuizChoiceInput {
-  return { id: String.fromCharCode(97 + index), text: "", misconception: "" };
-}
-
-function quizFrom(checkpoint: AdminCheckpoint): QuizInput | null {
-  const quiz = checkpoint.quiz;
-  if (!quiz) return null;
-  const answer = Array.isArray(quiz.answer) ? quiz.answer.map(String) : String(quiz.answer ?? "");
-  return {
-    type: quiz.type,
-    prompt: quiz.prompt ?? "",
-    choices: (quiz.choices ?? []).map((choice, index) => ({
-      id: choice.id || emptyChoice(index).id,
-      text: choice.text ?? "",
-      misconception: choice.misconception ?? "",
-    })),
-    answer,
-    explain: Boolean(quiz.explain),
-    misconception: quiz.misconception ?? "",
+function WidgetFields({ beat, onChange }: { beat: BeatDraft; onChange: (patch: Partial<BeatDraft>) => void }) {
+  const optional = beat.role === "diagnostic_gate";
+  const widget = beat.widget ?? {
+    type: "single" as const,
+    prompt: "",
+    choices: [emptyChoice(), emptyChoice()],
+    answer: "",
+    explain: false,
+    misconception: "",
   };
-}
-
-function CheckpointEditor({
-  checkpoint,
-  first,
-  last,
-  onChange,
-  onError,
-}: {
-  checkpoint: AdminCheckpoint;
-  first: boolean;
-  last: boolean;
-  onChange: (plan: LessonPlan) => void;
-  onError: (message: string | null) => void;
-}) {
-  const [kind, setKind] = useState(checkpoint.kind);
-  const [objective, setObjective] = useState(checkpoint.objective ?? "");
-  const [prompt, setPrompt] = useState(checkpoint.tutor_prompt);
-  const [rubric, setRubric] = useState(checkpoint.rubric ?? "");
-  const [criteria, setCriteria] = useState(checkpoint.pass_criteria ?? "");
-  const [passScore, setPassScore] = useState(String(checkpoint.pass_score ?? 70));
-  const [rows, setRows] = useState<RubricRowInput[]>(checkpoint.rubric_rows ?? []);
-  const [hints, setHints] = useState<HintLadder>(checkpoint.hint_ladder ?? { nudge: "", analogy: "", scaffold: "" });
-  const [widget, setWidget] = useState<"none" | QuizInput["type"]>(checkpoint.quiz?.type ?? "none");
-  const [quiz, setQuiz] = useState<QuizInput | null>(quizFrom(checkpoint));
-  const [note, setNote] = useState("");
-
-  useEffect(() => {
-    setKind(checkpoint.kind);
-    setObjective(checkpoint.objective ?? "");
-    setPrompt(checkpoint.tutor_prompt);
-    setRubric(checkpoint.rubric ?? "");
-    setCriteria(checkpoint.pass_criteria ?? "");
-    setPassScore(String(checkpoint.pass_score ?? 70));
-    setRows(checkpoint.rubric_rows ?? []);
-    setHints(checkpoint.hint_ladder ?? { nudge: "", analogy: "", scaffold: "" });
-    setWidget(checkpoint.quiz?.type ?? "none");
-    setQuiz(quizFrom(checkpoint));
-  }, [checkpoint]);
-
-  function ensureQuiz(type: QuizInput["type"]) {
-    setWidget(type);
-    setQuiz((current) => {
-      const choices = current?.choices?.length ? current.choices : [emptyChoice(0), emptyChoice(1)];
-      const answer = type === "multi" || type === "order"
-        ? (Array.isArray(current?.answer) ? current.answer : choices.map((choice) => choice.id))
-        : (typeof current?.answer === "string" && current.answer ? current.answer : choices[0]?.id ?? "a");
-      return {
-        type,
-        prompt: current?.prompt ?? "",
-        choices,
-        answer,
-        explain: current?.explain ?? false,
-        misconception: current?.misconception ?? "",
-      };
-    });
+  function setWidget(patch: Partial<QuizInput>) {
+    onChange({ widget: { ...widget, ...patch }, useWidget: true });
   }
-
-  async function save() {
-    onError(null);
-    setNote("");
-    const score = Number(passScore);
-    try {
-      onChange(await api<LessonPlan>(`/checkpoints/${checkpoint.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          kind,
-          tutor_prompt: prompt,
-          rubric,
-          pass_criteria: criteria,
-          objective,
-          rubric_rows: rows.filter((row) => row.text.trim()),
-          hint_ladder: hints,
-          pass_score: Number.isFinite(score) ? score : 70,
-          quiz: widget === "none" || !quiz ? null : { ...quiz, type: widget },
-        }),
-      }));
-      setNote("Saved. The tutor uses this the next time it teaches the block.");
-    } catch (err) {
-      onError(messageOf(err));
-    }
-  }
-
-  async function move(direction: "up" | "down") {
-    onError(null);
-    try {
-      onChange(await api<LessonPlan>(`/checkpoints/${checkpoint.id}/move`, {
-        method: "POST",
-        body: JSON.stringify({ direction }),
-      }));
-    } catch (err) {
-      onError(messageOf(err));
-    }
-  }
-
-  async function remove() {
-    if (!window.confirm("Delete this checkpoint?")) return;
-    onError(null);
-    try {
-      onChange(await api<LessonPlan>(`/checkpoints/${checkpoint.id}`, { method: "DELETE" }));
-    } catch (err) {
-      onError(messageOf(err));
-    }
-  }
-
   return (
-    <section className="checkpoint-editor">
-      <div className="inline-title">
-        <h3>Block {checkpoint.position}</h3>
-        <div className="row-actions">
-          <button type="button" className="ghost" disabled={first} onClick={() => void move("up")}>Up</button>
-          <button type="button" className="ghost" disabled={last} onClick={() => void move("down")}>Down</button>
-          <button type="button" className="button" onClick={() => void save()} disabled={prompt.trim().length === 0}>Save</button>
-          <button type="button" className="danger" onClick={() => void remove()}>Delete</button>
-        </div>
-      </div>
-      {note ? <p className="note">{note}</p> : null}
-      <label>
-        Kind
-        <select value={kind} onChange={(event) => setKind(event.target.value)}>
-          {BLOCK_KINDS.map(([value, label]) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Objective
-        <input value={objective} onChange={(event) => setObjective(event.target.value)} />
-      </label>
-      <label>
-        Tutor prompt
-        <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} />
-      </label>
-      <label>
-        Pass score
-        <input value={passScore} onChange={(event) => setPassScore(event.target.value)} inputMode="numeric" />
-      </label>
-      <div className="rubric-editor">
-        <p className="eyebrow">Rubric rows</p>
-        {rows.map((row, index) => (
-          <div key={`${row.id}-${index}`} className="rubric-edit-row">
-            <input
-              value={row.text}
-              aria-label={`Rubric row ${index + 1}`}
-              onChange={(event) => setRows(rows.map((item, itemIndex) => itemIndex === index ? { ...item, text: event.target.value } : item))}
-            />
-            <input
-              value={String(row.weight)}
-              aria-label={`Weight ${index + 1}`}
-              inputMode="numeric"
-              onChange={(event) => setRows(rows.map((item, itemIndex) => itemIndex === index ? { ...item, weight: Number(event.target.value) || 0 } : item))}
-            />
-            <button type="button" className="ghost" onClick={() => setRows(rows.filter((_, itemIndex) => itemIndex !== index))}>Remove</button>
-          </div>
-        ))}
-        <button
-          type="button"
-          className="ghost"
-          onClick={() => setRows([...rows, { id: `r${rows.length + 1}`, text: "", weight: 1 }])}
-        >
-          Add row
-        </button>
-      </div>
-      <div className="hint-editor">
-        <p className="eyebrow">Hint ladder</p>
-        {(["nudge", "analogy", "scaffold"] as const).map((tier) => (
-          <label key={tier}>
-            {tier}
-            <input value={hints[tier] ?? ""} onChange={(event) => setHints({ ...hints, [tier]: event.target.value })} />
+    <div>
+      <h4>Widget</h4>
+      {optional ? (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={beat.useWidget}
+            onChange={(event) => onChange({ useWidget: event.target.checked, widget: event.target.checked ? widget : null })}
+          />
+          Use a widget on this gate
+        </label>
+      ) : null}
+      {beat.useWidget || beat.role === "interactive_toy" ? (
+        <>
+          <label>
+            Widget type
+            <select
+              value={widget.type}
+              onChange={(event) => setWidget({ type: event.target.value as QuizInput["type"] })}
+            >
+              <option value="single">misconception MCQ</option>
+              <option value="flaw">spot the flaw</option>
+              <option value="order">ordering</option>
+            </select>
           </label>
-        ))}
-      </div>
-      <label>
-        Widget
-        <select
-          value={widget}
-          onChange={(event) => {
-            const next = event.target.value as "none" | QuizInput["type"];
-            if (next === "none") {
-              setWidget("none");
-              setQuiz(null);
-              return;
-            }
-            ensureQuiz(next);
-          }}
-        >
-          <option value="none">None</option>
-          <option value="single">Single answer</option>
-          <option value="multi">Multi-select</option>
-          <option value="flaw">Spot the flaw</option>
-          <option value="order">Ordering</option>
-        </select>
-      </label>
-      {quiz && widget !== "none" ? (
-        <div className="quiz-editor">
           <label>
             Widget prompt
-            <textarea value={quiz.prompt} onChange={(event) => setQuiz({ ...quiz, prompt: event.target.value })} />
+            <textarea value={widget.prompt} onChange={(event) => setWidget({ prompt: event.target.value })} />
           </label>
-          {quiz.choices.map((choice, index) => (
-            <div key={`${choice.id}-${index}`} className="choice-edit">
-              <input
-                value={choice.id}
-                aria-label={`Choice id ${index + 1}`}
-                onChange={(event) => {
-                  const choices = quiz.choices.map((item, itemIndex) => itemIndex === index ? { ...item, id: event.target.value } : item);
-                  setQuiz({ ...quiz, choices });
-                }}
-              />
-              <input
-                value={choice.text}
-                aria-label={`Choice text ${index + 1}`}
-                onChange={(event) => {
-                  const choices = quiz.choices.map((item, itemIndex) => itemIndex === index ? { ...item, text: event.target.value } : item);
-                  setQuiz({ ...quiz, choices });
-                }}
-              />
-              <input
-                value={choice.misconception}
-                aria-label={`Misconception ${index + 1}`}
-                placeholder="Misconception if they pick this"
-                onChange={(event) => {
-                  const choices = quiz.choices.map((item, itemIndex) => itemIndex === index ? { ...item, misconception: event.target.value } : item);
-                  setQuiz({ ...quiz, choices });
-                }}
-              />
+          {widget.choices.map((choice, index) => (
+            <div className="split" key={`${beat.role}-choice-${index}`}>
+              <label>
+                Choice id
+                <input
+                  value={choice.id}
+                  onChange={(event) => {
+                    const choices = widget.choices.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, id: event.target.value } : item,
+                    );
+                    setWidget({ choices });
+                  }}
+                />
+              </label>
+              <label>
+                Choice text
+                <input
+                  value={choice.text}
+                  onChange={(event) => {
+                    const choices = widget.choices.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, text: event.target.value } : item,
+                    );
+                    setWidget({ choices });
+                  }}
+                />
+              </label>
+              <label>
+                Misconception
+                <input
+                  value={choice.misconception}
+                  onChange={(event) => {
+                    const choices = widget.choices.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, misconception: event.target.value } : item,
+                    );
+                    setWidget({ choices });
+                  }}
+                />
+              </label>
             </div>
           ))}
-          <button
-            type="button"
-            className="ghost"
-            onClick={() => setQuiz({ ...quiz, choices: [...quiz.choices, emptyChoice(quiz.choices.length)] })}
-          >
-            Add choice
-          </button>
-          {widget === "single" || widget === "flaw" ? (
-            <label>
-              Correct choice
-              <select
-                value={typeof quiz.answer === "string" ? quiz.answer : ""}
-                onChange={(event) => setQuiz({ ...quiz, answer: event.target.value })}
-              >
-                {quiz.choices.map((choice) => (
-                  <option key={choice.id} value={choice.id}>{choice.id}: {choice.text || "Untitled"}</option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          {widget === "multi" ? (
-            <div>
-              <p className="eyebrow">Correct choices</p>
-              {quiz.choices.map((choice) => {
-                const selected = Array.isArray(quiz.answer) ? quiz.answer : [];
-                const on = selected.includes(choice.id);
-                return (
-                  <label key={choice.id} className="check">
-                    <input
-                      type="checkbox"
-                      checked={on}
-                      onChange={() => {
-                        const next = on ? selected.filter((id) => id !== choice.id) : [...selected, choice.id];
-                        setQuiz({ ...quiz, answer: next });
-                      }}
-                    />
-                    {choice.text || choice.id}
-                  </label>
-                );
-              })}
-            </div>
-          ) : null}
-          {widget === "order" ? (
-            <div>
-              <p className="eyebrow">Correct order</p>
-              {(Array.isArray(quiz.answer) ? quiz.answer : quiz.choices.map((choice) => choice.id)).map((id, index, answer) => (
-                <div key={`${id}-${index}`} className="row-actions">
-                  <span>{quiz.choices.find((choice) => choice.id === id)?.text || id}</span>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={index === 0}
-                    onClick={() => {
-                      const next = [...answer];
-                      [next[index - 1], next[index]] = [next[index], next[index - 1]];
-                      setQuiz({ ...quiz, answer: next });
-                    }}
-                  >
-                    Up
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={index === answer.length - 1}
-                    onClick={() => {
-                      const next = [...answer];
-                      [next[index + 1], next[index]] = [next[index], next[index + 1]];
-                      setQuiz({ ...quiz, answer: next });
-                    }}
-                  >
-                    Down
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
+          <label>
+            Answer
+            <input
+              value={answerText(widget.answer)}
+              onChange={(event) => setWidget({ answer: event.target.value })}
+            />
+          </label>
           <label className="check">
             <input
               type="checkbox"
-              checked={quiz.explain}
-              onChange={(event) => setQuiz({ ...quiz, explain: event.target.checked })}
+              checked={widget.explain}
+              onChange={(event) => setWidget({ explain: event.target.checked })}
             />
-            Ask for a short written explanation
+            Ask for a short explanation
           </label>
           <label>
-            Misconception if the set or the order is wrong
+            Widget misconception
             <input
-              value={quiz.misconception}
-              onChange={(event) => setQuiz({ ...quiz, misconception: event.target.value })}
+              value={widget.misconception}
+              onChange={(event) => setWidget({ misconception: event.target.value })}
             />
           </label>
-        </div>
-      ) : null}
-      <label>
-        Notes
-        <textarea value={rubric} onChange={(event) => setRubric(event.target.value)} />
-      </label>
-      <label>
-        Pass criteria
-        <textarea value={criteria} onChange={(event) => setCriteria(event.target.value)} />
-      </label>
-    </section>
+        </>
+      ) : (
+        <p className="help">This gate stays a typed reply until you turn the widget on.</p>
+      )}
+    </div>
   );
 }
