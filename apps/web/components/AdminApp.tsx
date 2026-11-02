@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { DeskSwitch } from "@/components/DeskSwitch";
 import { api } from "@/lib/api";
 import type {
   AdminCheckpoint,
@@ -96,36 +97,40 @@ export function AdminApp({
   }
 
   return (
-    <main className="desk">
-      <aside className="side">
-        <div className="side-head">
-          <p className="eyebrow">Admin</p>
-          <span className="top-links">
-            <Link className="top-link" href="/viewchats">View chats</Link>
-            <Link className="top-link" href="/">Kid session</Link>
-          </span>
+    <main className="ds-shell ds-desk">
+      <aside className="ds-side">
+        <DeskSwitch current="admin" />
+        <div className="ds-logo">
+          <span className="ds-logo-name">Lesson desk</span>
         </div>
-        <h1>Lesson desk</h1>
-        <p className="lede">Edit the blocks the tutor follows. Transcripts and scores live on View chats.</p>
-        <div className="row-actions" style={{ marginTop: 16 }}>
-          <button type="button" className="button" onClick={() => void createPlan()}>New plan</button>
-        </div>
-        <div className="stack">
+        <button type="button" className="ds-new" onClick={() => void createPlan()}>
+          <span aria-hidden="true">+</span>
+          New plan
+        </button>
+        <p className="ds-quiet">Edit the blocks the tutor follows.</p>
+        <ul className="ds-list" aria-label="Lesson plans">
           {plans.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`choice ${item.id === planId ? "is-on" : ""}`}
-              onClick={() => setPlanId(item.id)}
-            >
-              <strong>{item.title}</strong>
-              {item.is_active ? <span className="pill">Active</span> : null}
-              <small style={{ display: "block" }}>{item.topic_count} topics</small>
-            </button>
+            <li key={item.id}>
+              <button
+                type="button"
+                className={`ds-row ${item.id === planId ? "is-on" : ""}`}
+                onClick={() => setPlanId(item.id)}
+              >
+                <strong>
+                  {item.title}
+                  {item.is_active ? <span className="pill">Active</span> : null}
+                </strong>
+                <small>{item.topic_count} topics</small>
+              </button>
+            </li>
           ))}
+        </ul>
+        <div className="ds-foot">
+          <Link className="ds-settings" href="/viewchats">View chats</Link>
+          <Link className="ds-settings" href="/">Kid session</Link>
         </div>
       </aside>
-      <section>
+      <section className="ds-work">
         {error ? (
           <div className="banner" role="alert" style={{ margin: 18 }}>
             <p>{error}</p>

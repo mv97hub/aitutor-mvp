@@ -5,6 +5,8 @@ import {
   createUIMessageStream,
   createUIMessageStreamResponse,
   streamText,
+  wrapLanguageModel,
+  type LanguageModelMiddleware,
   type UIMessage,
 } from "ai";
 import { z } from "zod";
@@ -50,6 +52,57 @@ function jsonSafe(value: unknown): unknown {
       return item;
     }),
   );
+}
+
+type ModelCall = {
+  prompt?: Array<{ role?: string; content?: unknown }>;
+  temperature?: number;
+  maxOutputTokens?: number;
+  topP?: number;
+  topK?: number;
+  presencePenalty?: number;
+  frequencyPenalty?: number;
+  stopSequences?: string[];
+  seed?: number;
+  responseFormat?: unknown;
+  tools?: unknown;
+  toolChoice?: unknown;
+  reasoning?: string;
+};
+
+function textOfContent(content: unknown) {
+  return typeof content === "string" ? content : JSON.stringify(content);
+}
+
+function requestForCall(params: ModelCall, fallbackSystem: string) {
+  const prompt = Array.isArray(params.prompt) ? params.prompt : [];
+  const systemParts = prompt
+    .filter((message) => message.role === "system")
+    .map((message) => textOfContent(message.content))
+    .filter((text) => text.length > 0);
+  let systemPrompt = systemParts.join("\n\n");
+  if (fallbackSystem && !systemPrompt.includes(fallbackSystem)) {
+    systemPrompt = systemPrompt ? `${fallbackSystem}\n\n${systemPrompt}` : fallbackSystem;
+  }
+  const messages = prompt.filter((message) => message.role !== "system");
+  const extras: Record<string, unknown> = {};
+  if (params.temperature != null) extras.temperature = params.temperature;
+  if (params.maxOutputTokens != null) extras.maxOutputTokens = params.maxOutputTokens;
+  if (params.topP != null) extras.topP = params.topP;
+  if (params.topK != null) extras.topK = params.topK;
+  if (params.presencePenalty != null) extras.presencePenalty = params.presencePenalty;
+  if (params.frequencyPenalty != null) extras.frequencyPenalty = params.frequencyPenalty;
+  if (params.stopSequences != null) extras.stopSequences = params.stopSequences;
+  if (params.seed != null) extras.seed = params.seed;
+  if (params.responseFormat != null) extras.responseFormat = params.responseFormat;
+  if (params.tools != null) extras.tools = params.tools;
+  if (params.toolChoice != null) extras.toolChoice = params.toolChoice;
+  if (params.reasoning != null && params.reasoning !== "provider-default") extras.reasoning = params.reasoning;
+  const storedMessages = Object.keys(extras).length > 0 ? [...messages, { role: "request", content: extras }] : messages;
+  return {
+    system_prompt: systemPrompt || fallbackSystem,
+    messages: jsonSafe(storedMessages),
+  };
 }
 
 export async function POST(req: Request) {
@@ -128,24 +181,32 @@ export async function POST(req: Request) {
 
   const system = buildSystemPrompt(context, { kickoff });
   const modelMessages = await convertToModelMessages(messages);
-  const sentMessages = jsonSafe(modelMessages);
-  try {
-    await api(`/sessions/${sessionId}/model-prompts`, {
-      method: "POST",
-      body: JSON.stringify({
-        system_prompt: system,
-        messages: Array.isArray(sentMessages) ? sentMessages : [],
-        model: openaiModelName(),
-        message_id: turnMessageId,
-      }),
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not store the prompt.";
-    return new Response(message, { status: 502 });
-  }
+  const modelName = openaiModelName();
+  const captureRequest: LanguageModelMiddleware = {
+    specificationVersion: "v4",
+    wrapStream: async ({ doStream, params, model }) => {
+      const request = requestForCall(params, system);
+      const messagesForStore = Array.isArray(request.messages) ? request.messages : [];
+      try {
+        await api(`/sessions/${sessionId}/model-prompts`, {
+          method: "POST",
+          body: JSON.stringify({
+            system_prompt: request.system_prompt,
+            messages: messagesForStore,
+            model: model.modelId || modelName,
+            message_id: turnMessageId,
+          }),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Could not store the prompt.";
+        throw new Error(message);
+      }
+      return doStream();
+    },
+  };
 
   const result = streamText({
-    model: openai(openaiModelName()),
+    model: wrapLanguageModel({ model: openai(modelName), middleware: captureRequest }),
     output: Output.object({
       schema: turnScore,
       name: "turn_score",
