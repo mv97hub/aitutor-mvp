@@ -71,7 +71,7 @@ npm run dev --workspace web
 
 1. Open `/` and choose Storm. On the right, open a class notebook or press + for a new class. Storm can start Fractions, Reading, Science, or Super prompts. Function shifts stays off that shelf because it is for ages 15–17. Wolverine can start Function shifts.
 2. Inside a class, the block stepper shows the path. A choice widget sits under the tutor prompt. The rubric strip and the hint badge (nudge, analogy, or scaffold) sit above the composer. A wrong tap stores that choice's misconception before the model replies. The model writes the reply and grades a written explanation. It does not grade the taps.
-3. Open `/viewchats`, filter to Storm, and open the class. The transcript and checkpoint scores are the rows FastAPI stored. `/admin` edits blocks and does not list transcripts.
+3. Open `/viewchats`, filter to Storm, and open the class. The transcript and checkpoint scores are the rows FastAPI stored. The prompt icon on a class opens the system prompt and the messages that turn sent to the model. `/admin` edits blocks and does not list transcripts.
 4. Edit a block's objective, rubric rows, hint ladder, or widget and save. Start a new class from the kid page. The next turn uses the saved block.
 
 The chat route asks the model for a turn score: rubric rows met, a misconception if any, the hint tier, and the tutor reply. Choice widgets are graded by FastAPI first. A scored block does not advance until it has a passing result.

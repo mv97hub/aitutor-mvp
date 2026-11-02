@@ -444,3 +444,40 @@ def test_fractions_rewrites_in_place_under_an_open_class() -> None:
         if checkpoint["kind"] == "quiz"
     ]
     assert len(quiz_blocks) == 1
+
+
+def test_model_prompt_round_trip() -> None:
+    opened = client.post(
+        "/sessions",
+        json={"student_id": _storm_id(), "lesson_plan_id": _plan_id("fractions"), "fresh": True},
+    )
+    assert opened.status_code == 200
+    session_id = opened.json()["id"]
+    payload = {
+        "system_prompt": "You are the tutor for Storm.\n\nStay on the current block.",
+        "messages": [
+            {"role": "user", "content": "Hi! I'm ready to learn."},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hi Storm."}]},
+        ],
+        "model": "gpt-4o-mini",
+    }
+    saved = client.post(f"/sessions/{session_id}/model-prompts", json=payload)
+    assert saved.status_code == 200
+    body = saved.json()
+    assert body["seq"] == 1
+    assert body["system_prompt"] == payload["system_prompt"]
+    assert body["messages"] == payload["messages"]
+    assert body["model"] == "gpt-4o-mini"
+    again = client.post(
+        f"/sessions/{session_id}/model-prompts",
+        json={"system_prompt": "Second turn.", "messages": [{"role": "user", "content": "1/2"}], "model": "gpt-4o-mini"},
+    )
+    assert again.status_code == 200
+    assert again.json()["seq"] == 2
+    listed = client.get(f"/sessions/{session_id}/model-prompts")
+    assert listed.status_code == 200
+    rows = listed.json()
+    assert [row["seq"] for row in rows] == [1, 2]
+    assert rows[0]["messages"][1]["content"][0]["text"] == "Hi Storm."
+    missing = client.get("/sessions/00000000-0000-0000-0000-000000000000/model-prompts")
+    assert missing.status_code == 404

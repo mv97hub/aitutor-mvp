@@ -192,6 +192,16 @@ export type SessionSummary = {
   result_count: number;
 };
 
+export type ModelPrompt = {
+  id: string;
+  session_id: string;
+  seq: number;
+  system_prompt: string;
+  messages: unknown[];
+  model: string;
+  created_at: string;
+};
+
 export type SessionDetail = {
   id: string;
   status: string;
