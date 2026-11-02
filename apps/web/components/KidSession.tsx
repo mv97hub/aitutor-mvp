@@ -3,9 +3,9 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
-import { BlockStepper, ChoiceWidget, RubricStrip } from "@/components/LessonBlocks";
+import { BlockStepper, ChoiceWidget } from "@/components/LessonBlocks";
 import { api } from "@/lib/api";
 import { KICKOFF } from "@/lib/kickoff";
 import type { Board, CurrentBlock, LessonPlanSummary, SessionSummary, Student, StoredMessage } from "@/lib/types";
@@ -207,7 +207,6 @@ function ChatPanel({
           }}
         />
       ) : null}
-      {block && lessonStatus !== "completed" ? <RubricStrip block={block} /> : null}
       <form
         className="composer"
         onSubmit={(event) => {
@@ -240,6 +239,10 @@ function startablePlans(plans: LessonPlanSummary[], student: Student | null): Le
   return plans.filter((plan) => plan.topic_count > 0 && (student == null || planFits(student, plan)));
 }
 
+function childLabel(student: Student) {
+  return student.age == null ? student.display_name : `${student.display_name} · age ${student.age}`;
+}
+
 export function KidSession({
   initialStudents,
   initialPlans,
@@ -257,6 +260,10 @@ export function KidSession({
   const [error, setError] = useState(initialError);
   const [board, setBoard] = useState<Board | null>(null);
   const [opening, setOpening] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const [draftAge, setDraftAge] = useState("");
+  const [savingChild, setSavingChild] = useState(false);
   const choices = startablePlans(plans, learner);
 
   async function loadNotebooks(studentId: string) {
@@ -269,6 +276,7 @@ export function KidSession({
     setError(null);
     setBoard(null);
     setMaking(false);
+    setAdding(false);
     try {
       await loadNotebooks(student.id);
       setLearner(student);
@@ -324,6 +332,33 @@ export function KidSession({
     }
   }
 
+  async function createChild(event: FormEvent) {
+    event.preventDefault();
+    const name = draftName.trim();
+    const age = Number(draftAge);
+    if (!name || !Number.isInteger(age) || age < 4 || age > 18) {
+      setError("Enter a name and an age from 4 to 18.");
+      return;
+    }
+    setSavingChild(true);
+    setError(null);
+    try {
+      const student = await api<Student>("/students", {
+        method: "POST",
+        body: JSON.stringify({ display_name: name, age }),
+      });
+      const nextStudents = await api<Student[]>("/students");
+      setStudents(nextStudents);
+      setDraftName("");
+      setDraftAge("");
+      await chooseStudent(student);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add that child.");
+    } finally {
+      setSavingChild(false);
+    }
+  }
+
   async function reloadRoster() {
     try {
       const [nextStudents, nextPlans] = await Promise.all([
@@ -347,29 +382,59 @@ export function KidSession({
             <Link className="top-link" href="/admin">Edit lessons</Link>
           </div>
           <h1>Who&apos;s learning today?</h1>
-          <p className="lede">Pick a name. Then choose a class, or start a new one.</p>
-          {students.length === 0 ? <p className="lede">Loading the class list…</p> : null}
-          <div className="name-grid">
-            {students.map((student) => {
-              const look = lookFor(student.slug);
-              return (
-                <button
-                  key={student.id}
-                  type="button"
-                  className="name-card"
-                  disabled={opening}
-                  style={{ ["--wash" as string]: look.wash, ["--ink-color" as string]: look.ink }}
-                  onClick={() => void chooseStudent(student)}
-                >
-                  <span className="mark" style={{ background: look.ink }}>{look.mark}</span>
-                  <span>
-                    <strong>{student.display_name}</strong>
-                    <span className="hint">Open their classes</span>
-                  </span>
-                </button>
-              );
-            })}
+          <p className="lede">Choose a child, or add a new one. Then open a class.</p>
+          <label>
+            Child
+            <select
+              aria-label="Choose a child"
+              value=""
+              disabled={opening || students.length === 0}
+              onChange={(event) => {
+                const student = students.find((row) => row.id === event.target.value);
+                if (student) void chooseStudent(student);
+              }}
+            >
+              <option value="">{students.length === 0 ? "No children yet" : "Choose a child"}</option>
+              {students.map((student) => (
+                <option key={student.id} value={student.id}>{childLabel(student)}</option>
+              ))}
+            </select>
+          </label>
+          <div className="rail-actions">
+            <button type="button" className="ghost" onClick={() => { setAdding((open) => !open); setError(null); }}>
+              Add a new child
+            </button>
           </div>
+          {adding ? (
+            <form className="child-form" onSubmit={(event) => void createChild(event)}>
+              <label>
+                Name
+                <input
+                  value={draftName}
+                  onChange={(event) => setDraftName(event.target.value)}
+                  required
+                  maxLength={120}
+                  autoComplete="off"
+                />
+              </label>
+              <label>
+                Age
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={4}
+                  max={18}
+                  required
+                  value={draftAge}
+                  onChange={(event) => setDraftAge(event.target.value)}
+                />
+              </label>
+              <div className="rail-actions">
+                <button className="button" type="submit" disabled={savingChild}>Save child</button>
+                <button type="button" className="ghost" onClick={() => setAdding(false)}>Cancel</button>
+              </div>
+            </form>
+          ) : null}
           {error ? (
             <div className="banner" role="alert">
               <p>{error}</p>
@@ -389,30 +454,53 @@ export function KidSession({
       className={`shell ${board ? "is-class" : "is-shelf"}`}
       style={{ ["--wash" as string]: look.wash, ["--ink-color" as string]: look.ink }}
     >
-      <aside className={`rail ${board ? "lesson-desk" : ""}`}>
-        <div className="desk-top">
-          <div className="rail-head">
-            <p className="eyebrow">{board ? "Lesson desk" : "Learner"}</p>
-            <Link className="top-link" href="/admin">Edit lessons</Link>
-          </div>
-          {score ? (
-            <div className="desk-score" aria-label={`Score so far ${score.earned} of ${score.possible}`}>
-              <p className="eyebrow">Score so far</p>
-              <p className="desk-score-value">{score.earned}</p>
-              <p className="quiet">of {score.possible} in {board?.lesson_title}</p>
-            </div>
-          ) : (
-            <p className="lede">Classes are on the right. Start a new one, or open a notebook you already began.</p>
-          )}
-          <div className="who-pill">
-            <span className="mark" style={{ background: look.ink }}>{look.mark}</span>
-            <div>
-              <strong>{learner.display_name}</strong>
-              <p className="lesson-name">{board ? board.lesson_title : "No class open"}</p>
-            </div>
+      <aside className="rail class-rail">
+        <div className="rail-head">
+          <p className="eyebrow">Classes</p>
+          <Link className="top-link" href="/admin">Edit lessons</Link>
+        </div>
+        <div className="who-pill">
+          <span className="mark" style={{ background: look.ink }}>{look.mark}</span>
+          <div>
+            <strong>{learner.display_name}</strong>
+            <p className="lesson-name">
+              {board && !making ? board.lesson_title : learner.age == null ? "No class open" : `Age ${learner.age}`}
+            </p>
           </div>
         </div>
-        {board ? (
+        {score ? (
+          <p className="side-score" aria-label={`Score so far ${score.earned} of ${score.possible}`}>
+            Score so far <strong>{score.earned}</strong>
+            <span> of {score.possible}</span>
+          </p>
+        ) : null}
+        <ul className="class-list" aria-label="This child's classes">
+          <li>
+            <button
+              type="button"
+              className={`class-row class-row-new ${making ? "is-on" : ""}`}
+              disabled={opening}
+              onClick={() => setMaking(true)}
+            >
+              + New class
+            </button>
+          </li>
+          {notebooks.length === 0 ? <li className="quiet">No classes yet.</li> : null}
+          {notebooks.map((session) => (
+            <li key={session.id}>
+              <button
+                type="button"
+                className={`class-row ${board?.id === session.id && !making ? "is-on" : ""}`}
+                disabled={opening}
+                onClick={() => void openNotebook(session.id)}
+              >
+                <strong>{session.lesson_title}</strong>
+                <span>{classDate(session.updated_at)} · {session.status === "completed" ? "Finished" : "In progress"}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        {board && !making ? (
           <div className="desk-goals">
             <p className="eyebrow">Lesson goals</p>
             <ul className="goal-list">
@@ -423,22 +511,15 @@ export function KidSession({
                 </li>
               ))}
             </ul>
-            <div className="rail-actions">
-              <button type="button" className="ghost" onClick={() => void backToClasses()}>Classes</button>
-              <button type="button" className="ghost" onClick={() => { setLearner(null); setBoard(null); setMaking(false); }}>
-                Switch learner
-              </button>
-            </div>
           </div>
-        ) : (
-          <div className="rail-actions">
-            <button type="button" className="ghost" onClick={() => { setLearner(null); setMaking(false); }}>
-              Switch learner
-            </button>
-          </div>
-        )}
+        ) : null}
+        <div className="rail-actions">
+          <button type="button" className="ghost" onClick={() => { setLearner(null); setBoard(null); setMaking(false); }}>
+            Switch child
+          </button>
+        </div>
       </aside>
-      {board ? (
+      {board && !making ? (
         <section className="stage">
           <div className="stage-head">
             <h1>{board.lesson_title}</h1>
@@ -466,13 +547,12 @@ export function KidSession({
       ) : (
         <section className="stage shelf">
           <div className="stage-head">
-            <h1>Classes</h1>
+            <h1>{making ? "New class" : "Pick a class"}</h1>
             <p className="quiet">{learner.display_name}</p>
           </div>
           {making ? (
             <div className="lesson-pick">
-              <p className="eyebrow">New class</p>
-              <p className="lede">Choose the lesson for this notebook.</p>
+              <p className="lede">Choose the lesson. Your other classes stay in the list.</p>
               <div className="lesson-row" role="group" aria-label="Choose a lesson">
                 {choices.map((plan) => (
                   <button
@@ -486,37 +566,13 @@ export function KidSession({
                   </button>
                 ))}
               </div>
-              {choices.length === 0 ? <p className="lede">No lessons yet.</p> : null}
+              {choices.length === 0 ? <p className="lede">No lessons match this age.</p> : null}
               <div className="rail-actions">
                 <button type="button" className="ghost" onClick={() => setMaking(false)}>Cancel</button>
               </div>
             </div>
           ) : (
-            <div className="notebook-grid">
-              <button
-                type="button"
-                className="notebook notebook-new"
-                aria-label="New class"
-                disabled={opening}
-                onClick={() => setMaking(true)}
-              >
-                <span className="plus" aria-hidden="true">+</span>
-                <span>New class</span>
-              </button>
-              {notebooks.map((session) => (
-                <button
-                  key={session.id}
-                  type="button"
-                  className="notebook"
-                  disabled={opening}
-                  onClick={() => void openNotebook(session.id)}
-                >
-                  <strong>{session.lesson_title}</strong>
-                  <span className="notebook-meta">{classDate(session.updated_at)}</span>
-                  <span className="notebook-meta">{session.status === "completed" ? "Finished" : "In progress"}</span>
-                </button>
-              ))}
-            </div>
+            <p className="lede">Choose a class from the list, or start a new one.</p>
           )}
           {error ? (
             <div className="banner" role="alert">

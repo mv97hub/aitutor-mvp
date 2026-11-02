@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import type { BlockStep, CurrentBlock, KidQuiz } from "@/lib/types";
+import type { BlockStep, KidQuiz } from "@/lib/types";
 
 const KIND_LABEL: Record<string, string> = {
   discovery: "Discover",
@@ -10,12 +10,6 @@ const KIND_LABEL: Record<string, string> = {
   teach_back: "Teach the bot",
   teach: "Teach",
   practice: "Practice",
-};
-
-const HINT_LABEL: Record<string, string> = {
-  nudge: "Nudge",
-  analogy: "Analogy",
-  scaffold: "Scaffold",
 };
 
 export function BlockStepper({ steps }: { steps: BlockStep[] }) {
@@ -31,24 +25,6 @@ export function BlockStepper({ steps }: { steps: BlockStep[] }) {
         </li>
       ))}
     </ol>
-  );
-}
-
-export function RubricStrip({ block }: { block: CurrentBlock }) {
-  return (
-    <div className="rubric-strip" aria-label="Rubric">
-      {block.rubric.length === 0 ? <p className="quiet">No rubric rows on this block.</p> : null}
-      {block.rubric.map((row) => (
-        <p key={row.id} className={`rubric-chip ${row.met ? "is-met" : ""}`}>
-          <span>{row.met ? "Met" : "Not yet"}</span>
-          {row.text}
-        </p>
-      ))}
-      <p className={`hint-badge hint-${block.hint_tier}`}>
-        <span>Hint · {HINT_LABEL[block.hint_tier] ?? block.hint_tier}</span>
-        {block.hint_text ? <span className="quiet">{block.hint_text}</span> : null}
-      </p>
-    </div>
   );
 }
 

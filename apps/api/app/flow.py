@@ -44,14 +44,30 @@ def blank_to_none(value: str | None) -> str | None:
     return stripped or None
 
 
-def unique_slug(db: Session, title: str) -> str:
-    base = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:48] or "lesson"
+def _unique_slug(taken, title: str, fallback: str) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:48] or fallback
     slug = base
     suffix = 2
-    while db.scalar(select(LessonPlan.id).where(LessonPlan.slug == slug)):
+    while taken(slug):
         slug = f"{base[:40]}-{suffix}"
         suffix += 1
     return slug
+
+
+def unique_slug(db: Session, title: str) -> str:
+    return _unique_slug(
+        lambda slug: db.scalar(select(LessonPlan.id).where(LessonPlan.slug == slug)) is not None,
+        title,
+        "lesson",
+    )
+
+
+def unique_student_slug(db: Session, name: str) -> str:
+    return _unique_slug(
+        lambda slug: db.scalar(select(Student.id).where(Student.slug == slug)) is not None,
+        name,
+        "learner",
+    )
 
 
 def clear_active(db: Session) -> None:

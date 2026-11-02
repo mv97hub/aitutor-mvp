@@ -152,10 +152,59 @@ h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1.05; }
   overflow: auto;
 }
 
-.rail.lesson-desk {
+.rail.lesson-desk,
+.rail.class-rail {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.class-list {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  min-height: 0;
+  overflow: auto;
+}
+
+.rail.class-rail .class-list { flex: 1 1 auto; }
+
+.class-row {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: white;
+}
+
+.class-row span { color: var(--ink-soft); font-size: 0.84rem; }
+.class-row.is-on { border-color: var(--teal); background: #f3fbfa; }
+.class-row-new { color: var(--teal-deep); border-style: dashed; font-weight: 700; }
+
+.side-score {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+}
+
+.side-score strong {
+  color: var(--teal-deep);
+  font-family: var(--serif);
+  font-size: 1.6rem;
+  font-weight: 600;
+}
+
+.child-form { margin-top: 8px; }
+
+.rail.class-rail .desk-goals {
+  flex: 0 1 30%;
+  margin-top: 12px;
 }
 
 .desk-score-value {
@@ -351,15 +400,12 @@ h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1.05; }
 .stage > .banner,
 .stage > .block-map { flex: 0 0 auto; }
 
-.stage > .widget,
-.stage > .rubric-strip {
+.stage > .widget {
   flex: 0 1 auto;
   min-height: 0;
   overflow: auto;
+  max-height: 38%;
 }
-
-.stage > .widget { max-height: 38%; }
-.stage > .rubric-strip { max-height: 24%; }
 .widget textarea { min-height: 56px; }
 
 .block-map {
@@ -419,18 +465,6 @@ h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1.05; }
 }
 .widget-choice.is-on { border-color: var(--teal); background: #f3fbfa; }
 .widget-choice input { width: auto; }
-
-.rubric-strip { display: grid; gap: 6px; margin-top: 8px; }
-.rubric-chip, .hint-badge {
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: 12px;
-  background: var(--paper);
-  font-size: 0.92rem;
-}
-.rubric-chip span, .hint-badge span { display: block; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
-.rubric-chip.is-met { background: var(--good-wash); }
-.hint-badge { background: #fff6e8; }
 
 .top-links { display: flex; gap: 12px; }
 .age-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
