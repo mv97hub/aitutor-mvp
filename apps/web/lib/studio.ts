@@ -65,6 +65,7 @@ export type StudioCourse = {
   focus: string;
   theme: string;
   depth: "survey" | "standard" | "go_deep";
+  quiz_minutes: 2 | 5 | 10;
   sources: string;
   schema_version: number;
   close_default: StudioClose;
@@ -114,6 +115,10 @@ export const DEPTHS = [
   { value: "standard", label: "Standard" },
   { value: "go_deep", label: "Go deep" },
 ] as const;
+
+export const AGE_BANDS = ["6-8", "9-11", "12-14", "15-17"] as const;
+
+export const QUIZ_MINUTES = [2, 5, 10] as const;
 
 export function describeOperation(op: StudioOperation): string {
   const title = op.title ? `: ${op.title}` : "";

@@ -6,7 +6,9 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { BrandMark } from "@/components/BrandMark";
 import { api } from "@/lib/api";
 import {
+  AGE_BANDS,
   DEPTHS,
+  QUIZ_MINUTES,
   closeSummary,
   describeOperation,
   type StudioClose,
@@ -23,6 +25,7 @@ type Prefs = {
   focus: string;
   theme: string;
   depth: StudioCourse["depth"];
+  quizMinutes: StudioCourse["quiz_minutes"];
   sources: string;
   close_style: StudioClose["close_style"];
   answer_style: StudioClose["answer_style"];
@@ -34,10 +37,11 @@ type Prefs = {
 function prefsFrom(course: StudioCourse): Prefs {
   return {
     title: course.title,
-    audience: course.audience,
+    audience: (AGE_BANDS as readonly string[]).includes(course.audience) ? course.audience : "9-11",
     focus: course.focus,
     theme: course.theme,
     depth: course.depth,
+    quizMinutes: course.quiz_minutes,
     sources: course.sources,
     close_style: course.close_default.close_style,
     answer_style: course.close_default.answer_style,
@@ -160,6 +164,8 @@ export function CreateCourse() {
   const [draftCode, setDraftCode] = useState("");
   const [draftTitle, setDraftTitle] = useState("");
   const [prefs, setPrefs] = useState<Prefs | null>(null);
+  const [draft, setDraft] = useState<Prefs | null>(null);
+  const [prefError, setPrefError] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -215,6 +221,7 @@ export function CreateCourse() {
       api<StudioMessage[]>(`/studio/courses/${id}/messages`),
     ]);
     setCourse(next);
+    setDraft(null);
     setMessages(history);
     setOpen(new Set(next.units.map((unit) => unit.code)));
   }
@@ -245,31 +252,39 @@ export function CreateCourse() {
     }
   }
 
+  function cancelPrefs() {
+    setDraft(null);
+    setPrefError(null);
+  }
+
   async function savePrefs(event: FormEvent) {
     event.preventDefault();
-    if (!course || !prefs) return;
+    if (!course || !draft) return;
     setBusy(true);
-    setError(null);
+    setPrefError(null);
     try {
       const next = await api<StudioCourse>(`/studio/courses/${course.id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          title: prefs.title,
-          audience: prefs.audience,
-          focus: prefs.focus,
-          theme: prefs.theme,
-          depth: prefs.depth,
-          sources: prefs.sources.trim() || "none",
-          close_default: closeFrom(prefs),
+          title: course.title,
+          audience: draft.audience,
+          focus: course.focus,
+          theme: draft.theme.trim(),
+          depth: draft.depth,
+          quiz_minutes: draft.quizMinutes,
+          sources: draft.sources.trim() || "none",
+          close_default: closeFrom(draft),
         }),
       });
       setCourse(next);
       setCourses((rows) =>
         rows.map((row) => (row.id === next.id ? { ...row, title: next.title, updated_at: next.updated_at } : row)),
       );
+      setDraft(null);
+      setPrefError(null);
       setSavedNote("Saved");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save those preferences.");
+      setPrefError(err instanceof Error ? err.message : "Could not save those preferences.");
     } finally {
       setBusy(false);
     }
@@ -392,7 +407,8 @@ export function CreateCourse() {
     }
   }
 
-  const choicesOpen = prefs != null && prefs.answer_style !== "essay";
+  const choicesOpen = draft != null && draft.answer_style !== "essay";
+  const detailLabel = DEPTHS.find((item) => item.value === prefs?.depth)?.label ?? "Standard";
 
   return (
     <main className="ds-shell studio-shell">
@@ -489,128 +505,37 @@ export function CreateCourse() {
           </div>
         ) : (
           <>
-            <form className="studio-prefs" onSubmit={(event) => void savePrefs(event)}>
+            <div className="studio-prefs">
               <div className="studio-prefs-head">
-                <h1>
-                  <span className="studio-code">{course.code}</span>
-                  {prefs.title || course.title}
-                  <span className="studio-draft">{course.ready ? "Ready" : "Draft"}</span>
-                  <span className="studio-phase-name">{course.view.label}</span>
-                </h1>
-                <div className="rail-actions">
+                <div className="studio-prefs-title">
+                  <h1>
+                    <span className="studio-code">{course.code}</span>
+                    {course.title}
+                    <span className="studio-draft">{course.ready ? "Ready" : "Draft"}</span>
+                    <span className="studio-phase-name">{course.view.label}</span>
+                  </h1>
+                  <p className="studio-pref-summary">
+                    {detailLabel} · {course.quiz_minutes} minutes before the quiz
+                    {(AGE_BANDS as readonly string[]).includes(course.audience) ? ` · Ages ${course.audience}` : ""}
+                    {course.theme ? ` · ${course.theme}` : ""}
+                  </p>
+                </div>
+                <div className="studio-prefs-actions">
                   {savedNote ? <span className="studio-saved">{savedNote}</span> : null}
-                  <button className="button" type="submit" disabled={busy}>Save preferences</button>
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setPrefError(null);
+                      setDraft(prefsFrom(course));
+                    }}
+                  >
+                    Edit preferences
+                  </button>
                 </div>
               </div>
-              <div className="studio-grid">
-                <label>
-                  Title
-                  <input value={prefs.title} maxLength={240} required onChange={(event) => setPrefs({ ...prefs, title: event.target.value })} />
-                </label>
-                <label>
-                  Audience
-                  <input
-                    value={prefs.audience}
-                    placeholder="Grade 6, new to polygons"
-                    onChange={(event) => setPrefs({ ...prefs, audience: event.target.value })}
-                  />
-                </label>
-                <label>
-                  Focus
-                  <input
-                    value={prefs.focus}
-                    placeholder="triangles"
-                    onChange={(event) => setPrefs({ ...prefs, focus: event.target.value })}
-                  />
-                </label>
-                <label>
-                  Theme
-                  <input
-                    value={prefs.theme}
-                    placeholder="city planning, or no theme"
-                    onChange={(event) => setPrefs({ ...prefs, theme: event.target.value })}
-                  />
-                </label>
-                <label>
-                  Depth
-                  <select
-                    value={prefs.depth}
-                    onChange={(event) => setPrefs({ ...prefs, depth: event.target.value as Prefs["depth"] })}
-                  >
-                    {DEPTHS.map((item) => (
-                      <option key={item.value} value={item.value}>{item.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Framework to honor
-                  <input
-                    value={prefs.sources}
-                    placeholder="None"
-                    onChange={(event) => setPrefs({ ...prefs, sources: event.target.value })}
-                  />
-                </label>
-                <label>
-                  Close default
-                  <select
-                    value={prefs.close_style}
-                    onChange={(event) =>
-                      setPrefs({ ...prefs, close_style: event.target.value as Prefs["close_style"] })
-                    }
-                  >
-                    <option value="one">One question</option>
-                    <option value="several">Several questions</option>
-                  </select>
-                </label>
-                <label>
-                  Answer style
-                  <select
-                    value={prefs.answer_style}
-                    onChange={(event) =>
-                      setPrefs({ ...prefs, answer_style: event.target.value as Prefs["answer_style"] })
-                    }
-                  >
-                    <option value="multiple_choice">Multiple choice</option>
-                    <option value="essay">Essay</option>
-                    <option value="mixed">Mixed</option>
-                  </select>
-                </label>
-                {choicesOpen ? (
-                  <label>
-                    Multiple choice
-                    <select
-                      value={prefs.choice_mode}
-                      onChange={(event) =>
-                        setPrefs({ ...prefs, choice_mode: event.target.value as Prefs["choice_mode"] })
-                      }
-                    >
-                      <option value="predefined">Predefined</option>
-                      <option value="dynamic">Dynamic</option>
-                    </select>
-                  </label>
-                ) : null}
-                {choicesOpen && prefs.choice_mode === "predefined" ? (
-                  <label className="studio-span">
-                    Predefined choices
-                    <textarea
-                      value={prefs.itemsText}
-                      placeholder={"One choice per line"}
-                      onChange={(event) => setPrefs({ ...prefs, itemsText: event.target.value })}
-                    />
-                  </label>
-                ) : null}
-                {choicesOpen && prefs.choice_mode === "dynamic" ? (
-                  <label className="studio-span">
-                    Dynamic intent
-                    <input
-                      value={prefs.intent}
-                      placeholder="What the choices should test"
-                      onChange={(event) => setPrefs({ ...prefs, intent: event.target.value })}
-                    />
-                  </label>
-                ) : null}
-              </div>
-            </form>
+            </div>
             <div className="studio-tree" aria-label="Course so far">
               <div className="studio-strip" aria-label="Course phases">
                 {course.strip.map((item) => {
@@ -797,6 +722,147 @@ export function CreateCourse() {
           </div>
         ) : null}
       </section>
+      {draft ? (
+        <div className="prompt-backdrop" role="presentation" onMouseDown={cancelPrefs}>
+          <div
+            className="prompt-dialog settings-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="studio-pref-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <h2 id="studio-pref-title">Preferences</h2>
+                <p>A quest can still use a different close.</p>
+              </div>
+              <button type="button" className="ghost" onClick={cancelPrefs}>Close</button>
+            </header>
+            <form className="prompt-body" onSubmit={(event) => void savePrefs(event)}>
+              <label>
+                Detail
+                <select
+                  value={draft.depth}
+                  onChange={(event) => setDraft({ ...draft, depth: event.target.value as Prefs["depth"] })}
+                >
+                  {DEPTHS.map((item) => (
+                    <option key={item.value} value={item.value}>{item.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Minimum time before the closing quiz
+                <select
+                  value={draft.quizMinutes}
+                  onChange={(event) =>
+                    setDraft({ ...draft, quizMinutes: Number(event.target.value) as Prefs["quizMinutes"] })
+                  }
+                >
+                  {QUIZ_MINUTES.map((minutes) => (
+                    <option key={minutes} value={minutes}>{minutes} minutes</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Close default
+                <select
+                  value={draft.close_style}
+                  onChange={(event) =>
+                    setDraft({ ...draft, close_style: event.target.value as Prefs["close_style"] })
+                  }
+                >
+                  <option value="one">One question</option>
+                  <option value="several">Several questions</option>
+                </select>
+              </label>
+              <label>
+                Answer style
+                <select
+                  value={draft.answer_style}
+                  onChange={(event) =>
+                    setDraft({ ...draft, answer_style: event.target.value as Prefs["answer_style"] })
+                  }
+                >
+                  <option value="multiple_choice">Multiple choice</option>
+                  <option value="essay">Essay</option>
+                  <option value="mixed">Mixed</option>
+                </select>
+              </label>
+              {choicesOpen ? (
+                <label>
+                  Multiple choice source
+                  <select
+                    value={draft.choice_mode}
+                    onChange={(event) =>
+                      setDraft({ ...draft, choice_mode: event.target.value as Prefs["choice_mode"] })
+                    }
+                  >
+                    <option value="predefined">Predefined</option>
+                    <option value="dynamic">Written later in the kid session</option>
+                  </select>
+                </label>
+              ) : null}
+              {choicesOpen && draft.choice_mode === "predefined" ? (
+                <label>
+                  Predefined choices
+                  <textarea
+                    value={draft.itemsText}
+                    placeholder="One choice per line"
+                    onChange={(event) => setDraft({ ...draft, itemsText: event.target.value })}
+                  />
+                </label>
+              ) : null}
+              {choicesOpen && draft.choice_mode === "dynamic" ? (
+                <label>
+                  What the later choices should test
+                  <input
+                    value={draft.intent}
+                    onChange={(event) => setDraft({ ...draft, intent: event.target.value })}
+                  />
+                </label>
+              ) : null}
+              <label>
+                Theme
+                <input
+                  value={draft.theme}
+                  maxLength={240}
+                  placeholder="None"
+                  onChange={(event) => setDraft({ ...draft, theme: event.target.value })}
+                />
+              </label>
+              <label>
+                Audience
+                <select
+                  value={draft.audience}
+                  onChange={(event) => setDraft({ ...draft, audience: event.target.value })}
+                >
+                  {AGE_BANDS.map((band) => (
+                    <option key={band} value={band}>Ages {band}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Framework to honor
+                <input
+                  value={draft.sources}
+                  maxLength={80}
+                  placeholder="None"
+                  onChange={(event) => setDraft({ ...draft, sources: event.target.value })}
+                />
+              </label>
+              {prefError ? (
+                <div className="banner" role="alert">
+                  <p>{prefError}</p>
+                </div>
+              ) : null}
+              <div className="rail-actions">
+                <button className="button" type="submit" disabled={busy}>Save</button>
+                <button type="button" className="ghost" onClick={cancelPrefs}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
       {settingsOpen ? (
         <div className="prompt-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
           <div
