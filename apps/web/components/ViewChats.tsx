@@ -234,11 +234,19 @@ function PromptDialog({
   );
 }
 
+function scoreCountLabel(count: number) {
+  if (count === 0) return "None yet";
+  if (count === 1) return "1 score";
+  return `${count} scores`;
+}
+
 function SessionView({ session }: { session: SessionDetail }) {
   const [prompt, setPrompt] = useState<ModelPrompt | null>(null);
+  const [scoresOpen, setScoresOpen] = useState(false);
   const icons = promptOnRow(session);
   useEffect(() => {
     setPrompt(null);
+    setScoresOpen(false);
   }, [session.id]);
   const current = session.beats.find((beat) => beat.id === session.current_beat_id);
   const roleLabel: Record<string, string> = {
@@ -256,23 +264,42 @@ function SessionView({ session }: { session: SessionDetail }) {
         {session.quest.code} · {session.quest.course_title} · {session.status.replaceAll("_", " ")} · opened {when(session.created_at)}
         {current ? ` · now on ${roleLabel[current.role] ?? current.role}` : " · quest finished"}
       </p>
-      <h3>Scores</h3>
-      {session.results.length === 0 ? <p className="help">No beat scores stored yet.</p> : null}
-      <ul className="score-list">
-        {session.results.map((result) => (
-          <li key={result.id}>
-            <strong className={result.passed ? "pass" : "miss"}>
-              {result.passed ? "Passed" : "Not yet"} · {result.score}/100
-            </strong>
-            <span className="quiet">
-              {result.quest_title} · {roleLabel[result.beat_role] ?? result.beat_role} {result.beat_position} · {when(result.created_at)}
-              {result.hint_tier ? ` · hint ${result.hint_tier}` : ""}
+      <div className="score-fold">
+        <h3>
+          <button
+            type="button"
+            className="score-toggle"
+            aria-expanded={scoresOpen}
+            aria-controls="session-scores"
+            onClick={() => setScoresOpen((open) => !open)}
+          >
+            <span>Scores</span>
+            <span className="score-toggle-meta">
+              {scoreCountLabel(session.results.length)}
+              <span className="score-toggle-action">{scoresOpen ? "Hide" : "Show"}</span>
+              <span className="score-chevron" aria-hidden="true">{scoresOpen ? "▴" : "▾"}</span>
             </span>
-            <span>{result.feedback}</span>
-            {result.misconception ? <span className="quiet">Misconception: {result.misconception}</span> : null}
-          </li>
-        ))}
-      </ul>
+          </button>
+        </h3>
+        <div id="session-scores" hidden={!scoresOpen}>
+          {session.results.length === 0 ? <p className="help">No beat scores stored yet.</p> : null}
+          <ul className="score-list">
+            {session.results.map((result) => (
+              <li key={result.id}>
+                <strong className={result.passed ? "pass" : "miss"}>
+                  {result.passed ? "Passed" : "Not yet"} · {result.score}/100
+                </strong>
+                <span className="quiet">
+                  {result.quest_title} · {roleLabel[result.beat_role] ?? result.beat_role} {result.beat_position} · {when(result.created_at)}
+                  {result.hint_tier ? ` · hint ${result.hint_tier}` : ""}
+                </span>
+                <span>{result.feedback}</span>
+                {result.misconception ? <span className="quiet">Misconception: {result.misconception}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
       <h3>Transcript</h3>
       {session.messages.length === 0 ? <p className="help">No messages stored yet.</p> : null}
       <ol className="transcript-list">

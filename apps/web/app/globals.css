@@ -1576,6 +1576,51 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
   line-height: 22px;
 }
 
+.ds-desk .transcript-view .score-fold { margin: 20px 0 0; }
+
+.ds-desk .transcript-view .score-fold h3 { margin: 0; }
+
+.ds-desk .transcript-view .score-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  width: auto;
+  max-width: 100%;
+  margin: 0 -8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+
+.ds-desk .transcript-view .score-toggle:hover {
+  background: rgba(38, 49, 72, 0.06);
+}
+
+.ds-desk .transcript-view .score-toggle-meta {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: rgb(129, 133, 140);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.ds-desk .transcript-view .score-toggle-action {
+  color: rgb(15, 17, 21);
+  font-weight: 500;
+}
+
+.ds-desk .transcript-view .score-chevron {
+  width: 1em;
+  text-align: center;
+  line-height: 1;
+}
+
 .ds-desk label {
   color: rgb(15, 17, 21);
   font-size: 13px;
