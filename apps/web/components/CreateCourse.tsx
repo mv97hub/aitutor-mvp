@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { BrandMark } from "@/components/BrandMark";
@@ -400,6 +401,7 @@ export function CreateCourse() {
           <BrandMark />
         </div>
         <p className="ds-learner">Create course</p>
+        <Link href="/manage-courses" className="studio-manage-link">Manage courses</Link>
         <button type="button" className="button studio-new" onClick={() => setCreating((openForm) => !openForm)}>
           New course
         </button>

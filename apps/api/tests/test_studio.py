@@ -1167,3 +1167,187 @@ def test_goal_patch_for_an_existing_quest_code_writes_the_goal() -> None:
         assert stored["close"]["close_style"] == "one"
     finally:
         _wipe("ZZGEO")
+
+
+def _table_counts() -> dict[str, int]:
+    db = SessionLocal()
+    try:
+        return {
+            "courses": db.scalar(select(func.count()).select_from(Course)) or 0,
+            "messages": db.scalar(select(func.count()).select_from(Message)) or 0,
+            "sessions": db.scalar(select(func.count()).select_from(TutorSession)) or 0,
+        }
+    finally:
+        db.close()
+
+
+def test_wrong_password_does_nothing_and_the_right_password_deletes_the_studio_course() -> None:
+    course = _make("ZZDEL", "Delete me")
+    course_id = course["id"]
+    kept = _make("ZZKEEP", "Keep me")
+    before = _table_counts()
+    try:
+        planted = _proposal(
+            course_id,
+            "A quest with a close and a creation chat.",
+            [
+                _full("add", "unit", "ZZDEL-U1", parent="ZZDEL", title="Exile", learning_goal="The story begins."),
+                _full(
+                    "add",
+                    "quest",
+                    "ZZDEL-U1-Q1",
+                    parent="ZZDEL-U1",
+                    title="The bow",
+                    learning_goal="Name the bow.",
+                    close={
+                        "close_style": "one",
+                        "answer_style": "essay",
+                        "choice_mode": None,
+                        "items": [],
+                        "intent": "",
+                    },
+                ),
+                _full(
+                    "add",
+                    "move",
+                    "ZZDEL-U1-Q1-M1",
+                    parent="ZZDEL-U1-Q1",
+                    title="Draw the bow",
+                    learning_goal="Draw it.",
+                ),
+            ],
+        )
+        assert planted.status_code == 200, planted.text
+        accepted = client.post(f"/studio/courses/{course_id}/messages/{planted.json()['id']}/accept")
+        assert accepted.status_code == 200, accepted.text
+
+        wrong = client.post(f"/studio/courses/{course_id}/delete", json={"password": "not-the-password"})
+        assert wrong.status_code == 422
+        assert wrong.json()["detail"] == "The password is wrong."
+        assert "password:" not in wrong.json()["detail"]
+        still = client.get(f"/studio/courses/{course_id}")
+        assert still.status_code == 200
+        quest_id = still.json()["units"][0]["quests"][0]["id"]
+        assert still.json()["units"][0]["quests"][0]["close"]["close_style"] == "one"
+        assert client.get(f"/studio/courses/{course_id}/messages").json()
+        assert client.get(f"/studio/courses/{kept['id']}").status_code == 200
+        assert _table_counts() == before
+
+        deleted = client.post(f"/studio/courses/{course_id}/delete", json={"password": "BulmerGardens"})
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json()["deleted"] is True
+        assert client.get(f"/studio/courses/{course_id}").status_code == 404
+        assert client.get(f"/studio/courses/{kept['id']}").status_code == 200
+        codes = [row["code"] for row in client.get("/studio/courses").json()]
+        assert "ZZDEL" not in codes
+        assert "ZZKEEP" in codes
+        assert _table_counts() == before
+        db = SessionLocal()
+        try:
+            assert db.scalar(select(func.count()).select_from(StudioUnit).where(StudioUnit.course_id == course_id)) == 0
+            assert db.scalar(select(func.count()).select_from(StudioQuest).where(StudioQuest.course_id == course_id)) == 0
+            assert db.scalar(select(func.count()).select_from(StudioMove).where(StudioMove.course_id == course_id)) == 0
+            assert db.scalar(select(func.count()).select_from(StudioMessage).where(StudioMessage.course_id == course_id)) == 0
+            assert (
+                db.scalar(select(func.count()).select_from(StudioQuestClose).where(StudioQuestClose.quest_id == quest_id))
+                == 0
+            )
+        finally:
+            db.close()
+    finally:
+        _wipe("ZZDEL")
+        _wipe("ZZKEEP")
+
+
+def test_copy_writes_a_new_code_and_leaves_the_chat_behind() -> None:
+    course = _make("ZZMAN", "Manage me")
+    course_id = course["id"]
+    _wipe("ZZMAN2")
+    try:
+        prefs = client.patch(
+            f"/studio/courses/{course_id}",
+            json={
+                "title": "Manage me",
+                "audience": "Grade 6",
+                "focus": "triangles",
+                "theme": "city planning",
+                "depth": "go_deep",
+                "sources": "none",
+                "close_default": {
+                    "close_style": "one",
+                    "answer_style": "multiple_choice",
+                    "choice_mode": "dynamic",
+                    "items": [],
+                    "intent": "A new triangle question.",
+                },
+            },
+        )
+        assert prefs.status_code == 200, prefs.text
+        planted = _proposal(
+            course_id,
+            "Build the course, and keep this chat on the original.",
+            [
+                _full("add", "unit", "ZZMAN-U1", parent="ZZMAN", title="Exile", learning_goal="The story begins."),
+                _full(
+                    "add",
+                    "quest",
+                    "ZZMAN-U1-Q1",
+                    parent="ZZMAN-U1",
+                    title="The bow",
+                    learning_goal="Name the shape.",
+                    close={
+                        "close_style": "one",
+                        "answer_style": "essay",
+                        "choice_mode": None,
+                        "items": [],
+                        "intent": "",
+                    },
+                ),
+                _full(
+                    "add",
+                    "move",
+                    "ZZMAN-U1-Q1-M1",
+                    parent="ZZMAN-U1-Q1",
+                    title="Draw it",
+                    learning_goal="Draw the shape.",
+                ),
+            ],
+        )
+        assert planted.status_code == 200, planted.text
+        accepted = client.post(f"/studio/courses/{course_id}/messages/{planted.json()['id']}/accept")
+        assert accepted.status_code == 200, accepted.text
+        assert client.get(f"/studio/courses/{course_id}/messages").json()
+
+        copied = client.post(f"/studio/courses/{course_id}/copy", json={"title": "Copied course"})
+        assert copied.status_code == 200, copied.text
+        body = copied.json()
+        assert body["id"] != course_id
+        assert body["code"] == "ZZMAN2"
+        assert body["title"] == "Copied course"
+        assert body["audience"] == "Grade 6"
+        assert body["focus"] == "triangles"
+        assert body["depth"] == "go_deep"
+        assert body["theme"] == "city planning"
+        assert body["close_default"]["intent"] == "A new triangle question."
+        assert body["ready"] is False
+        unit = body["units"][0]
+        assert unit["code"] == "ZZMAN2-U1"
+        assert unit["title"] == "Exile"
+        quest = unit["quests"][0]
+        assert quest["code"] == "ZZMAN2-U1-Q1"
+        assert quest["learning_goal"] == "Name the shape."
+        assert quest["close"]["close_style"] == "one"
+        assert quest["close"]["answer_style"] == "essay"
+        assert quest["moves"][0]["code"] == "ZZMAN2-U1-Q1-M1"
+        assert quest["moves"][0]["learning_goal"] == "Draw the shape."
+        assert client.get(f"/studio/courses/{body['id']}/messages").json() == []
+        source = client.get(f"/studio/courses/{course_id}").json()
+        assert source["code"] == "ZZMAN"
+        assert source["units"][0]["quests"][0]["code"] == "ZZMAN-U1-Q1"
+        assert client.get(f"/studio/courses/{course_id}/messages").json()
+        listed = {row["code"]: row["title"] for row in client.get("/studio/courses").json()}
+        assert listed["ZZMAN2"] == "Copied course"
+        assert "ZZMAN2" not in [row["code"] for row in client.get("/courses").json()]
+    finally:
+        _wipe("ZZMAN")
+        _wipe("ZZMAN2")

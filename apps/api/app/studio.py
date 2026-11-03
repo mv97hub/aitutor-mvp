@@ -8,6 +8,7 @@ is until that patch is accepted.
 from __future__ import annotations
 
 import copy
+import hmac
 import json
 import re
 from datetime import datetime, timezone
@@ -46,6 +47,7 @@ DEFAULT_STUDIO_MODEL = "gpt-4o-mini"
 SCHEMA_VERSION = 1
 SETTINGS_ID = "default"
 STUDIO_TEMPERATURE = 0.4
+DELETE_PASSWORD = "BulmerGardens"
 
 COURSE_CODE = re.compile(r"^[A-Z][A-Z0-9]{1,15}$")
 NODE_CODE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+){1,6}$")
@@ -833,6 +835,120 @@ def create_course(db: Session, *, code: str, title: str) -> StudioCourse:
         ready=False,
     )
     db.add(course)
+    db.flush()
+    return course
+
+
+def delete_studio_course(db: Session, course: StudioCourse, password: str) -> None:
+    """Delete one studio course after the password. Tutor courses and kid chats stay."""
+    if not isinstance(password, str) or not hmac.compare_digest(password, DELETE_PASSWORD):
+        raise StudioError("password", "is wrong", plain="The password is wrong.")
+    db.delete(course)
+    db.flush()
+
+
+def _node_codes(course: StudioCourse) -> list[str]:
+    codes: list[str] = []
+    for unit in course.units:
+        codes.append(unit.code)
+        for quest in unit.quests:
+            codes.append(quest.code)
+            for move in quest.moves:
+                codes.append(move.code)
+    return codes
+
+
+def _retarget_code(code: str, old: str, new: str) -> str:
+    prefix = f"{old}-"
+    if code.startswith(prefix):
+        return f"{new}-{code[len(prefix):]}"
+    return code
+
+
+def fresh_course_code(db: Session, source: StudioCourse) -> str:
+    taken = set(db.scalars(select(StudioCourse.code)).all())
+    nodes = _node_codes(source)
+    for number in range(2, 1000):
+        suffix = str(number)
+        room = 16 - len(suffix)
+        if room < 1:
+            break
+        candidate = f"{source.code[:room]}{suffix}"
+        if candidate in taken or candidate == source.code or not COURSE_CODE.fullmatch(candidate):
+            continue
+        rewritten = [_retarget_code(code, source.code, candidate) for code in nodes]
+        if any(len(code) > 40 or not NODE_CODE.fullmatch(code) for code in rewritten):
+            continue
+        return candidate
+    raise StudioError("code", "a new code is not available", plain="Could not choose a new code.")
+
+
+def _copy_close(quest: StudioQuest, source: StudioQuestClose) -> None:
+    row = StudioQuestClose(
+        close_style=source.close_style,
+        answer_style=source.answer_style,
+        choice_mode=source.choice_mode,
+        items=copy.deepcopy(source.items or []),
+        intent=source.intent or "",
+    )
+    quest.close = row
+    session = object_session(quest)
+    if session is not None:
+        session.add(row)
+
+
+def copy_studio_course(db: Session, source: StudioCourse, title: str) -> StudioCourse:
+    """Copy the course under a new code and name. The creation chat is not copied."""
+    label = _text("title", title, required=True)
+    code = fresh_course_code(db, source)
+    course = StudioCourse(
+        code=code,
+        title=label,
+        audience=source.audience,
+        focus=source.focus,
+        theme=source.theme,
+        depth=source.depth,
+        sources=source.sources,
+        preferences=copy.deepcopy(source.preferences or {}),
+        schema_version=source.schema_version,
+        ready=source.ready,
+    )
+    db.add(course)
+    db.flush()
+    for unit in sorted(source.units, key=lambda row: (row.position, row.code)):
+        new_unit = StudioUnit(
+            course_id=course.id,
+            code=_retarget_code(unit.code, source.code, code),
+            position=unit.position,
+            title=unit.title,
+            learning_goal=unit.learning_goal,
+            success_criterion=unit.success_criterion,
+        )
+        course.units.append(new_unit)
+        db.flush()
+        for quest in sorted(unit.quests, key=lambda row: (row.position, row.code)):
+            new_quest = StudioQuest(
+                course_id=course.id,
+                code=_retarget_code(quest.code, source.code, code),
+                position=quest.position,
+                title=quest.title,
+                learning_goal=quest.learning_goal,
+                success_criterion=quest.success_criterion,
+            )
+            new_unit.quests.append(new_quest)
+            db.flush()
+            if quest.close is not None:
+                _copy_close(new_quest, quest.close)
+            for move in sorted(quest.moves, key=lambda row: (row.position, row.code)):
+                new_unit_move = StudioMove(
+                    course_id=course.id,
+                    code=_retarget_code(move.code, source.code, code),
+                    position=move.position,
+                    title=move.title,
+                    learning_goal=move.learning_goal,
+                    success_criterion=move.success_criterion,
+                )
+                new_quest.moves.append(new_unit_move)
     db.flush()
     return course
 
