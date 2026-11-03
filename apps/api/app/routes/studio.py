@@ -24,7 +24,6 @@ from app.schemas import (
 )
 from app.studio import (
     STUDIO_MODELS,
-    STUDIO_RESPONSE_SCHEMA,
     STUDIO_TEMPERATURE,
     StudioError,
     accept_proposal,
@@ -40,6 +39,7 @@ from app.studio import (
     load_course,
     mark_ready,
     message_out,
+    response_schema,
     set_model,
     set_phase_view,
     summary_out,
@@ -197,7 +197,7 @@ def get_prompt(course_id: UUID, db: Session = Depends(get_db)) -> StudioPromptOu
     return StudioPromptOut(
         model=settings.model,
         system_prompt=system_prompt(course, messages),
-        response_schema=STUDIO_RESPONSE_SCHEMA,
+        response_schema=response_schema(course),
         temperature=STUDIO_TEMPERATURE,
     )
 
