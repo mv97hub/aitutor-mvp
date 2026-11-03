@@ -1,10 +1,14 @@
+import copy
+
 from sqlalchemy import delete, func, select
 
 from fastapi.testclient import TestClient
 
+from app.course_io import CourseFileError, update_course_in_place
+from app.curriculum import COURSES
 from app.database import SessionLocal
 from app.main import app
-from app.models import Beat, Course, Quest, Session as TutorSession, Student, Unit
+from app.models import Beat, Course, Message, Quest, Session as TutorSession, Student, Unit
 from app.seed import seed
 from app.tutor_profile import reset_default_profile
 
@@ -76,6 +80,90 @@ def test_seed_is_idempotent_and_counts_the_map() -> None:
     assert ages["wolverine"] == 16
     assert "Co-Explorer" in persona
     assert interests == ["weather", "leadership"]
+
+
+def test_reseed_keeps_sessions_and_refreshes_quest_text() -> None:
+    db = SessionLocal()
+    try:
+        quest = db.scalar(select(Quest).where(Quest.code == "ROM-U2-Q1"))
+        beat = db.scalar(select(Beat).where(Beat.quest_id == quest.id, Beat.position == 1))
+        quest_id = quest.id
+        beat_id = beat.id
+        original_goal = quest.learning_goal
+        original_prompt = beat.prompt
+        quest.learning_goal = "Edited goal that the seed must replace."
+        beat.prompt = "Edited prompt that the seed must replace."
+        student = db.scalar(select(Student).where(Student.slug == "storm"))
+        tutor_session = TutorSession(
+            student_id=student.id,
+            quest_id=quest.id,
+            current_beat_id=beat.id,
+            status="in_progress",
+        )
+        db.add(tutor_session)
+        db.flush()
+        message = Message(
+            session_id=tutor_session.id,
+            role="user",
+            content="Two consuls can veto each other.",
+            seq=1,
+        )
+        db.add(message)
+        db.commit()
+        session_id = tutor_session.id
+        message_id = message.id
+
+        again = seed(db)
+
+        kept_session = db.get(TutorSession, session_id)
+        kept_message = db.get(Message, message_id)
+        refreshed = db.get(Quest, quest_id)
+        refreshed_beat = db.get(Beat, beat_id)
+        assert again == {"students_created": 0, "courses_created": 0}
+        assert kept_session.quest_id == quest_id
+        assert kept_session.current_beat_id == beat_id
+        assert kept_message.session_id == session_id
+        assert kept_message.content == "Two consuls can veto each other."
+        assert refreshed.learning_goal == original_goal
+        assert refreshed_beat.id == beat_id
+        assert refreshed_beat.prompt == original_prompt
+    finally:
+        db.close()
+
+
+def test_in_place_update_refuses_to_drop_a_quest_with_a_class() -> None:
+    db = SessionLocal()
+    try:
+        payload = copy.deepcopy(next(course for course in COURSES if course["code"] == "rome"))
+        for unit in payload["units"]:
+            unit["quests"] = [quest for quest in unit["quests"] if quest["code"] != "ROM-U4-BOSS"]
+        quest = db.scalar(select(Quest).where(Quest.code == "ROM-U4-BOSS"))
+        quest_id = quest.id
+        beat_id = db.scalar(
+            select(Beat.id).where(Beat.quest_id == quest.id).order_by(Beat.position)
+        )
+        student = db.scalar(select(Student).where(Student.slug == "storm"))
+        tutor_session = TutorSession(
+            student_id=student.id,
+            quest_id=quest.id,
+            current_beat_id=beat_id,
+            status="in_progress",
+        )
+        db.add(tutor_session)
+        db.commit()
+        session_id = tutor_session.id
+        refused = False
+        try:
+            update_course_in_place(db, payload)
+        except CourseFileError as exc:
+            refused = True
+            assert exc.field == "quests"
+            assert "ROM-U4-BOSS" in exc.message
+        assert refused
+        assert db.get(TutorSession, session_id) is not None
+        assert db.get(Quest, quest_id) is not None
+    finally:
+        db.close()
 
 
 def test_health_roster_and_age_filter() -> None:
