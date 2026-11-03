@@ -28,6 +28,7 @@ export type TutorProfile = {
   anti_spoiler: boolean;
   one_question: boolean;
   use_interests: boolean;
+  stay_on_course: boolean;
   growth_praise: boolean;
   updated_at?: string;
 };

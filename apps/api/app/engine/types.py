@@ -125,6 +125,7 @@ class Layer4Discourse:
     instructive: int = 3
     one_question: bool = True
     use_interests: bool = True
+    stay_on_course: bool = True
 
 
 @dataclass(frozen=True)

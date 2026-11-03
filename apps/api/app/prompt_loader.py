@@ -40,6 +40,14 @@ from app.tutor_profile import load_profile
 PASS_SCORE = 70
 
 
+def course_scope_on(profile: object) -> bool:
+    """Read the course guard. A missing attribute or a null older row counts as on."""
+    value = getattr(profile, "stay_on_course", True)
+    if value is None:
+        return True
+    return bool(value)
+
+
 def _rows(beat: Beat) -> tuple[RubricCriterion, ...]:
     rows = []
     for row in beat.rubric or []:
@@ -298,6 +306,7 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
         instructive=level,
         one_question=bool(profile.one_question),
         use_interests=bool(profile.use_interests),
+        stay_on_course=course_scope_on(profile),
     )
     affect = Layer5Affect(
         praise="growth-mindset-only" if profile.growth_praise else "result-or-effort"

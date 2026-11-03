@@ -80,6 +80,7 @@ class TutorProfileIn(BaseModel):
     anti_spoiler: bool = True
     one_question: bool = True
     use_interests: bool = True
+    stay_on_course: bool = True
     growth_praise: bool = True
 
     @model_validator(mode="after")

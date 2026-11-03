@@ -9,6 +9,7 @@ from app.curriculum import COURSES
 from app.database import SessionLocal
 from app.main import app
 from app.models import Beat, Course, Message, Quest, Session as TutorSession, Student, Unit
+from app.prompt_loader import course_scope_on
 from app.seed import seed
 from app.tutor_profile import reset_default_profile
 
@@ -771,6 +772,7 @@ def _profile(**overrides) -> dict:
         "anti_spoiler": True,
         "one_question": True,
         "use_interests": True,
+        "stay_on_course": True,
         "growth_praise": True,
     }
     body.update(overrides)
@@ -853,6 +855,51 @@ def test_one_tutor_profile_applies_to_every_student() -> None:
             f"/students/{storm['id']}",
             json={"tutor_persona": storm["tutor_persona"], "tutor_struggle_window": "minimum"},
         )
+
+
+def test_stay_on_course_rule_follows_the_profile_switch() -> None:
+    class OlderRow:
+        pass
+
+    class BlankRow:
+        stay_on_course = None
+
+    class OffRow:
+        stay_on_course = False
+
+    assert course_scope_on(OlderRow()) is True
+    assert course_scope_on(BlankRow()) is True
+    assert course_scope_on(OffRow()) is False
+
+    current = client.get("/tutor-profile")
+    assert current.status_code == 200
+    assert current.json()["stay_on_course"] is True
+
+    storm = _student("storm")
+    opened = client.post(
+        "/sessions",
+        json={"student_id": storm["id"], "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
+    )
+    assert opened.status_code == 200
+    session_id = opened.json()["id"]
+    course = "Ancient Rome: From Seven Hills to the Fall of the Empire"
+    on = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+    assert f"Course scope: stay on {course}." in on
+    assert "unit The Republic, and quest The Two-Captain Rule: Consuls and Veto Power" in on
+    assert "including closely related ideas that serve this learning goal." in on
+    assert "Do not follow a turn onto a different subject." in on
+    assert f"A short acknowledgment, then back to {course}." in on
+    assert "stay on topic" not in on.lower()
+    assert "Teach, then ask." in on
+
+    saved = client.put("/tutor-profile", json=_profile(stay_on_course=False))
+    assert saved.status_code == 200
+    assert saved.json()["stay_on_course"] is False
+    off = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+    assert "Course scope:" not in off
+    assert "Do not follow a turn onto a different subject." not in off
+    assert "Stay on the active move." in off
+    assert "Teach, then ask." in off
 
 
 def test_model_prompt_round_trip() -> None:

@@ -89,6 +89,7 @@ class TutorProfile(Base):
     anti_spoiler: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     one_question: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     use_interests: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    stay_on_course: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     growth_praise: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

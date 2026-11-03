@@ -21,6 +21,7 @@ def _out(row: TutorProfile) -> TutorProfileOut:
         anti_spoiler=row.anti_spoiler,
         one_question=row.one_question,
         use_interests=row.use_interests,
+        stay_on_course=row.stay_on_course,
         growth_praise=row.growth_praise,
         updated_at=row.updated_at,
     )
@@ -45,6 +46,7 @@ def put_tutor_profile(body: TutorProfileIn, db: Session = Depends(get_db)) -> Tu
         anti_spoiler=body.anti_spoiler,
         one_question=body.one_question,
         use_interests=body.use_interests,
+        stay_on_course=body.stay_on_course,
         growth_praise=body.growth_praise,
     )
     return _out(row)
