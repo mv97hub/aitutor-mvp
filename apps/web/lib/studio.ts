@@ -75,6 +75,7 @@ export type StudioCourse = {
   strip: StudioStripPhase[];
   view: StudioView;
   units: StudioUnit[];
+  undo: boolean;
   updated_at: string;
 };
 
@@ -93,6 +94,7 @@ export type StudioOperation = {
   title?: string | null;
   learning_goal?: string | null;
   success_criterion?: string | null;
+  position?: number | null;
 };
 
 export type StudioMessage = {
@@ -100,7 +102,7 @@ export type StudioMessage = {
   role: "user" | "assistant";
   content: string;
   seq: number;
-  proposal: { operations: StudioOperation[] } | null;
+  proposal: { operations: StudioOperation[]; phase?: StudioPhaseName } | null;
   applied: boolean;
   created_at: string;
 };

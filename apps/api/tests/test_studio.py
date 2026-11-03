@@ -1378,7 +1378,7 @@ def test_copy_writes_a_new_code_and_leaves_the_chat_behind() -> None:
 
 
 def test_preference_save_writes_the_choices_and_cancel_does_not() -> None:
-    course = _make("ZZPREF", "Preferences")
+    course = _make("ZZPREFS", "Preferences")
     course_id = course["id"]
     try:
         assert course["depth"] == "standard"
@@ -1486,7 +1486,7 @@ def test_preference_save_writes_the_choices_and_cancel_does_not() -> None:
         assert kept["quiz_minutes"] == 10
         assert kept["depth"] == "go_deep"
     finally:
-        _wipe("ZZPREF")
+        _wipe("ZZPREFS")
 
 
 def test_unit_patch_with_depth_still_writes_the_unit() -> None:
@@ -1745,3 +1745,100 @@ def test_phase_schema_limits_fields_and_goals_skips_a_new_unit() -> None:
         assert body["units"][0]["quests"][0]["learning_goal"] == "Name the first winners."
     finally:
         _wipe("ZZPHASE")
+
+
+def test_one_item_can_be_accepted_edited_and_undone() -> None:
+    course = _make("ZZEDIT", "Edit check")
+    course_id = course["id"]
+    copy_code = None
+    try:
+        assert course["undo"] is False
+        draft = _proposal(
+            course_id,
+            "Two periods.",
+            [
+                _full("add", "unit", "ZZEDIT-U1", parent="ZZEDIT", title="Opening"),
+                _full("add", "unit", "ZZEDIT-U2", parent="ZZEDIT", title="Later"),
+            ],
+        )
+        assert draft.status_code == 200, draft.text
+        assert draft.json()["proposal"]["phase"] == "structure"
+        message_id = draft.json()["id"]
+
+        skipped = client.post(
+            f"/studio/courses/{course_id}/messages/{message_id}/dismiss",
+            json={"indexes": [0]},
+        )
+        assert skipped.status_code == 200, skipped.text
+        assert [op["code"] for op in skipped.json()["proposal"]["operations"]] == ["ZZEDIT-U2"]
+        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+
+        missing = client.post(
+            f"/studio/courses/{course_id}/messages/{message_id}/accept",
+            json={"indexes": [4]},
+        )
+        assert missing.status_code == 422
+        assert missing.json()["detail"] == "That change is not in this proposal."
+
+        one = client.post(
+            f"/studio/courses/{course_id}/messages/{message_id}/accept",
+            json={"indexes": [0]},
+        )
+        assert one.status_code == 200, one.text
+        assert [unit["code"] for unit in one.json()["course"]["units"]] == ["ZZEDIT-U2"]
+        assert one.json()["message"]["applied"] is True
+        assert [op["code"] for op in one.json()["message"]["proposal"]["operations"]] == ["ZZEDIT-U2"]
+        assert one.json()["course"]["undo"] is True
+
+        undone = client.post(f"/studio/courses/{course_id}/undo")
+        assert undone.status_code == 200, undone.text
+        assert undone.json()["units"] == []
+        assert undone.json()["undo"] is False
+        restored = client.get(f"/studio/courses/{course_id}/messages").json()[-1]
+        assert restored["applied"] is False
+        assert [op["code"] for op in restored["proposal"]["operations"]] == ["ZZEDIT-U2"]
+
+        again = client.post(f"/studio/courses/{course_id}/messages/{message_id}/accept")
+        assert again.status_code == 200, again.text
+        edited = client.post(
+            f"/studio/courses/{course_id}/edit",
+            json={"kind": "unit", "code": "ZZEDIT-U2", "title": "Later years"},
+        )
+        assert edited.status_code == 200, edited.text
+        assert edited.json()["units"][0]["title"] == "Later years"
+        assert edited.json()["phase"]["name"] == "structure"
+        rolled = client.post(f"/studio/courses/{course_id}/undo")
+        assert rolled.status_code == 200, rolled.text
+        assert rolled.json()["units"][0]["title"] == "Later"
+
+        quest = _proposal(
+            course_id,
+            "One quest, still in Goals after this.",
+            [_full("add", "quest", "ZZEDIT-U2-Q1", parent="ZZEDIT-U2", title="Winners")],
+        )
+        assert quest.status_code == 200, quest.text
+        planted = client.post(f"/studio/courses/{course_id}/messages/{quest.json()['id']}/accept")
+        assert planted.status_code == 200, planted.text
+        assert planted.json()["course"]["phase"]["name"] == "goals"
+        retitled = client.post(
+            f"/studio/courses/{course_id}/edit",
+            json={"kind": "unit", "code": "ZZEDIT-U2", "title": "Still editable"},
+        )
+        assert retitled.status_code == 200, retitled.text
+        assert retitled.json()["units"][0]["title"] == "Still editable"
+        assert retitled.json()["phase"]["name"] == "goals"
+
+        copied = client.post(f"/studio/courses/{course_id}/copy", json={"title": "Edit copy"})
+        assert copied.status_code == 200, copied.text
+        copy_code = copied.json()["code"]
+        assert copied.json()["undo"] is False
+        copy_undo = client.post(f"/studio/courses/{copied.json()['id']}/undo")
+        assert copy_undo.status_code == 422
+        assert copy_undo.json()["detail"] == "There is nothing to undo."
+        assert client.get(f"/studio/courses/{course_id}").json()["units"][0]["title"] == "Still editable"
+        tutor_codes = [row["code"] for row in client.get("/courses").json()]
+        assert "ZZEDIT" not in tutor_codes
+    finally:
+        if copy_code:
+            _wipe(copy_code)
+        _wipe("ZZEDIT")

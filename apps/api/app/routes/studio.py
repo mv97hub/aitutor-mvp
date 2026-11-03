@@ -14,6 +14,8 @@ from app.schemas import (
     StudioCourseOut,
     StudioCourseSummary,
     StudioDeleteIn,
+    StudioEditIn,
+    StudioIndexesIn,
     StudioMessageIn,
     StudioMessageOut,
     StudioPhaseIn,
@@ -33,6 +35,7 @@ from app.studio import (
     create_course,
     delete_studio_course,
     dismiss_proposal,
+    edit_item,
     ensure_settings,
     list_courses,
     list_messages,
@@ -44,6 +47,7 @@ from app.studio import (
     set_phase_view,
     summary_out,
     system_prompt,
+    undo_last,
     update_preferences,
 )
 
@@ -165,12 +169,15 @@ def post_message(
 
 @router.post("/courses/{course_id}/messages/{message_id}/accept", response_model=StudioAcceptOut)
 def post_accept(
-    course_id: UUID, message_id: UUID, db: Session = Depends(get_db)
+    course_id: UUID,
+    message_id: UUID,
+    body: StudioIndexesIn | None = None,
+    db: Session = Depends(get_db),
 ) -> StudioAcceptOut:
     course = _course(db, course_id)
     message = _message(db, course_id, message_id)
     try:
-        accept_proposal(db, course, message)
+        accept_proposal(db, course, message, None if body is None else body.indexes)
     except StudioError as exc:
         raise _fail(exc) from exc
     return StudioAcceptOut(course=course_out(course), message=message_out(message))
@@ -178,15 +185,47 @@ def post_accept(
 
 @router.post("/courses/{course_id}/messages/{message_id}/dismiss", response_model=StudioMessageOut)
 def post_dismiss(
-    course_id: UUID, message_id: UUID, db: Session = Depends(get_db)
+    course_id: UUID,
+    message_id: UUID,
+    body: StudioIndexesIn | None = None,
+    db: Session = Depends(get_db),
 ) -> StudioMessageOut:
     course = _course(db, course_id)
     message = _message(db, course_id, message_id)
     try:
-        dismiss_proposal(course, message)
+        dismiss_proposal(course, message, None if body is None else body.indexes)
     except StudioError as exc:
         raise _fail(exc) from exc
     return message_out(message)
+
+
+@router.post("/courses/{course_id}/edit", response_model=StudioCourseOut)
+def post_edit(course_id: UUID, body: StudioEditIn, db: Session = Depends(get_db)) -> StudioCourseOut:
+    course = _course(db, course_id)
+    try:
+        edit_item(
+            db,
+            course,
+            kind=body.kind,
+            code=body.code,
+            title=body.title,
+            learning_goal=body.learning_goal,
+            success_criterion=body.success_criterion,
+        )
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    return course_out(course)
+
+
+@router.post("/courses/{course_id}/undo", response_model=StudioCourseOut)
+def post_undo(course_id: UUID, db: Session = Depends(get_db)) -> StudioCourseOut:
+    course = _course(db, course_id)
+    try:
+        undo_last(db, course)
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    fresh = load_course(db, course_id)
+    return course_out(fresh or course)
 
 
 @router.get("/courses/{course_id}/prompt", response_model=StudioPromptOut)

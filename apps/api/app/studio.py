@@ -13,6 +13,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, object_session, selectinload
@@ -575,17 +576,20 @@ def _outside_phase(course: StudioCourse, op_name: str, kind: str, code) -> str |
     return None
 
 
-def split_patch(course: StudioCourse, patch) -> tuple[list[dict], list[str], list[dict]]:
-    """Plan each operation. A bad sibling is skipped. Nothing is written."""
-    nodes = {
-        course.code: _Node("course", course.code, None, 0),
-    }
+def _nodes_for(course: StudioCourse) -> dict[str, _Node]:
+    nodes = {course.code: _Node("course", course.code, None, 0)}
     for unit in course.units:
         nodes[unit.code] = _Node("unit", unit.code, course.code, unit.position)
         for quest in unit.quests:
             nodes[quest.code] = _Node("quest", quest.code, unit.code, quest.position)
             for move in quest.moves:
                 nodes[move.code] = _Node("move", move.code, quest.code, move.position)
+    return nodes
+
+
+def split_patch(course: StudioCourse, patch) -> tuple[list[dict], list[str], list[dict]]:
+    """Plan each operation. A bad sibling is skipped. Nothing is written."""
+    nodes = _nodes_for(course)
     state = {
         "title": course.title,
         "audience": course.audience,
@@ -1040,7 +1044,7 @@ def copy_studio_course(db: Session, source: StudioCourse, title: str) -> StudioC
         depth=source.depth,
         quiz_minutes=source.quiz_minutes,
         sources=source.sources,
-        preferences=copy.deepcopy(source.preferences or {}),
+        preferences=_preferences_without_undo(source),
         schema_version=source.schema_version,
         ready=source.ready,
     )
@@ -1154,7 +1158,10 @@ def add_message(
         if not kept:
             plain = " ".join(skipped) if skipped else "That change had nothing to save."
             raise StudioError("patch", "needs at least one add, update, or remove", plain=plain)
-        stored = {"operations": copy.deepcopy(kept)}
+        phase = proposal.get("phase") if isinstance(proposal, dict) else None
+        if phase not in ("structure", "goals", "close", "ready"):
+            phase = viewed_phase(course)["name"]
+        stored = {"operations": copy.deepcopy(kept), "phase": phase}
         if skipped:
             text = text.rstrip() + "\n" + "\n".join(skipped)
     seq = db.scalar(select(func.max(StudioMessage.seq)).where(StudioMessage.course_id == course.id))
@@ -1172,30 +1179,262 @@ def add_message(
     return message
 
 
-def accept_proposal(db: Session, course: StudioCourse, message: StudioMessage) -> None:
+_UNDO = "_undo"
+
+
+def _preferences_without_undo(course: StudioCourse) -> dict:
+    prefs = copy.deepcopy(course.preferences or {})
+    if isinstance(prefs, dict):
+        prefs.pop(_UNDO, None)
+    return prefs if isinstance(prefs, dict) else {}
+
+
+def has_undo(course: StudioCourse) -> bool:
+    prefs = course.preferences if isinstance(course.preferences, dict) else {}
+    undo = prefs.get(_UNDO)
+    return isinstance(undo, dict) and isinstance(undo.get("course"), dict)
+
+
+def _proposal_phase(proposal) -> str | None:
+    if isinstance(proposal, dict) and proposal.get("phase") in ("structure", "goals", "close", "ready"):
+        return proposal["phase"]
+    return None
+
+
+def _proposal_ops(message: StudioMessage) -> list[dict]:
+    proposal = message.proposal if isinstance(message.proposal, dict) else None
+    ops = proposal.get("operations") if proposal else None
+    if not isinstance(ops, list) or not ops:
+        raise StudioError("proposal", "there is nothing to accept")
+    return list(ops)
+
+
+def _pick_indexes(count: int, indexes: list[int] | None) -> list[int]:
+    if indexes is None:
+        return list(range(count))
+    if not indexes:
+        raise StudioError("items", "choose at least one", plain="Choose at least one change.")
+    chosen: list[int] = []
+    for index in indexes:
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0 or index >= count or index in chosen:
+            raise StudioError("items", "is not in this proposal", plain="That change is not in this proposal.")
+        chosen.append(index)
+    return chosen
+
+
+def _store_ops(ops: list[dict], phase: str | None) -> dict:
+    stored: dict = {"operations": ops}
+    if phase:
+        stored["phase"] = phase
+    return stored
+
+
+def _course_snapshot(course: StudioCourse) -> dict:
+    units = []
+    for unit in sorted(course.units, key=lambda row: (row.position, row.code)):
+        quests = []
+        for quest in sorted(unit.quests, key=lambda row: (row.position, row.code)):
+            close = None
+            if quest.close is not None:
+                close = {
+                    "close_style": quest.close.close_style,
+                    "answer_style": quest.close.answer_style,
+                    "choice_mode": quest.close.choice_mode,
+                    "items": copy.deepcopy(quest.close.items or []),
+                    "intent": quest.close.intent or "",
+                }
+            quests.append(
+                {
+                    "code": quest.code,
+                    "position": quest.position,
+                    "title": quest.title,
+                    "learning_goal": quest.learning_goal,
+                    "success_criterion": quest.success_criterion,
+                    "close": close,
+                    "moves": [
+                        {
+                            "code": move.code,
+                            "position": move.position,
+                            "title": move.title,
+                            "learning_goal": move.learning_goal,
+                            "success_criterion": move.success_criterion,
+                        }
+                        for move in sorted(quest.moves, key=lambda row: (row.position, row.code))
+                    ],
+                }
+            )
+        units.append(
+            {
+                "code": unit.code,
+                "position": unit.position,
+                "title": unit.title,
+                "learning_goal": unit.learning_goal,
+                "success_criterion": unit.success_criterion,
+                "quests": quests,
+            }
+        )
+    return {
+        "title": course.title,
+        "audience": course.audience,
+        "focus": course.focus,
+        "theme": course.theme,
+        "depth": course.depth,
+        "quiz_minutes": course.quiz_minutes,
+        "sources": course.sources,
+        "ready": bool(course.ready),
+        "schema_version": course.schema_version,
+        "preferences": _preferences_without_undo(course),
+        "units": units,
+    }
+
+
+def _remember_undo(course: StudioCourse, message: StudioMessage | None) -> None:
+    prefs = _preferences_without_undo(course)
+    prefs[_UNDO] = {
+        "message_id": str(message.id) if message is not None else None,
+        "applied": bool(message.applied) if message is not None else None,
+        "proposal": copy.deepcopy(message.proposal) if message is not None else None,
+        "course": _course_snapshot(course),
+    }
+    course.preferences = prefs
+
+
+def _restore_course(db: Session, course: StudioCourse, snap: dict) -> None:
+    for key in ("title", "audience", "focus", "theme", "depth", "quiz_minutes", "sources", "ready", "schema_version"):
+        setattr(course, key, snap[key])
+    course.preferences = dict(snap.get("preferences") or {})
+    for unit in list(course.units):
+        db.delete(unit)
+    course.units.clear()
+    db.flush()
+    db.expire(course, ["units"])
+    for unit_data in snap.get("units") or []:
+        unit = StudioUnit(
+            course_id=course.id,
+            code=unit_data["code"],
+            position=unit_data["position"],
+            title=unit_data["title"],
+            learning_goal=unit_data.get("learning_goal") or "",
+            success_criterion=unit_data.get("success_criterion") or "",
+        )
+        course.units.append(unit)
+        db.flush()
+        for quest_data in unit_data.get("quests") or []:
+            quest = StudioQuest(
+                course_id=course.id,
+                code=quest_data["code"],
+                position=quest_data["position"],
+                title=quest_data["title"],
+                learning_goal=quest_data.get("learning_goal") or "",
+                success_criterion=quest_data.get("success_criterion") or "",
+            )
+            unit.quests.append(quest)
+            db.flush()
+            close = quest_data.get("close")
+            if isinstance(close, dict):
+                _fill_close(quest, close)
+            for move_data in quest_data.get("moves") or []:
+                quest.moves.append(
+                    StudioMove(
+                        course_id=course.id,
+                        code=move_data["code"],
+                        position=move_data["position"],
+                        title=move_data["title"],
+                        learning_goal=move_data.get("learning_goal") or "",
+                        success_criterion=move_data.get("success_criterion") or "",
+                    )
+                )
+    db.flush()
+
+
+def accept_proposal(
+    db: Session, course: StudioCourse, message: StudioMessage, indexes: list[int] | None = None
+) -> None:
     if message.course_id != course.id:
         raise StudioError("message", "is not part of this course", status=404)
     if message.applied:
         raise StudioError("proposal", "that change is already saved", status=409)
-    if not message.proposal:
-        raise StudioError("proposal", "there is nothing to accept")
-    apply_patch(db, course, message.proposal)
-    message.applied = True
+    ops = _proposal_ops(message)
+    chosen = _pick_indexes(len(ops), indexes)
+    selected = [ops[index] for index in chosen]
+    _remember_undo(course, message)
+    apply_patch(db, course, {"operations": selected})
+    chosen_set = set(chosen)
+    remaining = [op for index, op in enumerate(ops) if index not in chosen_set]
+    if remaining:
+        message.proposal = _store_ops(remaining, _proposal_phase(message.proposal))
+        message.applied = False
+    else:
+        message.applied = True
     if course_phase(course)["name"] != "ready":
         course.ready = False
     course.updated_at = _now()
     db.flush()
 
 
-def dismiss_proposal(course: StudioCourse, message: StudioMessage) -> None:
+def dismiss_proposal(course: StudioCourse, message: StudioMessage, indexes: list[int] | None = None) -> None:
     if message.course_id != course.id:
         raise StudioError("message", "is not part of this course", status=404)
     if message.applied:
         raise StudioError("proposal", "that change is already saved", status=409)
-    if not message.proposal:
-        raise StudioError("proposal", "there is nothing to dismiss")
-    message.proposal = None
+    ops = _proposal_ops(message)
+    if indexes is None:
+        message.proposal = None
+    else:
+        chosen = set(_pick_indexes(len(ops), indexes))
+        remaining = [op for index, op in enumerate(ops) if index not in chosen]
+        message.proposal = _store_ops(remaining, _proposal_phase(message.proposal)) if remaining else None
     course.updated_at = _now()
+
+
+def edit_item(
+    db: Session,
+    course: StudioCourse,
+    *,
+    kind: str,
+    code: str,
+    title: str | None,
+    learning_goal: str | None,
+    success_criterion: str | None,
+) -> None:
+    if kind not in ("unit", "quest", "move"):
+        raise StudioError("kind", "must be a unit, quest, or move", plain="Edit a unit, quest, or move.")
+    raw: dict = {"op": "update", "kind": kind, "code": code}
+    if title is not None:
+        raw["title"] = title
+    if learning_goal is not None:
+        raw["learning_goal"] = learning_goal
+    if success_criterion is not None:
+        raw["success_criterion"] = success_criterion
+    cleaned = _keep_tier_fields(raw, "update")
+    step = _plan_update(course.code, cleaned, _nodes_for(course), {})
+    if step is None:
+        raise StudioError("patch", "needs a change", plain="That change had nothing to save.")
+    _remember_undo(course, None)
+    _apply(course, [step])
+    if course_phase(course)["name"] != "ready":
+        course.ready = False
+    course.updated_at = _now()
+    db.flush()
+
+
+def undo_last(db: Session, course: StudioCourse) -> None:
+    prefs = course.preferences if isinstance(course.preferences, dict) else {}
+    undo = prefs.get(_UNDO) if isinstance(prefs, dict) else None
+    if not isinstance(undo, dict) or not isinstance(undo.get("course"), dict):
+        raise StudioError("proposal", "nothing to undo", plain="There is nothing to undo.")
+    message = None
+    message_id = undo.get("message_id")
+    if message_id:
+        message = db.get(StudioMessage, UUID(str(message_id)))
+        if message is None or message.course_id != course.id:
+            raise StudioError("message", "that undo is no longer available", plain="That undo is no longer available.")
+    _restore_course(db, course, undo["course"])
+    if message is not None:
+        message.proposal = copy.deepcopy(undo.get("proposal"))
+        message.applied = bool(undo.get("applied"))
+    course.updated_at = _now()
+    db.flush()
 
 
 def ensure_settings(db: Session) -> StudioSettings:
@@ -1508,6 +1747,7 @@ def course_out(course: StudioCourse) -> StudioCourseOut:
             codes=viewed_phase(course)["codes"],
         ),
         units=units,
+        undo=has_undo(course),
         updated_at=course.updated_at,
     )
 
