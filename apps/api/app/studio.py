@@ -147,7 +147,10 @@ STUDIO_RESPONSE_SCHEMA: dict = {
     "properties": {
         "reply": {
             "type": "string",
-            "description": "What the creator reads. Say which framework a suggestion comes from.",
+            "description": (
+                "What the creator reads. Say which framework a suggestion comes from. "
+                "Do not say the course was saved or that the structure was accepted."
+            ),
         },
         "patch": {
             "description": "Null when nothing should change. Otherwise typed add, update, or remove operations.",
@@ -173,11 +176,20 @@ STUDIO_RESPONSE_SCHEMA: dict = {
 
 
 class StudioError(Exception):
-    def __init__(self, field: str, message: str, status: int = 422) -> None:
+    def __init__(self, field: str, message: str, status: int = 422, plain: str | None = None) -> None:
         self.field = field
         self.message = message
         self.status = status
-        super().__init__(f"{field}: {message}")
+        self.plain = plain if plain is not None else f"{field}: {message}"
+        super().__init__(self.plain)
+
+
+POSITION_REASON = "Position must be an integer from 1 to 200."
+
+
+def rejection_reply(_model_reply: str, reason: str) -> str:
+    """The chat shows this reason alone. The model's claim that it saved is dropped."""
+    return reason.strip()
 
 
 class _Node:
@@ -353,10 +365,8 @@ def close_default_of(course: StudioCourse) -> dict:
 
 
 def _position(value) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise StudioError("position", "must be a whole number")
-    if value < 1 or value > 200:
-        raise StudioError("position", "must be from 1 to 200")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > 200:
+        raise StudioError("position", "must be an integer from 1 to 200", plain=POSITION_REASON)
     return value
 
 
@@ -366,7 +376,11 @@ def _slot(existing: list, row, position: int) -> None:
         key=lambda item: (item.position, item.code),
     )
     if position < 1 or position > len(others) + 1:
-        raise StudioError("position", "is outside this list")
+        raise StudioError(
+            "position",
+            "is past the end of this list",
+            plain="Position is past the end of this list.",
+        )
     ordered = others[: position - 1] + [row] + others[position - 1 :]
     for index, item in enumerate(ordered, start=1):
         item.position = index
@@ -460,7 +474,7 @@ def _siblings(nodes: dict[str, _Node], parent: str, kind: str) -> list[_Node]:
     return [node for node in nodes.values() if node.parent == parent and node.kind == kind]
 
 
-def _plan_add(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict) -> dict:
+def _plan_add(course_code: str, raw: dict, nodes: dict[str, _Node], _state: dict) -> dict:
     kind = raw["kind"]
     if kind == "course":
         raise StudioError("op", "the course already exists")
@@ -487,11 +501,7 @@ def _plan_add(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict)
     if _field(raw, "success_criterion") is not _MISSING:
         criterion = _text("success_criterion", raw.get("success_criterion"))
     if kind == "quest":
-        close = (
-            normalize_close(raw.get("close"))
-            if _field(raw, "close") is not _MISSING
-            else copy.deepcopy(state["close_default"])
-        )
+        close = normalize_close(raw.get("close")) if _field(raw, "close") is not _MISSING else None
     elif _field(raw, "close") is not _MISSING:
         raise StudioError("close", "belongs on a quest")
     else:
@@ -652,7 +662,8 @@ def _apply_add(course: StudioCourse, step: dict) -> None:
         )
         unit.quests.append(row)
         _slot(list(unit.quests), row, step["position"])
-        _fill_close(row, step["close"])
+        if step.get("close") is not None:
+            _fill_close(row, step["close"])
         return
     quest = _quest(course, step["parent"])
     row = StudioMove(
@@ -768,6 +779,7 @@ def create_course(db: Session, *, code: str, title: str) -> StudioCourse:
         sources="",
         preferences=default_preferences(),
         schema_version=SCHEMA_VERSION,
+        ready=False,
     )
     db.add(course)
     db.flush()
@@ -857,6 +869,8 @@ def accept_proposal(db: Session, course: StudioCourse, message: StudioMessage) -
         raise StudioError("proposal", "there is nothing to accept")
     apply_patch(db, course, message.proposal)
     message.applied = True
+    if course_gaps(course):
+        course.ready = False
     course.updated_at = _now()
     db.flush()
 
@@ -889,6 +903,40 @@ def set_model(db: Session, model: str) -> StudioSettings:
     row.model = model
     db.flush()
     return row
+
+
+def course_gaps(course: StudioCourse) -> list[str]:
+    """Empty required fields on a saved item. These marks do not undo the draft."""
+    gaps: list[str] = []
+    for unit in sorted(course.units, key=lambda row: (row.position, row.code)):
+        _goal_gap(gaps, unit.code, unit.learning_goal)
+        for quest in sorted(unit.quests, key=lambda row: (row.position, row.code)):
+            _goal_gap(gaps, quest.code, quest.learning_goal)
+            style = quest.close.close_style if quest.close is not None else ""
+            if not str(style or "").strip():
+                gaps.append(f"{quest.code}: no close style")
+            for move in sorted(quest.moves, key=lambda row: (row.position, row.code)):
+                _goal_gap(gaps, move.code, move.learning_goal)
+    return gaps
+
+
+def _goal_gap(gaps: list[str], code: str, learning_goal: str | None) -> None:
+    if not str(learning_goal or "").strip():
+        gaps.append(f"{code}: no learning goal")
+
+
+def mark_ready(course: StudioCourse) -> None:
+    """Record that the creator says this draft is complete. Nothing is copied."""
+    gaps = course_gaps(course)
+    if gaps:
+        listed = "; ".join(gaps)
+        raise StudioError(
+            "ready",
+            f"still has open gaps: {listed}",
+            plain=f"These gaps are still open: {listed}.",
+        )
+    course.ready = True
+    course.updated_at = _now()
 
 
 def _close_out(close: dict | None) -> StudioCloseOut | None:
@@ -966,6 +1014,8 @@ def course_out(course: StudioCourse) -> StudioCourseOut:
         sources=course.sources,
         schema_version=course.schema_version,
         close_default=_close_out(default),
+        ready=bool(course.ready),
+        gaps=course_gaps(course),
         units=units,
         updated_at=course.updated_at,
     )
@@ -1011,10 +1061,26 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "You must say which framework a suggestion comes from. "
         "Label every curriculum idea as a suggestion.\n"
         "You have no web search and no document upload. Do not claim you searched the web or read an uploaded file.\n"
-        "Nothing is saved until the creator accepts the patch. Say what the patch would change.\n"
+        "Nothing is saved until the creator accepts the patch. "
+        "The server still checks. A rejected patch is not written. "
+        "Do not say the course was saved, and do not say the structure was accepted.\n"
         "Return a reply plus an optional patch. The patch is a list of operations. "
         "Each operation is add, update, or remove, and it names a code. "
         "Do not rewrite the whole tree in prose. The server ignores anything that is not a typed patch.\n"
+        "Each add names these fields: code, parent code, title, position as an integer from 1, "
+        "learning goal, success criterion, and quest-close choices. "
+        "In the patch JSON those fields are code, parent, title, position, learning_goal, "
+        "success_criterion, and close.\n"
+        "A position of 0 is invalid. Leave position null and the server fills the next free number. "
+        "A position outside 1 to 200 rejects the whole patch and saves nothing.\n"
+        "A missing learning goal or quest-close choice does not block the write. "
+        "The course is a draft from the moment it is created. "
+        "The tree marks a missing learning goal and a missing close style. "
+        "Those marks do not undo the draft. "
+        "Mark ready only records that the creator says the draft is complete.\n"
+        "The course close default is a preference in the header. "
+        "Copy it into a quest's quest-close choices when you want that close. "
+        "If close is null, the quest is stored with no close style. The server does not invent one.\n"
         "To change or remove an item, name its code. To add an item, choose a new short stable code "
         f"such as {course.code}-U2 or {course.code}-U2-Q3 and name the parent code.\n"
         "Unit parent is the course code. Quest parent is a unit code. Move parent is a quest code.\n"
@@ -1023,7 +1089,6 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "Multiple choice choice_mode is predefined or dynamic. "
         "Predefined stores the items and no intent. Dynamic stores only the intent and no items. "
         "Essay stores neither items nor intent.\n"
-        "A new quest that leaves close null uses the course close default.\n"
         "depth is survey, standard, or go_deep. sources is the framework to honor, or none.\n"
         f"{pending_note}\n"
         "The course so far, read from the database:\n"
