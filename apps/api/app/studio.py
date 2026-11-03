@@ -449,6 +449,17 @@ def _operations(patch) -> list:
     return raw
 
 
+def _foreign_sentence(key: str, kind: str) -> str:
+    labels = {
+        "learning_goal": "A learning goal",
+        "success_criterion": "A success criterion",
+        "close_default": "A close default",
+        "depth": "Detail",
+    }
+    label = labels.get(key, key.replace("_", " ").capitalize())
+    return f"{label} does not belong on a {kind}."
+
+
 def _reject_foreign(op: dict, allowed: set[str], kind: str) -> None:
     for key in (
         "title",
@@ -466,9 +477,12 @@ def _reject_foreign(op: dict, allowed: set[str], kind: str) -> None:
     ):
         if key in allowed:
             continue
+        # Depth is a course preference. A model often copies it onto a unit.
+        if key == "depth" and kind != "course":
+            continue
         if _field(op, key) is _MISSING:
             continue
-        raise StudioError(key, f"does not belong on a {kind}")
+        raise StudioError(key, f"does not belong on a {kind}", plain=_foreign_sentence(key, kind))
 
 
 def plan_patch(course: StudioCourse, patch) -> list[dict]:
@@ -1479,7 +1493,9 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "Multiple choice choice_mode is predefined or dynamic. "
         "Predefined stores the items and no intent. Dynamic stores only the intent and no items. "
         "Essay stores neither items nor intent.\n"
-        "depth is survey, standard, or go_deep. sources is the framework to honor, or none.\n"
+        "depth is a course preference: survey, standard, or go_deep. "
+        "Leave depth null on a unit, quest, or move. The server ignores depth on those items and still saves them.\n"
+        "sources is the framework to honor, or none.\n"
         f"{pending_note}\n"
         "The course so far, read from the database:\n"
         f"{json.dumps(tree)}"

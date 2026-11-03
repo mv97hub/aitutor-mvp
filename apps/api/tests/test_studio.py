@@ -1478,3 +1478,97 @@ def test_preference_save_writes_the_choices_and_cancel_does_not() -> None:
         assert kept["depth"] == "go_deep"
     finally:
         _wipe("ZZPREF")
+
+
+def test_unit_patch_with_depth_still_writes_the_unit() -> None:
+    course = _make("ZZDEPTH", "Premier League History")
+    course_id = course["id"]
+    claim = "The unit was saved."
+    try:
+        assert course["depth"] == "standard"
+        assert course["units"] == []
+        draft = _proposal(
+            course_id,
+            "Add the opening period.",
+            [
+                _full(
+                    "add",
+                    "unit",
+                    "ZZDEPTH-U1",
+                    parent="ZZDEPTH",
+                    title="1992 to 1995",
+                    learning_goal="Name the first Premier League winners.",
+                    depth="go_deep",
+                ),
+                _full(
+                    "add",
+                    "quest",
+                    "ZZDEPTH-U1-Q1",
+                    parent="ZZDEPTH-U1",
+                    title="First winners",
+                    depth="go_deep",
+                ),
+            ],
+        )
+        assert draft.status_code == 200, draft.text
+        assert draft.json()["content"] == "Add the opening period."
+        accepted = client.post(f"/studio/courses/{course_id}/messages/{draft.json()['id']}/accept")
+        assert accepted.status_code == 200, accepted.text
+        body = accepted.json()["course"]
+        assert body["depth"] == "standard"
+        assert body["units"][0]["code"] == "ZZDEPTH-U1"
+        assert body["units"][0]["title"] == "1992 to 1995"
+        assert body["units"][0]["learning_goal"] == "Name the first Premier League winners."
+        assert body["units"][0]["quests"][0]["code"] == "ZZDEPTH-U1-Q1"
+        stored = client.get(f"/studio/courses/{course_id}").json()
+        assert stored["depth"] == "standard"
+        assert stored["units"][0]["title"] == "1992 to 1995"
+
+        revised = _proposal(
+            course_id,
+            "Rename the opening period.",
+            [
+                _full(
+                    "update",
+                    "unit",
+                    "ZZDEPTH-U1",
+                    title="1992 to 1995 winners",
+                    depth="survey",
+                )
+            ],
+        )
+        assert revised.status_code == 200, revised.text
+        renamed = client.post(f"/studio/courses/{course_id}/messages/{revised.json()['id']}/accept")
+        assert renamed.status_code == 200, renamed.text
+        renamed_course = renamed.json()["course"]
+        assert renamed_course["depth"] == "standard"
+        assert renamed_course["units"][0]["title"] == "1992 to 1995 winners"
+
+        rejected = _proposal(
+            course_id,
+            claim,
+            [
+                _full(
+                    "add",
+                    "unit",
+                    "ZZDEPTH-U2",
+                    parent="ZZDEPTH",
+                    title="1995 to 1998",
+                    audience="9-11",
+                )
+            ],
+        )
+        assert rejected.status_code == 422
+        reason = rejected.json()["detail"]
+        assert reason == "Audience does not belong on a unit."
+        assert "audience:" not in reason
+        reply = rejection_reply(claim, reason)
+        assert reply == reason
+        assert "saved" not in reply.lower()
+        assert "accepted" not in reply.lower()
+        fresh = client.get(f"/studio/courses/{course_id}").json()
+        assert [unit["code"] for unit in fresh["units"]] == ["ZZDEPTH-U1"]
+        assert fresh["depth"] == "standard"
+        assert client.get(f"/studio/courses/{course_id}/messages").json()[-1]["content"] != claim
+    finally:
+        _wipe("ZZDEPTH")
