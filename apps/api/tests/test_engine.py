@@ -110,6 +110,7 @@ def test_prompt_includes_all_seven_layers_and_keeps_tutor_settings_apart() -> No
         "misconception",
         "hint_tier",
         "advance",
+        "diagram",
     ]
     for heading in (
         "Layer 1 — Active move",
@@ -436,6 +437,22 @@ def test_closed_tutor_choices_and_sidekick_off() -> None:
     assert "plain language only" in text.lower()
     assert "Sidekick is off" in text
     assert "Do not invent a partner" in text
+
+
+def test_diagram_prompt_is_a_geometry_triangle_when_a_picture_helps() -> None:
+    rome = assemble(*_layers())
+    described = str(rome.response_schema["properties"]["diagram"])
+    assert "triangle" in described
+    assert "graph" in described
+    assert "map" in described
+    assert "only when a picture makes that idea clearer" in rome.system_prompt
+    assert "A triangle is only inside the geometry course." in rome.system_prompt
+    layers = list(_layers())
+    layers[0] = _beat(course_code="geometry", course_title="Euclidean and Coordinate Geometry I")
+    geometry = assemble(*layers).system_prompt
+    assert "only when a picture makes that idea clearer" in geometry
+    assert 'kind "triangle"' in geometry
+    assert "This course gets no picture." not in geometry
 
 
 def test_course_scope_rule_names_the_course_only_when_the_switch_is_on() -> None:

@@ -204,6 +204,23 @@ export type KidQuiz = {
   explain: boolean;
 };
 
+export type TriangleSide = {
+  label: string;
+  length: number;
+};
+
+export type TriangleAngle = {
+  label: string;
+  degrees: number;
+};
+
+export type TriangleDiagram = {
+  kind: "triangle";
+  sides: TriangleSide[];
+  angles: TriangleAngle[];
+  right_angle: boolean;
+};
+
 export type BlockStep = {
   id: string;
   position: number;

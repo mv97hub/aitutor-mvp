@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { BrandMark } from "@/components/BrandMark";
+import { ChatBox } from "@/components/ChatBox";
 import { ChoiceWidget } from "@/components/LessonBlocks";
 import { api } from "@/lib/api";
 import { KICKOFF } from "@/lib/kickoff";
@@ -28,64 +29,6 @@ function toUiMessages(messages: StoredMessage[]): UIMessage[] {
     role: message.role,
     parts: [{ type: "text", text: message.content }],
   }));
-}
-
-type LoosePart = {
-  type: string;
-  text?: string;
-  state?: string;
-  output?: unknown;
-  toolCallId?: string;
-};
-
-function readOutput(output: unknown) {
-  if (!output || typeof output !== "object") return null;
-  const record = output as Record<string, unknown>;
-  return {
-    ok: typeof record.ok === "boolean" ? record.ok : undefined,
-    passed: typeof record.passed === "boolean" ? record.passed : undefined,
-    score: typeof record.score === "number" ? record.score : undefined,
-    feedback: typeof record.feedback === "string" ? record.feedback : undefined,
-    kind: typeof record.kind === "string" ? record.kind : undefined,
-    reason: typeof record.reason === "string" ? record.reason : undefined,
-  };
-}
-
-function MessageView({ message, studentName }: { message: UIMessage; studentName: string }) {
-  const parts = message.parts as LoosePart[];
-  const pieces = parts.map((part, index) => {
-    const key = part.toolCallId || `${message.id}-${index}`;
-    if (part.type === "text" && part.text?.trim()) {
-      return <p key={key}>{part.text}</p>;
-    }
-    if (part.type === "tool-record_checkpoint_result") {
-      if (part.state === "output-error") {
-        return <p key={key} className="result-card miss">That score did not save.</p>;
-      }
-      const output = readOutput(part.output);
-      if (!output || part.state !== "output-available") {
-        return <p key={key} className="result-card">Checking that answer…</p>;
-      }
-      if (output.ok === false) {
-        return <p key={key} className="result-card miss">{output.reason}</p>;
-      }
-      const passed = output.passed === true;
-      return (
-        <p key={key} className={`result-card ${passed ? "pass" : "miss"}`}>
-          Beat result: {passed ? "Passed" : "Not yet"}
-          {output.score != null ? ` · ${output.score}/100` : ""}
-          {output.feedback ? <span>{output.feedback}</span> : null}
-        </p>
-      );
-    }
-    return null;
-  });
-  if (pieces.every((piece) => piece == null)) return null;
-  return (
-    <article className={`bubble ${message.role}`} aria-label={message.role === "user" ? studentName : "Tutor"}>
-      {pieces}
-    </article>
-  );
 }
 
 function classDate(value: string) {
@@ -400,7 +343,7 @@ function ChatPanel({
             const here = offers.filter((item) => item.anchorId === message.id);
             return (
               <Fragment key={message.id}>
-                {hide ? null : <MessageView message={message} studentName={studentName} />}
+                {hide ? null : <ChatBox message={message} studentName={studentName} />}
                 {here.map((offer) => (
                   <ChoiceOfferView
                     key={offer.key}
@@ -533,8 +476,8 @@ function ChoiceOfferView({
 }
 
 function messageText(message: UIMessage) {
-  return (message.parts as LoosePart[])
-    .map((part) => (part.type === "text" ? part.text?.trim() ?? "" : ""))
+  return message.parts
+    .map((part) => (part.type === "text" ? part.text.trim() : ""))
     .filter(Boolean)
     .join("\n")
     .trim();

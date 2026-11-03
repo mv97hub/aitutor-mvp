@@ -458,6 +458,10 @@ class WidgetIn(BaseModel):
     explanation: str = Field(default="", max_length=2000)
 
 
+class DiagramCheckIn(BaseModel):
+    diagram: Any = None
+
+
 class TurnScoreIn(BaseModel):
     rubric_met: list[str] = Field(default_factory=list)
     misconception: str | None = None
