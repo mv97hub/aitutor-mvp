@@ -535,6 +535,8 @@ class StudioCourseOut(BaseModel):
     sources: str
     schema_version: int
     close_default: StudioCloseOut
+    ready: bool
+    gaps: list[str]
     units: list[StudioUnitOut]
     updated_at: datetime
 

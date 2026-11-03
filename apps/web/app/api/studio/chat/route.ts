@@ -24,6 +24,10 @@ type CourseEdit = {
   patch?: { operations?: unknown[] } | null;
 };
 
+function rejectionReply(reason: string): string {
+  return reason.trim();
+}
+
 function detailFrom(body: unknown, fallback: string): string {
   if (typeof body === "string" && body.trim()) return body;
   if (body && typeof body === "object" && "detail" in body) {
@@ -130,7 +134,7 @@ export async function POST(req: Request) {
     if (saved.ok) {
       assistant = savedBody as StudioMessage;
     } else if (saved.status === 422) {
-      assistantText = `${assistantText}\n\nThat change was not offered, because ${detailFrom(savedBody, "the patch was rejected")}. Nothing was saved.`;
+      assistantText = rejectionReply(detailFrom(savedBody, "That change was rejected."));
     } else {
       return new Response(detailFrom(savedBody, "Could not save the reply."), { status: 502 });
     }

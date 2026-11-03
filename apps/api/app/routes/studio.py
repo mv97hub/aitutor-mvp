@@ -33,6 +33,7 @@ from app.studio import (
     list_courses,
     list_messages,
     load_course,
+    mark_ready,
     message_out,
     set_model,
     summary_out,
@@ -44,7 +45,7 @@ router = APIRouter(prefix="/studio")
 
 
 def _fail(exc: StudioError) -> HTTPException:
-    return HTTPException(status_code=exc.status, detail=f"{exc.field}: {exc.message}")
+    return HTTPException(status_code=exc.status, detail=exc.plain)
 
 
 def _course(db: Session, course_id: UUID):
@@ -87,6 +88,16 @@ def patch_course(
     course = _course(db, course_id)
     try:
         update_preferences(course, body.model_dump())
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    return course_out(course)
+
+
+@router.post("/courses/{course_id}/ready", response_model=StudioCourseOut)
+def post_ready(course_id: UUID, db: Session = Depends(get_db)) -> StudioCourseOut:
+    course = _course(db, course_id)
+    try:
+        mark_ready(course)
     except StudioError as exc:
         raise _fail(exc) from exc
     return course_out(course)

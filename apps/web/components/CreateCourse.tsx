@@ -89,15 +89,24 @@ function readError(text: string): string {
   return trimmed;
 }
 
+function rowMarks(code: string, gaps: string[]): string[] {
+  const marks: string[] = [];
+  if (gaps.includes(`${code}: no learning goal`)) marks.push("No learning goal");
+  if (gaps.includes(`${code}: no close style`)) marks.push("No close style");
+  return marks;
+}
+
 function Tier({
   code,
   title,
+  marks,
   open,
   onToggle,
   children,
 }: {
   code: string;
   title: string;
+  marks: string[];
   open: boolean;
   onToggle: () => void;
   children?: ReactNode;
@@ -108,6 +117,9 @@ function Tier({
         <span aria-hidden="true">{open ? "▾" : "▸"}</span>
         <span className="studio-code">{code}</span>
         <span className="studio-title">{title}</span>
+        {marks.map((mark) => (
+          <span key={mark} className="studio-gap">{mark}</span>
+        ))}
       </button>
       {open ? <div className="studio-detail">{children}</div> : null}
     </li>
@@ -314,6 +326,21 @@ export function CreateCourse() {
     }
   }
 
+  async function markReady() {
+    if (!course || course.ready || course.gaps.length > 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api<StudioCourse>(`/studio/courses/${course.id}/ready`, { method: "POST" });
+      setCourse(next);
+      setSavedNote("Marked ready");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not mark this course ready.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveModel(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -420,6 +447,7 @@ export function CreateCourse() {
                 <h1>
                   <span className="studio-code">{course.code}</span>
                   {prefs.title || course.title}
+                  <span className="studio-draft">{course.ready ? "Ready" : "Draft"}</span>
                 </h1>
                 <div className="rail-actions">
                   {savedNote ? <span className="studio-saved">{savedNote}</span> : null}
@@ -536,6 +564,23 @@ export function CreateCourse() {
               </div>
             </form>
             <div className="studio-tree" aria-label="Course so far">
+              <div className="studio-ready">
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy || course.ready || course.gaps.length > 0}
+                  onClick={() => void markReady()}
+                >
+                  {course.ready ? "Marked ready" : "Mark ready"}
+                </button>
+                {course.gaps.length > 0 ? (
+                  <ul className="studio-gaps" aria-label="Open gaps">
+                    {course.gaps.map((gap) => (
+                      <li key={gap}>{gap}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
               {course.units.length === 0 ? (
                 <p className="ds-quiet">No units yet. The tree updates after you accept a change.</p>
               ) : (
@@ -545,6 +590,7 @@ export function CreateCourse() {
                       key={unit.id}
                       code={unit.code}
                       title={unit.title}
+                      marks={rowMarks(unit.code, course.gaps)}
                       open={open.has(unit.code)}
                       onToggle={() => toggle(unit.code)}
                     >
@@ -556,6 +602,7 @@ export function CreateCourse() {
                             key={quest.id}
                             code={quest.code}
                             title={quest.title}
+                            marks={rowMarks(quest.code, course.gaps)}
                             open={open.has(quest.code)}
                             onToggle={() => toggle(quest.code)}
                           >
@@ -578,6 +625,7 @@ export function CreateCourse() {
                                   key={move.id}
                                   code={move.code}
                                   title={move.title}
+                                  marks={rowMarks(move.code, course.gaps)}
                                   open={open.has(move.code)}
                                   onToggle={() => toggle(move.code)}
                                 >

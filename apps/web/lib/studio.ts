@@ -47,6 +47,8 @@ export type StudioCourse = {
   sources: string;
   schema_version: number;
   close_default: StudioClose;
+  ready: boolean;
+  gaps: string[];
   units: StudioUnit[];
   updated_at: string;
 };
