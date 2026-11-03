@@ -474,3 +474,125 @@ class ModelPromptIn(BaseModel):
     messages: list[Any] = Field(default_factory=list)
     model: str = Field(default="", max_length=120)
     message_id: UUID | None = None
+
+
+StudioDepth = Literal["survey", "standard", "go_deep"]
+StudioCloseStyle = Literal["one", "several"]
+StudioAnswerStyle = Literal["multiple_choice", "essay", "mixed"]
+StudioChoiceMode = Literal["predefined", "dynamic"]
+
+
+class StudioChoiceOut(BaseModel):
+    text: str
+
+
+class StudioCloseOut(BaseModel):
+    close_style: StudioCloseStyle
+    answer_style: StudioAnswerStyle
+    choice_mode: StudioChoiceMode | None = None
+    items: list[StudioChoiceOut] = Field(default_factory=list)
+    intent: str = ""
+
+
+class StudioMoveOut(BaseModel):
+    id: UUID
+    code: str
+    position: int
+    title: str
+    learning_goal: str
+    success_criterion: str
+
+
+class StudioQuestOut(BaseModel):
+    id: UUID
+    code: str
+    position: int
+    title: str
+    learning_goal: str
+    success_criterion: str
+    close: StudioCloseOut | None = None
+    moves: list[StudioMoveOut]
+
+
+class StudioUnitOut(BaseModel):
+    id: UUID
+    code: str
+    position: int
+    title: str
+    learning_goal: str
+    success_criterion: str
+    quests: list[StudioQuestOut]
+
+
+class StudioCourseOut(BaseModel):
+    id: UUID
+    code: str
+    title: str
+    audience: str
+    focus: str
+    theme: str
+    depth: StudioDepth
+    sources: str
+    schema_version: int
+    close_default: StudioCloseOut
+    units: list[StudioUnitOut]
+    updated_at: datetime
+
+
+class StudioCourseSummary(BaseModel):
+    id: UUID
+    code: str
+    title: str
+    updated_at: datetime
+
+
+class StudioCourseCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=40)
+    title: str = Field(min_length=1, max_length=240)
+
+
+class StudioPreferencesIn(BaseModel):
+    title: str = Field(min_length=1, max_length=240)
+    audience: str = ""
+    focus: str = ""
+    theme: str = ""
+    depth: StudioDepth = "standard"
+    sources: str = ""
+    close_default: dict
+
+
+class StudioMessageOut(BaseModel):
+    id: UUID
+    role: Literal["user", "assistant"]
+    content: str
+    seq: int
+    proposal: dict | None = None
+    applied: bool
+    created_at: datetime
+
+
+class StudioMessageIn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=20000)
+    proposal: dict | None = None
+
+
+class StudioSettingsOut(BaseModel):
+    model: str
+    options: list[str]
+
+
+class StudioSettingsIn(BaseModel):
+    model: str = Field(min_length=1, max_length=64)
+
+
+class StudioPromptOut(BaseModel):
+    model: str
+    system_prompt: str
+    response_schema: dict
+    temperature: float
+
+
+class StudioAcceptOut(BaseModel):
+    course: StudioCourseOut
+    message: StudioMessageOut

@@ -5,6 +5,8 @@ updated in place. Sessions and messages stay. Any other course code is left as e
 Students keep a tutor persona that was already saved. Blank tutor fields are filled
 from the age band. The default tutor profile is inserted when it is missing and
 is not overwritten.
+
+Studio tables (studio_*) are not read or written here. A re-seed leaves them in place.
 """
 
 from sqlalchemy import select
