@@ -11,7 +11,7 @@ import {
   type StudioClose,
   type StudioCourse,
   type StudioMessage,
-  type StudioPhase,
+  type StudioPhaseName,
   type StudioSettings,
   type StudioSummary,
 } from "@/lib/studio";
@@ -90,11 +90,20 @@ function readError(text: string): string {
   return trimmed;
 }
 
-function waveLabel(phase: StudioPhase, code: string): string | null {
-  if (!phase.open_codes.includes(code)) return null;
-  if (phase.name === "goals") return "Needs a learning goal";
-  if (phase.name === "close") return "Needs a close style";
-  if (phase.name === "structure") return "Needs a quest";
+function listedCodes(course: StudioCourse): string[] {
+  if (course.view.name === course.phase.name) return course.phase.open_codes;
+  return course.view.codes;
+}
+
+function waveLabel(course: StudioCourse, code: string): string | null {
+  const listed = listedCodes(course);
+  if (!listed.includes(code)) return null;
+  if (course.view.name === "goals" && course.gaps.includes(`${code}: no learning goal`)) return "Needs a learning goal";
+  if (course.view.name === "close" && course.gaps.includes(`${code}: no close style`)) return "Needs a close style";
+  if (course.view.name === "structure") {
+    const unit = course.units.find((item) => item.code === code);
+    if (unit && unit.quests.length === 0) return "Needs a quest";
+  }
   return null;
 }
 
@@ -330,6 +339,23 @@ export function CreateCourse() {
     }
   }
 
+  async function choosePhase(name: StudioPhaseName) {
+    if (!course || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api<StudioCourse>(`/studio/courses/${course.id}/phase`, {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      setCourse(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not open that phase.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function markReady() {
     if (!course || course.ready || course.phase.name !== "ready") return;
     setBusy(true);
@@ -452,7 +478,7 @@ export function CreateCourse() {
                   <span className="studio-code">{course.code}</span>
                   {prefs.title || course.title}
                   <span className="studio-draft">{course.ready ? "Ready" : "Draft"}</span>
-                  <span className="studio-phase-name">{course.phase.label}</span>
+                  <span className="studio-phase-name">{course.view.label}</span>
                 </h1>
                 <div className="rail-actions">
                   {savedNote ? <span className="studio-saved">{savedNote}</span> : null}
@@ -569,14 +595,32 @@ export function CreateCourse() {
               </div>
             </form>
             <div className="studio-tree" aria-label="Course so far">
-              <div className="studio-phase" aria-label="Next wave">
-                <h2>{course.phase.label}</h2>
-                {course.phase.open_codes.length > 0 ? (
-                  <p>Still open: {course.phase.open_codes.join(", ")}</p>
-                ) : (
-                  <p>Mark ready can be turned on.</p>
-                )}
+              <div className="studio-strip" aria-label="Course phases">
+                {course.strip.map((item) => {
+                  const order = ["structure", "goals", "close", "ready"];
+                  const later = order.indexOf(item.name) > order.indexOf(course.phase.name);
+                  return (
+                  <button
+                    key={item.name}
+                    type="button"
+                    className={`studio-strip-phase${item.active ? " is-active" : ""}${item.filled ? " is-filled" : ""}`}
+                    aria-current={item.active ? "step" : undefined}
+                    disabled={busy || later}
+                    onClick={() => void choosePhase(item.name)}
+                  >
+                    <span>{item.label}</span>
+                    {item.filled ? <span className="studio-strip-filled">Filled</span> : null}
+                  </button>
+                  );
+                })}
               </div>
+              <p className="studio-phase-codes" aria-label="Phase codes">
+                {course.view.name === course.phase.name
+                  ? course.phase.open_codes.length > 0
+                    ? `Still open: ${course.phase.open_codes.join(", ")}`
+                    : "Mark ready can be turned on."
+                  : `Codes: ${course.view.codes.join(", ") || "none"}`}
+              </p>
               <div className="studio-ready">
                 <button
                   type="button"
@@ -606,8 +650,8 @@ export function CreateCourse() {
                       key={unit.id}
                       code={unit.code}
                       title={unit.title}
-                      marks={[waveLabel(course.phase, unit.code)].filter((mark): mark is string => mark != null)}
-                      wave={course.phase.open_codes.includes(unit.code)}
+                      marks={[waveLabel(course, unit.code)].filter((mark): mark is string => mark != null)}
+                      wave={listedCodes(course).includes(unit.code)}
                       open={open.has(unit.code)}
                       onToggle={() => toggle(unit.code)}
                     >
@@ -619,8 +663,8 @@ export function CreateCourse() {
                             key={quest.id}
                             code={quest.code}
                             title={quest.title}
-                            marks={[waveLabel(course.phase, quest.code)].filter((mark): mark is string => mark != null)}
-                            wave={course.phase.open_codes.includes(quest.code)}
+                            marks={[waveLabel(course, quest.code)].filter((mark): mark is string => mark != null)}
+                            wave={listedCodes(course).includes(quest.code)}
                             open={open.has(quest.code)}
                             onToggle={() => toggle(quest.code)}
                           >
@@ -643,8 +687,8 @@ export function CreateCourse() {
                                   key={move.id}
                                   code={move.code}
                                   title={move.title}
-                                  marks={[waveLabel(course.phase, move.code)].filter((mark): mark is string => mark != null)}
-                                  wave={course.phase.open_codes.includes(move.code)}
+                                  marks={[waveLabel(course, move.code)].filter((mark): mark is string => mark != null)}
+                                  wave={listedCodes(course).includes(move.code)}
                                   open={open.has(move.code)}
                                   onToggle={() => toggle(move.code)}
                                 >

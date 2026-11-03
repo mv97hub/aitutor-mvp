@@ -32,7 +32,9 @@ from app.schemas import (
     StudioMoveOut,
     StudioPhaseOut,
     StudioQuestOut,
+    StudioStripOut,
     StudioUnitOut,
+    StudioViewOut,
 )
 
 CLOSE_STYLES = ("one", "several")
@@ -971,7 +973,121 @@ def course_phase(course: StudioCourse) -> dict:
     return {"name": "ready", "label": "Ready", "open_codes": []}
 
 
+PHASES = (
+    ("structure", "Structure"),
+    ("goals", "Goals"),
+    ("close", "Close"),
+    ("ready", "Ready"),
+)
+PHASE_ORDER = {name: index for index, (name, _label) in enumerate(PHASES)}
+PHASE_LABELS = dict(PHASES)
+
+
+def _stored_phase_view(course: StudioCourse) -> str | None:
+    raw = course.preferences if isinstance(course.preferences, dict) else {}
+    value = raw.get("phase_view") if isinstance(raw, dict) else None
+    if value in PHASE_ORDER:
+        return str(value)
+    return None
+
+
+def _quest_codes(course: StudioCourse) -> list[str]:
+    codes = []
+    for unit in sorted(course.units, key=lambda row: (row.position, row.code)):
+        for quest in sorted(unit.quests, key=lambda row: (row.position, row.code)):
+            codes.append(quest.code)
+    return codes
+
+
+def _codes_in_phase(course: StudioCourse, name: str) -> list[str]:
+    if name == "structure":
+        units = sorted(course.units, key=lambda row: (row.position, row.code))
+        if not units:
+            return [course.code]
+        return [unit.code for unit in units]
+    if name in ("goals", "close"):
+        return _quest_codes(course)
+    return []
+
+
+def viewed_phase(course: StudioCourse) -> dict:
+    """The phase the chat and the strip highlight. Earlier choices include filled items."""
+    open_phase = course_phase(course)
+    stored = _stored_phase_view(course)
+    if stored is None or PHASE_ORDER[stored] >= PHASE_ORDER[open_phase["name"]]:
+        return {
+            "name": open_phase["name"],
+            "label": open_phase["label"],
+            "codes": list(open_phase["open_codes"]),
+            "stepped_back": False,
+        }
+    return {
+        "name": stored,
+        "label": PHASE_LABELS[stored],
+        "codes": _codes_in_phase(course, stored),
+        "stepped_back": True,
+    }
+
+
+def phase_strip(course: StudioCourse) -> list[dict]:
+    open_phase = course_phase(course)
+    view = viewed_phase(course)
+    open_index = PHASE_ORDER[open_phase["name"]]
+    return [
+        {
+            "name": name,
+            "label": label,
+            "filled": (course.ready if name == "ready" else PHASE_ORDER[name] < open_index),
+            "active": name == view["name"],
+        }
+        for name, label in PHASES
+    ]
+
+
+def set_phase_view(course: StudioCourse, name: str) -> None:
+    """Point the chat at an earlier phase. Later rows stay as they are."""
+    if name not in PHASE_ORDER:
+        raise StudioError("phase", "must be a course phase", plain="Choose Structure, Goals, Close, or Ready.")
+    open_phase = course_phase(course)
+    if PHASE_ORDER[name] > PHASE_ORDER[open_phase["name"]]:
+        raise StudioError(
+            "phase",
+            "is later than the open wave",
+            plain=f"Finish {open_phase['label']} before opening {PHASE_LABELS[name]}.",
+        )
+    prefs = dict(course.preferences or {})
+    if name == open_phase["name"]:
+        prefs.pop("phase_view", None)
+    else:
+        prefs["phase_view"] = name
+    course.preferences = prefs
+    course.updated_at = _now()
+
+
 def phase_instructions(course: StudioCourse) -> str:
+    view = viewed_phase(course)
+    if view["stepped_back"]:
+        codes = ", ".join(view["codes"]) if view["codes"] else "none"
+        open_label = course_phase(course)["label"]
+        if view["name"] == "goals":
+            focus = (
+                "Offer a learning goal for each of these quests, including items already filled. "
+                "An update names that quest's code and sets parent to null. "
+                "Do not wipe close style."
+            )
+        elif view["name"] == "structure":
+            focus = (
+                "Update these units by code. Set parent to null. "
+                "Do not wipe learning goals or close style."
+            )
+        else:
+            focus = "An update names the item's code and sets parent to null. Do not wipe later work."
+        return (
+            f"Current phase: {view['label']}.\n"
+            f"Codes in this phase: {codes}.\n"
+            f"Patch only those codes. {focus}\n"
+            f"The next unfinished wave is {open_label}. Later phases are not wiped.\n"
+        )
     phase = course_phase(course)
     codes = ", ".join(phase["open_codes"]) if phase["open_codes"] else "none"
     if phase["name"] == "structure":
@@ -1116,6 +1232,12 @@ def course_out(course: StudioCourse) -> StudioCourseOut:
         ready=bool(course.ready),
         gaps=course_gaps(course),
         phase=StudioPhaseOut(**course_phase(course)),
+        strip=[StudioStripOut(**item) for item in phase_strip(course)],
+        view=StudioViewOut(
+            name=viewed_phase(course)["name"],
+            label=viewed_phase(course)["label"],
+            codes=viewed_phase(course)["codes"],
+        ),
         units=units,
         updated_at=course.updated_at,
     )

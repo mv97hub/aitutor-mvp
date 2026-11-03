@@ -14,6 +14,7 @@ from app.schemas import (
     StudioCourseSummary,
     StudioMessageIn,
     StudioMessageOut,
+    StudioPhaseIn,
     StudioPreferencesIn,
     StudioPromptOut,
     StudioSettingsIn,
@@ -36,6 +37,7 @@ from app.studio import (
     mark_ready,
     message_out,
     set_model,
+    set_phase_view,
     summary_out,
     system_prompt,
     update_preferences,
@@ -98,6 +100,16 @@ def post_ready(course_id: UUID, db: Session = Depends(get_db)) -> StudioCourseOu
     course = _course(db, course_id)
     try:
         mark_ready(course)
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    return course_out(course)
+
+
+@router.post("/courses/{course_id}/phase", response_model=StudioCourseOut)
+def post_phase(course_id: UUID, body: StudioPhaseIn, db: Session = Depends(get_db)) -> StudioCourseOut:
+    course = _course(db, course_id)
+    try:
+        set_phase_view(course, body.name)
     except StudioError as exc:
         raise _fail(exc) from exc
     return course_out(course)

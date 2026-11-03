@@ -979,3 +979,114 @@ def test_goals_phase_limits_the_prompt_to_open_goal_codes() -> None:
         assert applied.json()["course"]["phase"]["open_codes"] == ["ZZGEO-U1-Q1", "ZZGEO-U1-Q2"]
     finally:
         _wipe("ZZGEO")
+
+
+def test_stepping_back_to_goals_keeps_the_close() -> None:
+    course = _make()
+    course_id = course["id"]
+    try:
+        structure = _proposal(
+            course_id,
+            "Goals are in. One quest still needs a close.",
+            [
+                _full(
+                    "add",
+                    "unit",
+                    "ZZGEO-U1",
+                    parent="ZZGEO",
+                    title="Exile",
+                    learning_goal="The story begins.",
+                ),
+                _full(
+                    "add",
+                    "quest",
+                    "ZZGEO-U1-Q1",
+                    parent="ZZGEO-U1",
+                    title="The bow",
+                    learning_goal="Name the bow.",
+                    close={
+                        "close_style": "one",
+                        "answer_style": "essay",
+                        "choice_mode": None,
+                        "items": [],
+                        "intent": "",
+                    },
+                ),
+                _full(
+                    "add",
+                    "quest",
+                    "ZZGEO-U1-Q2",
+                    parent="ZZGEO-U1",
+                    title="The city",
+                    learning_goal="Name the city.",
+                    close=None,
+                ),
+            ],
+        )
+        assert structure.status_code == 200, structure.text
+        accepted = client.post(f"/studio/courses/{course_id}/messages/{structure.json()['id']}/accept")
+        assert accepted.status_code == 200, accepted.text
+        opened = accepted.json()["course"]
+        assert opened["phase"]["name"] == "close"
+        assert opened["phase"]["open_codes"] == ["ZZGEO-U1-Q2"]
+        assert opened["view"] == {"name": "close", "label": "Close", "codes": ["ZZGEO-U1-Q2"]}
+        by_name = {item["name"]: item for item in opened["strip"]}
+        assert [item["label"] for item in opened["strip"]] == ["Structure", "Goals", "Close", "Ready"]
+        assert by_name["structure"]["filled"] is True and by_name["structure"]["active"] is False
+        assert by_name["goals"]["filled"] is True and by_name["goals"]["active"] is False
+        assert by_name["close"]["active"] is True and by_name["close"]["filled"] is False
+        assert by_name["ready"]["active"] is False and by_name["ready"]["filled"] is False
+
+        stepped = client.post(f"/studio/courses/{course_id}/phase", json={"name": "goals"})
+        assert stepped.status_code == 200, stepped.text
+        looking = stepped.json()
+        assert looking["phase"]["name"] == "close"
+        assert looking["view"] == {
+            "name": "goals",
+            "label": "Goals",
+            "codes": ["ZZGEO-U1-Q1", "ZZGEO-U1-Q2"],
+        }
+        stepped_strip = {item["name"]: item for item in looking["strip"]}
+        assert stepped_strip["goals"]["active"] is True and stepped_strip["goals"]["filled"] is True
+        assert stepped_strip["close"]["active"] is False
+        prompt = client.get(f"/studio/courses/{course_id}/prompt").json()["system_prompt"]
+        codes_line = next(line for line in prompt.splitlines() if line.startswith("Codes in this phase:"))
+        assert codes_line == "Codes in this phase: ZZGEO-U1-Q1, ZZGEO-U1-Q2."
+        assert "Current phase: Goals." in prompt
+        assert "including items already filled" in prompt
+        assert "Do not wipe close style." in prompt
+        assert "The next unfinished wave is Close." in prompt
+
+        revised = _proposal(
+            course_id,
+            "Revise the bow goal.",
+            [_full("update", "quest", "ZZGEO-U1-Q1", learning_goal="Name the sacred bow.")],
+        )
+        assert revised.status_code == 200, revised.text
+        applied = client.post(f"/studio/courses/{course_id}/messages/{revised.json()['id']}/accept")
+        assert applied.status_code == 200, applied.text
+        quests = {quest["code"]: quest for quest in applied.json()["course"]["units"][0]["quests"]}
+        assert quests["ZZGEO-U1-Q1"]["learning_goal"] == "Name the sacred bow."
+        assert quests["ZZGEO-U1-Q1"]["close"]["answer_style"] == "essay"
+        assert quests["ZZGEO-U1-Q1"]["close"]["close_style"] == "one"
+        assert quests["ZZGEO-U1-Q2"]["learning_goal"] == "Name the city."
+        assert quests["ZZGEO-U1-Q2"]["close"] is None
+        assert applied.json()["course"]["phase"]["name"] == "close"
+        assert applied.json()["course"]["view"]["name"] == "goals"
+        blocked = client.post(f"/studio/courses/{course_id}/ready")
+        assert blocked.status_code == 422
+        assert client.get(f"/studio/courses/{course_id}").json()["ready"] is False
+
+        returned = client.post(f"/studio/courses/{course_id}/phase", json={"name": "close"})
+        assert returned.status_code == 200, returned.text
+        assert returned.json()["view"] == {"name": "close", "label": "Close", "codes": ["ZZGEO-U1-Q2"]}
+        assert returned.json()["strip"][1]["active"] is False
+        assert returned.json()["strip"][1]["filled"] is True
+        assert returned.json()["strip"][2]["active"] is True
+        again = client.get(f"/studio/courses/{course_id}/prompt").json()["system_prompt"]
+        open_line = next(line for line in again.splitlines() if line.startswith("Codes still open in this phase:"))
+        assert open_line == "Codes still open in this phase: ZZGEO-U1-Q2."
+        kept = client.get(f"/studio/courses/{course_id}").json()["units"][0]["quests"][0]
+        assert kept["close"]["close_style"] == "one"
+    finally:
+        _wipe("ZZGEO")
