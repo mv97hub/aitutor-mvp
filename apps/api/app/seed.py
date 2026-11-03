@@ -3,7 +3,8 @@
 Running this twice does not duplicate students. Rome, Geometry, and AP Macro are
 rewritten to the quest cycle. Any other course code is left as edited.
 Students keep a tutor persona that was already saved. Blank tutor fields are filled
-from the age band. Revision 006 clears old class transcripts.
+from the age band. The default tutor profile is inserted when it is missing and
+is not overwritten. Revision 006 clears old class transcripts.
 """
 
 from sqlalchemy import select
@@ -14,6 +15,7 @@ from app.curriculum import COURSES
 from app.database import SessionLocal
 from app.engine.defaults import profile_for_age
 from app.models import Course, Student
+from app.tutor_profile import ensure_default_profile
 
 STUDENTS = [
     {
@@ -80,6 +82,7 @@ def seed(db: Session) -> dict[str, int]:
         replace_course(db, payload)
         if exists is None:
             created_courses += 1
+    ensure_default_profile(db)
     db.commit()
     return {"students_created": created_students, "courses_created": created_courses}
 

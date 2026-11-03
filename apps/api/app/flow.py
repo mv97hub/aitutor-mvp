@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.engine.assemble import hint_tier_for, struggle_limit
 from app.engine.defaults import profile_for_age
+from app.tutor_profile import load_profile
 from app.models import Beat, BeatResult, Course, Message, ModelPrompt, Quest, Session as TutorSession, Student
 from app.prompt_loader import PASS_SCORE
 from app.queries import choice_widget_visible, latest_result, locate_beat, next_position, ordered_beats
@@ -310,9 +311,9 @@ def grade_widget(
     }
 
 
-def _window_closed(tutor_session: TutorSession, beat: Beat) -> bool:
+def _window_closed(db: Session, tutor_session: TutorSession, beat: Beat) -> bool:
     return failed_attempts(tutor_session, beat.id) >= struggle_limit(
-        tutor_session.student.tutor_struggle_window
+        load_profile(db).struggle_window
     )
 
 
@@ -380,7 +381,7 @@ def apply_turn_score(
     latest = latest_result(tutor_session, beat.id)
     quiz = beat.widget if isinstance(beat.widget, dict) else None
     note = blank_to_none(misconception)
-    reveal = _window_closed(tutor_session, beat)
+    reveal = _window_closed(db, tutor_session, beat)
     if quiz is not None and not choice_widget_visible(tutor_session, beat):
         return {
             "ok": True,
