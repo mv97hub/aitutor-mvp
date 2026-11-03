@@ -164,6 +164,7 @@ export function CreateCourse() {
   const [error, setError] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [coursesOpen, setCoursesOpen] = useState(false);
   const [modelDraft, setModelDraft] = useState("gpt-4o-mini");
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -431,7 +432,21 @@ export function CreateCourse() {
             </div>
           </form>
         ) : null}
-        <ul className="studio-courses" aria-label="Saved courses">
+        <button
+          type="button"
+          className="studio-courses-toggle"
+          aria-expanded={coursesOpen}
+          aria-controls="studio-course-list"
+          onClick={() => setCoursesOpen((open) => !open)}
+        >
+          Courses
+          <span aria-hidden="true">{coursesOpen ? "▴" : "▾"}</span>
+        </button>
+        <ul
+          id="studio-course-list"
+          className={`studio-courses${coursesOpen ? " is-open" : ""}`}
+          aria-label="Saved courses"
+        >
           {courses.length === 0 ? <li className="ds-quiet">No saved courses</li> : null}
           {courses.map((row) => (
             <li key={row.id}>
