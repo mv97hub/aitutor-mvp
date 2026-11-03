@@ -706,35 +706,39 @@ export function KidSession({
           <BrandMark />
           <h1>Who&apos;s learning today?</h1>
           <p>Choose a child, or add a new one. Then open a class.</p>
-          <label>
-            Child
-            <select
-              aria-label="Choose a child"
-              value=""
-              disabled={opening || students.length === 0}
-              onChange={(event) => {
-                const student = students.find((row) => row.id === event.target.value);
-                if (student) void chooseStudent(student);
-              }}
-            >
-              <option value="">{students.length === 0 ? "No children yet" : "Choose a child"}</option>
-              {students.map((student) => (
-                <option key={student.id} value={student.id}>{childLabel(student)}</option>
-              ))}
-            </select>
-          </label>
-          <div className="rail-actions">
-            <button
-              type="button"
-              className="button ds-add-child"
-              onClick={() => {
-                setAdding((open) => !open);
-                setError(null);
-              }}
-            >
-              Add child
-            </button>
-          </div>
+          {adding ? null : (
+            <>
+              <label>
+                Child
+                <select
+                  aria-label="Choose a child"
+                  value=""
+                  disabled={opening || students.length === 0}
+                  onChange={(event) => {
+                    const student = students.find((row) => row.id === event.target.value);
+                    if (student) void chooseStudent(student);
+                  }}
+                >
+                  <option value="">{students.length === 0 ? "No children yet" : "Choose a child"}</option>
+                  {students.map((student) => (
+                    <option key={student.id} value={student.id}>{childLabel(student)}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="ds-add-child-slot">
+                <button
+                  type="button"
+                  className="button ds-add-child"
+                  onClick={() => {
+                    setAdding(true);
+                    setError(null);
+                  }}
+                >
+                  Add child
+                </button>
+              </div>
+            </>
+          )}
           {adding ? (
             <form className="child-form" onSubmit={(event) => void createChild(event)}>
               <label>

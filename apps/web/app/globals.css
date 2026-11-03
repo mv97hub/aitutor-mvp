@@ -838,6 +838,11 @@ body:has(.ds-landing) {
 
 .ds-landing .rail-actions { margin-top: 12px; }
 
+.ds-landing .ds-add-child-slot {
+  display: flex;
+  margin-top: 16px;
+}
+
 .ds-landing .button {
   border-radius: 12px;
   border-color: rgb(15, 17, 21);
