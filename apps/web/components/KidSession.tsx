@@ -103,14 +103,6 @@ type ProfileDraft = {
   reading_level: string;
   modality: string;
   interests: string;
-  tutor_persona: string;
-  tutor_lexicon: string;
-  tutor_metaphors: string;
-  tutor_sidekick: string;
-  tutor_socratic_strictness: string;
-  tutor_struggle_window: string;
-  tutor_anti_spoiler: boolean;
-  tutor_pacing: string;
 };
 
 function blankChild(): ChildDraft {
@@ -122,14 +114,6 @@ function profileFrom(student: Student): ProfileDraft {
     reading_level: student.reading_level,
     modality: student.modality,
     interests: student.interests.join(", "),
-    tutor_persona: student.tutor_persona,
-    tutor_lexicon: student.tutor_lexicon,
-    tutor_metaphors: student.tutor_metaphors,
-    tutor_sidekick: student.tutor_sidekick,
-    tutor_socratic_strictness: student.tutor_socratic_strictness,
-    tutor_struggle_window: student.tutor_struggle_window,
-    tutor_anti_spoiler: student.tutor_anti_spoiler,
-    tutor_pacing: student.tutor_pacing,
   };
 }
 
@@ -203,71 +187,6 @@ function ProfileFields({
           placeholder="cities, fairness"
         />
       </label>
-      <div className="tutor-group">
-        <h2>Tutor agent settings</h2>
-        <label>
-          Persona
-          <input
-            value={draft.tutor_persona}
-            maxLength={160}
-            onChange={(event) => onChange({ ...draft, tutor_persona: event.target.value })}
-          />
-        </label>
-        <label>
-          Lexicon
-          <textarea
-            value={draft.tutor_lexicon}
-            onChange={(event) => onChange({ ...draft, tutor_lexicon: event.target.value })}
-          />
-        </label>
-        <label>
-          Metaphors
-          <textarea
-            value={draft.tutor_metaphors}
-            onChange={(event) => onChange({ ...draft, tutor_metaphors: event.target.value })}
-          />
-        </label>
-        <label>
-          Sidekick
-          <textarea
-            value={draft.tutor_sidekick}
-            maxLength={200}
-            onChange={(event) => onChange({ ...draft, tutor_sidekick: event.target.value })}
-          />
-        </label>
-        <label>
-          Socratic strictness
-          <input
-            value={draft.tutor_socratic_strictness}
-            maxLength={40}
-            onChange={(event) => onChange({ ...draft, tutor_socratic_strictness: event.target.value })}
-          />
-        </label>
-        <label>
-          Struggle window
-          <input
-            value={draft.tutor_struggle_window}
-            maxLength={40}
-            onChange={(event) => onChange({ ...draft, tutor_struggle_window: event.target.value })}
-          />
-        </label>
-        <label>
-          Pacing
-          <input
-            value={draft.tutor_pacing}
-            maxLength={80}
-            onChange={(event) => onChange({ ...draft, tutor_pacing: event.target.value })}
-          />
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={draft.tutor_anti_spoiler}
-            onChange={(event) => onChange({ ...draft, tutor_anti_spoiler: event.target.checked })}
-          />
-          Hold the answer during the struggle window
-        </label>
-      </div>
       {notice ? (
         <div className="banner" role="alert">
           <p>{notice}</p>
@@ -808,14 +727,6 @@ export function KidSession({
           reading_level: profile.reading_level,
           modality: profile.modality,
           interests: profile.interests.split(",").map((item) => item.trim()).filter(Boolean),
-          tutor_persona: profile.tutor_persona,
-          tutor_lexicon: profile.tutor_lexicon,
-          tutor_metaphors: profile.tutor_metaphors,
-          tutor_sidekick: profile.tutor_sidekick,
-          tutor_socratic_strictness: profile.tutor_socratic_strictness,
-          tutor_struggle_window: profile.tutor_struggle_window,
-          tutor_anti_spoiler: profile.tutor_anti_spoiler,
-          tutor_pacing: profile.tutor_pacing,
         }),
       });
       setLearner(student);

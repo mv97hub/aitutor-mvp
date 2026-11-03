@@ -1,8 +1,7 @@
 """Typed inputs for the seven prompt layers.
 
-Layer 2 is the student. Layers 3 and 4 are tutor-agent settings. They are
-separate objects so a later tutor profile can replace the columns that hold
-them today without changing this assembler.
+Layer 2 is the student. Layers 3 and 4 are the tutor profile. They are
+separate objects so the assembler does not read student columns.
 """
 
 from __future__ import annotations
@@ -113,12 +112,19 @@ class Layer3Tutor:
 
 @dataclass(frozen=True)
 class Layer4Discourse:
-    """Tutor-agent guardrails. Not a student trait."""
+    """Tutor-agent guardrails. Not a student trait.
+
+    instructive is 1 (one short question) through 5 (a fuller lesson first).
+    3 is today's short explanation, then one question.
+    """
 
     socratic_strictness: str
     struggle_window: str
     anti_spoiler: bool
     pacing: str
+    instructive: int = 3
+    one_question: bool = True
+    use_interests: bool = True
 
 
 @dataclass(frozen=True)

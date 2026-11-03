@@ -17,6 +17,21 @@ export type Student = {
   tutor_pacing: string;
 };
 
+export type TutorProfile = {
+  instructive: number;
+  persona: string;
+  lexicon: string;
+  voice_override: boolean;
+  metaphors: string;
+  sidekick: string;
+  struggle_window: string;
+  anti_spoiler: boolean;
+  one_question: boolean;
+  use_interests: boolean;
+  growth_praise: boolean;
+  updated_at?: string;
+};
+
 export type ProfileDefaults = {
   age_band: string;
   reading_level: string;

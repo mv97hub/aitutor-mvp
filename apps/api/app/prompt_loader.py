@@ -5,15 +5,19 @@ The engine package itself does not import the database.
 
 from __future__ import annotations
 
+from sqlalchemy.orm import object_session
+
 from app.engine.assemble import assemble
+from app.engine.choices import pacing_for, strictness_for
 from app.engine.defaults import age_band_for
-from app.engine.placeholders import affect_layer, memory_layer, metacognition_layer
+from app.engine.placeholders import memory_layer, metacognition_layer
 from app.engine.types import (
     HintLadder,
     Layer1Beat,
     Layer2Student,
     Layer3Tutor,
     Layer4Discourse,
+    Layer5Affect,
     MisconceptionTrap,
     PromptBundle,
     RubricCriterion,
@@ -31,6 +35,7 @@ from app.queries import (
     ordered_beats,
     replied_after_teaching,
 )
+from app.tutor_profile import load_profile
 
 PASS_SCORE = 70
 
@@ -277,24 +282,32 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
         attempt_count=attempt_count,
         zpd=_zpd(tutor_session, None if finished else current),
     )
+    profile = load_profile(object_session(tutor_session))
+    level = min(5, max(1, int(profile.instructive or 3)))
     tutor_layer = Layer3Tutor(
-        persona=student.tutor_persona,
-        lexicon=student.tutor_lexicon,
-        metaphors=student.tutor_metaphors,
-        sidekick=student.tutor_sidekick,
+        persona=profile.persona,
+        lexicon=profile.lexicon,
+        metaphors=profile.metaphors,
+        sidekick=profile.sidekick,
     )
     discourse = Layer4Discourse(
-        socratic_strictness=student.tutor_socratic_strictness,
-        struggle_window=student.tutor_struggle_window,
-        anti_spoiler=bool(student.tutor_anti_spoiler),
-        pacing=student.tutor_pacing,
+        socratic_strictness=strictness_for(level),
+        struggle_window=profile.struggle_window,
+        anti_spoiler=bool(profile.anti_spoiler),
+        pacing=pacing_for(level),
+        instructive=level,
+        one_question=bool(profile.one_question),
+        use_interests=bool(profile.use_interests),
+    )
+    affect = Layer5Affect(
+        praise="growth-mindset-only" if profile.growth_praise else "result-or-effort"
     )
     return assemble(
         beat_layer,
         student_layer,
         tutor_layer,
         discourse,
-        affect_layer(),
+        affect,
         metacognition_layer(),
         memory_layer(),
         kickoff=kickoff,

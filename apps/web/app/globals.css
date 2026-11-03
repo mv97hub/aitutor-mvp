@@ -1677,6 +1677,25 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
   overflow: auto;
 }
 
+.agent-form { max-width: 640px; }
+.agent-form .check { align-items: flex-start; }
+.agent-form .check > span { display: grid; gap: 2px; }
+.agent-level { font-weight: 600; }
+.agent-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: rgb(129, 133, 140);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+.ds-desk input[type="range"] {
+  width: 100%;
+  margin: 8px 0 0;
+  accent-color: rgb(65, 118, 230);
+}
+
 .child-form h2,
 .tutor-group h2 {
   margin: 18px 0 0;

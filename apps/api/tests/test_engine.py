@@ -10,6 +10,7 @@ from app.engine.types import (
     Layer2Student,
     Layer3Tutor,
     Layer4Discourse,
+    Layer5Affect,
     MisconceptionTrap,
     RubricCriterion,
     WidgetChoice,
@@ -343,6 +344,98 @@ def test_engage_and_name_teach_before_the_question() -> None:
     assert "Name teaches, then asks." in name
     assert "set advance to true" in name.lower()
     assert "Do not start the next move." in name
+
+
+def _discourse(**overrides) -> Layer4Discourse:
+    base = dict(
+        socratic_strictness="balanced",
+        struggle_window="minimum",
+        anti_spoiler=True,
+        pacing="short-turns-one-question",
+    )
+    base.update(overrides)
+    return Layer4Discourse(**base)
+
+
+def _with_discourse(**overrides):
+    layers = list(_layers())
+    layers[3] = _discourse(**overrides)
+    return layers
+
+
+def test_socratic_slider_asks_before_it_explains() -> None:
+    assert struggle_limit("short") == 1
+    assert struggle_limit("standard") == 2
+    assert struggle_limit("long") == 3
+    text = assemble(*_with_discourse(instructive=1)).system_prompt
+    assert "One short question" in text
+    assert "Almost no explanation" in text
+    assert "Teach, then ask." not in text
+    layers = _with_discourse(instructive=1)
+    layers[1] = Layer2Student(
+        display_name="Storm",
+        age_band="9-11",
+        reading_level="middle-grade",
+        modality="story",
+        interests=(),
+        attempt_count=1,
+        zpd="support",
+    )
+    missed = assemble(*layers).system_prompt
+    assert "almost no explanation" in missed.lower()
+    assert "The student missed. Explain what they tried" not in missed
+    assert "The struggle window is over" not in missed
+
+
+def test_instructive_slider_teaches_longer_and_explains_a_miss_sooner() -> None:
+    opening = assemble(*_with_discourse(instructive=5)).system_prompt
+    assert "fuller lesson" in opening.lower()
+    assert "why it matters" in opening.lower()
+    assert "longer explanation" in opening.lower()
+    layers = _with_discourse(instructive=5)
+    layers[1] = Layer2Student(
+        display_name="Storm",
+        age_band="9-11",
+        reading_level="middle-grade",
+        modality="story",
+        interests=(),
+        attempt_count=1,
+        zpd="support",
+    )
+    missed = assemble(*layers).system_prompt
+    assert "longer explanation" in missed.lower()
+    assert "Do not wait" in missed
+    assert "The struggle window is over" not in missed
+
+
+def test_switches_change_questions_interests_and_praise() -> None:
+    questions = assemble(*_with_discourse(one_question=False)).system_prompt
+    assert "Do not ask a second question." not in questions
+    assert "second question is allowed" in questions.lower()
+    interests = assemble(*_with_discourse(use_interests=False)).system_prompt
+    assert "Examples stay on the subject" in interests
+    assert "Do not use those hobbies" in interests
+    layers = list(_layers())
+    layers[4] = Layer5Affect(praise="result-or-effort")
+    praise = assemble(*layers).system_prompt
+    assert "Growth-mindset praise is off" in praise
+    assert "Growth-mindset praise only" not in praise
+
+
+def test_closed_tutor_choices_and_sidekick_off() -> None:
+    layers = list(_layers())
+    layers[2] = Layer3Tutor(
+        persona="debate-moderator",
+        lexicon="analytical-high-school",
+        metaphors="none",
+        sidekick="off",
+    )
+    layers[0] = _beat(beat_role="teach_back")
+    text = assemble(*layers).system_prompt
+    assert "debate moderator" in text.lower()
+    assert "plain language only" in text.lower()
+    assert "Sidekick is off" in text
+    assert "Do not invent a partner" in text
 
 
 def test_age_band_defaults() -> None:

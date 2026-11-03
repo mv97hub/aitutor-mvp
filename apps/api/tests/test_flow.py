@@ -6,6 +6,7 @@ from app.database import SessionLocal
 from app.main import app
 from app.models import Beat, Course, Quest, Session as TutorSession, Student, Unit
 from app.seed import seed
+from app.tutor_profile import reset_default_profile
 
 client = TestClient(app)
 
@@ -16,6 +17,8 @@ def setup_function() -> None:
         db.execute(delete(TutorSession))
         db.commit()
         seed(db)
+        reset_default_profile(db)
+        db.commit()
     finally:
         db.close()
 
@@ -201,7 +204,7 @@ def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
 
     prompt = client.get(f"/sessions/{session_id}/prompt", params={"kickoff": True}).json()
     assert "Layer 7 — Memory" in prompt["system_prompt"]
-    assert "Curious Co-Explorer" in prompt["system_prompt"]
+    assert "curious co-explorer" in prompt["system_prompt"]
     assert "weather" in prompt["system_prompt"]
     assert "what finished work looks like" in prompt["system_prompt"]
     assert "Do not invent a different topic" in prompt["system_prompt"]
@@ -348,7 +351,7 @@ def test_choice_widget_waits_until_the_tutor_has_spoken_for_the_move() -> None:
 
 def test_unstick_comes_before_the_answer_and_a_later_check_is_a_new_message() -> None:
     storm = _student("storm")["id"]
-    client.patch(f"/students/{storm}", json={"tutor_struggle_window": "minimum"})
+    client.put("/tutor-profile", json=_profile(struggle_window="standard"))
     opened = client.post(
         "/sessions",
         json={"student_id": storm, "quest_id": _quest("ROM-U1-Q1")["id"], "fresh": True},
@@ -398,8 +401,8 @@ def test_unstick_comes_before_the_answer_and_a_later_check_is_a_new_message() ->
     assert "The struggle window is over" in revealed
     assert "Correct answer, for you only" in revealed
 
-    extended = client.patch(f"/students/{storm}", json={"tutor_struggle_window": "extended"})
-    assert extended.status_code == 200
+    widened = client.put("/tutor-profile", json=_profile(struggle_window="long"))
+    assert widened.status_code == 200
     try:
         again = client.post(
             "/sessions",
@@ -439,7 +442,7 @@ def test_unstick_comes_before_the_answer_and_a_later_check_is_a_new_message() ->
         assert "explained in their own words" in retry_prompt
         assert "They have not submitted the widget yet." in retry_prompt
     finally:
-        client.patch(f"/students/{storm}", json={"tutor_struggle_window": "minimum"})
+        client.put("/tutor-profile", json=_profile(struggle_window="standard"))
 
 
 def test_struggle_window_then_worked_answer_advances() -> None:
@@ -666,6 +669,102 @@ def _cycle_moves() -> list[dict]:
             }
         )
     return moves
+
+
+def _profile(**overrides) -> dict:
+    body = {
+        "instructive": 3,
+        "persona": "curious-co-explorer",
+        "lexicon": "middle-grade-vivid",
+        "voice_override": False,
+        "metaphors": "playground-sports",
+        "sidekick": "bumbling-partner",
+        "struggle_window": "standard",
+        "anti_spoiler": True,
+        "one_question": True,
+        "use_interests": True,
+        "growth_praise": True,
+    }
+    body.update(overrides)
+    return body
+
+
+def test_one_tutor_profile_applies_to_every_student() -> None:
+    current = client.get("/tutor-profile")
+    assert current.status_code == 200
+    assert current.json()["instructive"] == 3
+    assert current.json()["struggle_window"] == "standard"
+    rejected = client.put("/tutor-profile", json=_profile(persona="wizard"))
+    assert rejected.status_code == 422
+
+    followed = client.put(
+        "/tutor-profile",
+        json=_profile(persona="tactical-coach", lexicon="early-concrete", voice_override=False),
+    )
+    assert followed.status_code == 200
+    assert followed.json()["lexicon"] == "precise-visual"
+    assert followed.json()["voice_override"] is False
+    overridden = client.put(
+        "/tutor-profile",
+        json=_profile(
+            persona="debate-moderator",
+            lexicon="early-concrete",
+            voice_override=True,
+            instructive=1,
+            struggle_window="short",
+            metaphors="none",
+            sidekick="off",
+        ),
+    )
+    assert overridden.status_code == 200
+    saved = overridden.json()
+    assert saved["lexicon"] == "early-concrete"
+    assert saved["voice_override"] is True
+    assert saved["instructive"] == 1
+
+    storm = _student("storm")
+    assert "Co-Explorer" in storm["tutor_persona"]
+    try:
+        opened = client.post(
+            "/sessions",
+            json={"student_id": storm["id"], "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
+        )
+        session_id = opened.json()["id"]
+        prompt = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "debate moderator" in prompt.lower()
+        assert "Curious Co-Explorer" not in prompt
+        assert "One short question" in prompt
+        assert "plain language only" in prompt.lower()
+        patched = client.patch(
+            f"/students/{storm['id']}",
+            json={"tutor_persona": "Harbor Guide", "tutor_struggle_window": "long"},
+        )
+        assert patched.status_code == 200
+        assert patched.json()["tutor_persona"] == "Harbor Guide"
+        again = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "Harbor Guide" not in again
+        assert "debate moderator" in again.lower()
+
+        wolverine = client.post(
+            "/sessions",
+            json={"student_id": _student("wolverine")["id"], "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
+        )
+        other = client.get(f"/sessions/{wolverine.json()['id']}/prompt").json()["system_prompt"]
+        assert "debate moderator" in other.lower()
+        assert "One short question" in other
+
+        held = {"rubric_met": [], "misconception": None, "hint_tier": "nudge", "advance": True}
+        first = client.post(f"/sessions/{session_id}/turn-score", json=held)
+        assert first.json()["advanced"] is False
+        revealed = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "The struggle window is over" in revealed
+        second = client.post(f"/sessions/{session_id}/turn-score", json=held)
+        assert second.json()["advanced"] is True
+    finally:
+        client.patch(
+            f"/students/{storm['id']}",
+            json={"tutor_persona": storm["tutor_persona"], "tutor_struggle_window": "minimum"},
+        )
 
 
 def test_model_prompt_round_trip() -> None:

@@ -4,10 +4,11 @@ import uuid
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.engine.assemble import struggle_limit
 from app.models import Beat, BeatResult, Course, Message, Quest, Session as TutorSession, Unit
+from app.tutor_profile import load_profile
 
 KICKOFF_TEXT = "Hi! I'm ready to learn."
 
@@ -221,7 +222,8 @@ def choice_offer(tutor_session: TutorSession, beat: Beat) -> str | None:
     if not _check_ready(span):
         return None
     failed = _failed_attempts(tutor_session, beat.id)
-    limit = struggle_limit(tutor_session.student.tutor_struggle_window or "minimum")
+    window = load_profile(object_session(tutor_session)).struggle_window or "standard"
+    limit = struggle_limit(window)
     if not submitted:
         if failed >= max(limit - 1, 1):
             return "unstick"

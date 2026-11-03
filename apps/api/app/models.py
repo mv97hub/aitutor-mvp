@@ -31,9 +31,9 @@ BEAT_ROLES = (
 
 
 class Student(Base):
-    """Layer 2 lives here. Layers 3 and 4 are tutor-agent settings stored on the
-    student until a tutor profile exists. Those columns are named tutor_* so
-    the later move is a relocation, not a redesign.
+    """Layer 2 lives here. The tutor_* columns are the old per-student copy of
+    layers 3 and 4. The live settings are the single tutor_profiles row.
+    These columns stay so that move is not a destructive migration.
     """
 
     __tablename__ = "students"
@@ -64,6 +64,35 @@ class Student(Base):
     )
 
     sessions: Mapped[list[Session]] = relationship(back_populates="student")
+
+
+class TutorProfile(Base):
+    """One default tutor profile, applied to every student."""
+
+    __tablename__ = "tutor_profiles"
+    __table_args__ = (
+        CheckConstraint("id = 'default'", name="ck_tutor_profiles_singleton"),
+        CheckConstraint(
+            "instructive >= 1 AND instructive <= 5",
+            name="ck_tutor_profiles_instructive",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    instructive: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    persona: Mapped[str] = mapped_column(String(40), nullable=False)
+    lexicon: Mapped[str] = mapped_column(String(40), nullable=False)
+    voice_override: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    metaphors: Mapped[str] = mapped_column(String(40), nullable=False)
+    sidekick: Mapped[str] = mapped_column(String(40), nullable=False)
+    struggle_window: Mapped[str] = mapped_column(String(16), nullable=False, default="standard")
+    anti_spoiler: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    one_question: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    use_interests: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    growth_praise: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class Course(Base):
