@@ -440,21 +440,24 @@ def test_closed_tutor_choices_and_sidekick_off() -> None:
 
 def test_course_scope_rule_names_the_course_only_when_the_switch_is_on() -> None:
     on = assemble(*_layers()).system_prompt
-    assert "Course scope: stay on Ancient Rome." in on
+    assert on.split("Layer 1", 1)[0].startswith("You are the tutor for Storm.")
+    assert "Stay on Ancient Rome." in on.split("Layer 1", 1)[0]
+    assert "Depth inside Ancient Rome stays allowed" in on
     assert (
-        "Go as deep as the student needs on Ancient Rome, unit The Republic, "
+        "go as deep as the student needs on Ancient Rome, unit The Republic, "
         "and quest The Two-Captain Rule, including closely related ideas that serve this learning goal."
     ) in on
-    assert "Do not follow a turn onto a different subject." in on
-    assert "A short acknowledgment, then back to Ancient Rome." in on
+    assert "acknowledge it in one short line and return to Ancient Rome." in on
+    assert "Do not explain that subject." in on
+    assert "Do not keep chatting about it." in on
+    assert "If they wander off, answer in one sentence and come back." not in on
     assert "stay on topic" not in on.lower()
     assert "Teach, then ask." in on
 
     off = assemble(*_with_discourse(stay_on_course=False)).system_prompt
-    assert "Course scope:" not in off
-    assert "Do not follow a turn onto a different subject." not in off
-    assert "A short acknowledgment, then back to" not in off
-    assert "Stay on the active move." in off
+    assert "Stay on Ancient Rome." not in off
+    assert "acknowledge it in one short line" not in off
+    assert "If they wander off, answer in one sentence and come back." in off
     assert "Teach, then ask." in off
 
     layers = list(_layers())
@@ -470,7 +473,8 @@ def test_course_scope_rule_names_the_course_only_when_the_switch_is_on() -> None
     revealed = assemble(*layers).system_prompt
     assert "The struggle window is over" in revealed
     assert "why the worked answer fits" in revealed.lower()
-    assert "Course scope: stay on Ancient Rome." in revealed
+    assert "Stay on Ancient Rome." in revealed
+    assert "acknowledge it in one short line and return to Ancient Rome." in revealed
 
 
 def test_age_band_defaults() -> None:

@@ -94,9 +94,9 @@ def instructive_level(value: int | None) -> int:
 def _course_scope_rule(discourse: Layer4Discourse, beat: Layer1Beat) -> str | None:
     """Name the current course when the layer 4 switch is on.
 
-    Depth inside that course, unit, and quest stays allowed. A different
-    subject gets a short acknowledgment, then the turn returns. None leaves
-    today's prompt unchanged, so a tangent can be followed.
+    Depth inside that course stays allowed. A different subject gets one
+    short line, then the turn returns. None leaves today's prompt unchanged,
+    including the permission to answer a tangent.
     """
     if not discourse.stay_on_course:
         return None
@@ -104,11 +104,10 @@ def _course_scope_rule(discourse: Layer4Discourse, beat: Layer1Beat) -> str | No
     unit = beat.unit_title.strip() or "this unit"
     quest = beat.quest_title.strip() or "this quest"
     return (
-        f"Course scope: stay on {course}. "
-        f"Go as deep as the student needs on {course}, unit {unit}, and quest {quest}, "
-        "including closely related ideas that serve this learning goal. "
-        "Do not follow a turn onto a different subject. "
-        f"A short acknowledgment, then back to {course}."
+        f"Stay on {course}. Depth inside {course} stays allowed: go as deep as the student needs "
+        f"on {course}, unit {unit}, and quest {quest}, including closely related ideas that serve this learning goal. "
+        f"If the student brings up a different subject, acknowledge it in one short line and return to {course}. "
+        "Do not explain that subject. Do not keep chatting about it."
     )
 
 
@@ -601,14 +600,19 @@ def _rules(
     missed: bool,
 ) -> list[str]:
     classic = _classic(discourse)
-    lines = [
-        "Rules:",
-        "- Stay on the active move. If they wander off, answer in one sentence and come back.",
-        "- Do not dump the whole quest or teach a later move.",
-    ]
     scope = _course_scope_rule(discourse, beat)
     if scope:
-        lines.append(f"- {scope}")
+        lines = [
+            "Rules:",
+            f"- {scope}",
+            "- Stay on the active move inside this course. Do not dump the whole quest or teach a later move.",
+        ]
+    else:
+        lines = [
+            "Rules:",
+            "- Stay on the active move. If they wander off, answer in one sentence and come back.",
+            "- Do not dump the whole quest or teach a later move.",
+        ]
     if classic:
         lines.append("- Teach, then ask. One question per turn, and it comes last. Do not ask a second question.")
     else:
@@ -695,6 +699,9 @@ def assemble(
         f"You are the tutor for {student.display_name}.",
         "The reply field is the only text the student reads. The other fields are the turn score.",
     ]
+    scope = _course_scope_rule(discourse, beat)
+    if scope:
+        lines.append(scope)
     lines.extend(_layer1(beat, tier, reveal=reveal, hold_widget=hold_widget, discourse=discourse))
     lines.extend(_layer2(student, use_interests=discourse.use_interests))
     lines.extend(_layer3(tutor))

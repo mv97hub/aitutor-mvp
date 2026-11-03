@@ -884,11 +884,14 @@ def test_stay_on_course_rule_follows_the_profile_switch() -> None:
     session_id = opened.json()["id"]
     course = "Ancient Rome: From Seven Hills to the Fall of the Empire"
     on = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-    assert f"Course scope: stay on {course}." in on
+    assert f"Stay on {course}." in on.split("Layer 1", 1)[0]
+    assert f"Depth inside {course} stays allowed" in on
     assert "unit The Republic, and quest The Two-Captain Rule: Consuls and Veto Power" in on
     assert "including closely related ideas that serve this learning goal." in on
-    assert "Do not follow a turn onto a different subject." in on
-    assert f"A short acknowledgment, then back to {course}." in on
+    assert f"acknowledge it in one short line and return to {course}." in on
+    assert "Do not explain that subject." in on
+    assert "Do not keep chatting about it." in on
+    assert "If they wander off, answer in one sentence and come back." not in on
     assert "stay on topic" not in on.lower()
     assert "Teach, then ask." in on
 
@@ -896,9 +899,9 @@ def test_stay_on_course_rule_follows_the_profile_switch() -> None:
     assert saved.status_code == 200
     assert saved.json()["stay_on_course"] is False
     off = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-    assert "Course scope:" not in off
-    assert "Do not follow a turn onto a different subject." not in off
-    assert "Stay on the active move." in off
+    assert f"Stay on {course}." not in off
+    assert "acknowledge it in one short line" not in off
+    assert "If they wander off, answer in one sentence and come back." in off
     assert "Teach, then ask." in off
 
 
