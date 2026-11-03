@@ -1966,6 +1966,55 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
   list-style: none;
 }
 
+.studio-strip {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.studio-strip-phase {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  background: #fff;
+  color: rgb(15, 17, 21);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: left;
+}
+
+.studio-strip-phase:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.studio-strip-phase.is-active {
+  background: rgba(180, 83, 9, 0.14);
+  border-color: rgb(180, 83, 9);
+  color: rgb(180, 83, 9);
+}
+
+.studio-strip-filled {
+  color: rgb(22, 120, 70);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.studio-phase-codes {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
 .studio-phase {
   margin-bottom: 8px;
 }

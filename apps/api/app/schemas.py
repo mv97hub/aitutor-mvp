@@ -530,6 +530,23 @@ class StudioPhaseOut(BaseModel):
     open_codes: list[str]
 
 
+class StudioStripOut(BaseModel):
+    name: Literal["structure", "goals", "close", "ready"]
+    label: Literal["Structure", "Goals", "Close", "Ready"]
+    filled: bool
+    active: bool
+
+
+class StudioViewOut(BaseModel):
+    name: Literal["structure", "goals", "close", "ready"]
+    label: Literal["Structure", "Goals", "Close", "Ready"]
+    codes: list[str]
+
+
+class StudioPhaseIn(BaseModel):
+    name: Literal["structure", "goals", "close", "ready"]
+
+
 class StudioCourseOut(BaseModel):
     id: UUID
     code: str
@@ -544,6 +561,8 @@ class StudioCourseOut(BaseModel):
     ready: bool
     gaps: list[str]
     phase: StudioPhaseOut
+    strip: list[StudioStripOut]
+    view: StudioViewOut
     units: list[StudioUnitOut]
     updated_at: datetime
 
