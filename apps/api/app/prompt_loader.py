@@ -26,7 +26,15 @@ from app.engine.types import (
     WidgetTask,
 )
 from app.models import Beat, Session as TutorSession
-from app.queries import choice_widget_visible, latest_result, locate_beat, ordered_beats
+from app.queries import (
+    awaiting_tap_reply,
+    choice_offer,
+    choice_submitted,
+    latest_result,
+    locate_beat,
+    ordered_beats,
+    replied_after_teaching,
+)
 from app.tutor_profile import load_profile
 
 PASS_SCORE = 70
@@ -69,7 +77,12 @@ def _ladder(beat: Beat) -> HintLadder:
     )
 
 
-def _widget(tutor_session: TutorSession, beat: Beat) -> WidgetTask | None:
+def _widget(
+    tutor_session: TutorSession,
+    beat: Beat,
+    *,
+    include_grade: bool,
+) -> WidgetTask | None:
     quiz = beat.widget if isinstance(beat.widget, dict) else None
     if quiz is None:
         return None
@@ -88,17 +101,25 @@ def _widget(tutor_session: TutorSession, beat: Beat) -> WidgetTask | None:
     else:
         shown = str(answer or "")
     grade = None
-    result = latest_result(tutor_session, beat.id)
-    if result is not None and isinstance(result.choice, dict):
-        ids = tuple(str(item) for item in result.choice.get("ids") or [])
-        grade = WidgetGrade(
-            correct=bool(result.passed and result.score == 100),
-            score=result.score,
-            passed=result.passed,
-            misconception=result.misconception,
-            choice_ids=ids,
-            explanation=str(result.choice.get("explanation") or ""),
-        )
+    if include_grade:
+        matches = [
+            result
+            for result in tutor_session.results
+            if result.beat_id == beat.id
+            and isinstance(result.choice, dict)
+            and result.choice.get("ids")
+        ]
+        result = max(matches, key=lambda item: item.seq) if matches else None
+        if result is not None and isinstance(result.choice, dict):
+            ids = tuple(str(item) for item in result.choice.get("ids") or [])
+            grade = WidgetGrade(
+                correct=bool(result.passed and result.score == 100),
+                score=result.score,
+                passed=result.passed,
+                misconception=result.misconception,
+                choice_ids=ids,
+                explanation=str(result.choice.get("explanation") or ""),
+            )
     return WidgetTask(
         type=str(quiz.get("type") or ""),
         prompt=str(quiz.get("prompt") or ""),
@@ -172,11 +193,26 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
         source = beats[-1]
     engage = next((item for item in beats if item.role == "engage"), None)
     opening_idea = (engage.prompt if engage is not None else "").strip()
+    offer = None
+    submitted = False
+    answering_tap = False
+    if source is not None and not finished:
+        offer = choice_offer(tutor_session, source)
+        submitted = choice_submitted(tutor_session, source)
+        answering_tap = awaiting_tap_reply(tutor_session, source)
+    include_widget = offer is not None or answering_tap
     held = (
         source is not None
         and not finished
         and isinstance(source.widget, dict)
-        and not choice_widget_visible(tutor_session, source)
+        and not include_widget
+    )
+    grade_writing = bool(held and source is not None and replied_after_teaching(tutor_session, source))
+    withhold_answer = bool(
+        source is not None
+        and not finished
+        and isinstance(source.widget, dict)
+        and not submitted
     )
     if source is None:
         beat_layer = Layer1Beat(
@@ -222,7 +258,9 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             rubric=_rows(source),
             misconceptions=_traps(source),
             hint_ladder=_ladder(source),
-            widget=None if finished or held else _widget(tutor_session, source),
+            widget=None
+            if finished or not include_widget
+            else _widget(tutor_session, source, include_grade=offer is None),
             pass_score=PASS_SCORE,
             gate_cleared=gate_cleared,
             finished=finished,
@@ -274,4 +312,7 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
         memory_layer(),
         kickoff=kickoff,
         hold_widget=held,
+        grade_writing=grade_writing,
+        widget_offer=offer,
+        withhold_answer=withhold_answer,
     )

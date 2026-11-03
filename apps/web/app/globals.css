@@ -1373,6 +1373,11 @@ body:has(.ds-landing) {
 
 .ds-text:hover { background: rgba(38, 49, 72, 0.06); }
 
+.ds-shell .widget-message {
+  align-self: stretch;
+  max-width: 100%;
+}
+.ds-shell .widget.is-settled { pointer-events: none; }
 .ds-shell .widget { max-width: 100%; }
 .ds-shell .eyebrow {
   color: rgb(129, 133, 140);

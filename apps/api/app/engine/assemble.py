@@ -487,9 +487,11 @@ def _layer4(
     beat: Layer1Beat,
     student: Layer2Student,
     tutor: Layer3Tutor | None = None,
+    *,
+    reveal: bool,
 ) -> list[str]:
     limit = struggle_limit(discourse.struggle_window)
-    closed = student.attempt_count >= limit
+    closed = reveal
     missed = student.attempt_count > 0 and not closed
     lines = [
         "Layer 4 — Discourse",
@@ -652,9 +654,15 @@ def assemble(
     *,
     kickoff: bool = False,
     hold_widget: bool = False,
+    grade_writing: bool = False,
+    widget_offer: str | None = None,
+    withhold_answer: bool = False,
 ) -> PromptBundle:
     tier = hint_tier_for(student.attempt_count)
-    reveal = student.attempt_count >= struggle_limit(discourse.struggle_window)
+    reveal = (
+        student.attempt_count >= struggle_limit(discourse.struggle_window)
+        and not withhold_answer
+    )
     missed = student.attempt_count > 0 and not reveal
     lines: list[str] = [
         f"You are the tutor for {student.display_name}.",
@@ -663,7 +671,7 @@ def assemble(
     lines.extend(_layer1(beat, tier, reveal=reveal, hold_widget=hold_widget, discourse=discourse))
     lines.extend(_layer2(student, use_interests=discourse.use_interests))
     lines.extend(_layer3(tutor))
-    lines.extend(_layer4(discourse, beat, student, tutor))
+    lines.extend(_layer4(discourse, beat, student, tutor, reveal=reveal))
     lines.extend(_layer5(affect))
     lines.extend(_layer6(metacognition))
     lines.extend(_layer7(memory))
@@ -709,30 +717,53 @@ def assemble(
                 )
             )
     elif hold_widget and not beat.finished:
-        if _classic(discourse):
-            lines.append(
-                "\n".join(
-                    [
-                        "The choice widget is not on screen yet. This reply teaches the move.",
-                        "Explain the idea, then ask one question. Do not list choices or ask them to pick.",
-                        "The choice box appears after this reply.",
-                        "Set rubric_met to [], misconception to null, and advance to false.",
-                    ]
-                )
+        if grade_writing:
+            closing = (
+                "They have replied in their own words. Mark rubric_met from those words. "
+                "Do not advance. Do not state the answer."
             )
         else:
-            lines.append(
-                "\n".join(
-                    [
-                        "The choice widget is not on screen yet. This reply teaches the move.",
-                        _opening_sentence(discourse),
-                        _question_rule(discourse.one_question),
-                        "Do not list choices or ask them to pick.",
-                        "The choice box appears after this reply.",
-                        "Set rubric_met to [], misconception to null, and advance to false.",
-                    ]
-                )
+            closing = "Set rubric_met to [], misconception to null, and advance to false."
+        if _classic(discourse):
+            teach = "Explain the idea, then ask one question. Do not list choices or ask them to pick."
+        else:
+            teach = "\n".join(
+                [
+                    _opening_sentence(discourse),
+                    _question_rule(discourse.one_question),
+                    "Do not list choices or ask them to pick.",
+                ]
             )
+        lines.append(
+            "\n".join(
+                [
+                    "The choice widget is not on screen yet. This reply teaches the move.",
+                    teach,
+                    "The choices stay off this turn. They appear later, only to check an idea the student has explained in their own words, or to give one structured try before the answer if they are stuck.",
+                    closing,
+                ]
+            )
+        )
+    elif widget_offer == "unstick" and not beat.finished:
+        lines.append(
+            "\n".join(
+                [
+                    "The choices are one message in the chat. They are stuck, and the struggle window is about to open.",
+                    "This is one structured try before you state the answer. Invite them to choose. Do not name the correct choice.",
+                    "Set advance to false until they submit.",
+                ]
+            )
+        )
+    elif widget_offer == "check" and not beat.finished:
+        lines.append(
+            "\n".join(
+                [
+                    "The choices are one message in the chat, to check the idea they explained in their own words.",
+                    "Invite them to choose. Do not teach a new idea. Do not state the correct choice.",
+                    "Set advance to false until they submit.",
+                ]
+            )
+        )
     return PromptBundle(
         system_prompt="\n\n".join(lines),
         response_schema=RESPONSE_SCHEMA,

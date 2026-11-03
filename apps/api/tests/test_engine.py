@@ -230,8 +230,48 @@ def test_opening_hold_keeps_the_choice_out_of_the_kickoff() -> None:
     reply = assemble(*layers, hold_widget=True).system_prompt
     assert "not on screen yet" in reply
     assert "This reply teaches the move." in reply
+    assert "appears after this reply" not in reply
+    assert "own words" in reply
     assert "Invite them to choose" not in reply
     assert "pottery" not in reply.lower()
+    graded = assemble(*layers, hold_widget=True, grade_writing=True).system_prompt
+    assert "Mark rubric_met from those words." in graded
+    assert "Set rubric_met to []" not in graded.split("The choice widget is not on screen yet.")[-1]
+
+
+def test_check_and_unstick_are_the_only_times_the_choices_appear() -> None:
+    widget = WidgetTask(
+        type="multi",
+        prompt="Which of these are archaeological clues?",
+        choices=(
+            WidgetChoice("wall", "A wall dated to early Rome.", ""),
+            WidgetChoice("pottery", "Pottery found under the Forum.", ""),
+        ),
+        answer=("wall", "pottery"),
+        explain=False,
+        grade=None,
+    )
+    layers = list(_layers())
+    layers[0] = _beat(widget=widget, beat_role="try", prompt="Sort a find from a story.")
+    layers[1] = Layer2Student(
+        display_name="Storm",
+        age_band="9-11",
+        reading_level="middle-grade",
+        modality="story",
+        interests=(),
+        attempt_count=2,
+        zpd="support",
+    )
+    check = assemble(*layers, widget_offer="check", withhold_answer=True).system_prompt
+    assert "explained in their own words" in check
+    assert "Invite them to choose" in check
+    assert "Correct answer, for you only" not in check
+    assert "The struggle window is over" not in check
+    unstick = assemble(*layers, widget_offer="unstick", withhold_answer=True).system_prompt
+    assert "one structured try" in unstick
+    assert "about to open" in unstick
+    assert "Correct answer, for you only" not in unstick
+    assert "The struggle window is over" not in unstick
 
 
 def test_widget_answer_stays_hidden_until_the_window() -> None:

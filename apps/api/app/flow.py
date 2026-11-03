@@ -13,7 +13,16 @@ from app.engine.defaults import profile_for_age
 from app.tutor_profile import load_profile
 from app.models import Beat, BeatResult, Course, Message, ModelPrompt, Quest, Session as TutorSession, Student
 from app.prompt_loader import PASS_SCORE
-from app.queries import choice_widget_visible, latest_result, locate_beat, next_position, ordered_beats
+from app.queries import (
+    awaiting_tap_reply,
+    choice_offer,
+    choice_submitted,
+    latest_result,
+    locate_beat,
+    next_position,
+    ordered_beats,
+    replied_after_teaching,
+)
 from app.widgets import choice_ids, grade_choice, hint_text
 
 def now() -> datetime:
@@ -381,16 +390,36 @@ def apply_turn_score(
     latest = latest_result(tutor_session, beat.id)
     quiz = beat.widget if isinstance(beat.widget, dict) else None
     note = blank_to_none(misconception)
-    reveal = _window_closed(db, tutor_session, beat)
-    if quiz is not None and not choice_widget_visible(tutor_session, beat):
-        return {
-            "ok": True,
-            "advanced": False,
-            "graded_by": "opening",
-            "passed": False,
-            "score": 0,
-            "feedback": "This move is still being taught.",
-        }
+    submitted = choice_submitted(tutor_session, beat) if quiz is not None else True
+    reveal = _window_closed(db, tutor_session, beat) and submitted
+    offer = choice_offer(tutor_session, beat) if quiz is not None else None
+    answering_tap = awaiting_tap_reply(tutor_session, beat) if quiz is not None else False
+    if quiz is not None and offer is None and not answering_tap:
+        if not replied_after_teaching(tutor_session, beat):
+            return {
+                "ok": True,
+                "advanced": False,
+                "graded_by": "opening",
+                "passed": False,
+                "score": 0,
+                "feedback": "This move is still being taught.",
+            }
+        total = sum(weights.values()) or 0
+        earned = sum(weights[row_id] for row_id in met)
+        score = round(100 * earned / total) if total else 0
+        passed = score >= PASS_SCORE
+        feedback = "That meets this move." if passed else "Not yet. The idea still needs another try."
+        recorded = record_result(
+            db,
+            tutor_session,
+            score,
+            passed,
+            feedback,
+            rubric_met=met,
+            misconception=None if passed else note,
+            hint_tier=hint_tier_for(failed_attempts(tutor_session, beat.id)),
+        )
+        return {**recorded, "advanced": False, "graded_by": "discussion"}
     if beat.role == "name":
         recorded = record_result(
             db,
@@ -411,7 +440,13 @@ def apply_turn_score(
             passed=True,
         )
         return {**recorded, "advanced": advanced, "graded_by": "model"}
-    if quiz is not None and latest is not None and isinstance(latest.choice, dict):
+    if (
+        quiz is not None
+        and answering_tap
+        and latest is not None
+        and isinstance(latest.choice, dict)
+        and latest.choice.get("ids")
+    ):
         latest.rubric_met = met
         if not latest.misconception and note and not latest.passed:
             latest.misconception = note
@@ -441,6 +476,15 @@ def apply_turn_score(
             "passed": latest.passed,
             "advanced": advanced,
             "misconception": latest.misconception,
+        }
+    if quiz is not None and offer is not None:
+        return {
+            "ok": True,
+            "advanced": False,
+            "graded_by": "widget",
+            "passed": False,
+            "score": 0,
+            "feedback": "Choose an answer on the widget.",
         }
     if quiz is not None:
         recorded = record_result(
