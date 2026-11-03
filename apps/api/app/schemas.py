@@ -579,6 +579,14 @@ class StudioCourseCreate(BaseModel):
     title: str = Field(min_length=1, max_length=240)
 
 
+class StudioDeleteIn(BaseModel):
+    password: str = Field(default="", max_length=200)
+
+
+class StudioCopyIn(BaseModel):
+    title: str = Field(min_length=1, max_length=240)
+
+
 class StudioPreferencesIn(BaseModel):
     title: str = Field(min_length=1, max_length=240)
     audience: str = ""

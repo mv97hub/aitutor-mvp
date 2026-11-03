@@ -9,9 +9,11 @@ from app.database import get_db
 from app.models import StudioMessage
 from app.schemas import (
     StudioAcceptOut,
+    StudioCopyIn,
     StudioCourseCreate,
     StudioCourseOut,
     StudioCourseSummary,
+    StudioDeleteIn,
     StudioMessageIn,
     StudioMessageOut,
     StudioPhaseIn,
@@ -27,8 +29,10 @@ from app.studio import (
     StudioError,
     accept_proposal,
     add_message,
+    copy_studio_course,
     course_out,
     create_course,
+    delete_studio_course,
     dismiss_proposal,
     ensure_settings,
     list_courses,
@@ -76,6 +80,26 @@ def post_course(body: StudioCourseCreate, db: Session = Depends(get_db)) -> Stud
     except StudioError as exc:
         raise _fail(exc) from exc
     return course_out(course)
+
+
+@router.post("/courses/{course_id}/delete")
+def post_delete(course_id: UUID, body: StudioDeleteIn, db: Session = Depends(get_db)) -> dict:
+    course = _course(db, course_id)
+    try:
+        delete_studio_course(db, course, body.password)
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    return {"deleted": True}
+
+
+@router.post("/courses/{course_id}/copy", response_model=StudioCourseOut)
+def post_copy(course_id: UUID, body: StudioCopyIn, db: Session = Depends(get_db)) -> StudioCourseOut:
+    course = _course(db, course_id)
+    try:
+        copied = copy_studio_course(db, course, body.title)
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    return course_out(copied)
 
 
 @router.get("/courses/{course_id}", response_model=StudioCourseOut)
