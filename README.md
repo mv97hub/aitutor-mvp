@@ -79,9 +79,9 @@ python -m app.seed
 uvicorn app.main:app --reload --port 8000
 ```
 
-`alembic upgrade head` and `python -m app.seed` are required. A local refresh of the Next.js page is not enough: revision `006_quest_cycle` adds the learning goal, the success criterion, and the move roles, clears old class transcripts, and drops the old four-beat rows. Revision `007_tutor_profile` adds one tutor profile row and does not clear classes. Run `alembic upgrade head` after pulling this change. Re-seed only if you also need the quest text from revision 006.
+`alembic upgrade head` and `python -m app.seed` are required. A local refresh of the Next.js page is not enough: revision `006_quest_cycle` adds the learning goal, the success criterion, and the move roles, clears old class transcripts, and drops the old four-beat rows. Revision `007_tutor_profile` adds one tutor profile row and does not clear classes. Run `alembic upgrade head` after pulling this change. Re-seed to refresh quest text on Rome, Geometry, and AP Macro. That update is in place and does not delete sessions or messages.
 
-The seed inserts Iron Man, Storm, Spider-Man, and Wolverine when they are missing, and fills an age or tutor settings only when the tutor persona is blank. It rewrites Ancient Rome (ages 9–11), Euclidean and coordinate geometry (ages 12–14), and AP Macroeconomics (ages 15–17) to the quest cycle. Any other course code is left as edited.
+The seed inserts Iron Man, Storm, Spider-Man, and Wolverine when they are missing, and fills an age or tutor settings only when the tutor persona is blank. It updates Ancient Rome (ages 9–11), Euclidean and coordinate geometry (ages 12–14), and AP Macroeconomics (ages 15–17) in place and does not delete sessions or messages. Any other course code is left as edited.
 
 Terminal 2, web:
 
@@ -106,4 +106,4 @@ Add child asks for a name and an age. Reading level, modality, and interests are
 
 ## Render
 
-Not deployed from this repo. A later deploy would be three Render resources you create by hand: a web service for `apps/web`, a web service for `apps/api`, and a managed Postgres database. Set `OPENAI_API_KEY`, `API_URL`, and `NEXT_PUBLIC_API_URL` on the Next service. Set `DATABASE_URL` (`postgresql+psycopg://...`) on the API. A fresh database still needs `alembic upgrade head` and `python -m app.seed`. Agent customizations add revision `007_tutor_profile`. Deploy the web service and the API, then run `alembic upgrade head`. The migration inserts the default profile. A re-seed is not required: the seed does not overwrite a saved profile and does not change quest text.
+Not deployed from this repo. A later deploy would be three Render resources you create by hand: a web service for `apps/web`, a web service for `apps/api`, and a managed Postgres database. Set `OPENAI_API_KEY`, `API_URL`, and `NEXT_PUBLIC_API_URL` on the Next service. Set `DATABASE_URL` (`postgresql+psycopg://...`) on the API. A fresh database still needs `alembic upgrade head` and `python -m app.seed`. Agent customizations add revision `007_tutor_profile`. Deploy the web service and the API, then run `alembic upgrade head` and `python -m app.seed`. The migration inserts the default profile. The seed updates Ancient Rome, Euclidean and coordinate geometry, and AP Macroeconomics in place and does not delete sessions or messages. It does not overwrite a saved tutor profile.

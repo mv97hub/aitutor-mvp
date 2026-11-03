@@ -1,16 +1,16 @@
 """Idempotent seed: four students and three courses.
 
 Running this twice does not duplicate students. Rome, Geometry, and AP Macro are
-rewritten to the quest cycle. Any other course code is left as edited.
+updated in place. Sessions and messages stay. Any other course code is left as edited.
 Students keep a tutor persona that was already saved. Blank tutor fields are filled
 from the age band. The default tutor profile is inserted when it is missing and
-is not overwritten. Revision 006 clears old class transcripts.
+is not overwritten.
 """
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.course_io import replace_course
+from app.course_io import replace_course, update_course_in_place
 from app.curriculum import COURSES
 from app.database import SessionLocal
 from app.engine.defaults import profile_for_age
@@ -79,9 +79,11 @@ def seed(db: Session) -> dict[str, int]:
     created_courses = 0
     for payload in COURSES:
         exists = db.scalar(select(Course.id).where(Course.code == payload["code"]))
-        replace_course(db, payload)
         if exists is None:
+            replace_course(db, payload)
             created_courses += 1
+        else:
+            update_course_in_place(db, payload)
     ensure_default_profile(db)
     db.commit()
     return {"students_created": created_students, "courses_created": created_courses}

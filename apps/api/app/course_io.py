@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
+from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy import delete, select
@@ -15,6 +16,7 @@ from app.models import (
     BEAT_ROLES,
     QUEST_TYPES,
     Beat,
+    BeatResult,
     Course,
     Quest,
     Session as TutorSession,
@@ -433,3 +435,160 @@ def replace_course(db: Session, payload: dict) -> Course:
     _write_tree(existing, normalized)
     db.flush()
     return existing
+
+
+def _beats_held(db: Session, beat_ids: list) -> bool:
+    if not beat_ids:
+        return False
+    if db.scalar(select(TutorSession.id).where(TutorSession.current_beat_id.in_(beat_ids))) is not None:
+        return True
+    return db.scalar(select(BeatResult.id).where(BeatResult.beat_id.in_(beat_ids))) is not None
+
+
+def _fill_beat(beat: Beat, body: dict) -> None:
+    beat.role = body["role"]
+    beat.bloom_level = body["bloom_level"]
+    beat.cognitive_load = body["cognitive_load"]
+    beat.prompt = body["prompt"]
+    beat.rubric = body["rubric"]
+    beat.misconception_map = body["misconception_map"]
+    beat.hint_ladder = body["hint_ladder"]
+    beat.widget = body["widget"]
+
+
+def _sync_beats(quest: Quest, beats: list[dict]) -> None:
+    by_position = {beat.position: beat for beat in quest.beats}
+    incoming = set(range(1, len(beats) + 1))
+    for position, body in enumerate(beats, start=1):
+        beat = by_position.get(position)
+        if beat is None:
+            beat = Beat(position=position, role=body["role"])
+            quest.beats.append(beat)
+        _fill_beat(beat, body)
+    for beat in list(quest.beats):
+        if beat.position not in incoming:
+            quest.beats.remove(beat)
+
+
+def _fill_quest(quest: Quest, body: dict) -> None:
+    quest.title = body["title"]
+    quest.quest_type = body["quest_type"]
+    quest.prerequisite_codes = body["prerequisite_codes"]
+    quest.competency_tags = body["competency_tags"]
+    quest.dinner_prompt = body["dinner_prompt"]
+    quest.learning_goal = body["learning_goal"]
+    quest.success_criterion = body["success_criterion"]
+    quest.requires_teach_back = body["requires_teach_back"]
+
+
+def update_course_in_place(db: Session, payload: dict) -> Course:
+    """Refresh one course without deleting classes.
+
+    Units match by number, quests by code, and moves by position. Columns are
+    updated on those rows. A quest that still has a class is not dropped.
+    """
+    normalized = validate_course(payload)
+    course = db.scalar(
+        select(Course)
+        .where(Course.code == normalized["code"])
+        .options(selectinload(Course.units).selectinload(Unit.quests).selectinload(Quest.beats))
+    )
+    if course is None:
+        raise CourseFileError("code", "is not in the database")
+
+    incoming_codes = [
+        quest["code"] for unit in normalized["units"] for quest in unit["quests"]
+    ]
+    incoming_code_set = set(incoming_codes)
+    quests_by_code = {quest.code: quest for unit in course.units for quest in unit.quests}
+    dropped = [quest for quest in quests_by_code.values() if quest.code not in incoming_code_set]
+    if dropped:
+        dropped_ids = [quest.id for quest in dropped]
+        held_id = db.scalar(
+            select(TutorSession.quest_id).where(TutorSession.quest_id.in_(dropped_ids))
+        )
+        if held_id is not None:
+            code = next(quest.code for quest in dropped if quest.id == held_id)
+            raise CourseFileError("quests", f"{code} still has classes, so it cannot be removed")
+        dropped_beats = [beat.id for quest in dropped for beat in quest.beats]
+        if _beats_held(db, dropped_beats):
+            raise CourseFileError("beats", "a move still has classes, so it cannot be removed")
+
+    for unit_body in normalized["units"]:
+        for quest_body in unit_body["quests"]:
+            quest = quests_by_code.get(quest_body["code"])
+            if quest is None:
+                continue
+            incoming_positions = set(range(1, len(quest_body["beats"]) + 1))
+            extra_ids = [beat.id for beat in quest.beats if beat.position not in incoming_positions]
+            if _beats_held(db, extra_ids):
+                raise CourseFileError("beats", "a move still has classes, so it cannot be removed")
+
+    course.title = normalized["title"]
+    course.age_band = normalized["age_band"]
+    course.standards_alignment = normalized["standards_alignment"]
+    course.competency_dictionary = normalized["competency_dictionary"]
+    course.updated_at = datetime.now(timezone.utc)
+
+    units_by_number = {unit.number: unit for unit in course.units}
+    for unit_body in normalized["units"]:
+        unit = units_by_number.get(unit_body["number"])
+        if unit is None:
+            unit = Unit(
+                course_id=course.id,
+                number=unit_body["number"],
+                title=unit_body["title"],
+                enduring_understanding=unit_body["enduring_understanding"],
+                continuity_summary=unit_body["continuity_summary"],
+                is_diagnostic=unit_body["is_diagnostic"],
+                is_capstone=unit_body["is_capstone"],
+            )
+            course.units.append(unit)
+            units_by_number[unit.number] = unit
+        else:
+            unit.title = unit_body["title"]
+            unit.enduring_understanding = unit_body["enduring_understanding"]
+            unit.continuity_summary = unit_body["continuity_summary"]
+            unit.is_diagnostic = unit_body["is_diagnostic"]
+            unit.is_capstone = unit_body["is_capstone"]
+    db.flush()
+
+    for unit in list(course.units):
+        for quest in list(unit.quests):
+            if quest.code not in incoming_code_set:
+                unit.quests.remove(quest)
+    db.flush()
+
+    live = [quests_by_code[code] for code in incoming_codes if code in quests_by_code]
+    for offset, quest in enumerate(live, start=1):
+        quest.position = 10_000 + offset
+    db.flush()
+
+    for unit_body in normalized["units"]:
+        unit = units_by_number[unit_body["number"]]
+        for position, quest_body in enumerate(unit_body["quests"], start=1):
+            quest = quests_by_code.get(quest_body["code"])
+            if quest is None:
+                clash = db.scalar(select(Quest.id).where(Quest.code == quest_body["code"]))
+                if clash is not None:
+                    raise CourseFileError("quests", "a quest code is already used by another course")
+                quest = Quest(code=quest_body["code"], position=position)
+                unit.quests.append(quest)
+                quests_by_code[quest.code] = quest
+            else:
+                quest.unit = unit
+                quest.position = position
+            _fill_quest(quest, quest_body)
+            _sync_beats(quest, quest_body["beats"])
+    db.flush()
+
+    incoming_numbers = [unit_body["number"] for unit_body in normalized["units"]]
+    stale_units = db.scalars(
+        select(Unit).where(Unit.course_id == course.id, Unit.number.not_in(incoming_numbers))
+    ).all()
+    for unit in stale_units:
+        if db.scalar(select(Quest.id).where(Quest.unit_id == unit.id)) is not None:
+            raise CourseFileError("units", "a unit still has quests, so it cannot be removed")
+        db.delete(unit)
+    db.flush()
+    return course
