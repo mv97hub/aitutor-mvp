@@ -1,0 +1,1031 @@
+"""CreateCourse studio: preferences, the typed patch, and the model row.
+
+The tutor seed does not import this module. Patches are checked before they
+are written. A model reply can describe a change, and the tree stays as it
+is until that patch is accepted.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import re
+from datetime import datetime, timezone
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, object_session, selectinload
+
+from app.models import (
+    StudioCourse,
+    StudioMessage,
+    StudioMove,
+    StudioQuest,
+    StudioQuestClose,
+    StudioSettings,
+    StudioUnit,
+)
+from app.schemas import (
+    StudioCloseOut,
+    StudioCourseOut,
+    StudioCourseSummary,
+    StudioMessageOut,
+    StudioMoveOut,
+    StudioQuestOut,
+    StudioUnitOut,
+)
+
+CLOSE_STYLES = ("one", "several")
+ANSWER_STYLES = ("multiple_choice", "essay", "mixed")
+CHOICE_MODES = ("predefined", "dynamic")
+DEPTHS = ("survey", "standard", "go_deep")
+STUDIO_MODELS = ("gpt-4o-mini", "gpt-4o", "gpt-4.1-mini")
+DEFAULT_STUDIO_MODEL = "gpt-4o-mini"
+SCHEMA_VERSION = 1
+SETTINGS_ID = "default"
+STUDIO_TEMPERATURE = 0.4
+
+COURSE_CODE = re.compile(r"^[A-Z][A-Z0-9]{1,15}$")
+NODE_CODE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+){1,6}$")
+KINDS = ("course", "unit", "quest", "move")
+OPS = ("add", "update", "remove")
+PARENT_KIND = {"unit": "course", "quest": "unit", "move": "quest"}
+TEXT_LIMITS = {
+    "title": 240,
+    "audience": 500,
+    "focus": 2000,
+    "theme": 240,
+    "sources": 500,
+    "learning_goal": 2000,
+    "success_criterion": 2000,
+    "intent": 2000,
+}
+COURSE_FIELDS = ("title", "audience", "focus", "theme", "depth", "sources", "close_default")
+NODE_FIELDS = ("title", "learning_goal", "success_criterion", "position")
+
+_MISSING = object()
+
+def _close_schema() -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "close_style": {"type": "string", "enum": ["one", "several"]},
+            "answer_style": {
+                "type": "string",
+                "enum": ["multiple_choice", "essay", "mixed"],
+            },
+            "choice_mode": {
+                "anyOf": [
+                    {"type": "null"},
+                    {"type": "string", "enum": ["predefined", "dynamic"]},
+                ]
+            },
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            },
+            "intent": {"type": "string"},
+        },
+        "required": ["close_style", "answer_style", "choice_mode", "items", "intent"],
+    }
+
+
+def _operation_schema() -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "op": {"type": "string", "enum": ["add", "update", "remove"]},
+            "kind": {"type": "string", "enum": ["course", "unit", "quest", "move"]},
+            "code": {"type": "string"},
+            "parent": {"type": ["string", "null"]},
+            "title": {"type": ["string", "null"]},
+            "learning_goal": {"type": ["string", "null"]},
+            "success_criterion": {"type": ["string", "null"]},
+            "position": {"anyOf": [{"type": "null"}, {"type": "integer"}]},
+            "audience": {"type": ["string", "null"]},
+            "focus": {"type": ["string", "null"]},
+            "theme": {"type": ["string", "null"]},
+            "depth": {
+                "anyOf": [
+                    {"type": "null"},
+                    {"type": "string", "enum": ["survey", "standard", "go_deep"]},
+                ]
+            },
+            "sources": {"type": ["string", "null"]},
+            "close": {"anyOf": [{"type": "null"}, _close_schema()]},
+            "close_default": {"anyOf": [{"type": "null"}, _close_schema()]},
+        },
+        "required": [
+            "op",
+            "kind",
+            "code",
+            "parent",
+            "title",
+            "learning_goal",
+            "success_criterion",
+            "position",
+            "audience",
+            "focus",
+            "theme",
+            "depth",
+            "sources",
+            "close",
+            "close_default",
+        ],
+    }
+
+
+STUDIO_RESPONSE_SCHEMA: dict = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "reply": {
+            "type": "string",
+            "description": "What the creator reads. Say which framework a suggestion comes from.",
+        },
+        "patch": {
+            "description": "Null when nothing should change. Otherwise typed add, update, or remove operations.",
+            "anyOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "operations": {
+                            "type": "array",
+                            "maxItems": 40,
+                            "items": _operation_schema(),
+                        }
+                    },
+                    "required": ["operations"],
+                },
+            ],
+        },
+    },
+    "required": ["reply", "patch"],
+}
+
+
+class StudioError(Exception):
+    def __init__(self, field: str, message: str, status: int = 422) -> None:
+        self.field = field
+        self.message = message
+        self.status = status
+        super().__init__(f"{field}: {message}")
+
+
+class _Node:
+    def __init__(self, kind: str, code: str, parent: str | None, position: int) -> None:
+        self.kind = kind
+        self.code = code
+        self.parent = parent
+        self.position = position
+
+
+def default_close() -> dict:
+    return {
+        "close_style": "one",
+        "answer_style": "essay",
+        "choice_mode": None,
+        "items": [],
+        "intent": "",
+    }
+
+
+def default_preferences() -> dict:
+    return {"close_default": default_close()}
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _field(op: dict, key: str):
+    if key not in op or op[key] is None:
+        return _MISSING
+    return op[key]
+
+
+def _text(field: str, value, *, required: bool = False, allow_blank: bool = True) -> str:
+    if not isinstance(value, str):
+        raise StudioError(field, "must be text")
+    text = value.strip()
+    if required and not text:
+        raise StudioError(field, "is required")
+    if not allow_blank and not text:
+        raise StudioError(field, "is required")
+    limit = TEXT_LIMITS[field]
+    if len(text) > limit:
+        raise StudioError(field, "is too long")
+    return text
+
+
+def _upper(value, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise StudioError(field, "must be a short code")
+    return value.strip().upper()
+
+
+def normalize_course_code(value) -> str:
+    code = _upper(value, "code")
+    if not COURSE_CODE.fullmatch(code):
+        raise StudioError("code", "must be a short code such as GEO")
+    return code
+
+
+def normalize_node_code(value, course_code: str, field: str = "code") -> str:
+    code = _upper(value, field)
+    prefix = f"{course_code}-"
+    if not NODE_CODE.fullmatch(code) or len(code) > 40 or not code.startswith(prefix):
+        raise StudioError(field, f"must be a short stable code such as {course_code}-U2")
+    return code
+
+
+def normalize_depth(value) -> str:
+    if value not in DEPTHS:
+        raise StudioError("depth", "must be survey, standard, or go_deep")
+    return value
+
+
+def normalize_sources(value) -> str:
+    text = _text("sources", value)
+    if text.lower() == "none":
+        return ""
+    return text
+
+
+def _items(value) -> list[dict]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise StudioError("items", "must be a list of choices")
+    cleaned = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            text = item["text"].strip()
+        else:
+            raise StudioError("items", "each choice needs text")
+        if not text or len(text) > 240:
+            raise StudioError("items", "each choice needs short text")
+        cleaned.append({"text": text})
+    return cleaned
+
+
+def normalize_close(value, field: str = "close") -> dict:
+    if not isinstance(value, dict):
+        raise StudioError(field, "must say how the quest closes")
+    style = value.get("close_style")
+    if style not in CLOSE_STYLES:
+        raise StudioError("close_style", "must be one or several")
+    answer = value.get("answer_style")
+    if answer not in ANSWER_STYLES:
+        raise StudioError("answer_style", "must be multiple_choice, essay, or mixed")
+    mode = value.get("choice_mode")
+    if mode == "":
+        mode = None
+    intent = value.get("intent")
+    if intent is None:
+        intent = ""
+    if not isinstance(intent, str):
+        raise StudioError("intent", "must be text")
+    intent = intent.strip()
+    if len(intent) > TEXT_LIMITS["intent"]:
+        raise StudioError("intent", "is too long")
+    items = _items(value.get("items"))
+    if answer == "essay":
+        if mode is not None:
+            raise StudioError("choice_mode", "is only for multiple choice")
+        if items:
+            raise StudioError("items", "are stored only for predefined choices")
+        if intent:
+            raise StudioError("intent", "is stored only for dynamic choices")
+        return {
+            "close_style": style,
+            "answer_style": answer,
+            "choice_mode": None,
+            "items": [],
+            "intent": "",
+        }
+    if mode not in CHOICE_MODES:
+        raise StudioError("choice_mode", "must be predefined or dynamic")
+    if mode == "predefined":
+        if len(items) < 2 or len(items) > 8:
+            raise StudioError("items", "needs two to eight choices")
+        if intent:
+            raise StudioError("intent", "is stored only for dynamic choices")
+        return {
+            "close_style": style,
+            "answer_style": answer,
+            "choice_mode": "predefined",
+            "items": items,
+            "intent": "",
+        }
+    if items:
+        raise StudioError("items", "dynamic choices store only the intent")
+    if not intent:
+        raise StudioError("intent", "is required for dynamic choices")
+    return {
+        "close_style": style,
+        "answer_style": answer,
+        "choice_mode": "dynamic",
+        "items": [],
+        "intent": intent,
+    }
+
+
+def close_default_of(course: StudioCourse) -> dict:
+    raw = course.preferences if isinstance(course.preferences, dict) else {}
+    stored = raw.get("close_default") if isinstance(raw, dict) else None
+    if not isinstance(stored, dict):
+        return default_close()
+    try:
+        return normalize_close(stored, "close_default")
+    except StudioError:
+        return default_close()
+
+
+def _position(value) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise StudioError("position", "must be a whole number")
+    if value < 1 or value > 200:
+        raise StudioError("position", "must be from 1 to 200")
+    return value
+
+
+def _slot(existing: list, row, position: int) -> None:
+    others = sorted(
+        [item for item in existing if item.code != row.code],
+        key=lambda item: (item.position, item.code),
+    )
+    if position < 1 or position > len(others) + 1:
+        raise StudioError("position", "is outside this list")
+    ordered = others[: position - 1] + [row] + others[position - 1 :]
+    for index, item in enumerate(ordered, start=1):
+        item.position = index
+
+
+def _compact(rows: list) -> None:
+    ordered = sorted(rows, key=lambda item: (item.position, item.code))
+    for index, item in enumerate(ordered, start=1):
+        item.position = index
+
+
+def _operations(patch) -> list:
+    if isinstance(patch, list):
+        raw = patch
+    elif isinstance(patch, dict) and isinstance(patch.get("operations"), list):
+        raw = patch["operations"]
+    else:
+        raise StudioError(
+            "patch",
+            "must be add, update, or remove operations addressed by code",
+        )
+    if not raw:
+        raise StudioError("patch", "needs at least one add, update, or remove")
+    if len(raw) > 40:
+        raise StudioError("patch", "is too large")
+    return raw
+
+
+def _reject_foreign(op: dict, allowed: set[str], kind: str) -> None:
+    for key in (
+        "title",
+        "learning_goal",
+        "success_criterion",
+        "position",
+        "audience",
+        "focus",
+        "theme",
+        "depth",
+        "sources",
+        "close",
+        "close_default",
+        "parent",
+    ):
+        if key in allowed:
+            continue
+        if _field(op, key) is _MISSING:
+            continue
+        raise StudioError(key, f"does not belong on a {kind}")
+
+
+def plan_patch(course: StudioCourse, patch) -> list[dict]:
+    """Check a patch against this course. Nothing is written."""
+    nodes = {
+        course.code: _Node("course", course.code, None, 0),
+    }
+    for unit in course.units:
+        nodes[unit.code] = _Node("unit", unit.code, course.code, unit.position)
+        for quest in unit.quests:
+            nodes[quest.code] = _Node("quest", quest.code, unit.code, quest.position)
+            for move in quest.moves:
+                nodes[move.code] = _Node("move", move.code, quest.code, move.position)
+    state = {
+        "title": course.title,
+        "audience": course.audience,
+        "focus": course.focus,
+        "theme": course.theme,
+        "depth": course.depth,
+        "sources": course.sources,
+        "close_default": close_default_of(course),
+    }
+    planned: list[dict] = []
+    for raw in _operations(patch):
+        if not isinstance(raw, dict):
+            raise StudioError("patch", "each change must be an object")
+        op_name = raw.get("op")
+        kind = raw.get("kind")
+        if op_name not in OPS:
+            raise StudioError("op", "must be add, update, or remove")
+        if kind not in KINDS:
+            raise StudioError("kind", "must be course, unit, quest, or move")
+        if op_name == "add":
+            planned.append(_plan_add(course.code, raw, nodes, state))
+        elif op_name == "update":
+            planned.append(_plan_update(course.code, raw, nodes, state))
+        else:
+            planned.append(_plan_remove(course.code, raw, nodes))
+    return planned
+
+
+def _siblings(nodes: dict[str, _Node], parent: str, kind: str) -> list[_Node]:
+    return [node for node in nodes.values() if node.parent == parent and node.kind == kind]
+
+
+def _plan_add(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict) -> dict:
+    kind = raw["kind"]
+    if kind == "course":
+        raise StudioError("op", "the course already exists")
+    _reject_foreign(raw, {"title", "learning_goal", "success_criterion", "position", "parent", "close"}, kind)
+    code = normalize_node_code(raw.get("code"), course_code)
+    if code in nodes:
+        raise StudioError("code", f"{code} is already used in this course")
+    if kind == "unit":
+        parent_code = _upper(raw.get("parent"), "parent")
+        if parent_code != course_code:
+            raise StudioError("parent", f"{parent_code} is not this course")
+    else:
+        parent_code = normalize_node_code(raw.get("parent"), course_code, "parent")
+    parent = nodes.get(parent_code)
+    if parent is None:
+        raise StudioError("parent", f"{parent_code} is not in this course")
+    if parent.kind != PARENT_KIND[kind]:
+        raise StudioError("parent", f"{code} must be added under a {PARENT_KIND[kind]}")
+    title = _text("title", raw.get("title"), required=True)
+    goal = ""
+    criterion = ""
+    if _field(raw, "learning_goal") is not _MISSING:
+        goal = _text("learning_goal", raw.get("learning_goal"))
+    if _field(raw, "success_criterion") is not _MISSING:
+        criterion = _text("success_criterion", raw.get("success_criterion"))
+    if kind == "quest":
+        close = (
+            normalize_close(raw.get("close"))
+            if _field(raw, "close") is not _MISSING
+            else copy.deepcopy(state["close_default"])
+        )
+    elif _field(raw, "close") is not _MISSING:
+        raise StudioError("close", "belongs on a quest")
+    else:
+        close = None
+    row = _Node(kind, code, parent_code, 0)
+    group = _siblings(nodes, parent_code, kind)
+    position = len(group) + 1 if _field(raw, "position") is _MISSING else _position(raw.get("position"))
+    _slot(group, row, position)
+    nodes[code] = row
+    planned = {
+        "op": "add",
+        "kind": kind,
+        "code": code,
+        "parent": parent_code,
+        "title": title,
+        "learning_goal": goal,
+        "success_criterion": criterion,
+        "position": row.position,
+    }
+    if kind == "quest":
+        planned["close"] = close
+    return planned
+
+
+def _plan_update(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict) -> dict:
+    kind = raw["kind"]
+    if _field(raw, "parent") is not _MISSING:
+        raise StudioError("parent", "an update names the item's own code")
+    if kind == "course":
+        code = normalize_course_code(raw.get("code"))
+        if code != course_code:
+            raise StudioError("code", "does not match this course")
+        _reject_foreign(raw, set(COURSE_FIELDS), "course")
+        planned: dict = {"op": "update", "kind": "course", "code": code}
+        if _field(raw, "title") is not _MISSING:
+            planned["title"] = _text("title", raw.get("title"), required=True)
+            state["title"] = planned["title"]
+        if _field(raw, "audience") is not _MISSING:
+            planned["audience"] = _text("audience", raw.get("audience"))
+            state["audience"] = planned["audience"]
+        if _field(raw, "focus") is not _MISSING:
+            planned["focus"] = _text("focus", raw.get("focus"))
+            state["focus"] = planned["focus"]
+        if _field(raw, "theme") is not _MISSING:
+            planned["theme"] = _text("theme", raw.get("theme"))
+            state["theme"] = planned["theme"]
+        if _field(raw, "depth") is not _MISSING:
+            planned["depth"] = normalize_depth(raw.get("depth"))
+            state["depth"] = planned["depth"]
+        if _field(raw, "sources") is not _MISSING:
+            planned["sources"] = normalize_sources(raw.get("sources"))
+            state["sources"] = planned["sources"]
+        if _field(raw, "close_default") is not _MISSING:
+            planned["close_default"] = normalize_close(raw.get("close_default"), "close_default")
+            state["close_default"] = planned["close_default"]
+        if len(planned) == 3:
+            raise StudioError("patch", "an update needs a field to change")
+        return planned
+
+    _reject_foreign(raw, set(NODE_FIELDS) | ({"close"} if kind == "quest" else set()), kind)
+    code = normalize_node_code(raw.get("code"), course_code)
+    node = nodes.get(code)
+    if node is None:
+        raise StudioError("code", f"{code} is not in this course")
+    if node.kind != kind:
+        raise StudioError("kind", f"{code} is a {node.kind}")
+    planned = {"op": "update", "kind": kind, "code": code}
+    if _field(raw, "title") is not _MISSING:
+        planned["title"] = _text("title", raw.get("title"), required=True)
+    if _field(raw, "learning_goal") is not _MISSING:
+        planned["learning_goal"] = _text("learning_goal", raw.get("learning_goal"))
+    if _field(raw, "success_criterion") is not _MISSING:
+        planned["success_criterion"] = _text("success_criterion", raw.get("success_criterion"))
+    if _field(raw, "position") is not _MISSING:
+        position = _position(raw.get("position"))
+        _slot(_siblings(nodes, node.parent or "", kind), node, position)
+        planned["position"] = node.position
+    if kind == "quest" and _field(raw, "close") is not _MISSING:
+        planned["close"] = normalize_close(raw.get("close"))
+    elif _field(raw, "close") is not _MISSING:
+        raise StudioError("close", "belongs on a quest")
+    if len(planned) == 3:
+        raise StudioError("patch", "an update needs a field to change")
+    return planned
+
+
+def _plan_remove(course_code: str, raw: dict, nodes: dict[str, _Node]) -> dict:
+    kind = raw["kind"]
+    if kind == "course":
+        raise StudioError("op", "the course is not removed from a patch")
+    code = normalize_node_code(raw.get("code"), course_code)
+    node = nodes.get(code)
+    if node is None:
+        raise StudioError("code", f"{code} is not in this course")
+    if node.kind != kind:
+        raise StudioError("kind", f"{code} is a {node.kind}")
+    parent = node.parent
+    _drop(nodes, code)
+    _compact(_siblings(nodes, parent or "", kind))
+    return {"op": "remove", "kind": kind, "code": code}
+
+
+def _drop(nodes: dict[str, _Node], code: str) -> None:
+    children = [node.code for node in nodes.values() if node.parent == code]
+    for child in children:
+        _drop(nodes, child)
+    del nodes[code]
+
+
+def _fill_close(quest: StudioQuest, close: dict) -> None:
+    row = quest.close
+    if row is None:
+        row = StudioQuestClose()
+        quest.close = row
+        session = object_session(quest)
+        if session is not None:
+            session.add(row)
+    row.close_style = close["close_style"]
+    row.answer_style = close["answer_style"]
+    row.choice_mode = close["choice_mode"]
+    row.items = list(close["items"])
+    row.intent = close["intent"]
+
+
+def _apply(course: StudioCourse, planned: list[dict]) -> None:
+    for step in planned:
+        if step["op"] == "add":
+            _apply_add(course, step)
+        elif step["op"] == "update":
+            _apply_update(course, step)
+        else:
+            _apply_remove(course, step)
+
+
+def _apply_add(course: StudioCourse, step: dict) -> None:
+    kind = step["kind"]
+    if kind == "unit":
+        row = StudioUnit(
+            course_id=course.id,
+            code=step["code"],
+            position=step["position"],
+            title=step["title"],
+            learning_goal=step["learning_goal"],
+            success_criterion=step["success_criterion"],
+        )
+        course.units.append(row)
+        _slot(list(course.units), row, step["position"])
+        return
+    if kind == "quest":
+        unit = _unit(course, step["parent"])
+        row = StudioQuest(
+            course_id=course.id,
+            code=step["code"],
+            position=step["position"],
+            title=step["title"],
+            learning_goal=step["learning_goal"],
+            success_criterion=step["success_criterion"],
+        )
+        unit.quests.append(row)
+        _slot(list(unit.quests), row, step["position"])
+        _fill_close(row, step["close"])
+        return
+    quest = _quest(course, step["parent"])
+    row = StudioMove(
+        course_id=course.id,
+        code=step["code"],
+        position=step["position"],
+        title=step["title"],
+        learning_goal=step["learning_goal"],
+        success_criterion=step["success_criterion"],
+    )
+    quest.moves.append(row)
+    _slot(list(quest.moves), row, step["position"])
+
+
+def _apply_update(course: StudioCourse, step: dict) -> None:
+    if step["kind"] == "course":
+        for key in ("title", "audience", "focus", "theme", "depth", "sources"):
+            if key in step:
+                setattr(course, key, step[key])
+        if "close_default" in step:
+            prefs = dict(course.preferences or {})
+            prefs["close_default"] = step["close_default"]
+            course.preferences = prefs
+        return
+    if step["kind"] == "unit":
+        row = _unit(course, step["code"])
+        _assign_node(row, step)
+        if "position" in step:
+            _slot(list(course.units), row, step["position"])
+        return
+    if step["kind"] == "quest":
+        row = _quest(course, step["code"])
+        _assign_node(row, step)
+        if "position" in step:
+            _slot(list(row.unit.quests), row, step["position"])
+        if "close" in step:
+            _fill_close(row, step["close"])
+        return
+    row = _move(course, step["code"])
+    _assign_node(row, step)
+    if "position" in step:
+        _slot(list(row.quest.moves), row, step["position"])
+
+
+def _assign_node(row, step: dict) -> None:
+    for key in ("title", "learning_goal", "success_criterion"):
+        if key in step:
+            setattr(row, key, step[key])
+
+
+def _apply_remove(course: StudioCourse, step: dict) -> None:
+    if step["kind"] == "unit":
+        row = _unit(course, step["code"])
+        course.units.remove(row)
+        _compact(list(course.units))
+        return
+    if step["kind"] == "quest":
+        row = _quest(course, step["code"])
+        unit = row.unit
+        unit.quests.remove(row)
+        _compact(list(unit.quests))
+        return
+    row = _move(course, step["code"])
+    quest = row.quest
+    quest.moves.remove(row)
+    _compact(list(quest.moves))
+
+
+def _unit(course: StudioCourse, code: str) -> StudioUnit:
+    for unit in course.units:
+        if unit.code == code:
+            return unit
+    raise StudioError("code", f"{code} is not in this course")
+
+
+def _quest(course: StudioCourse, code: str) -> StudioQuest:
+    for unit in course.units:
+        for quest in unit.quests:
+            if quest.code == code:
+                return quest
+    raise StudioError("code", f"{code} is not in this course")
+
+
+def _move(course: StudioCourse, code: str) -> StudioMove:
+    for unit in course.units:
+        for quest in unit.quests:
+            for move in quest.moves:
+                if move.code == code:
+                    return move
+    raise StudioError("code", f"{code} is not in this course")
+
+
+def apply_patch(db: Session, course: StudioCourse, patch) -> None:
+    planned = plan_patch(course, patch)
+    _apply(course, planned)
+    course.updated_at = _now()
+    db.flush()
+
+
+def create_course(db: Session, *, code: str, title: str) -> StudioCourse:
+    normalized = normalize_course_code(code)
+    label = _text("title", title, required=True)
+    taken = db.scalar(select(StudioCourse.id).where(StudioCourse.code == normalized))
+    if taken is not None:
+        raise StudioError("code", "is already used", status=409)
+    course = StudioCourse(
+        code=normalized,
+        title=label,
+        audience="",
+        focus="",
+        theme="",
+        depth="standard",
+        sources="",
+        preferences=default_preferences(),
+        schema_version=SCHEMA_VERSION,
+    )
+    db.add(course)
+    db.flush()
+    return course
+
+
+def update_preferences(course: StudioCourse, body: dict) -> None:
+    course.title = _text("title", body.get("title"), required=True)
+    course.audience = _text("audience", body.get("audience", ""))
+    course.focus = _text("focus", body.get("focus", ""))
+    course.theme = _text("theme", body.get("theme", ""))
+    course.depth = normalize_depth(body.get("depth"))
+    course.sources = normalize_sources(body.get("sources", ""))
+    close = normalize_close(body.get("close_default"), "close_default")
+    prefs = dict(course.preferences or {})
+    prefs["close_default"] = close
+    course.preferences = prefs
+    course.schema_version = SCHEMA_VERSION
+    course.updated_at = _now()
+
+
+def load_course(db: Session, course_id) -> StudioCourse | None:
+    return db.scalar(
+        select(StudioCourse)
+        .where(StudioCourse.id == course_id)
+        .options(
+            selectinload(StudioCourse.units).selectinload(StudioUnit.quests).selectinload(StudioQuest.moves),
+            selectinload(StudioCourse.units).selectinload(StudioUnit.quests).selectinload(StudioQuest.close),
+        )
+    )
+
+
+def list_courses(db: Session) -> list[StudioCourse]:
+    return list(
+        db.scalars(select(StudioCourse).order_by(StudioCourse.updated_at.desc(), StudioCourse.title)).all()
+    )
+
+
+def list_messages(db: Session, course: StudioCourse) -> list[StudioMessage]:
+    return list(
+        db.scalars(
+            select(StudioMessage).where(StudioMessage.course_id == course.id).order_by(StudioMessage.seq)
+        ).all()
+    )
+
+
+def add_message(
+    db: Session,
+    course: StudioCourse,
+    *,
+    role: str,
+    content: str,
+    proposal: dict | None,
+) -> StudioMessage:
+    text = content.strip()
+    if not text:
+        raise StudioError("content", "is required")
+    if len(text) > 20000:
+        raise StudioError("content", "is too long")
+    if role == "user" and proposal is not None:
+        raise StudioError("proposal", "a creator message cannot carry a patch")
+    stored = None
+    if proposal is not None:
+        plan_patch(course, proposal)
+        stored = {"operations": copy.deepcopy(_operations(proposal))}
+    seq = db.scalar(select(func.max(StudioMessage.seq)).where(StudioMessage.course_id == course.id))
+    message = StudioMessage(
+        course_id=course.id,
+        role=role,
+        content=text,
+        seq=(seq or 0) + 1,
+        proposal=stored,
+        applied=False,
+    )
+    db.add(message)
+    course.updated_at = _now()
+    db.flush()
+    return message
+
+
+def accept_proposal(db: Session, course: StudioCourse, message: StudioMessage) -> None:
+    if message.course_id != course.id:
+        raise StudioError("message", "is not part of this course", status=404)
+    if message.applied:
+        raise StudioError("proposal", "that change is already saved", status=409)
+    if not message.proposal:
+        raise StudioError("proposal", "there is nothing to accept")
+    apply_patch(db, course, message.proposal)
+    message.applied = True
+    course.updated_at = _now()
+    db.flush()
+
+
+def dismiss_proposal(course: StudioCourse, message: StudioMessage) -> None:
+    if message.course_id != course.id:
+        raise StudioError("message", "is not part of this course", status=404)
+    if message.applied:
+        raise StudioError("proposal", "that change is already saved", status=409)
+    if not message.proposal:
+        raise StudioError("proposal", "there is nothing to dismiss")
+    message.proposal = None
+    course.updated_at = _now()
+
+
+def ensure_settings(db: Session) -> StudioSettings:
+    row = db.get(StudioSettings, SETTINGS_ID)
+    if row is not None:
+        return row
+    row = StudioSettings(id=SETTINGS_ID, model=DEFAULT_STUDIO_MODEL)
+    db.add(row)
+    db.flush()
+    return row
+
+
+def set_model(db: Session, model: str) -> StudioSettings:
+    if not isinstance(model, str) or model not in STUDIO_MODELS:
+        raise StudioError("model", "must be gpt-4o-mini, gpt-4o, or gpt-4.1-mini")
+    row = ensure_settings(db)
+    row.model = model
+    db.flush()
+    return row
+
+
+def _close_out(close: dict | None) -> StudioCloseOut | None:
+    if close is None:
+        return None
+    return StudioCloseOut(
+        close_style=close["close_style"],
+        answer_style=close["answer_style"],
+        choice_mode=close["choice_mode"],
+        items=list(close["items"]),
+        intent=close["intent"],
+    )
+
+
+def _row_close(row: StudioQuestClose | None) -> StudioCloseOut | None:
+    if row is None:
+        return None
+    return StudioCloseOut(
+        close_style=row.close_style,
+        answer_style=row.answer_style,
+        choice_mode=row.choice_mode,
+        items=list(row.items or []),
+        intent=row.intent or "",
+    )
+
+
+def course_out(course: StudioCourse) -> StudioCourseOut:
+    units = []
+    for unit in sorted(course.units, key=lambda row: (row.position, row.code)):
+        quests = []
+        for quest in sorted(unit.quests, key=lambda row: (row.position, row.code)):
+            moves = [
+                StudioMoveOut(
+                    id=move.id,
+                    code=move.code,
+                    position=move.position,
+                    title=move.title,
+                    learning_goal=move.learning_goal,
+                    success_criterion=move.success_criterion,
+                )
+                for move in sorted(quest.moves, key=lambda row: (row.position, row.code))
+            ]
+            quests.append(
+                StudioQuestOut(
+                    id=quest.id,
+                    code=quest.code,
+                    position=quest.position,
+                    title=quest.title,
+                    learning_goal=quest.learning_goal,
+                    success_criterion=quest.success_criterion,
+                    close=_row_close(quest.close),
+                    moves=moves,
+                )
+            )
+        units.append(
+            StudioUnitOut(
+                id=unit.id,
+                code=unit.code,
+                position=unit.position,
+                title=unit.title,
+                learning_goal=unit.learning_goal,
+                success_criterion=unit.success_criterion,
+                quests=quests,
+            )
+        )
+    default = close_default_of(course)
+    return StudioCourseOut(
+        id=course.id,
+        code=course.code,
+        title=course.title,
+        audience=course.audience,
+        focus=course.focus,
+        theme=course.theme,
+        depth=course.depth,
+        sources=course.sources,
+        schema_version=course.schema_version,
+        close_default=_close_out(default),
+        units=units,
+        updated_at=course.updated_at,
+    )
+
+
+def summary_out(course: StudioCourse) -> StudioCourseSummary:
+    return StudioCourseSummary(
+        id=course.id,
+        code=course.code,
+        title=course.title,
+        updated_at=course.updated_at,
+    )
+
+
+def message_out(message: StudioMessage) -> StudioMessageOut:
+    return StudioMessageOut(
+        id=message.id,
+        role=message.role,
+        content=message.content,
+        seq=message.seq,
+        proposal=message.proposal,
+        applied=message.applied,
+        created_at=message.created_at,
+    )
+
+
+def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
+    tree = course_out(course).model_dump(mode="json")
+    pending = []
+    for message in messages:
+        if message.proposal and not message.applied:
+            pending.append(message.proposal)
+    pending_note = "There is no unaccepted patch."
+    if pending:
+        pending_note = (
+            "These patches are not saved yet. They are not part of the course JSON below:\n"
+            + "\n".join(str(item) for item in pending)
+        )
+    return (
+        "You are helping a person build one course in the CreateCourse studio.\n"
+        "The creator states a focus. You propose a short structure of units, quests, and moves.\n"
+        "You may use widely known national curricula and standard texts as suggestions. "
+        "You must say which framework a suggestion comes from. "
+        "Label every curriculum idea as a suggestion.\n"
+        "You have no web search and no document upload. Do not claim you searched the web or read an uploaded file.\n"
+        "Nothing is saved until the creator accepts the patch. Say what the patch would change.\n"
+        "Return a reply plus an optional patch. The patch is a list of operations. "
+        "Each operation is add, update, or remove, and it names a code. "
+        "Do not rewrite the whole tree in prose. The server ignores anything that is not a typed patch.\n"
+        "To change or remove an item, name its code. To add an item, choose a new short stable code "
+        f"such as {course.code}-U2 or {course.code}-U2-Q3 and name the parent code.\n"
+        "Unit parent is the course code. Quest parent is a unit code. Move parent is a quest code.\n"
+        "Codes stay inside this course. Use null for a field you are not changing. An add requires a title.\n"
+        "close_style is one or several. answer_style is multiple_choice, essay, or mixed. "
+        "Multiple choice choice_mode is predefined or dynamic. "
+        "Predefined stores the items and no intent. Dynamic stores only the intent and no items. "
+        "Essay stores neither items nor intent.\n"
+        "A new quest that leaves close null uses the course close default.\n"
+        "depth is survey, standard, or go_deep. sources is the framework to honor, or none.\n"
+        f"{pending_note}\n"
+        "The course so far, read from the database:\n"
+        f"{json.dumps(tree)}"
+    )
