@@ -483,14 +483,21 @@ def _siblings(nodes: dict[str, _Node], parent: str, kind: str) -> list[_Node]:
     return [node for node in nodes.values() if node.parent == parent and node.kind == kind]
 
 
-def _plan_add(course_code: str, raw: dict, nodes: dict[str, _Node], _state: dict) -> dict:
+def _plan_add(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict) -> dict:
     kind = raw["kind"]
     if kind == "course":
         raise StudioError("op", "the course already exists")
     _reject_foreign(raw, {"title", "learning_goal", "success_criterion", "position", "parent", "close"}, kind)
     code = normalize_node_code(raw.get("code"), course_code)
-    if code in nodes:
-        raise StudioError("code", f"{code} is already used in this course")
+    existing = nodes.get(code)
+    if existing is not None:
+        if existing.kind != kind:
+            raise StudioError(
+                "code",
+                f"{code} is already a {existing.kind}",
+                plain=f"{code} is already a {existing.kind}.",
+            )
+        return _plan_update(course_code, raw, nodes, state)
     if kind == "unit":
         parent_code = _upper(raw.get("parent"), "parent")
         if parent_code != course_code:
@@ -1305,6 +1312,7 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "Copy it into a quest's quest-close choices when you want that close. "
         "If close is null, the quest is stored with no close style. The server does not invent one.\n"
         "To change an item, name its code and set parent to null. Do not send a parent on an update. "
+        "An add of a code that is already in this course is saved as an update of that item. "
         "To add an item, choose a new short stable code "
         f"such as {course.code}-U2 or {course.code}-U2-Q3 and name the parent code.\n"
         "On an add, the unit parent is the course code, the quest parent is a unit code, "

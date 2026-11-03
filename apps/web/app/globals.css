@@ -1915,6 +1915,8 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
   line-height: 22px;
 }
 
+.studio-courses-toggle { display: none; }
+
 .studio-courses {
   display: grid;
   gap: 2px;
@@ -2167,7 +2169,34 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
 .studio-saved { color: rgb(34, 197, 94); }
 
 @media (max-width: 860px) {
-  .studio-shell { overflow: auto; }
-  .studio-stage { grid-template-rows: auto auto minmax(320px, 1fr); }
+  .studio-shell { overflow: hidden; }
+  .studio-stage { grid-template-rows: minmax(0, auto) minmax(0, auto) minmax(180px, 1fr); }
+  .studio-prefs { max-height: 28dvh; }
   .studio-grid { grid-template-columns: 1fr; }
+  .studio-courses-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: calc(100% - 8px);
+    min-height: 36px;
+    margin: 0 4px 8px;
+    padding: 7px 10px;
+    border: 0.5px solid rgba(0, 0, 0, 0.12);
+    border-radius: 12px;
+    background: #fff;
+    color: rgb(15, 17, 21);
+    font-size: 14px;
+    line-height: 22px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .studio-shell .studio-courses,
+  .studio-shell .ds-foot { display: none; }
+  .studio-shell .studio-courses.is-open {
+    display: grid;
+    flex: none;
+    max-height: min(200px, 32dvh);
+    margin-bottom: 8px;
+  }
+  .studio-shell .studio-courses.is-open ~ .ds-foot { display: grid; }
 }

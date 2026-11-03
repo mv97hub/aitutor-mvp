@@ -315,7 +315,13 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
             },
         )
         assert duplicate.status_code == 422
-        assert "code" in duplicate.json()["detail"]
+        reason = duplicate.json()["detail"]
+        assert reason == "ZZGEO-U1 is already a unit."
+        assert "code:" not in reason
+        reply = rejection_reply("That code is taken.", reason)
+        assert reply == reason
+        assert "saved" not in reply.lower()
+        assert "accepted" not in reply.lower()
 
         accepted = client.post(f"/studio/courses/{course_id}/messages/{message_id}/accept")
         assert accepted.status_code == 200, accepted.text
@@ -1088,5 +1094,76 @@ def test_stepping_back_to_goals_keeps_the_close() -> None:
         assert open_line == "Codes still open in this phase: ZZGEO-U1-Q2."
         kept = client.get(f"/studio/courses/{course_id}").json()["units"][0]["quests"][0]
         assert kept["close"]["close_style"] == "one"
+    finally:
+        _wipe("ZZGEO")
+
+
+def test_goal_patch_for_an_existing_quest_code_writes_the_goal() -> None:
+    course = _make()
+    course_id = course["id"]
+    claim = "The learning goal was saved."
+    try:
+        structure = _proposal(
+            course_id,
+            "Add a quest that still needs a goal.",
+            [
+                _full(
+                    "add",
+                    "unit",
+                    "ZZGEO-U1",
+                    parent="ZZGEO",
+                    title="Exile",
+                    learning_goal="The story begins.",
+                ),
+                _full(
+                    "add",
+                    "quest",
+                    "ZZGEO-U1-Q1",
+                    parent="ZZGEO-U1",
+                    title="The bow",
+                    learning_goal="",
+                    close={
+                        "close_style": "one",
+                        "answer_style": "essay",
+                        "choice_mode": None,
+                        "items": [],
+                        "intent": "",
+                    },
+                ),
+            ],
+        )
+        assert structure.status_code == 200, structure.text
+        planted = client.post(f"/studio/courses/{course_id}/messages/{structure.json()['id']}/accept")
+        assert planted.status_code == 200, planted.text
+        before = planted.json()["course"]["units"][0]["quests"][0]
+        assert before["learning_goal"] == ""
+        assert before["close"]["close_style"] == "one"
+
+        goals = _proposal(
+            course_id,
+            claim,
+            [
+                _full(
+                    "add",
+                    "quest",
+                    "ZZGEO-U1-Q1",
+                    parent="ZZGEO-U1",
+                    title="The bow",
+                    learning_goal="Name the bow.",
+                    close=None,
+                )
+            ],
+        )
+        assert goals.status_code == 200, goals.text
+        accepted = client.post(f"/studio/courses/{course_id}/messages/{goals.json()['id']}/accept")
+        assert accepted.status_code == 200, accepted.text
+        quest = accepted.json()["course"]["units"][0]["quests"][0]
+        assert quest["learning_goal"] == "Name the bow."
+        assert quest["title"] == "The bow"
+        assert quest["close"]["close_style"] == "one"
+        assert quest["close"]["answer_style"] == "essay"
+        stored = client.get(f"/studio/courses/{course_id}").json()["units"][0]["quests"][0]
+        assert stored["learning_goal"] == "Name the bow."
+        assert stored["close"]["close_style"] == "one"
     finally:
         _wipe("ZZGEO")
