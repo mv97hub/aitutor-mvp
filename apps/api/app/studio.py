@@ -30,6 +30,7 @@ from app.schemas import (
     StudioCourseSummary,
     StudioMessageOut,
     StudioMoveOut,
+    StudioPhaseOut,
     StudioQuestOut,
     StudioUnitOut,
 )
@@ -103,7 +104,13 @@ def _operation_schema() -> dict:
             "op": {"type": "string", "enum": ["add", "update", "remove"]},
             "kind": {"type": "string", "enum": ["course", "unit", "quest", "move"]},
             "code": {"type": "string"},
-            "parent": {"type": ["string", "null"]},
+            "parent": {
+                "type": ["string", "null"],
+                "description": (
+                    "Parent code when adding a unit, quest, or move. "
+                    "Null on update. An update names the item by its own code and must not send a parent."
+                ),
+            },
             "title": {"type": ["string", "null"]},
             "learning_goal": {"type": ["string", "null"]},
             "success_criterion": {"type": ["string", "null"]},
@@ -526,14 +533,38 @@ def _plan_add(course_code: str, raw: dict, nodes: dict[str, _Node], _state: dict
     return planned
 
 
+def _update_by_code_sentence(example: str) -> str:
+    return f"To change an item, name its code, such as {example}."
+
+
+def _parent_on_update(raw: dict, course_code: str, kind: str, example: str) -> str | None:
+    """A parent on an update is only an echo of the current parent. Anything else is refused."""
+    if _field(raw, "parent") is _MISSING:
+        return None
+    try:
+        if kind in ("course", "unit"):
+            return _upper(raw.get("parent"), "parent")
+        return normalize_node_code(raw.get("parent"), course_code, "parent")
+    except StudioError as exc:
+        raise StudioError(
+            "parent",
+            "an update names the item's own code",
+            plain=_update_by_code_sentence(example),
+        ) from exc
+
+
 def _plan_update(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict) -> dict:
     kind = raw["kind"]
-    if _field(raw, "parent") is not _MISSING:
-        raise StudioError("parent", "an update names the item's own code")
     if kind == "course":
         code = normalize_course_code(raw.get("code"))
         if code != course_code:
             raise StudioError("code", "does not match this course")
+        if _parent_on_update(raw, course_code, kind, code) is not None:
+            raise StudioError(
+                "parent",
+                "an update names the item's own code",
+                plain=_update_by_code_sentence(code),
+            )
         _reject_foreign(raw, set(COURSE_FIELDS), "course")
         planned: dict = {"op": "update", "kind": "course", "code": code}
         if _field(raw, "title") is not _MISSING:
@@ -561,13 +592,24 @@ def _plan_update(course_code: str, raw: dict, nodes: dict[str, _Node], state: di
             raise StudioError("patch", "an update needs a field to change")
         return planned
 
-    _reject_foreign(raw, set(NODE_FIELDS) | ({"close"} if kind == "quest" else set()), kind)
+    _reject_foreign(
+        raw,
+        set(NODE_FIELDS) | {"parent"} | ({"close"} if kind == "quest" else set()),
+        kind,
+    )
     code = normalize_node_code(raw.get("code"), course_code)
     node = nodes.get(code)
     if node is None:
         raise StudioError("code", f"{code} is not in this course")
     if node.kind != kind:
         raise StudioError("kind", f"{code} is a {node.kind}")
+    sent_parent = _parent_on_update(raw, course_code, kind, code)
+    if sent_parent is not None and sent_parent != node.parent:
+        raise StudioError(
+            "parent",
+            "an update names the item's own code",
+            plain=_update_by_code_sentence(code),
+        )
     planned = {"op": "update", "kind": kind, "code": code}
     if _field(raw, "title") is not _MISSING:
         planned["title"] = _text("title", raw.get("title"), required=True)
@@ -869,7 +911,7 @@ def accept_proposal(db: Session, course: StudioCourse, message: StudioMessage) -
         raise StudioError("proposal", "there is nothing to accept")
     apply_patch(db, course, message.proposal)
     message.applied = True
-    if course_gaps(course):
+    if course_phase(course)["name"] != "ready":
         course.ready = False
     course.updated_at = _now()
     db.flush()
@@ -905,6 +947,62 @@ def set_model(db: Session, model: str) -> StudioSettings:
     return row
 
 
+def course_phase(course: StudioCourse) -> dict:
+    """The one wave still open. Later waves are not part of this result."""
+    units = sorted(course.units, key=lambda row: (row.position, row.code))
+    if not units:
+        return {"name": "structure", "label": "Structure", "open_codes": [course.code]}
+    bare_units = [unit.code for unit in units if not unit.quests]
+    if bare_units:
+        return {"name": "structure", "label": "Structure", "open_codes": bare_units}
+    missing_goals: list[str] = []
+    missing_close: list[str] = []
+    for unit in units:
+        for quest in sorted(unit.quests, key=lambda row: (row.position, row.code)):
+            if not str(quest.learning_goal or "").strip():
+                missing_goals.append(quest.code)
+            style = quest.close.close_style if quest.close is not None else ""
+            if not str(style or "").strip():
+                missing_close.append(quest.code)
+    if missing_goals:
+        return {"name": "goals", "label": "Goals", "open_codes": missing_goals}
+    if missing_close:
+        return {"name": "close", "label": "Close", "open_codes": missing_close}
+    return {"name": "ready", "label": "Ready", "open_codes": []}
+
+
+def phase_instructions(course: StudioCourse) -> str:
+    phase = course_phase(course)
+    codes = ", ".join(phase["open_codes"]) if phase["open_codes"] else "none"
+    if phase["name"] == "structure":
+        focus = "Add the missing units and quests. Empty learning goals are allowed."
+        later = (
+            "Later phases, in one line: Goals, then Close, then Ready. "
+            "Do not fill learning goals or close style in this patch."
+        )
+    elif phase["name"] == "goals":
+        focus = (
+            "Offer a learning goal for each open quest, addressed by that quest's code. "
+            "An update names that code and sets parent to null."
+        )
+        later = "Later phases, in one line: Close, then Ready. Do not fill close style in this patch."
+    elif phase["name"] == "close":
+        focus = (
+            "Offer a close style for each open quest, addressed by that quest's code. "
+            "An update names that code and sets parent to null."
+        )
+        later = "Later phase, in one line: Ready. Do not add new goals in this patch."
+    else:
+        focus = "Units, quests, learning goals, and close styles are in place. Mark ready can be turned on."
+        later = "There is no later phase. Do not send a patch unless the creator asks for a change."
+    return (
+        f"Current phase: {phase['label']}.\n"
+        f"Codes still open in this phase: {codes}.\n"
+        f"Patch only those codes. {focus}\n"
+        f"{later}\n"
+    )
+
+
 def course_gaps(course: StudioCourse) -> list[str]:
     """Empty required fields on a saved item. These marks do not undo the draft."""
     gaps: list[str] = []
@@ -927,9 +1025,10 @@ def _goal_gap(gaps: list[str], code: str, learning_goal: str | None) -> None:
 
 def mark_ready(course: StudioCourse) -> None:
     """Record that the creator says this draft is complete. Nothing is copied."""
+    phase = course_phase(course)
     gaps = course_gaps(course)
-    if gaps:
-        listed = "; ".join(gaps)
+    if phase["name"] != "ready":
+        listed = "; ".join(gaps) if gaps else ", ".join(phase["open_codes"])
         raise StudioError(
             "ready",
             f"still has open gaps: {listed}",
@@ -1016,6 +1115,7 @@ def course_out(course: StudioCourse) -> StudioCourseOut:
         close_default=_close_out(default),
         ready=bool(course.ready),
         gaps=course_gaps(course),
+        phase=StudioPhaseOut(**course_phase(course)),
         units=units,
         updated_at=course.updated_at,
     )
@@ -1064,6 +1164,7 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "Nothing is saved until the creator accepts the patch. "
         "The server still checks. A rejected patch is not written. "
         "Do not say the course was saved, and do not say the structure was accepted.\n"
+        f"{phase_instructions(course)}"
         "Return a reply plus an optional patch. The patch is a list of operations. "
         "Each operation is add, update, or remove, and it names a code. "
         "Do not rewrite the whole tree in prose. The server ignores anything that is not a typed patch.\n"
@@ -1081,9 +1182,11 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "The course close default is a preference in the header. "
         "Copy it into a quest's quest-close choices when you want that close. "
         "If close is null, the quest is stored with no close style. The server does not invent one.\n"
-        "To change or remove an item, name its code. To add an item, choose a new short stable code "
+        "To change an item, name its code and set parent to null. Do not send a parent on an update. "
+        "To add an item, choose a new short stable code "
         f"such as {course.code}-U2 or {course.code}-U2-Q3 and name the parent code.\n"
-        "Unit parent is the course code. Quest parent is a unit code. Move parent is a quest code.\n"
+        "On an add, the unit parent is the course code, the quest parent is a unit code, "
+        "and the move parent is a quest code.\n"
         "Codes stay inside this course. Use null for a field you are not changing. An add requires a title.\n"
         "close_style is one or several. answer_style is multiple_choice, essay, or mixed. "
         "Multiple choice choice_mode is predefined or dynamic. "

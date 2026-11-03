@@ -1966,6 +1966,41 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
   list-style: none;
 }
 
+.studio-phase {
+  margin-bottom: 8px;
+}
+
+.studio-phase h2,
+.studio-phase-name {
+  margin: 0;
+  color: rgb(180, 83, 9);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 18px;
+  text-transform: uppercase;
+}
+
+.studio-phase p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.studio-tier-row.is-wave {
+  background: rgba(180, 83, 9, 0.12);
+}
+
+.studio-all-gaps {
+  color: rgb(129, 133, 140);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.studio-all-gaps summary {
+  cursor: pointer;
+}
+
 .studio-gap,
 .studio-gaps li {
   color: rgb(180, 83, 9);

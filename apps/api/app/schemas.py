@@ -524,6 +524,12 @@ class StudioUnitOut(BaseModel):
     quests: list[StudioQuestOut]
 
 
+class StudioPhaseOut(BaseModel):
+    name: Literal["structure", "goals", "close", "ready"]
+    label: Literal["Structure", "Goals", "Close", "Ready"]
+    open_codes: list[str]
+
+
 class StudioCourseOut(BaseModel):
     id: UUID
     code: str
@@ -537,6 +543,7 @@ class StudioCourseOut(BaseModel):
     close_default: StudioCloseOut
     ready: bool
     gaps: list[str]
+    phase: StudioPhaseOut
     units: list[StudioUnitOut]
     updated_at: datetime
 

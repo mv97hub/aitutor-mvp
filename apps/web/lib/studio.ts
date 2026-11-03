@@ -36,6 +36,12 @@ export type StudioUnit = {
   quests: StudioQuest[];
 };
 
+export type StudioPhase = {
+  name: "structure" | "goals" | "close" | "ready";
+  label: "Structure" | "Goals" | "Close" | "Ready";
+  open_codes: string[];
+};
+
 export type StudioCourse = {
   id: string;
   code: string;
@@ -49,6 +55,7 @@ export type StudioCourse = {
   close_default: StudioClose;
   ready: boolean;
   gaps: string[];
+  phase: StudioPhase;
   units: StudioUnit[];
   updated_at: string;
 };

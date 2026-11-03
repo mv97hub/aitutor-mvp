@@ -11,6 +11,7 @@ import {
   type StudioClose,
   type StudioCourse,
   type StudioMessage,
+  type StudioPhase,
   type StudioSettings,
   type StudioSummary,
 } from "@/lib/studio";
@@ -89,17 +90,19 @@ function readError(text: string): string {
   return trimmed;
 }
 
-function rowMarks(code: string, gaps: string[]): string[] {
-  const marks: string[] = [];
-  if (gaps.includes(`${code}: no learning goal`)) marks.push("No learning goal");
-  if (gaps.includes(`${code}: no close style`)) marks.push("No close style");
-  return marks;
+function waveLabel(phase: StudioPhase, code: string): string | null {
+  if (!phase.open_codes.includes(code)) return null;
+  if (phase.name === "goals") return "Needs a learning goal";
+  if (phase.name === "close") return "Needs a close style";
+  if (phase.name === "structure") return "Needs a quest";
+  return null;
 }
 
 function Tier({
   code,
   title,
   marks,
+  wave,
   open,
   onToggle,
   children,
@@ -107,13 +110,14 @@ function Tier({
   code: string;
   title: string;
   marks: string[];
+  wave: boolean;
   open: boolean;
   onToggle: () => void;
   children?: ReactNode;
 }) {
   return (
     <li className="studio-tier">
-      <button type="button" className="studio-tier-row" aria-expanded={open} onClick={onToggle}>
+      <button type="button" className={`studio-tier-row${wave ? " is-wave" : ""}`} aria-expanded={open} onClick={onToggle}>
         <span aria-hidden="true">{open ? "▾" : "▸"}</span>
         <span className="studio-code">{code}</span>
         <span className="studio-title">{title}</span>
@@ -327,7 +331,7 @@ export function CreateCourse() {
   }
 
   async function markReady() {
-    if (!course || course.ready || course.gaps.length > 0) return;
+    if (!course || course.ready || course.phase.name !== "ready") return;
     setBusy(true);
     setError(null);
     try {
@@ -448,6 +452,7 @@ export function CreateCourse() {
                   <span className="studio-code">{course.code}</span>
                   {prefs.title || course.title}
                   <span className="studio-draft">{course.ready ? "Ready" : "Draft"}</span>
+                  <span className="studio-phase-name">{course.phase.label}</span>
                 </h1>
                 <div className="rail-actions">
                   {savedNote ? <span className="studio-saved">{savedNote}</span> : null}
@@ -564,21 +569,32 @@ export function CreateCourse() {
               </div>
             </form>
             <div className="studio-tree" aria-label="Course so far">
+              <div className="studio-phase" aria-label="Next wave">
+                <h2>{course.phase.label}</h2>
+                {course.phase.open_codes.length > 0 ? (
+                  <p>Still open: {course.phase.open_codes.join(", ")}</p>
+                ) : (
+                  <p>Mark ready can be turned on.</p>
+                )}
+              </div>
               <div className="studio-ready">
                 <button
                   type="button"
                   className="button"
-                  disabled={busy || course.ready || course.gaps.length > 0}
+                  disabled={busy || course.ready || course.phase.name !== "ready"}
                   onClick={() => void markReady()}
                 >
                   {course.ready ? "Marked ready" : "Mark ready"}
                 </button>
                 {course.gaps.length > 0 ? (
-                  <ul className="studio-gaps" aria-label="Open gaps">
-                    {course.gaps.map((gap) => (
-                      <li key={gap}>{gap}</li>
-                    ))}
-                  </ul>
+                  <details className="studio-all-gaps">
+                    <summary>All gaps</summary>
+                    <ul className="studio-gaps" aria-label="Open gaps">
+                      {course.gaps.map((gap) => (
+                        <li key={gap}>{gap}</li>
+                      ))}
+                    </ul>
+                  </details>
                 ) : null}
               </div>
               {course.units.length === 0 ? (
@@ -590,7 +606,8 @@ export function CreateCourse() {
                       key={unit.id}
                       code={unit.code}
                       title={unit.title}
-                      marks={rowMarks(unit.code, course.gaps)}
+                      marks={[waveLabel(course.phase, unit.code)].filter((mark): mark is string => mark != null)}
+                      wave={course.phase.open_codes.includes(unit.code)}
                       open={open.has(unit.code)}
                       onToggle={() => toggle(unit.code)}
                     >
@@ -602,7 +619,8 @@ export function CreateCourse() {
                             key={quest.id}
                             code={quest.code}
                             title={quest.title}
-                            marks={rowMarks(quest.code, course.gaps)}
+                            marks={[waveLabel(course.phase, quest.code)].filter((mark): mark is string => mark != null)}
+                            wave={course.phase.open_codes.includes(quest.code)}
                             open={open.has(quest.code)}
                             onToggle={() => toggle(quest.code)}
                           >
@@ -625,7 +643,8 @@ export function CreateCourse() {
                                   key={move.id}
                                   code={move.code}
                                   title={move.title}
-                                  marks={rowMarks(move.code, course.gaps)}
+                                  marks={[waveLabel(course.phase, move.code)].filter((mark): mark is string => mark != null)}
+                                  wave={course.phase.open_codes.includes(move.code)}
                                   open={open.has(move.code)}
                                   onToggle={() => toggle(move.code)}
                                 >
