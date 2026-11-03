@@ -42,9 +42,11 @@ CLOSE_STYLES = ("one", "several")
 ANSWER_STYLES = ("multiple_choice", "essay", "mixed")
 CHOICE_MODES = ("predefined", "dynamic")
 DEPTHS = ("survey", "standard", "go_deep")
+QUIZ_MINUTES = (2, 5, 10)
+AGE_BANDS = ("6-8", "9-11", "12-14", "15-17")
 STUDIO_MODELS = ("gpt-4o-mini", "gpt-4o", "gpt-4.1-mini")
 DEFAULT_STUDIO_MODEL = "gpt-4o-mini"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SETTINGS_ID = "default"
 STUDIO_TEMPERATURE = 0.4
 DELETE_PASSWORD = "BulmerGardens"
@@ -222,7 +224,14 @@ def default_close() -> dict:
 
 
 def default_preferences() -> dict:
-    return {"close_default": default_close()}
+    return {
+        "close_default": default_close(),
+        "depth": "standard",
+        "quiz_minutes": 5,
+        "audience": "",
+        "theme": "",
+        "sources": "",
+    }
 
 
 def _now() -> datetime:
@@ -272,7 +281,27 @@ def normalize_node_code(value, course_code: str, field: str = "code") -> str:
 
 def normalize_depth(value) -> str:
     if value not in DEPTHS:
-        raise StudioError("depth", "must be survey, standard, or go_deep")
+        raise StudioError("depth", "must be survey, standard, or go_deep", plain="Detail must be survey, standard, or go deep.")
+    return value
+
+
+def normalize_quiz_minutes(value) -> int:
+    if isinstance(value, bool) or value not in QUIZ_MINUTES:
+        raise StudioError(
+            "quiz_minutes",
+            "must be 2, 5, or 10",
+            plain="Minimum time before the closing quiz must be 2, 5, or 10 minutes.",
+        )
+    return value
+
+
+def normalize_audience(value) -> str:
+    if value not in AGE_BANDS:
+        raise StudioError(
+            "audience",
+            "must be an age band",
+            plain="Audience must be 6-8, 9-11, 12-14, or 15-17.",
+        )
     return value
 
 
@@ -829,6 +858,7 @@ def create_course(db: Session, *, code: str, title: str) -> StudioCourse:
         focus="",
         theme="",
         depth="standard",
+        quiz_minutes=5,
         sources="",
         preferences=default_preferences(),
         schema_version=SCHEMA_VERSION,
@@ -908,6 +938,7 @@ def copy_studio_course(db: Session, source: StudioCourse, title: str) -> StudioC
         focus=source.focus,
         theme=source.theme,
         depth=source.depth,
+        quiz_minutes=source.quiz_minutes,
         sources=source.sources,
         preferences=copy.deepcopy(source.preferences or {}),
         schema_version=source.schema_version,
@@ -955,14 +986,23 @@ def copy_studio_course(db: Session, source: StudioCourse, title: str) -> StudioC
 
 def update_preferences(course: StudioCourse, body: dict) -> None:
     course.title = _text("title", body.get("title"), required=True)
-    course.audience = _text("audience", body.get("audience", ""))
+    course.audience = normalize_audience(body.get("audience", ""))
     course.focus = _text("focus", body.get("focus", ""))
-    course.theme = _text("theme", body.get("theme", ""))
+    theme = _text("theme", body.get("theme", ""))
+    if theme.lower() in {"none", "no theme"}:
+        theme = ""
+    course.theme = theme
     course.depth = normalize_depth(body.get("depth"))
+    course.quiz_minutes = normalize_quiz_minutes(body.get("quiz_minutes", course.quiz_minutes))
     course.sources = normalize_sources(body.get("sources", ""))
     close = normalize_close(body.get("close_default"), "close_default")
     prefs = dict(course.preferences or {})
     prefs["close_default"] = close
+    prefs["depth"] = course.depth
+    prefs["quiz_minutes"] = course.quiz_minutes
+    prefs["audience"] = course.audience
+    prefs["theme"] = course.theme
+    prefs["sources"] = course.sources
     course.preferences = prefs
     course.schema_version = SCHEMA_VERSION
     course.updated_at = _now()
@@ -1349,6 +1389,7 @@ def course_out(course: StudioCourse) -> StudioCourseOut:
         focus=course.focus,
         theme=course.theme,
         depth=course.depth,
+        quiz_minutes=course.quiz_minutes,
         sources=course.sources,
         schema_version=course.schema_version,
         close_default=_close_out(default),

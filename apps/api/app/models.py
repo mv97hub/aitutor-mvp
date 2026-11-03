@@ -349,6 +349,10 @@ class StudioCourse(Base):
             "depth IN ('survey', 'standard', 'go_deep')",
             name="ck_studio_courses_depth",
         ),
+        CheckConstraint(
+            "quiz_minutes IN (2, 5, 10)",
+            name="ck_studio_courses_quiz_minutes",
+        ),
         CheckConstraint("schema_version >= 1", name="ck_studio_courses_schema_version"),
     )
 
@@ -359,6 +363,7 @@ class StudioCourse(Base):
     focus: Mapped[str] = mapped_column(Text, nullable=False, default="")
     theme: Mapped[str] = mapped_column(String(240), nullable=False, default="")
     depth: Mapped[str] = mapped_column(String(16), nullable=False, default="standard")
+    quiz_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=5, server_default="5")
     sources: Mapped[str] = mapped_column(Text, nullable=False, default="")
     preferences: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

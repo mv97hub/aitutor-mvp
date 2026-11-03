@@ -28,6 +28,7 @@ client = TestClient(app)
 
 REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "009_studio.py"
 READY_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "010_studio_ready.py"
+QUIZ_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "011_studio_quiz_minutes.py"
 
 
 def _wipe(code: str) -> None:
@@ -108,6 +109,20 @@ def test_ready_revision_adds_one_column() -> None:
     assert "delete(" not in upgrade
     assert "seed" not in upgrade
     assert 'op.drop_column("studio_courses", "ready")' in downgrade
+    for name in ("students", "courses", "units", "quests", "beats", "sessions", "messages"):
+        assert f'"{name}"' not in upgrade
+
+
+def test_quiz_minutes_revision_adds_one_column() -> None:
+    text = QUIZ_REVISION.read_text()
+    upgrade = text.split("def upgrade")[1].split("def downgrade")[0]
+    downgrade = text.split("def downgrade")[1]
+    assert 'op.add_column(\n        "studio_courses"' in upgrade
+    assert '"quiz_minutes"' in upgrade
+    assert "drop_table" not in upgrade
+    assert "delete(" not in upgrade
+    assert "seed" not in upgrade
+    assert 'op.drop_column("studio_courses", "quiz_minutes")' in downgrade
     for name in ("students", "courses", "units", "quests", "beats", "sessions", "messages"):
         assert f'"{name}"' not in upgrade
 
@@ -223,7 +238,7 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
             f"/studio/courses/{course_id}",
             json={
                 "title": "Triangles",
-                "audience": "Grade 6, new to polygons",
+                "audience": "9-11",
                 "focus": "triangles",
                 "theme": "city planning",
                 "depth": "go_deep",
@@ -1268,7 +1283,7 @@ def test_copy_writes_a_new_code_and_leaves_the_chat_behind() -> None:
             f"/studio/courses/{course_id}",
             json={
                 "title": "Manage me",
-                "audience": "Grade 6",
+                "audience": "9-11",
                 "focus": "triangles",
                 "theme": "city planning",
                 "depth": "go_deep",
@@ -1324,7 +1339,7 @@ def test_copy_writes_a_new_code_and_leaves_the_chat_behind() -> None:
         assert body["id"] != course_id
         assert body["code"] == "ZZMAN2"
         assert body["title"] == "Copied course"
-        assert body["audience"] == "Grade 6"
+        assert body["audience"] == "9-11"
         assert body["focus"] == "triangles"
         assert body["depth"] == "go_deep"
         assert body["theme"] == "city planning"
@@ -1351,3 +1366,115 @@ def test_copy_writes_a_new_code_and_leaves_the_chat_behind() -> None:
     finally:
         _wipe("ZZMAN")
         _wipe("ZZMAN2")
+
+
+def test_preference_save_writes_the_choices_and_cancel_does_not() -> None:
+    course = _make("ZZPREF", "Preferences")
+    course_id = course["id"]
+    try:
+        assert course["depth"] == "standard"
+        assert course["quiz_minutes"] == 5
+        assert course["audience"] == ""
+        # Cancel drops this draft. Nothing is sent, so the stored header stays.
+        cancelled = {
+            "title": "Preferences",
+            "audience": "6-8",
+            "focus": "ships",
+            "theme": "harbors",
+            "depth": "survey",
+            "quiz_minutes": 2,
+            "sources": "A framework that was not saved",
+            "close_default": {
+                "close_style": "several",
+                "answer_style": "essay",
+                "choice_mode": None,
+                "items": [],
+                "intent": "",
+            },
+        }
+        untouched = client.get(f"/studio/courses/{course_id}").json()
+        assert cancelled["depth"] != untouched["depth"]
+        assert cancelled["quiz_minutes"] != untouched["quiz_minutes"]
+        assert untouched["depth"] == "standard"
+        assert untouched["quiz_minutes"] == 5
+        assert untouched["audience"] == ""
+        assert untouched["theme"] == ""
+        assert untouched["sources"] == ""
+
+        saved = client.patch(
+            f"/studio/courses/{course_id}",
+            json={
+                "title": "Preferences",
+                "audience": "12-14",
+                "focus": "triangles",
+                "theme": "city planning",
+                "depth": "go_deep",
+                "quiz_minutes": 10,
+                "sources": "Common Core",
+                "close_default": {
+                    "close_style": "several",
+                    "answer_style": "mixed",
+                    "choice_mode": "predefined",
+                    "items": [{"text": "90 degrees"}, {"text": "180 degrees"}],
+                    "intent": "",
+                },
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        body = saved.json()
+        assert body["depth"] == "go_deep"
+        assert body["quiz_minutes"] == 10
+        assert body["audience"] == "12-14"
+        assert body["theme"] == "city planning"
+        assert body["sources"] == "Common Core"
+        assert body["focus"] == "triangles"
+        assert body["close_default"]["close_style"] == "several"
+        assert body["close_default"]["answer_style"] == "mixed"
+        assert body["close_default"]["choice_mode"] == "predefined"
+        fresh = client.get(f"/studio/courses/{course_id}").json()
+        assert fresh["depth"] == "go_deep"
+        assert fresh["quiz_minutes"] == 10
+        assert fresh["audience"] == "12-14"
+        assert fresh["close_default"]["items"][0]["text"] == "90 degrees"
+        db = SessionLocal()
+        try:
+            row = db.scalar(select(StudioCourse).where(StudioCourse.id == course_id))
+            assert row is not None
+            assert row.quiz_minutes == 10
+            assert row.depth == "go_deep"
+            assert row.audience == "12-14"
+            assert row.schema_version == 2
+            prefs = row.preferences
+            assert prefs["quiz_minutes"] == 10
+            assert prefs["depth"] == "go_deep"
+            assert prefs["audience"] == "12-14"
+            assert prefs["theme"] == "city planning"
+            assert prefs["sources"] == "Common Core"
+            assert prefs["close_default"]["close_style"] == "several"
+            assert prefs["close_default"]["answer_style"] == "mixed"
+            tutor = db.scalar(select(func.count()).select_from(Course))
+            chats = db.scalar(select(func.count()).select_from(Message))
+            assert tutor is not None
+            assert chats is not None
+        finally:
+            db.close()
+        rejected = client.patch(
+            f"/studio/courses/{course_id}",
+            json={
+                "title": "Preferences",
+                "audience": "12-14",
+                "focus": "triangles",
+                "theme": "city planning",
+                "depth": "survey",
+                "quiz_minutes": 7,
+                "sources": "Common Core",
+                "close_default": fresh["close_default"],
+            },
+        )
+        assert rejected.status_code == 422
+        assert rejected.json()["detail"] == "Minimum time before the closing quiz must be 2, 5, or 10 minutes."
+        kept = client.get(f"/studio/courses/{course_id}").json()
+        assert kept["quiz_minutes"] == 10
+        assert kept["depth"] == "go_deep"
+    finally:
+        _wipe("ZZPREF")

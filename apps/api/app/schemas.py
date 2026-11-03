@@ -555,6 +555,7 @@ class StudioCourseOut(BaseModel):
     focus: str
     theme: str
     depth: StudioDepth
+    quiz_minutes: Literal[2, 5, 10]
     sources: str
     schema_version: int
     close_default: StudioCloseOut
@@ -593,6 +594,7 @@ class StudioPreferencesIn(BaseModel):
     focus: str = ""
     theme: str = ""
     depth: StudioDepth = "standard"
+    quiz_minutes: int = 5
     sources: str = ""
     close_default: dict
 
