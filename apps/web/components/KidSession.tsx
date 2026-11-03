@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { BrandMark } from "@/components/BrandMark";
 import { ChoiceWidget } from "@/components/LessonBlocks";
@@ -13,6 +13,7 @@ import type {
   Board,
   CourseSummary,
   CurrentBlock,
+  KidQuiz,
   QuestListItem,
   SessionSummary,
   Student,
@@ -352,13 +353,24 @@ function SettingsDialog({
   );
 }
 
+type ChoiceOffer = {
+  key: string;
+  beatId: string;
+  quiz: KidQuiz;
+  anchorId: string;
+  settled: { ids: string[]; note: string; transcript: string } | null;
+};
+
+function choiceIds(choice: string | string[]) {
+  return Array.isArray(choice) ? choice : [choice];
+}
+
 function ChatPanel({
   sessionId,
   lessonStatus,
   initialMessages,
   studentName,
   block,
-  quizLocked,
   onTurn,
 }: {
   sessionId: string;
@@ -366,7 +378,6 @@ function ChatPanel({
   initialMessages: StoredMessage[];
   studentName: string;
   block: CurrentBlock | null;
-  quizLocked: boolean;
   onTurn: () => void;
 }) {
   const [seed] = useState(initialMessages);
@@ -384,19 +395,40 @@ function ChatPanel({
   const endRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
   const awaitingReply = useRef(false);
-  const moveBaseline = useRef<{ id: string; assistants: number } | null>(null);
   const busy = status === "submitted" || status === "streaming";
-  const assistants = tutorTurns(messages);
-  if (block && moveBaseline.current?.id !== block.id) {
-    moveBaseline.current = {
-      id: block.id,
-      assistants: block.quiz ? Math.max(0, assistants - 1) : assistants,
-    };
-  }
-  const tutorSpokeForMove =
-    block != null &&
-    moveBaseline.current?.id === block.id &&
-    assistants > moveBaseline.current.assistants;
+  const [offers, setOffers] = useState<ChoiceOffer[]>([]);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const liveOffer = offers.some((item) => item.settled == null);
+
+  useEffect(() => {
+    const quiz = block?.quiz;
+    const show = Boolean(quiz) && lessonStatus !== "completed";
+    if (!show || !quiz || !block) {
+      setOffers((current) => {
+        if (!current.some((item) => item.settled == null)) return current;
+        return current.filter((item) => item.settled != null);
+      });
+      return;
+    }
+    setOffers((current) => {
+      const kept = current.filter((item) => item.settled != null || item.beatId === block.id);
+      if (kept.some((item) => item.settled == null && item.beatId === block.id)) {
+        return kept.length === current.length ? current : kept;
+      }
+      const anchorId = messagesRef.current[messagesRef.current.length - 1]?.id ?? "";
+      return [
+        ...kept,
+        {
+          key: `${block.id}:${kept.length}:${anchorId}`,
+          beatId: block.id,
+          quiz,
+          anchorId,
+          settled: null,
+        },
+      ];
+    });
+  }, [block, lessonStatus]);
 
   function growDraft(element: HTMLTextAreaElement) {
     element.style.height = "auto";
@@ -419,7 +451,7 @@ function ChatPanel({
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
-  }, [messages, status, block?.id]);
+  }, [messages, status, block?.id, offers]);
 
   useEffect(() => {
     if (busy) {
@@ -435,28 +467,62 @@ function ChatPanel({
     field.focus({ preventScroll: true });
   }, [busy]);
 
+  const hiddenChoiceText = new Set(
+    offers.flatMap((item) => (item.settled ? [item.settled.transcript] : [])),
+  );
+
   return (
     <>
       <div className="ds-scroll" role="log" aria-live="polite" aria-relevant="additions">
         <div className="ds-column">
-          {messages.map((message) => (
-            <MessageView key={message.id} message={message} studentName={studentName} />
-          ))}
-          {block?.quiz &&
-          lessonStatus !== "completed" &&
-          !quizLocked &&
-          (block.kind === "try" || block.kind === "show") &&
-          tutorSpokeForMove ? (
-            <ChoiceWidget
-              key={block.id}
-              quiz={block.quiz}
-              busy={busy}
-              onSubmit={(choice, explanation, transcript) => {
-                clearError();
-                void sendMessage({ text: transcript }, { body: { widget: { choice, explanation } } });
-              }}
-            />
-          ) : null}
+          {messages.map((message) => {
+            const text = messageText(message);
+            const hide = message.role === "user" && hiddenChoiceText.has(text);
+            const here = offers.filter((item) => item.anchorId === message.id);
+            return (
+              <Fragment key={message.id}>
+                {hide ? null : <MessageView message={message} studentName={studentName} />}
+                {here.map((offer) => (
+                  <ChoiceOfferView
+                    key={offer.key}
+                    offer={offer}
+                    busy={busy}
+                    onSubmit={(choice, explanation, transcript) => {
+                      setOffers((current) =>
+                        current.map((item) =>
+                          item.key === offer.key
+                            ? { ...item, settled: { ids: choiceIds(choice), note: explanation, transcript } }
+                            : item,
+                        ),
+                      );
+                      clearError();
+                      void sendMessage({ text: transcript }, { body: { widget: { choice, explanation } } });
+                    }}
+                  />
+                ))}
+              </Fragment>
+            );
+          })}
+          {offers
+            .filter((item) => item.anchorId === "" || !messages.some((message) => message.id === item.anchorId))
+            .map((offer) => (
+              <ChoiceOfferView
+                key={offer.key}
+                offer={offer}
+                busy={busy}
+                onSubmit={(choice, explanation, transcript) => {
+                  setOffers((current) =>
+                    current.map((item) =>
+                      item.key === offer.key
+                        ? { ...item, settled: { ids: choiceIds(choice), note: explanation, transcript } }
+                        : item,
+                    ),
+                  );
+                  clearError();
+                  void sendMessage({ text: transcript }, { body: { widget: { choice, explanation } } });
+                }}
+              />
+            ))}
           <div ref={endRef} />
         </div>
       </div>
@@ -484,7 +550,7 @@ function ChatPanel({
         onSubmit={(event) => {
           event.preventDefault();
           const text = input.trim();
-          if (!text || busy) return;
+          if (!text || busy || liveOffer) return;
           clearError();
           setInput("");
           if (draftRef.current) draftRef.current.style.height = "auto";
@@ -507,13 +573,13 @@ function ChatPanel({
                 event.currentTarget.form?.requestSubmit();
               }
             }}
-            placeholder="Message"
+            placeholder={liveOffer ? "Choose an answer above" : "Message"}
             aria-label="Your answer"
-            disabled={busy}
+            disabled={busy || liveOffer}
             maxLength={2000}
           />
           <div className="ds-card-row">
-            <button className="ds-send" type="submit" aria-label="Send" disabled={busy || input.trim().length === 0}>
+            <button className="ds-send" type="submit" aria-label="Send" disabled={busy || liveOffer || input.trim().length === 0}>
               <SendIcon />
             </button>
           </div>
@@ -523,16 +589,36 @@ function ChatPanel({
   );
 }
 
+function ChoiceOfferView({
+  offer,
+  busy,
+  onSubmit,
+}: {
+  offer: ChoiceOffer;
+  busy: boolean;
+  onSubmit: (choice: string | string[], explanation: string, transcript: string) => void;
+}) {
+  return (
+    <article
+      className="bubble assistant widget-message"
+      aria-label={offer.settled ? "Your choice" : "Choose an answer"}
+    >
+      <ChoiceWidget
+        quiz={offer.quiz}
+        busy={busy}
+        settled={offer.settled ? { ids: offer.settled.ids, note: offer.settled.note } : null}
+        onSubmit={onSubmit}
+      />
+    </article>
+  );
+}
+
 function messageText(message: UIMessage) {
   return (message.parts as LoosePart[])
     .map((part) => (part.type === "text" ? part.text?.trim() ?? "" : ""))
     .filter(Boolean)
     .join("\n")
     .trim();
-}
-
-function tutorTurns(messages: UIMessage[]) {
-  return messages.filter((message) => message.role === "assistant" && messageText(message)).length;
 }
 
 function isTyping(element: HTMLElement) {
@@ -937,9 +1023,6 @@ export function KidSession({
               initialMessages={board.messages}
               studentName={board.student.display_name}
               block={board.current_block}
-              quizLocked={
-                board.beats.find((beat) => beat.id === board.current_beat_id)?.latest_result?.passed === true
-              }
               onTurn={() => {
                 void api<Board>(`/sessions/${board.id}/board`).then(setBoard).catch(() => undefined);
               }}

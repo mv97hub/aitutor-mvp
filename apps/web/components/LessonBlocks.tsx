@@ -31,12 +31,31 @@ export function BlockStepper({ steps }: { steps: BlockStep[] }) {
 export function ChoiceWidget({
   quiz,
   busy,
+  settled,
   onSubmit,
 }: {
   quiz: KidQuiz;
   busy: boolean;
+  settled?: { ids: string[]; note: string } | null;
   onSubmit: (choice: string | string[], explanation: string, transcript: string) => void;
 }) {
+  if (settled) {
+    const chosen = settled.ids.map((id) => quiz.choices.find((choice) => choice.id === id)?.text ?? id);
+    return (
+      <div className="widget is-settled">
+        <p className="eyebrow">Your choice</p>
+        <p className="widget-prompt">{quiz.prompt}</p>
+        <ul className="choice-list">
+          {chosen.map((label, index) => (
+            <li key={`${settled.ids[index]}-${index}`} className="widget-choice is-on">
+              <span>{label}</span>
+            </li>
+          ))}
+        </ul>
+        {settled.note ? <p>{settled.note}</p> : null}
+      </div>
+    );
+  }
   const [picked, setPicked] = useState<string[]>([]);
   const [order, setOrder] = useState(quiz.choices.map((choice) => choice.id));
   const [explanation, setExplanation] = useState("");
