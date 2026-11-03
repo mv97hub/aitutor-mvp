@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hmac
 import json
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -37,6 +38,8 @@ from app.schemas import (
     StudioUnitOut,
     StudioViewOut,
 )
+
+logger = logging.getLogger(__name__)
 
 CLOSE_STYLES = ("one", "several")
 ANSWER_STYLES = ("multiple_choice", "essay", "mixed")
@@ -449,40 +452,53 @@ def _operations(patch) -> list:
     return raw
 
 
-def _foreign_sentence(key: str, kind: str) -> str:
-    labels = {
-        "learning_goal": "A learning goal",
-        "success_criterion": "A success criterion",
-        "close_default": "A close default",
-        "depth": "Detail",
-    }
-    label = labels.get(key, key.replace("_", " ").capitalize())
-    return f"{label} does not belong on a {kind}."
+_STRUCTURAL = ("op", "kind", "code")
+_CLOSE_FIELDS = frozenset({"close_style", "answer_style", "choice_mode", "items", "intent"})
+# Parent is accepted on an add only. On an update it is redundant and dropped.
+_TIER_FIELDS = {
+    "course": frozenset(COURSE_FIELDS),
+    "unit": frozenset(NODE_FIELDS),
+    "quest": frozenset(NODE_FIELDS) | {"close"},
+    "move": frozenset(NODE_FIELDS),
+}
 
 
-def _reject_foreign(op: dict, allowed: set[str], kind: str) -> None:
-    for key in (
-        "title",
-        "learning_goal",
-        "success_criterion",
-        "position",
-        "audience",
-        "focus",
-        "theme",
-        "depth",
-        "sources",
-        "close",
-        "close_default",
-        "parent",
-    ):
-        if key in allowed:
+def _log_drop(field: str, kind, code) -> None:
+    logger.info("studio patch dropped %s on %s %s", field, kind, code)
+
+
+def _sanitize_close(value, kind, code):
+    if not isinstance(value, dict):
+        return value
+    for key, item in value.items():
+        if key not in _CLOSE_FIELDS and item is not None:
+            _log_drop(f"close.{key}", kind, code)
+    return {key: value[key] for key in _CLOSE_FIELDS if key in value}
+
+
+def _keep_tier_fields(raw: dict, op_name: str) -> dict:
+    """Keep the fields this tier accepts. Anything else is logged and dropped."""
+    kind = raw.get("kind")
+    code = raw.get("code")
+    allowed = set(_TIER_FIELDS.get(kind, ()))
+    if op_name == "add" and kind in ("unit", "quest", "move"):
+        allowed.add("parent")
+    cleaned = {key: raw[key] for key in _STRUCTURAL if key in raw}
+    for key, value in raw.items():
+        if key in _STRUCTURAL:
             continue
-        # Depth is a course preference. A model often copies it onto a unit.
-        if key == "depth" and kind != "course":
+        if key == "parent" and op_name != "add":
+            if value is not None:
+                _log_drop("parent", kind, code)
             continue
-        if _field(op, key) is _MISSING:
+        if key not in allowed:
+            if value is not None:
+                _log_drop(str(key), kind, code)
             continue
-        raise StudioError(key, f"does not belong on a {kind}", plain=_foreign_sentence(key, kind))
+        if key in ("close", "close_default") and isinstance(value, dict):
+            value = _sanitize_close(value, kind, code)
+        cleaned[key] = value
+    return cleaned
 
 
 def plan_patch(course: StudioCourse, patch) -> list[dict]:
@@ -515,12 +531,21 @@ def plan_patch(course: StudioCourse, patch) -> list[dict]:
             raise StudioError("op", "must be add, update, or remove")
         if kind not in KINDS:
             raise StudioError("kind", "must be course, unit, quest, or move")
+        cleaned = _keep_tier_fields(raw, op_name)
         if op_name == "add":
-            planned.append(_plan_add(course.code, raw, nodes, state))
+            step = _plan_add(course.code, cleaned, nodes, state)
         elif op_name == "update":
-            planned.append(_plan_update(course.code, raw, nodes, state))
+            step = _plan_update(course.code, cleaned, nodes, state)
         else:
-            planned.append(_plan_remove(course.code, raw, nodes))
+            step = _plan_remove(course.code, cleaned, nodes)
+        if step is not None:
+            planned.append(step)
+    if not planned:
+        raise StudioError(
+            "patch",
+            "needs at least one add, update, or remove",
+            plain="That change had nothing to save.",
+        )
     return planned
 
 
@@ -532,7 +557,6 @@ def _plan_add(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict)
     kind = raw["kind"]
     if kind == "course":
         raise StudioError("op", "the course already exists")
-    _reject_foreign(raw, {"title", "learning_goal", "success_criterion", "position", "parent", "close"}, kind)
     code = normalize_node_code(raw.get("code"), course_code)
     existing = nodes.get(code)
     if existing is not None:
@@ -561,12 +585,9 @@ def _plan_add(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict)
         goal = _text("learning_goal", raw.get("learning_goal"))
     if _field(raw, "success_criterion") is not _MISSING:
         criterion = _text("success_criterion", raw.get("success_criterion"))
-    if kind == "quest":
-        close = normalize_close(raw.get("close")) if _field(raw, "close") is not _MISSING else None
-    elif _field(raw, "close") is not _MISSING:
-        raise StudioError("close", "belongs on a quest")
-    else:
-        close = None
+    close = None
+    if kind == "quest" and _field(raw, "close") is not _MISSING:
+        close = normalize_close(raw.get("close"))
     row = _Node(kind, code, parent_code, 0)
     group = _siblings(nodes, parent_code, kind)
     position = len(group) + 1 if _field(raw, "position") is _MISSING else _position(raw.get("position"))
@@ -587,39 +608,12 @@ def _plan_add(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict)
     return planned
 
 
-def _update_by_code_sentence(example: str) -> str:
-    return f"To change an item, name its code, such as {example}."
-
-
-def _parent_on_update(raw: dict, course_code: str, kind: str, example: str) -> str | None:
-    """A parent on an update is only an echo of the current parent. Anything else is refused."""
-    if _field(raw, "parent") is _MISSING:
-        return None
-    try:
-        if kind in ("course", "unit"):
-            return _upper(raw.get("parent"), "parent")
-        return normalize_node_code(raw.get("parent"), course_code, "parent")
-    except StudioError as exc:
-        raise StudioError(
-            "parent",
-            "an update names the item's own code",
-            plain=_update_by_code_sentence(example),
-        ) from exc
-
-
-def _plan_update(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict) -> dict:
+def _plan_update(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict) -> dict | None:
     kind = raw["kind"]
     if kind == "course":
         code = normalize_course_code(raw.get("code"))
         if code != course_code:
             raise StudioError("code", "does not match this course")
-        if _parent_on_update(raw, course_code, kind, code) is not None:
-            raise StudioError(
-                "parent",
-                "an update names the item's own code",
-                plain=_update_by_code_sentence(code),
-            )
-        _reject_foreign(raw, set(COURSE_FIELDS), "course")
         planned: dict = {"op": "update", "kind": "course", "code": code}
         if _field(raw, "title") is not _MISSING:
             planned["title"] = _text("title", raw.get("title"), required=True)
@@ -643,27 +637,15 @@ def _plan_update(course_code: str, raw: dict, nodes: dict[str, _Node], state: di
             planned["close_default"] = normalize_close(raw.get("close_default"), "close_default")
             state["close_default"] = planned["close_default"]
         if len(planned) == 3:
-            raise StudioError("patch", "an update needs a field to change")
+            return None
         return planned
 
-    _reject_foreign(
-        raw,
-        set(NODE_FIELDS) | {"parent"} | ({"close"} if kind == "quest" else set()),
-        kind,
-    )
     code = normalize_node_code(raw.get("code"), course_code)
     node = nodes.get(code)
     if node is None:
         raise StudioError("code", f"{code} is not in this course")
     if node.kind != kind:
         raise StudioError("kind", f"{code} is a {node.kind}")
-    sent_parent = _parent_on_update(raw, course_code, kind, code)
-    if sent_parent is not None and sent_parent != node.parent:
-        raise StudioError(
-            "parent",
-            "an update names the item's own code",
-            plain=_update_by_code_sentence(code),
-        )
     planned = {"op": "update", "kind": kind, "code": code}
     if _field(raw, "title") is not _MISSING:
         planned["title"] = _text("title", raw.get("title"), required=True)
@@ -677,10 +659,8 @@ def _plan_update(course_code: str, raw: dict, nodes: dict[str, _Node], state: di
         planned["position"] = node.position
     if kind == "quest" and _field(raw, "close") is not _MISSING:
         planned["close"] = normalize_close(raw.get("close"))
-    elif _field(raw, "close") is not _MISSING:
-        raise StudioError("close", "belongs on a quest")
     if len(planned) == 3:
-        raise StudioError("patch", "an update needs a field to change")
+        return None
     return planned
 
 
@@ -1482,7 +1462,7 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "The course close default is a preference in the header. "
         "Copy it into a quest's quest-close choices when you want that close. "
         "If close is null, the quest is stored with no close style. The server does not invent one.\n"
-        "To change an item, name its code and set parent to null. Do not send a parent on an update. "
+        "To change an item, name its code and set parent to null. A parent sent on an update is ignored. "
         "An add of a code that is already in this course is saved as an update of that item. "
         "To add an item, choose a new short stable code "
         f"such as {course.code}-U2 or {course.code}-U2-Q3 and name the parent code.\n"
@@ -1493,8 +1473,9 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "Multiple choice choice_mode is predefined or dynamic. "
         "Predefined stores the items and no intent. Dynamic stores only the intent and no items. "
         "Essay stores neither items nor intent.\n"
-        "depth is a course preference: survey, standard, or go_deep. "
-        "Leave depth null on a unit, quest, or move. The server ignores depth on those items and still saves them.\n"
+        "depth, sources, audience, focus, and theme are course preferences. "
+        "depth is survey, standard, or go_deep. "
+        "The server drops course preferences copied onto a unit, quest, or move, and still saves the item.\n"
         "sources is the framework to honor, or none.\n"
         f"{pending_note}\n"
         "The course so far, read from the database:\n"

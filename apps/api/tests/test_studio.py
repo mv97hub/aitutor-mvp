@@ -834,7 +834,7 @@ def test_mark_ready_records_completion_and_reopens_when_a_gap_returns() -> None:
         _wipe("ZZGEO")
 
 
-def test_parent_on_an_update_is_one_plain_sentence_and_writes_nothing() -> None:
+def test_parent_on_an_update_is_ignored_and_the_goal_is_written() -> None:
     course = _make()
     course_id = course["id"]
     claim = "The learning goals were saved and the structure was accepted."
@@ -867,7 +867,7 @@ def test_parent_on_an_update_is_one_plain_sentence_and_writes_nothing() -> None:
         assert planted.status_code == 200, planted.text
         assert planted.json()["course"]["units"][0]["quests"][0]["close"] is None
 
-        rejected = _proposal(
+        kept = _proposal(
             course_id,
             claim,
             [
@@ -880,18 +880,16 @@ def test_parent_on_an_update_is_one_plain_sentence_and_writes_nothing() -> None:
                 )
             ],
         )
-        assert rejected.status_code == 422
-        reason = rejected.json()["detail"]
-        assert reason == "To change an item, name its code, such as ZZGEO-U1-Q1."
-        assert "parent:" not in reason
-        reply = rejection_reply(claim, reason)
-        assert reply == reason
-        assert "saved" not in reply.lower()
-        assert "accepted" not in reply.lower()
-        assert client.get(f"/studio/courses/{course_id}/messages").json()[-1]["content"] != claim
-        fresh = client.get(f"/studio/courses/{course_id}").json()
-        assert fresh["units"][0]["quests"][0]["learning_goal"] == ""
-        assert fresh["units"][0]["quests"][0]["close"] is None
+        assert kept.status_code == 200, kept.text
+        assert "does not belong" not in kept.text
+        assert "parent:" not in kept.json()["content"]
+        applied = client.post(f"/studio/courses/{course_id}/messages/{kept.json()['id']}/accept")
+        assert applied.status_code == 200, applied.text
+        quest = applied.json()["course"]["units"][0]["quests"][0]
+        assert quest["learning_goal"] == "Name the bow."
+        assert quest["close"] is None
+        assert quest["code"] == "ZZGEO-U1-Q1"
+        assert applied.json()["course"]["units"][0]["code"] == "ZZGEO-U1"
 
         echoed = _proposal(
             course_id,
@@ -1483,7 +1481,6 @@ def test_preference_save_writes_the_choices_and_cancel_does_not() -> None:
 def test_unit_patch_with_depth_still_writes_the_unit() -> None:
     course = _make("ZZDEPTH", "Premier League History")
     course_id = course["id"]
-    claim = "The unit was saved."
     try:
         assert course["depth"] == "standard"
         assert course["units"] == []
@@ -1544,9 +1541,9 @@ def test_unit_patch_with_depth_still_writes_the_unit() -> None:
         assert renamed_course["depth"] == "standard"
         assert renamed_course["units"][0]["title"] == "1992 to 1995 winners"
 
-        rejected = _proposal(
+        another = _proposal(
             course_id,
-            claim,
+            "Add the next period.",
             [
                 _full(
                     "add",
@@ -1555,20 +1552,127 @@ def test_unit_patch_with_depth_still_writes_the_unit() -> None:
                     parent="ZZDEPTH",
                     title="1995 to 1998",
                     audience="9-11",
+                    sources="Premier League records",
                 )
             ],
         )
-        assert rejected.status_code == 422
-        reason = rejected.json()["detail"]
-        assert reason == "Audience does not belong on a unit."
-        assert "audience:" not in reason
+        assert another.status_code == 200, another.text
+        assert "does not belong" not in another.text
+        saved = client.post(f"/studio/courses/{course_id}/messages/{another.json()['id']}/accept")
+        assert saved.status_code == 200, saved.text
+        fresh = saved.json()["course"]
+        assert [unit["code"] for unit in fresh["units"]] == ["ZZDEPTH-U1", "ZZDEPTH-U2"]
+        assert fresh["units"][1]["title"] == "1995 to 1998"
+        assert fresh["depth"] == "standard"
+        assert fresh["sources"] == ""
+        assert fresh["audience"] == ""
+    finally:
+        _wipe("ZZDEPTH")
+
+
+def test_recoverable_checker_cases_normalize_and_position_stays_fatal(caplog) -> None:
+    course = _make("ZZNORM", "Checker")
+    course_id = course["id"]
+    claim = "The structure was saved."
+    try:
+        caplog.set_level("INFO", logger="app.studio")
+        out_of_range = _proposal(
+            course_id,
+            claim,
+            [_full("add", "unit", "ZZNORM-U1", parent="ZZNORM", title="Opening", position=0)],
+        )
+        assert out_of_range.status_code == 422
+        reason = out_of_range.json()["detail"]
+        assert reason == "Position must be an integer from 1 to 200."
+        assert "position:" not in reason
         reply = rejection_reply(claim, reason)
         assert reply == reason
         assert "saved" not in reply.lower()
-        assert "accepted" not in reply.lower()
-        fresh = client.get(f"/studio/courses/{course_id}").json()
-        assert [unit["code"] for unit in fresh["units"]] == ["ZZDEPTH-U1"]
-        assert fresh["depth"] == "standard"
-        assert client.get(f"/studio/courses/{course_id}/messages").json()[-1]["content"] != claim
+        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+
+        past = _proposal(
+            course_id,
+            claim,
+            [_full("add", "unit", "ZZNORM-U1", parent="ZZNORM", title="Opening", position=5)],
+        )
+        assert past.status_code == 422
+        assert past.json()["detail"] == "Position is past the end of this list."
+        assert "position:" not in past.json()["detail"]
+        assert client.get(f"/studio/courses/{course_id}/messages").json() == []
+
+        draft = _proposal(
+            course_id,
+            "Add the first period.",
+            [
+                _full(
+                    "add",
+                    "unit",
+                    "ZZNORM-U1",
+                    parent="ZZNORM",
+                    title="1992 to 1995",
+                    depth="go_deep",
+                    sources="Premier League records",
+                )
+            ],
+        )
+        assert draft.status_code == 200, draft.text
+        assert "does not belong" not in draft.text
+        accepted = client.post(f"/studio/courses/{course_id}/messages/{draft.json()['id']}/accept")
+        assert accepted.status_code == 200, accepted.text
+        body = accepted.json()["course"]
+        assert body["units"][0]["code"] == "ZZNORM-U1"
+        assert body["units"][0]["position"] == 1
+        assert body["depth"] == "standard"
+        assert body["sources"] == ""
+        dropped = [record.message for record in caplog.records]
+        assert any("dropped sources on unit ZZNORM-U1" in message for message in dropped)
+        assert any("dropped depth on unit ZZNORM-U1" in message for message in dropped)
+
+        again = _proposal(
+            course_id,
+            "Rename the period.",
+            [
+                _full(
+                    "add",
+                    "unit",
+                    "ZZNORM-U1",
+                    parent="ZZNORM",
+                    title="1992 to 1995 winners",
+                    sources="still ignored",
+                )
+            ],
+        )
+        assert again.status_code == 200, again.text
+        renamed = client.post(f"/studio/courses/{course_id}/messages/{again.json()['id']}/accept")
+        assert renamed.status_code == 200, renamed.text
+        renamed_course = renamed.json()["course"]
+        assert [unit["code"] for unit in renamed_course["units"]] == ["ZZNORM-U1"]
+        assert renamed_course["units"][0]["title"] == "1992 to 1995 winners"
+        assert renamed_course["sources"] == ""
+
+        moved = _proposal(
+            course_id,
+            "Retitle without moving.",
+            [_full("update", "unit", "ZZNORM-U1", parent="ZZNORM-U9", title="Opening years", sources="nope")],
+        )
+        assert moved.status_code == 200, moved.text
+        moved_ok = client.post(f"/studio/courses/{course_id}/messages/{moved.json()['id']}/accept")
+        assert moved_ok.status_code == 200, moved_ok.text
+        assert moved_ok.json()["course"]["units"][0]["title"] == "Opening years"
+        assert any("dropped parent on unit ZZNORM-U1" in record.message for record in caplog.records)
+
+        mixed = _proposal(
+            course_id,
+            claim,
+            [
+                _full("add", "unit", "ZZNORM-U2", parent="ZZNORM", title="Next", sources="records"),
+                _full("add", "quest", "ZZNORM-U2-Q1", parent="ZZNORM-U2", title="Winners", position=0),
+            ],
+        )
+        assert mixed.status_code == 422
+        assert mixed.json()["detail"] == "Position must be an integer from 1 to 200."
+        assert "saved" not in rejection_reply(claim, mixed.json()["detail"]).lower()
+        final = client.get(f"/studio/courses/{course_id}").json()
+        assert [unit["code"] for unit in final["units"]] == ["ZZNORM-U1"]
     finally:
-        _wipe("ZZDEPTH")
+        _wipe("ZZNORM")
