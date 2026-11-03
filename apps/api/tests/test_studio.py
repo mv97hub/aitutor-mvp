@@ -178,8 +178,10 @@ def test_patch_checker_rejects_unknown_parent_bad_close_and_prose() -> None:
                 },
             },
         )
-        assert bad_close.status_code == 422
-        assert "close_style" in bad_close.json()["detail"]
+        assert bad_close.status_code == 200, bad_close.text
+        assert "Close style must be one or several." in bad_close.json()["content"]
+        assert "close_style:" not in bad_close.json()["content"]
+        assert [op["code"] for op in bad_close.json()["proposal"]["operations"]] == ["ZZGEO-U1"]
 
         prose = client.post(
             f"/studio/courses/{course_id}/messages",
@@ -218,12 +220,19 @@ def test_patch_checker_rejects_unknown_parent_bad_close_and_prose() -> None:
                 },
             },
         )
-        assert dynamic_items.status_code == 422
-        assert "items" in dynamic_items.json()["detail"]
+        assert dynamic_items.status_code == 200, dynamic_items.text
+        assert "Dynamic choices store the intent, not the items." in dynamic_items.json()["content"]
+        assert "items:" not in dynamic_items.json()["content"]
+        assert [op["code"] for op in dynamic_items.json()["proposal"]["operations"]] == ["ZZGEO-U1"]
 
         saved = client.get(f"/studio/courses/{course_id}").json()
         assert saved["units"] == []
-        assert client.get(f"/studio/courses/{course_id}/messages").json() == []
+        stored = client.get(f"/studio/courses/{course_id}/messages").json()
+        assert stored
+        assert all(message["applied"] is False for message in stored)
+        assert all(
+            op["code"] == "ZZGEO-U1" for message in stored for op in message["proposal"]["operations"]
+        )
         tutor_codes = [row["code"] for row in client.get("/courses").json()]
         assert "ZZGEO" not in tutor_codes
     finally:
@@ -329,12 +338,12 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
                 },
             },
         )
-        assert duplicate.status_code == 422
-        reason = duplicate.json()["detail"]
-        assert reason == "ZZGEO-U1 is already a unit."
-        assert "code:" not in reason
-        reply = rejection_reply("That code is taken.", reason)
-        assert reply == reason
+        assert duplicate.status_code == 200, duplicate.text
+        assert "ZZGEO-U1 is already a unit." in duplicate.json()["content"]
+        assert "code:" not in duplicate.json()["content"]
+        assert [op["kind"] for op in duplicate.json()["proposal"]["operations"]] == ["unit"]
+        reply = rejection_reply("That code is taken.", "ZZGEO-U1 is already a unit.")
+        assert reply == "ZZGEO-U1 is already a unit."
         assert "saved" not in reply.lower()
         assert "accepted" not in reply.lower()
 
@@ -369,6 +378,8 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
         again = client.post(f"/studio/courses/{course_id}/messages/{message_id}/accept")
         assert again.status_code == 409
 
+        stepped = client.post(f"/studio/courses/{course_id}/phase", json={"name": "structure"})
+        assert stepped.status_code == 200, stepped.text
         renamed = client.post(
             f"/studio/courses/{course_id}/messages",
             json={
@@ -625,17 +636,7 @@ def test_rejected_position_does_not_save_or_claim_it_saved() -> None:
         rejected = _proposal(
             course_id,
             claim,
-            [
-                _full("add", "unit", "ZZGEO-U1", parent="ZZGEO", title="Exile", learning_goal="The story begins."),
-                _full(
-                    "add",
-                    "quest",
-                    "ZZGEO-U1-Q1",
-                    parent="ZZGEO-U1",
-                    title="The bow",
-                    position=0,
-                ),
-            ],
+            [_full("add", "unit", "ZZGEO-U1", parent="ZZGEO", title="Exile", position=0)],
         )
         assert rejected.status_code == 422
         reason = rejected.json()["detail"]
@@ -646,6 +647,19 @@ def test_rejected_position_does_not_save_or_claim_it_saved() -> None:
         assert "accepted" not in reply.lower()
         assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
         assert client.get(f"/studio/courses/{course_id}/messages").json() == []
+
+        mixed = _proposal(
+            course_id,
+            claim,
+            [
+                _full("add", "unit", "ZZGEO-U1", parent="ZZGEO", title="Exile", learning_goal="The story begins."),
+                _full("add", "quest", "ZZGEO-U1-Q1", parent="ZZGEO-U1", title="The bow", position=0),
+            ],
+        )
+        assert mixed.status_code == 200, mixed.text
+        assert "Position must be an integer from 1 to 200." in mixed.json()["content"]
+        assert [op["code"] for op in mixed.json()["proposal"]["operations"]] == ["ZZGEO-U1"]
+        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
 
         outside = _proposal(
             course_id,
@@ -664,7 +678,8 @@ def test_rejected_position_does_not_save_or_claim_it_saved() -> None:
         assert past.status_code == 422
         assert past.json()["detail"] == "Position is past the end of this list."
         assert "saved" not in past.json()["detail"].lower()
-        assert client.get(f"/studio/courses/{course_id}/messages").json() == []
+        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+        assert len(client.get(f"/studio/courses/{course_id}/messages").json()) == 1
     finally:
         _wipe("ZZGEO")
 
@@ -905,12 +920,8 @@ def test_parent_on_an_update_is_ignored_and_the_goal_is_written() -> None:
                 )
             ],
         )
-        assert echoed.status_code == 200, echoed.text
-        accepted = client.post(f"/studio/courses/{course_id}/messages/{echoed.json()['id']}/accept")
-        assert accepted.status_code == 200, accepted.text
-        quest = accepted.json()["course"]["units"][0]["quests"][0]
-        assert quest["learning_goal"] == "Name the bow."
-        assert quest["close"] is None
+        assert echoed.status_code == 422
+        assert echoed.json()["detail"] == "Close only updates the close for ZZGEO-U1-Q1."
         stored = client.get(f"/studio/courses/{course_id}").json()["units"][0]["quests"][0]
         assert stored["learning_goal"] == "Name the bow."
         assert stored["close"] is None
@@ -1521,6 +1532,8 @@ def test_unit_patch_with_depth_still_writes_the_unit() -> None:
         assert stored["depth"] == "standard"
         assert stored["units"][0]["title"] == "1992 to 1995"
 
+        stepped = client.post(f"/studio/courses/{course_id}/phase", json={"name": "structure"})
+        assert stepped.status_code == 200, stepped.text
         revised = _proposal(
             course_id,
             "Rename the opening period.",
@@ -1669,10 +1682,66 @@ def test_recoverable_checker_cases_normalize_and_position_stays_fatal(caplog) ->
                 _full("add", "quest", "ZZNORM-U2-Q1", parent="ZZNORM-U2", title="Winners", position=0),
             ],
         )
-        assert mixed.status_code == 422
-        assert mixed.json()["detail"] == "Position must be an integer from 1 to 200."
-        assert "saved" not in rejection_reply(claim, mixed.json()["detail"]).lower()
-        final = client.get(f"/studio/courses/{course_id}").json()
-        assert [unit["code"] for unit in final["units"]] == ["ZZNORM-U1"]
+        assert mixed.status_code == 200, mixed.text
+        assert "Position must be an integer from 1 to 200." in mixed.json()["content"]
+        assert "saved" not in rejection_reply(claim, "Position must be an integer from 1 to 200.").lower()
+        assert [op["code"] for op in mixed.json()["proposal"]["operations"]] == ["ZZNORM-U2"]
+        kept_mixed = client.post(f"/studio/courses/{course_id}/messages/{mixed.json()['id']}/accept")
+        assert kept_mixed.status_code == 200, kept_mixed.text
+        final = kept_mixed.json()["course"]
+        assert [unit["code"] for unit in final["units"]] == ["ZZNORM-U1", "ZZNORM-U2"]
+        assert final["units"][1]["quests"] == []
     finally:
         _wipe("ZZNORM")
+
+
+def test_phase_schema_limits_fields_and_goals_skips_a_new_unit() -> None:
+    course = _make("ZZPHASE", "Phase check")
+    course_id = course["id"]
+    try:
+        schema = client.get(f"/studio/courses/{course_id}/prompt").json()["response_schema"]
+        props = schema["properties"]["patch"]["anyOf"][1]["properties"]["operations"]["items"]["properties"]
+        assert set(props) == {"op", "kind", "code", "parent", "title", "position"}
+        assert "depth" not in props
+        assert "sources" not in props
+        assert "learning_goal" not in props
+        assert "close" not in props
+
+        structure = _proposal(
+            course_id,
+            "One quest still needs a goal.",
+            [
+                _full("add", "unit", "ZZPHASE-U1", parent="ZZPHASE", title="Opening"),
+                _full("add", "quest", "ZZPHASE-U1-Q1", parent="ZZPHASE-U1", title="Winners", learning_goal=""),
+            ],
+        )
+        assert structure.status_code == 200, structure.text
+        planted = client.post(f"/studio/courses/{course_id}/messages/{structure.json()['id']}/accept")
+        assert planted.status_code == 200, planted.text
+        assert planted.json()["course"]["phase"]["name"] == "goals"
+
+        goal_schema = client.get(f"/studio/courses/{course_id}/prompt").json()["response_schema"]
+        goal_props = goal_schema["properties"]["patch"]["anyOf"][1]["properties"]["operations"]["items"]["properties"]
+        assert set(goal_props) == {"op", "kind", "code", "learning_goal", "success_criterion"}
+        assert "close" not in goal_props
+        assert "sources" not in goal_props
+
+        mixed = _proposal(
+            course_id,
+            "A goal, and a unit outside this phase.",
+            [
+                _full("add", "unit", "ZZPHASE-U2", parent="ZZPHASE", title="Later"),
+                _full("update", "quest", "ZZPHASE-U1-Q1", learning_goal="Name the first winners."),
+            ],
+        )
+        assert mixed.status_code == 200, mixed.text
+        assert "Goals only updates learning goals" in mixed.json()["content"]
+        assert [op["code"] for op in mixed.json()["proposal"]["operations"]] == ["ZZPHASE-U1-Q1"]
+        assert "does not belong" not in mixed.text
+        accepted = client.post(f"/studio/courses/{course_id}/messages/{mixed.json()['id']}/accept")
+        assert accepted.status_code == 200, accepted.text
+        body = accepted.json()["course"]
+        assert [unit["code"] for unit in body["units"]] == ["ZZPHASE-U1"]
+        assert body["units"][0]["quests"][0]["learning_goal"] == "Name the first winners."
+    finally:
+        _wipe("ZZPHASE")

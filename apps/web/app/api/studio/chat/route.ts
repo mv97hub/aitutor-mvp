@@ -3,6 +3,7 @@ import { Output, convertToModelMessages, jsonSchema, streamText, type JSONSchema
 
 import { api, apiBase } from "@/lib/api";
 import type { StudioMessage } from "@/lib/studio";
+import { detailFrom, plainFailure, settleModelResult } from "@/lib/studio-chat";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -23,19 +24,6 @@ type CourseEdit = {
   reply?: string;
   patch?: { operations?: unknown[] } | null;
 };
-
-function rejectionReply(reason: string): string {
-  return reason.trim();
-}
-
-function detailFrom(body: unknown, fallback: string): string {
-  if (typeof body === "string" && body.trim()) return body;
-  if (body && typeof body === "object" && "detail" in body) {
-    const detail = (body as { detail?: unknown }).detail;
-    if (typeof detail === "string") return detail;
-  }
-  return fallback;
-}
 
 async function readBody(response: Response): Promise<unknown> {
   const text = await response.text();
@@ -98,32 +86,58 @@ export async function POST(req: Request) {
   }));
   const modelMessages = await convertToModelMessages(uiMessages);
 
-  let output: CourseEdit;
-  try {
-    const result = streamText({
-      model: openai(bundle.model),
-      output: Output.object({
-        schema: jsonSchema(bundle.response_schema),
-        name: "course_edit",
-        description: "A reply and an optional typed patch addressed by code. No web search.",
-      }),
-      instructions: bundle.system_prompt,
-      messages: modelMessages,
-      temperature: bundle.temperature,
-    });
-    output = (await result.output) as CourseEdit;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "The model did not answer.";
-    return new Response(message, { status: 502 });
-  }
-
-  const reply = typeof output.reply === "string" ? output.reply.trim() : "";
-  const operations = output.patch && Array.isArray(output.patch.operations) ? output.patch.operations : [];
-  const proposal = operations.length > 0 ? { operations } : null;
-  let assistantText = reply || (proposal ? "Here is a change to accept." : "I don't have a change for the course yet.");
-
+  let assistantText = "";
+  let proposal: { operations: unknown[] } | null = null;
   let assistant: StudioMessage | null = null;
-  if (proposal) {
+  let note = "";
+
+  for (let attempt = 0; attempt < 2 && !assistant; attempt++) {
+    let output: CourseEdit;
+    try {
+      const result = streamText({
+        model: openai(bundle.model),
+        output: Output.object({
+          schema: jsonSchema(bundle.response_schema),
+          name: "course_edit",
+          description: "A reply and an optional typed patch addressed by code. No web search.",
+        }),
+        instructions: note ? `${bundle.system_prompt}\n${note}` : bundle.system_prompt,
+        messages: modelMessages,
+        temperature: bundle.temperature,
+      });
+      output = (await result.output) as CourseEdit;
+    } catch (error) {
+      const decision = settleModelResult({
+        attempt,
+        failure: error instanceof Error ? error.message : "The model did not answer.",
+        kind: "schema",
+        reply: "",
+        operations: [],
+      });
+      if (decision.action === "retry") {
+        note = decision.note;
+        continue;
+      }
+      return new Response(decision.action === "banner" ? decision.text : plainFailure(error), { status: 502 });
+    }
+
+    const reply = typeof output.reply === "string" ? output.reply : "";
+    const operations = output.patch && Array.isArray(output.patch.operations) ? output.patch.operations : [];
+    const decision = settleModelResult({
+      attempt,
+      failure: null,
+      kind: null,
+      reply,
+      operations,
+    });
+    if (decision.action !== "save") {
+      return new Response("The model reply could not be read.", { status: 502 });
+    }
+    assistantText = decision.text;
+    proposal = decision.proposal;
+
+    if (!proposal) break;
+
     const saved = await fetch(`${apiBase()}/studio/courses/${courseId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -133,11 +147,27 @@ export async function POST(req: Request) {
     const savedBody = await readBody(saved);
     if (saved.ok) {
       assistant = savedBody as StudioMessage;
-    } else if (saved.status === 422) {
-      assistantText = rejectionReply(detailFrom(savedBody, "That change was rejected."));
-    } else {
-      return new Response(detailFrom(savedBody, "Could not save the reply."), { status: 502 });
+      break;
     }
+    const failureKind = saved.status === 422 ? "checker" : "transport";
+    const failed = settleModelResult({
+      attempt,
+      failure: detailFrom(savedBody, saved.status === 422 ? "That change was rejected." : "Could not save the reply."),
+      kind: failureKind,
+      reply: assistantText,
+      operations,
+    });
+    if (failed.action === "retry") {
+      note = failed.note;
+      proposal = null;
+      continue;
+    }
+    if (failed.action === "banner") {
+      return new Response(failed.text, { status: 502 });
+    }
+    assistantText = failed.text;
+    proposal = null;
+    break;
   }
 
   if (!assistant) {

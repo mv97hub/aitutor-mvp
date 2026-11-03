@@ -191,12 +191,56 @@ STUDIO_RESPONSE_SCHEMA: dict = {
 }
 
 
+def _plain_error(field: str, message: str) -> str:
+    """One sentence for the chat. No raw field path such as `close_style:`."""
+    labels = {
+        "close_style": "Close style",
+        "answer_style": "Answer style",
+        "choice_mode": "Choice mode",
+        "learning_goal": "The learning goal",
+        "success_criterion": "The success criterion",
+        "close_default": "The close default",
+        "content": "The message",
+        "proposal": "The proposal",
+        "message": "The message",
+        "model": "The model",
+        "patch": "The patch",
+        "op": "The operation",
+        "kind": "The kind",
+        "code": "The code",
+        "parent": "The parent",
+        "title": "The title",
+        "items": "The items",
+        "intent": "The intent",
+        "close": "The close",
+        "position": "The position",
+        "audience": "The audience",
+        "focus": "The focus",
+        "theme": "The theme",
+        "sources": "The sources",
+        "depth": "Detail",
+        "phase": "The phase",
+        "ready": "Ready",
+        "password": "The password",
+    }
+    if field == "parent":
+        return message if message.endswith(".") else f"The parent {message}."
+    if message[:1].isupper():
+        return message if message.endswith(".") else f"{message}."
+    label = labels.get(field, "This value")
+    if message.startswith("dynamic "):
+        return "Dynamic choices store the intent, not the items."
+    if message.startswith("each "):
+        return f"{message[0].upper()}{message[1:]}."
+    return f"{label} {message}."
+
+
 class StudioError(Exception):
     def __init__(self, field: str, message: str, status: int = 422, plain: str | None = None) -> None:
         self.field = field
         self.message = message
         self.status = status
-        self.plain = plain if plain is not None else f"{field}: {message}"
+        self.plain = plain if plain is not None else _plain_error(field, message)
         super().__init__(self.plain)
 
 
@@ -501,8 +545,38 @@ def _keep_tier_fields(raw: dict, op_name: str) -> dict:
     return cleaned
 
 
-def plan_patch(course: StudioCourse, patch) -> list[dict]:
-    """Check a patch against this course. Nothing is written."""
+def _phase_only(course: StudioCourse, phase: str) -> str:
+    listed = ", ".join(viewed_phase(course)["codes"]) or "the open quests"
+    if phase == "goals":
+        return f"Goals only updates learning goals for {listed}."
+    return f"Close only updates the close for {listed}."
+
+
+def _outside_phase(course: StudioCourse, op_name: str, kind: str, code) -> str | None:
+    """Goals and Close only touch the quests listed for that wave. Structure stays structural."""
+    view = viewed_phase(course)
+    phase = view["name"]
+    codes = {str(item).upper() for item in view["codes"]}
+    code_text = str(code or "").strip().upper()
+    if phase == "structure":
+        if kind == "course":
+            return "Structure only changes units, quests, and moves."
+        return None
+    if phase == "goals":
+        if kind == "quest" and code_text in codes and op_name in ("add", "update"):
+            return None
+        return _phase_only(course, "goals")
+    if phase == "close":
+        if kind == "quest" and code_text in codes and op_name in ("add", "update"):
+            return None
+        return _phase_only(course, "close")
+    if op_name == "add" and code_text not in codes:
+        return "This course is ready. New items are not added from a patch."
+    return None
+
+
+def split_patch(course: StudioCourse, patch) -> tuple[list[dict], list[str], list[dict]]:
+    """Plan each operation. A bad sibling is skipped. Nothing is written."""
     nodes = {
         course.code: _Node("course", course.code, None, 0),
     }
@@ -522,30 +596,62 @@ def plan_patch(course: StudioCourse, patch) -> list[dict]:
         "close_default": close_default_of(course),
     }
     planned: list[dict] = []
+    skipped: list[str] = []
+    kept: list[dict] = []
+    phase = viewed_phase(course)["name"]
     for raw in _operations(patch):
-        if not isinstance(raw, dict):
-            raise StudioError("patch", "each change must be an object")
-        op_name = raw.get("op")
-        kind = raw.get("kind")
-        if op_name not in OPS:
-            raise StudioError("op", "must be add, update, or remove")
-        if kind not in KINDS:
-            raise StudioError("kind", "must be course, unit, quest, or move")
-        cleaned = _keep_tier_fields(raw, op_name)
-        if op_name == "add":
-            step = _plan_add(course.code, cleaned, nodes, state)
-        elif op_name == "update":
-            step = _plan_update(course.code, cleaned, nodes, state)
-        else:
-            step = _plan_remove(course.code, cleaned, nodes)
+        try:
+            if not isinstance(raw, dict):
+                raise StudioError("patch", "each change must be an object")
+            op_name = raw.get("op")
+            kind = raw.get("kind")
+            if op_name not in OPS:
+                raise StudioError("op", "must be add, update, or remove")
+            if kind not in KINDS:
+                raise StudioError("kind", "must be course, unit, quest, or move")
+            blocked = _outside_phase(course, op_name, kind, raw.get("code"))
+            if blocked:
+                raise StudioError("phase", blocked, plain=blocked)
+            cleaned = _keep_tier_fields(raw, op_name)
+            if phase == "goals":
+                cleaned.pop("close", None)
+                cleaned.pop("title", None)
+                cleaned.pop("position", None)
+                if (
+                    _field(cleaned, "learning_goal") is _MISSING
+                    and _field(cleaned, "success_criterion") is _MISSING
+                ):
+                    raise StudioError("phase", "goals", plain=_phase_only(course, "goals"))
+            elif phase == "close":
+                cleaned.pop("learning_goal", None)
+                cleaned.pop("success_criterion", None)
+                cleaned.pop("title", None)
+                cleaned.pop("position", None)
+                if _field(cleaned, "close") is _MISSING:
+                    raise StudioError("phase", "close", plain=_phase_only(course, "close"))
+            if op_name == "add":
+                step = _plan_add(course.code, cleaned, nodes, state)
+            elif op_name == "update":
+                step = _plan_update(course.code, cleaned, nodes, state)
+            else:
+                step = _plan_remove(course.code, cleaned, nodes)
+        except StudioError as exc:
+            skipped.append(exc.plain)
+            continue
         if step is not None:
             planned.append(step)
+            kept.append(raw)
+    return planned, skipped, kept
+
+
+def plan_patch(course: StudioCourse, patch) -> list[dict]:
+    """Check a patch against this course. Nothing is written."""
+    planned, skipped, _kept = split_patch(course, patch)
     if not planned:
-        raise StudioError(
-            "patch",
-            "needs at least one add, update, or remove",
-            plain="That change had nothing to save.",
-        )
+        plain = " ".join(skipped) if skipped else "That change had nothing to save."
+        raise StudioError("patch", "needs at least one add, update, or remove", plain=plain)
+    if skipped:
+        raise StudioError("patch", "has a change that was skipped", plain=" ".join(skipped))
     return planned
 
 
@@ -1044,8 +1150,13 @@ def add_message(
         raise StudioError("proposal", "a creator message cannot carry a patch")
     stored = None
     if proposal is not None:
-        plan_patch(course, proposal)
-        stored = {"operations": copy.deepcopy(_operations(proposal))}
+        _planned, skipped, kept = split_patch(course, proposal)
+        if not kept:
+            plain = " ".join(skipped) if skipped else "That change had nothing to save."
+            raise StudioError("patch", "needs at least one add, update, or remove", plain=plain)
+        stored = {"operations": copy.deepcopy(kept)}
+        if skipped:
+            text = text.rstrip() + "\n" + "\n".join(skipped)
     seq = db.scalar(select(func.max(StudioMessage.seq)).where(StudioMessage.course_id == course.id))
     message = StudioMessage(
         course_id=course.id,
@@ -1422,6 +1533,87 @@ def message_out(message: StudioMessage) -> StudioMessageOut:
     )
 
 
+def _phase_operation_schema(phase: str) -> dict:
+    if phase == "goals":
+        properties = {
+            "op": {"type": "string", "enum": ["update", "add"]},
+            "kind": {"type": "string", "enum": ["quest"]},
+            "code": {"type": "string"},
+            "learning_goal": {"type": ["string", "null"]},
+            "success_criterion": {"type": ["string", "null"]},
+        }
+    elif phase == "close":
+        properties = {
+            "op": {"type": "string", "enum": ["update", "add"]},
+            "kind": {"type": "string", "enum": ["quest"]},
+            "code": {"type": "string"},
+            "close": {"anyOf": [{"type": "null"}, _close_schema()]},
+        }
+    elif phase == "ready":
+        properties = {
+            "op": {"type": "string", "enum": ["update", "remove"]},
+            "kind": {"type": "string", "enum": ["unit", "quest", "move"]},
+            "code": {"type": "string"},
+            "title": {"type": ["string", "null"]},
+            "learning_goal": {"type": ["string", "null"]},
+            "success_criterion": {"type": ["string", "null"]},
+            "position": {"anyOf": [{"type": "null"}, {"type": "integer"}]},
+            "close": {"anyOf": [{"type": "null"}, _close_schema()]},
+        }
+    else:
+        properties = {
+            "op": {"type": "string", "enum": ["add", "update", "remove"]},
+            "kind": {"type": "string", "enum": ["unit", "quest", "move"]},
+            "code": {"type": "string"},
+            "parent": {"type": ["string", "null"]},
+            "title": {"type": ["string", "null"]},
+            "position": {"anyOf": [{"type": "null"}, {"type": "integer"}]},
+        }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": list(properties),
+    }
+
+
+def response_schema(course: StudioCourse) -> dict:
+    """The only patch shape the model may emit for the phase on screen."""
+    phase = viewed_phase(course)["name"]
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "reply": {
+                "type": "string",
+                "description": (
+                    "What the creator reads. Say which framework a suggestion comes from. "
+                    "Do not say the course was saved or that the structure was accepted."
+                ),
+            },
+            "patch": {
+                "description": "Null when nothing should change. Otherwise operations allowed in this phase.",
+                "anyOf": [
+                    {"type": "null"},
+                    {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "operations": {
+                                "type": "array",
+                                "maxItems": 40,
+                                "items": _phase_operation_schema(phase),
+                            }
+                        },
+                        "required": ["operations"],
+                    },
+                ],
+            },
+        },
+        "required": ["reply", "patch"],
+    }
+
+
 def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
     tree = course_out(course).model_dump(mode="json")
     pending = []
@@ -1442,8 +1634,10 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "Label every curriculum idea as a suggestion.\n"
         "You have no web search and no document upload. Do not claim you searched the web or read an uploaded file.\n"
         "Nothing is saved until the creator accepts the patch. "
-        "The server still checks. A rejected patch is not written. "
+        "The server still checks. A rejected operation is skipped and the rest can be saved. "
         "Do not say the course was saved, and do not say the structure was accepted.\n"
+        "The response schema lists the only fields for this phase. "
+        "Goals and Close refuse operations for any other code.\n"
         f"{phase_instructions(course)}"
         "Return a reply plus an optional patch. The patch is a list of operations. "
         "Each operation is add, update, or remove, and it names a code. "
@@ -1453,7 +1647,8 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "In the patch JSON those fields are code, parent, title, position, learning_goal, "
         "success_criterion, and close.\n"
         "A position of 0 is invalid. Leave position null and the server fills the next free number. "
-        "A position outside 1 to 200 rejects the whole patch and saves nothing.\n"
+        "A position outside 1 to 200, or past the end of the list, is skipped and reported in one sentence. "
+        "The other operations can still be saved.\n"
         "A missing learning goal or quest-close choice does not block the write. "
         "The course is a draft from the moment it is created. "
         "The tree marks a missing learning goal and a missing close style. "
