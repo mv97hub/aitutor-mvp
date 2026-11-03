@@ -1212,6 +1212,34 @@ body:has(.ds-landing) {
   white-space: pre-wrap;
 }
 
+.lesson-diagram {
+  display: block;
+  width: min(100%, 280px);
+  height: auto;
+  margin-top: 10px;
+  color: rgb(23, 37, 84);
+}
+
+.lesson-diagram polygon {
+  fill: rgb(237, 243, 254);
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.lesson-diagram polyline {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.lesson-diagram text {
+  fill: currentColor;
+  font-size: 13px;
+  font-family: inherit;
+}
+
 .ds-shell .bubble.user {
   align-self: flex-end;
   max-width: 70.2%;

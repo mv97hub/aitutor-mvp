@@ -248,6 +248,7 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             success_criterion=criterion,
             requires_teach_back=bool(quest.requires_teach_back),
             opening_idea=opening_idea,
+            course_code=course.code,
         )
         attempt_count = 0
     else:
@@ -278,6 +279,7 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             success_criterion=criterion,
             requires_teach_back=bool(quest.requires_teach_back),
             opening_idea=opening_idea,
+            course_code=course.code,
         )
         attempt_count = 0 if finished or current is None else _failed(tutor_session, current.id)
     interests = tuple(str(item) for item in (student.interests or []) if str(item).strip())

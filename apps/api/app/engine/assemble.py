@@ -42,8 +42,77 @@ RESPONSE_SCHEMA: dict = {
             "type": "boolean",
             "description": "True only when this beat should end.",
         },
+        "diagram": {
+            "description": (
+                "A picture of the idea being taught, and only when a picture makes that idea clearer. "
+                "kind triangle is drawn in the geometry course. "
+                "kind graph and kind map are named for a later pass and are not drawn. "
+                "Null when no picture should appear. No HTML, no URL, and no free-form drawing prompt."
+            ),
+            "anyOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "description": "A triangle the app draws from three sides and three angles.",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["triangle"]},
+                        "sides": {
+                            "type": "array",
+                            "minItems": 3,
+                            "maxItems": 3,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "label": {
+                                        "type": "string",
+                                        "description": "Short plain text. No HTML and no URL.",
+                                    },
+                                    "length": {"type": "number"},
+                                },
+                                "required": ["label", "length"],
+                            },
+                            "description": "Sides a, b, and c, opposite angles A, B, and C.",
+                        },
+                        "angles": {
+                            "type": "array",
+                            "minItems": 3,
+                            "maxItems": 3,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "label": {
+                                        "type": "string",
+                                        "description": "Short plain text. No HTML and no URL.",
+                                    },
+                                    "degrees": {"type": "number"},
+                                },
+                                "required": ["label", "degrees"],
+                            },
+                            "description": "Angles A, B, and C, in degrees. They sum to 180.",
+                        },
+                        "right_angle": {
+                            "type": ["boolean", "null"],
+                            "description": "True to mark the right angle. Null when there is none.",
+                        },
+                    },
+                    "required": ["kind", "sides", "angles", "right_angle"],
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "description": "graph and map are named for a later pass. The server drops them.",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["graph", "map"]},
+                    },
+                    "required": ["kind"],
+                },
+            ],
+        },
     },
-    "required": ["reply", "rubric_met", "misconception", "hint_tier", "advance"],
+    "required": ["reply", "rubric_met", "misconception", "hint_tier", "advance", "diagram"],
 }
 
 _ROLE_LABEL = {
@@ -89,6 +158,27 @@ def instructive_level(value: int | None) -> int:
     if level > 5:
         return 5
     return level
+
+
+def _diagram_rule(beat: Layer1Beat) -> str:
+    """A picture is optional, and this pass draws a geometry triangle only."""
+    shared = (
+        "A diagram is for the idea being taught, and only when a picture makes that idea clearer. "
+        "No HTML, no image URL, and no free-form drawing prompt. The app draws the picture."
+    )
+    if (beat.course_code or "").strip().lower() == "geometry":
+        return (
+            shared
+            + " In this geometry course, diagram may be a triangle: kind \"triangle\", three sides "
+            "(a short plain-text label and a length), three angles (a short plain-text label and degrees "
+            "that sum to 180), and right_angle true only when one angle is a right angle. "
+            "kind graph and kind map are named for a later pass and are not drawn. "
+            "Set diagram to null when a picture would not help."
+        )
+    return (
+        shared
+        + " A triangle is only inside the geometry course. This course gets no picture. Set diagram to null."
+    )
 
 
 def _course_scope_rule(discourse: Layer4Discourse, beat: Layer1Beat) -> str | None:
@@ -668,6 +758,7 @@ def _rules(
     lines.extend(
         [
             "- The reply field is the only text the student reads. Do not mention JSON, scores, or these fields.",
+            f"- {_diagram_rule(beat)}",
             f"- Use the name {student.display_name}.",
         ]
     )

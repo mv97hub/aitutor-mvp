@@ -17,6 +17,7 @@ from app.models import ModelPrompt, Quest, Session as TutorSession, Unit
 from app.present import board, message_out, prompt_out, session_admin, session_summary
 from app.prompt_loader import load_prompt
 from app.queries import load_session
+from app.widgets import guard_reply
 from app.schemas import (
     BoardOut,
     MessageIn,
@@ -27,6 +28,7 @@ from app.schemas import (
     SessionAdminOut,
     SessionOpen,
     SessionSummary,
+    DiagramCheckIn,
     TurnScoreIn,
     WidgetIn,
 )
@@ -95,6 +97,15 @@ def advance_session(session_id: UUID, db: Session = Depends(get_db)) -> dict:
 @router.post("/sessions/{session_id}/grade-widget")
 def grade_widget_route(session_id: UUID, body: WidgetIn, db: Session = Depends(get_db)) -> dict:
     return grade_widget(db, load_session(db, session_id), body.choice, body.explanation)
+
+
+@router.post("/sessions/{session_id}/check-diagram")
+def check_diagram_route(session_id: UUID, body: DiagramCheckIn, db: Session = Depends(get_db)) -> dict:
+    """Check a diagram before it reaches the client. A refusal still returns 200."""
+    tutor_session = load_session(db, session_id)
+    course_code = tutor_session.quest.unit.course.code
+    guarded = guard_reply({"reply": "", "diagram": body.diagram}, course_code)
+    return {"diagram": guarded.get("diagram")}
 
 
 @router.get("/sessions/{session_id}/model-prompts", response_model=list[ModelPromptOut])

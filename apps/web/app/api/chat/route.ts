@@ -15,7 +15,7 @@ import {
 import { api } from "@/lib/api";
 import { KICKOFF } from "@/lib/kickoff";
 import { openaiModelName } from "@/lib/model";
-import type { PromptBundle } from "@/lib/types";
+import type { PromptBundle, TriangleDiagram } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -29,12 +29,28 @@ type TurnScore = {
   misconception: string | null;
   hint_tier: "nudge" | "analogy" | "scaffold";
   advance: boolean;
+  diagram?: unknown;
 };
 
 type WidgetBody = {
   choice?: string | string[];
   explanation?: string;
 };
+
+async function checkedDiagram(sessionId: string, diagram: unknown): Promise<TriangleDiagram | null> {
+  if (diagram == null) return null;
+  try {
+    const checked = await api<{ diagram: TriangleDiagram | null }>(`/sessions/${sessionId}/check-diagram`, {
+      method: "POST",
+      body: JSON.stringify({ diagram }),
+    });
+    if (!checked.diagram || checked.diagram.kind !== "triangle") return null;
+    return checked.diagram;
+  } catch (error) {
+    console.error("Could not check the diagram", error);
+    return null;
+  }
+}
 
 function textOf(message: UIMessage): string {
   return message.parts
@@ -232,8 +248,18 @@ export async function POST(req: Request) {
         if (delta) writer.write({ type: "text-delta", id, delta });
         sent = reply;
       }
+      let finalScore: TurnScore;
+      try {
+        finalScore = (await result.output) as TurnScore;
+      } catch (error) {
+        writer.write({ type: "text-end", id });
+        throw error;
+      }
+      const diagram = await checkedDiagram(sessionId, finalScore.diagram);
+      if (diagram) {
+        writer.write({ type: "data-diagram", id: "lesson-diagram", data: diagram });
+      }
       writer.write({ type: "text-end", id });
-      const finalScore = (await result.output) as TurnScore;
       if (!kickoff) {
         try {
           await api(`/sessions/${sessionId}/turn-score`, {
