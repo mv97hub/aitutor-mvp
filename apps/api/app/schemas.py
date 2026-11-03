@@ -2,7 +2,9 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, STRUGGLE_WINDOWS, VOICES, ids
 
 
 AgeBand = Literal["6-8", "9-11", "12-14", "15-17"]
@@ -59,6 +61,39 @@ class StudentPatch(BaseModel):
     tutor_struggle_window: str | None = None
     tutor_anti_spoiler: bool | None = None
     tutor_pacing: str | None = None
+
+
+def _closed(value: str, options: tuple[tuple[str, str], ...], field: str) -> None:
+    allowed = ids(options)
+    if value not in allowed:
+        raise ValueError(f"{field} must be one of: {', '.join(sorted(allowed))}")
+
+
+class TutorProfileIn(BaseModel):
+    instructive: int = Field(ge=1, le=5)
+    persona: str
+    lexicon: str
+    voice_override: bool = False
+    metaphors: str
+    sidekick: str
+    struggle_window: str
+    anti_spoiler: bool = True
+    one_question: bool = True
+    use_interests: bool = True
+    growth_praise: bool = True
+
+    @model_validator(mode="after")
+    def closed_choices(self) -> "TutorProfileIn":
+        _closed(self.persona, PERSONAS, "persona")
+        _closed(self.lexicon, VOICES, "lexicon")
+        _closed(self.metaphors, METAPHORS, "metaphors")
+        _closed(self.sidekick, SIDEKICKS, "sidekick")
+        _closed(self.struggle_window, STRUGGLE_WINDOWS, "struggle_window")
+        return self
+
+
+class TutorProfileOut(TutorProfileIn):
+    updated_at: datetime
 
 
 class ProfileDefaults(BaseModel):

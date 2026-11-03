@@ -3,6 +3,7 @@ import Link from "next/link";
 export const ADMIN_SECTIONS = [
   { id: "lessons", href: "/admin", label: "Lesson Desk", menu: true },
   { id: "chats", href: "/viewchats", label: "View Chats", menu: true },
+  { id: "customizations", href: "/admin/agent-customizations", label: "Agent Customizations", menu: true },
   // Routes stay at these hrefs. Hidden until the pages are filled in.
   { id: "agents", href: "/admin/agent-profiles", label: "Agent Profiles", menu: false },
   { id: "tutor", href: "/admin/tutor-configuration", label: "Tutor Configuration", menu: false },
