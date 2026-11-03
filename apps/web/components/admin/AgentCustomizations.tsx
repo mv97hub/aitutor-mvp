@@ -167,6 +167,7 @@ export function AgentCustomizations() {
           anti_spoiler: draft.anti_spoiler,
           one_question: draft.one_question,
           use_interests: draft.use_interests,
+          stay_on_course: draft.stay_on_course,
           growth_praise: draft.growth_praise,
         }),
       });
@@ -304,6 +305,22 @@ export function AgentCustomizations() {
                 Use student interests
                 <span className="help">
                   On: hobbies appear inside examples. Off: examples stay on the subject.
+                </span>
+              </span>
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={draft.stay_on_course}
+                onChange={(event) => {
+                  setSaved(false);
+                  setDraft({ ...draft, stay_on_course: event.target.checked });
+                }}
+              />
+              <span>
+                Stay on the course
+                <span className="help">
+                  On: go deep on this course, unit, and quest, including closely related ideas. A different subject gets a short acknowledgment, then back to the course. Off: the tutor can follow the student's tangent.
                 </span>
               </span>
             </label>

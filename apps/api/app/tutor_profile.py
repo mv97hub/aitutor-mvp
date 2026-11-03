@@ -29,6 +29,7 @@ def default_row() -> TutorProfile:
         anti_spoiler=True,
         one_question=True,
         use_interests=True,
+        stay_on_course=True,
         growth_praise=True,
         updated_at=_now(),
     )
@@ -45,6 +46,7 @@ def _fill(row: TutorProfile, source: TutorProfile) -> TutorProfile:
     row.anti_spoiler = source.anti_spoiler
     row.one_question = source.one_question
     row.use_interests = source.use_interests
+    row.stay_on_course = source.stay_on_course
     row.growth_praise = source.growth_praise
     row.updated_at = _now()
     return row
@@ -100,6 +102,7 @@ def save_profile(
     anti_spoiler: bool,
     one_question: bool,
     use_interests: bool,
+    stay_on_course: bool,
     growth_praise: bool,
 ) -> TutorProfile:
     row = ensure_default_profile(db)
@@ -119,6 +122,7 @@ def save_profile(
     row.anti_spoiler = anti_spoiler
     row.one_question = one_question
     row.use_interests = use_interests
+    row.stay_on_course = stay_on_course
     row.growth_praise = growth_praise
     row.updated_at = _now()
     db.flush()

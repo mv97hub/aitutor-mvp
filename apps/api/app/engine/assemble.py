@@ -91,6 +91,27 @@ def instructive_level(value: int | None) -> int:
     return level
 
 
+def _course_scope_rule(discourse: Layer4Discourse, beat: Layer1Beat) -> str | None:
+    """Name the current course when the layer 4 switch is on.
+
+    Depth inside that course, unit, and quest stays allowed. A different
+    subject gets a short acknowledgment, then the turn returns. None leaves
+    today's prompt unchanged, so a tangent can be followed.
+    """
+    if not discourse.stay_on_course:
+        return None
+    course = beat.course_title.strip() or "this course"
+    unit = beat.unit_title.strip() or "this unit"
+    quest = beat.quest_title.strip() or "this quest"
+    return (
+        f"Course scope: stay on {course}. "
+        f"Go as deep as the student needs on {course}, unit {unit}, and quest {quest}, "
+        "including closely related ideas that serve this learning goal. "
+        "Do not follow a turn onto a different subject. "
+        f"A short acknowledgment, then back to {course}."
+    )
+
+
 def _classic(discourse: Layer4Discourse) -> bool:
     """Level 3 with both default switches is today's teach-then-ask prompt."""
     return (
@@ -532,6 +553,9 @@ def _layer4(
         lines.append(
             "The anti-spoiler ban is off. You may confirm a correct idea once the student has attempted it. When this window ends, explain why the answer fits if they are still stuck."
         )
+    scope = _course_scope_rule(discourse, beat)
+    if scope:
+        lines.append(scope)
     return lines
 
 
@@ -582,6 +606,9 @@ def _rules(
         "- Stay on the active move. If they wander off, answer in one sentence and come back.",
         "- Do not dump the whole quest or teach a later move.",
     ]
+    scope = _course_scope_rule(discourse, beat)
+    if scope:
+        lines.append(f"- {scope}")
     if classic:
         lines.append("- Teach, then ask. One question per turn, and it comes last. Do not ask a second question.")
     else:

@@ -438,6 +438,41 @@ def test_closed_tutor_choices_and_sidekick_off() -> None:
     assert "Do not invent a partner" in text
 
 
+def test_course_scope_rule_names_the_course_only_when_the_switch_is_on() -> None:
+    on = assemble(*_layers()).system_prompt
+    assert "Course scope: stay on Ancient Rome." in on
+    assert (
+        "Go as deep as the student needs on Ancient Rome, unit The Republic, "
+        "and quest The Two-Captain Rule, including closely related ideas that serve this learning goal."
+    ) in on
+    assert "Do not follow a turn onto a different subject." in on
+    assert "A short acknowledgment, then back to Ancient Rome." in on
+    assert "stay on topic" not in on.lower()
+    assert "Teach, then ask." in on
+
+    off = assemble(*_with_discourse(stay_on_course=False)).system_prompt
+    assert "Course scope:" not in off
+    assert "Do not follow a turn onto a different subject." not in off
+    assert "A short acknowledgment, then back to" not in off
+    assert "Stay on the active move." in off
+    assert "Teach, then ask." in off
+
+    layers = list(_layers())
+    layers[1] = Layer2Student(
+        display_name="Storm",
+        age_band="9-11",
+        reading_level="middle-grade",
+        modality="story",
+        interests=(),
+        attempt_count=2,
+        zpd="support",
+    )
+    revealed = assemble(*layers).system_prompt
+    assert "The struggle window is over" in revealed
+    assert "why the worked answer fits" in revealed.lower()
+    assert "Course scope: stay on Ancient Rome." in revealed
+
+
 def test_age_band_defaults() -> None:
     assert age_band_for(10) == "9-11"
     assert age_band_for(13) == "12-14"
