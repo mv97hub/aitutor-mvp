@@ -811,3 +811,171 @@ def test_mark_ready_records_completion_and_reopens_when_a_gap_returns() -> None:
         assert client.get(f"/studio/courses/{course_id}").json()["ready"] is False
     finally:
         _wipe("ZZGEO")
+
+
+def test_parent_on_an_update_is_one_plain_sentence_and_writes_nothing() -> None:
+    course = _make()
+    course_id = course["id"]
+    claim = "The learning goals were saved and the structure was accepted."
+    try:
+        structure = _proposal(
+            course_id,
+            "Add the first quest without a goal.",
+            [
+                _full(
+                    "add",
+                    "unit",
+                    "ZZGEO-U1",
+                    parent="ZZGEO",
+                    title="Exile",
+                    learning_goal="The story begins.",
+                ),
+                _full(
+                    "add",
+                    "quest",
+                    "ZZGEO-U1-Q1",
+                    parent="ZZGEO-U1",
+                    title="The bow",
+                    learning_goal="",
+                    close=None,
+                ),
+            ],
+        )
+        assert structure.status_code == 200, structure.text
+        planted = client.post(f"/studio/courses/{course_id}/messages/{structure.json()['id']}/accept")
+        assert planted.status_code == 200, planted.text
+        assert planted.json()["course"]["units"][0]["quests"][0]["close"] is None
+
+        rejected = _proposal(
+            course_id,
+            claim,
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZGEO-U1-Q1",
+                    parent="ZZGEO-U9",
+                    learning_goal="Name the bow.",
+                )
+            ],
+        )
+        assert rejected.status_code == 422
+        reason = rejected.json()["detail"]
+        assert reason == "To change an item, name its code, such as ZZGEO-U1-Q1."
+        assert "parent:" not in reason
+        reply = rejection_reply(claim, reason)
+        assert reply == reason
+        assert "saved" not in reply.lower()
+        assert "accepted" not in reply.lower()
+        assert client.get(f"/studio/courses/{course_id}/messages").json()[-1]["content"] != claim
+        fresh = client.get(f"/studio/courses/{course_id}").json()
+        assert fresh["units"][0]["quests"][0]["learning_goal"] == ""
+        assert fresh["units"][0]["quests"][0]["close"] is None
+
+        echoed = _proposal(
+            course_id,
+            "Offer a learning goal for ZZGEO-U1-Q1.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZGEO-U1-Q1",
+                    parent="ZZGEO-U1",
+                    learning_goal="Name the bow.",
+                    close=None,
+                )
+            ],
+        )
+        assert echoed.status_code == 200, echoed.text
+        accepted = client.post(f"/studio/courses/{course_id}/messages/{echoed.json()['id']}/accept")
+        assert accepted.status_code == 200, accepted.text
+        quest = accepted.json()["course"]["units"][0]["quests"][0]
+        assert quest["learning_goal"] == "Name the bow."
+        assert quest["close"] is None
+        stored = client.get(f"/studio/courses/{course_id}").json()["units"][0]["quests"][0]
+        assert stored["learning_goal"] == "Name the bow."
+        assert stored["close"] is None
+    finally:
+        _wipe("ZZGEO")
+
+
+def test_goals_phase_limits_the_prompt_to_open_goal_codes() -> None:
+    course = _make()
+    course_id = course["id"]
+    try:
+        structure = _proposal(
+            course_id,
+            "Two quests, one goal already written.",
+            [
+                _full(
+                    "add",
+                    "unit",
+                    "ZZGEO-U1",
+                    parent="ZZGEO",
+                    title="Exile",
+                    learning_goal="The story begins.",
+                ),
+                _full(
+                    "add",
+                    "quest",
+                    "ZZGEO-U1-Q1",
+                    parent="ZZGEO-U1",
+                    title="The bow",
+                    learning_goal="",
+                    close=None,
+                ),
+                _full(
+                    "add",
+                    "quest",
+                    "ZZGEO-U1-Q2",
+                    parent="ZZGEO-U1",
+                    title="The city",
+                    learning_goal="Name the city the story returns to.",
+                    close=None,
+                ),
+            ],
+        )
+        assert structure.status_code == 200, structure.text
+        accepted = client.post(f"/studio/courses/{course_id}/messages/{structure.json()['id']}/accept")
+        assert accepted.status_code == 200, accepted.text
+        tree = accepted.json()["course"]
+        assert tree["phase"] == {
+            "name": "goals",
+            "label": "Goals",
+            "open_codes": ["ZZGEO-U1-Q1"],
+        }
+
+        prompt = client.get(f"/studio/courses/{course_id}/prompt").json()["system_prompt"]
+        open_line = next(line for line in prompt.splitlines() if line.startswith("Codes still open in this phase:"))
+        assert open_line == "Codes still open in this phase: ZZGEO-U1-Q1."
+        assert "ZZGEO-U1-Q2" not in open_line
+        assert "Current phase: Goals." in prompt
+        assert "Patch only those codes." in prompt
+        assert "Offer a learning goal for each open quest, addressed by that quest's code." in prompt
+        assert "sets parent to null" in prompt
+        assert "Do not fill close style in this patch." in prompt
+
+        goals = _proposal(
+            course_id,
+            "Here is the goal for the open quest.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZGEO-U1-Q1",
+                    learning_goal="Name the bow.",
+                    close=None,
+                )
+            ],
+        )
+        assert goals.status_code == 200, goals.text
+        applied = client.post(f"/studio/courses/{course_id}/messages/{goals.json()['id']}/accept")
+        assert applied.status_code == 200, applied.text
+        quests = {quest["code"]: quest for quest in applied.json()["course"]["units"][0]["quests"]}
+        assert quests["ZZGEO-U1-Q1"]["learning_goal"] == "Name the bow."
+        assert quests["ZZGEO-U1-Q1"]["close"] is None
+        assert quests["ZZGEO-U1-Q2"]["close"] is None
+        assert applied.json()["course"]["phase"]["name"] == "close"
+        assert applied.json()["course"]["phase"]["open_codes"] == ["ZZGEO-U1-Q1", "ZZGEO-U1-Q2"]
+    finally:
+        _wipe("ZZGEO")
