@@ -2210,9 +2210,17 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
 }
 
 .studio-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, max-content));
   margin: 0 0 10px;
   max-width: 100%;
   min-width: 0;
+}
+
+.studio-tools .button,
+.studio-tools .ghost {
+  white-space: normal;
+  text-align: center;
 }
 
 .studio-ops { list-style: none; margin: 0 0 8px; padding: 0; }
