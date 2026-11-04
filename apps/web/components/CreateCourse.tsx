@@ -5,7 +5,6 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 
 import { BrandMark } from "@/components/BrandMark";
 import { api } from "@/lib/api";
-import { bulkPrompt } from "@/lib/studio-build";
 import {
   AGE_BANDS,
   DEPTHS,
@@ -19,13 +18,24 @@ import {
   type StudioSummary,
 } from "@/lib/studio";
 
-type EditDraft = {
-  kind: "quest" | "move";
+type QuestPopup = { kind: "quest"; mode: "add" | "edit"; code: string; title: string };
+type GoalPopup = {
+  kind: "goal";
+  mode: "add" | "edit";
   code: string;
-  title: string;
+  position: number;
   learningGoal: string;
   success: string;
 };
+type CloseMode = "essay" | "single" | "multi" | "none";
+type ClosePopup = {
+  kind: "close";
+  code: string;
+  mode: CloseMode;
+  question: string;
+  options: { text: string; correct: boolean }[];
+};
+type Popup = QuestPopup | GoalPopup | ClosePopup;
 
 type Prefs = {
   code: string;
@@ -120,6 +130,77 @@ function closeFrom(prefs: Prefs): StudioClose {
   };
 }
 
+function closePopupFrom(code: string, close: StudioClose | null): ClosePopup {
+  const options = close?.items.length
+    ? close.items.map((item) => ({ text: item.text, correct: Boolean(item.correct) }))
+    : [
+        { text: "", correct: true },
+        { text: "", correct: false },
+      ];
+  let mode: CloseMode = "essay";
+  if (close?.selection === "multi") mode = "multi";
+  else if (close?.answer_style === "multiple_choice") mode = "single";
+  else if (close && close.questions.length === 0) mode = "none";
+  return {
+    kind: "close",
+    code,
+    mode,
+    question: close?.questions[0]?.text ?? "",
+    options,
+  };
+}
+
+function popupBody(popup: Popup): Record<string, unknown> {
+  if (popup.kind === "quest") {
+    return { action: popup.mode === "add" ? "add_quest" : "update_quest", code: popup.code, title: popup.title };
+  }
+  if (popup.kind === "goal") {
+    return {
+      action: popup.mode === "add" ? "add_goal" : "update_goal",
+      code: popup.code,
+      position: popup.position,
+      learning_goal: popup.learningGoal,
+      success_criterion: popup.success,
+    };
+  }
+  if (popup.mode === "none") {
+    return {
+      action: "set_close",
+      code: popup.code,
+      close: { close_style: "one", answer_style: "essay", choice_mode: null, items: [], questions: [], intent: "" },
+    };
+  }
+  if (popup.mode === "essay") {
+    return {
+      action: "set_close",
+      code: popup.code,
+      close: {
+        close_style: "one",
+        answer_style: "essay",
+        choice_mode: null,
+        items: [],
+        questions: popup.question.trim() ? [{ text: popup.question.trim() }] : [],
+        intent: "",
+      },
+    };
+  }
+  return {
+    action: "set_close",
+    code: popup.code,
+    close: {
+      close_style: "one",
+      answer_style: "multiple_choice",
+      choice_mode: "predefined",
+      selection: popup.mode === "multi" ? "multi" : "single",
+      items: popup.options
+        .filter((option) => option.text.trim())
+        .map((option) => ({ text: option.text.trim(), correct: option.correct })),
+      questions: popup.question.trim() ? [{ text: popup.question.trim() }] : [{ text: "Choose the best answer." }],
+      intent: "",
+    },
+  };
+}
+
 function readError(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) return "The studio could not answer.";
@@ -130,20 +211,6 @@ function readError(text: string): string {
     return trimmed;
   }
   return trimmed;
-}
-
-function listedCodes(course: StudioCourse): string[] {
-  if (course.view.name === course.phase.name) return course.phase.open_codes;
-  return course.view.codes;
-}
-
-function waveLabel(course: StudioCourse, code: string): string | null {
-  const listed = listedCodes(course);
-  if (!listed.includes(code)) return null;
-  if (course.view.name === "goals" && course.gaps.includes(`${code}: no learning goal`)) return "Needs a learning goal";
-  if (course.view.name === "goals" && course.gaps.includes(`${code}: no success criterion`)) return "Needs a success criterion";
-  if (course.view.name === "close" && course.gaps.includes(`${code}: no close style`)) return "Needs a close style";
-  return null;
 }
 
 function Tier({
@@ -197,53 +264,6 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function EditRow({
-  draft,
-  busy,
-  onChange,
-  onSubmit,
-  onCancel,
-}: {
-  draft: EditDraft;
-  busy: boolean;
-  onChange: (draft: EditDraft) => void;
-  onSubmit: (event: FormEvent) => void;
-  onCancel: () => void;
-}) {
-  return (
-    <form className="studio-edit-form" onSubmit={onSubmit}>
-      <label>
-        Title
-        <input value={draft.title} maxLength={240} onChange={(event) => onChange({ ...draft, title: event.target.value })} />
-      </label>
-      <label>
-        Learning goal
-        <textarea
-          value={draft.learningGoal}
-          rows={2}
-          onChange={(event) => onChange({ ...draft, learningGoal: event.target.value })}
-        />
-      </label>
-      <label>
-        Success
-        <textarea
-          value={draft.success}
-          rows={2}
-          onChange={(event) => onChange({ ...draft, success: event.target.value })}
-        />
-      </label>
-      <div className="rail-actions">
-        <button className="button" type="submit" disabled={busy || draft.title.trim().length === 0}>
-          Save
-        </button>
-        <button className="ghost" type="button" disabled={busy} onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    </form>
-  );
-}
-
 export function CreateCourse() {
   const [courses, setCourses] = useState<StudioSummary[]>([]);
   const [course, setCourse] = useState<StudioCourse | null>(null);
@@ -261,7 +281,7 @@ export function CreateCourse() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [coursesOpen, setCoursesOpen] = useState(false);
   const [modelDraft, setModelDraft] = useState("gpt-4o-mini");
-  const [editing, setEditing] = useState<EditDraft | null>(null);
+  const [popup, setPopup] = useState<Popup | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -465,41 +485,10 @@ export function CreateCourse() {
       const history = await api<StudioMessage[]>(`/studio/courses/${course.id}/messages`);
       setCourse(next);
       setMessages(history);
-      setEditing(null);
+      setPopup(null);
       setSavedNote("Undone");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not undo that write.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function beginEdit(draft: EditDraft) {
-    setEditing(draft);
-    setOpen((prev) => new Set(prev).add(draft.code));
-  }
-
-  async function saveEdit(event: FormEvent) {
-    event.preventDefault();
-    if (!course || !editing) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const next = await api<StudioCourse>(`/studio/courses/${course.id}/edit`, {
-        method: "POST",
-        body: JSON.stringify({
-          kind: editing.kind,
-          code: editing.code,
-          title: editing.title,
-          learning_goal: editing.learningGoal,
-          success_criterion: editing.success,
-        }),
-      });
-      setCourse(next);
-      setEditing(null);
-      setSavedNote("Course updated");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save that edit.");
     } finally {
       setBusy(false);
     }
@@ -510,28 +499,96 @@ export function CreateCourse() {
     setBusy(true);
     setError(null);
     try {
-      const next = await api<StudioCourse>(`/studio/courses/${course.id}/phase`, {
+      const next = await api<StudioCourse>(`/studio/courses/${course.id}/stage`, {
         method: "POST",
         body: JSON.stringify({ name }),
       });
       setCourse(next);
+      setPopup(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not open that phase.");
+      setError(err instanceof Error ? err.message : "Could not open that stage.");
     } finally {
       setBusy(false);
     }
   }
 
-  async function markReady() {
-    if (!course || course.ready || course.phase.name !== "ready") return;
+  async function advanceStage() {
+    if (!course || !course.can_advance) return;
     setBusy(true);
     setError(null);
     try {
-      const next = await api<StudioCourse>(`/studio/courses/${course.id}/ready`, { method: "POST" });
+      const next = await api<StudioCourse>(`/studio/courses/${course.id}/advance-stage`, { method: "POST" });
+      const history = await api<StudioMessage[]>(`/studio/courses/${course.id}/messages`);
       setCourse(next);
-      setSavedNote("Marked ready");
+      setMessages(history);
+      setPopup(null);
+      setSavedNote(next.ready ? "Submitted" : "Stage complete");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not mark this course ready.");
+      setError(err instanceof Error ? err.message : "Could not mark this stage complete.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pushDraft() {
+    if (!course) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api<StudioCourse>(`/studio/courses/${course.id}/push-draft`, { method: "POST" });
+      const history = await api<StudioMessage[]>(`/studio/courses/${course.id}/messages`);
+      setCourse(next);
+      setMessages(history);
+      openQuests(next);
+      setSavedNote("Draft is in the tree");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not push that draft.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function savePopup(event: FormEvent) {
+    event.preventDefault();
+    if (!course || !popup) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body = popupBody(popup);
+      const next = await api<StudioCourse>(`/studio/courses/${course.id}/tree`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      setCourse(next);
+      setPopup(null);
+      openQuests(next);
+      setSavedNote("Course updated");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save that edit.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deletePopup() {
+    if (!course || !popup || popup.kind === "close") return;
+    setBusy(true);
+    setError(null);
+    try {
+      const action = popup.kind === "quest" ? "delete_quest" : "delete_goal";
+      const next = await api<StudioCourse>(`/studio/courses/${course.id}/tree`, {
+        method: "POST",
+        body: JSON.stringify({
+          action,
+          code: popup.code,
+          position: popup.kind === "goal" ? popup.position : undefined,
+        }),
+      });
+      setCourse(next);
+      setPopup(null);
+      setSavedNote("Course updated");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete that item.");
     } finally {
       setBusy(false);
     }
@@ -640,7 +697,7 @@ export function CreateCourse() {
                     <span className="studio-code">{course.code}</span>
                     {course.title}
                     <span className="studio-draft">{course.ready ? "Ready" : "Draft"}</span>
-                    <span className="studio-phase-name">{course.view.label}</span>
+                    <span className="studio-phase-name">{course.stage_view.label}</span>
                   </h1>
                   <p className="studio-pref-summary">
                     {detailLabel} · {course.quiz_minutes} minutes before the quiz
@@ -670,10 +727,10 @@ export function CreateCourse() {
                 </div>
               </div>
             </div>
-            <div className="studio-strip" aria-label="Course phases">
-              {course.strip.map((item) => {
+            <div className="studio-strip" aria-label="Course stages">
+              {course.stage_strip.map((item) => {
                 const order = ["quests", "goals", "close", "ready"];
-                const later = order.indexOf(item.name) > order.indexOf(course.phase.name);
+                const later = order.indexOf(item.name) > order.indexOf(course.stage.name);
                 return (
                 <button
                   key={item.name}
@@ -691,89 +748,76 @@ export function CreateCourse() {
             </div>
             <div className="studio-columns">
             <div className="studio-tree" aria-label="Course so far">
-              <p className="studio-phase-codes" aria-label="Phase codes">
-                {course.view.name === course.phase.name
-                  ? course.phase.open_codes.length > 0
-                    ? `Still open: ${course.phase.open_codes.join(", ")}`
-                    : "Mark ready can be turned on."
-                  : `Codes: ${course.view.codes.join(", ") || "none"}`}
-              </p>
-              {(course.view.name === "goals" || course.view.name === "close") && course.view.codes.length > 0 ? (
-                <div className="studio-tools">
-                  {course.view.name === "goals" ? (
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={busy}
-                      onClick={() => void ask(bulkPrompt("goals", course.view.codes))}
-                    >
-                      Write learning goals
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={busy}
-                      onClick={() => void ask(bulkPrompt("close", course.view.codes))}
-                    >
-                      Write closes
-                    </button>
-                  )}
-                </div>
-              ) : null}
               <div className="studio-ready">
                 <button
                   type="button"
                   className="button"
-                  disabled={busy || course.ready || course.phase.name !== "ready"}
-                  onClick={() => void markReady()}
+                  disabled={busy || !course.can_advance}
+                  onClick={() => void advanceStage()}
                 >
-                  {course.ready ? "Marked ready" : "Mark ready"}
+                  {course.ready ? "Submitted" : course.stage.name === "ready" ? "Final Submit" : "Mark Complete"}
                 </button>
-                {course.gaps.length > 0 ? (
-                  <details className="studio-all-gaps">
-                    <summary>All gaps</summary>
-                    <ul className="studio-gaps" aria-label="Open gaps">
-                      {course.gaps.map((gap) => (
-                        <li key={gap}>{gap}</li>
-                      ))}
-                    </ul>
-                  </details>
+                {course.stage_view.name === "quests" ? (
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy}
+                    onClick={() => setPopup({ kind: "quest", mode: "add", code: "", title: "" })}
+                  >
+                    Add quest
+                  </button>
                 ) : null}
               </div>
               {course.quests.length === 0 ? (
-                <p className="ds-quiet">No quests yet. The tree stays as it is until you confirm a suggestion in the chat.</p>
+                <p className="ds-quiet">No quests yet.</p>
               ) : (
                 <ul className="studio-tree-list">
-                  {course.quests.map((quest) => (
+                  {course.quests.map((quest) => {
+                    const goals = quest.goals.length > 0 ? quest.goals : [];
+                    return (
                     <Tier
                       key={quest.id}
                       code={quest.code}
                       title={quest.title}
-                      marks={[waveLabel(course, quest.code)].filter((mark): mark is string => mark != null)}
-                      wave={listedCodes(course).includes(quest.code)}
+                      marks={[]}
+                      wave={false}
                       open={open.has(quest.code)}
                       onToggle={() => toggle(quest.code)}
-                      onEdit={() =>
-                        beginEdit({
-                          kind: "quest",
-                          code: quest.code,
-                          title: quest.title,
-                          learningGoal: quest.learning_goal,
-                          success: quest.success_criterion,
-                        })
-                      }
+                      onEdit={course.stage_view.name === "quests" ? () => setPopup({ kind: "quest", mode: "edit", code: quest.code, title: quest.title }) : undefined}
                     >
-                      {editing?.code === quest.code ? (
-                        <EditRow draft={editing} busy={busy} onChange={setEditing} onSubmit={(event) => void saveEdit(event)} onCancel={() => setEditing(null)} />
-                      ) : null}
-                      {(quest.goals.length > 0 ? quest.goals : [{ position: 1, learning_goal: quest.learning_goal, success_criterion: quest.success_criterion }]).map((goal) => (
-                        <div key={goal.position}>
-                          <Fact label={quest.goals.length > 1 ? `Goal ${goal.position}` : "Goal"} value={goal.learning_goal} />
-                          <Fact label="Success" value={goal.success_criterion} />
+                      {goals.length === 0 ? <p className="ds-quiet">No goals yet.</p> : null}
+                      {goals.map((goal) => (
+                        <div key={goal.position} className="studio-goal-row">
+                          <Fact label={`Goal ${goal.position}`} value={goal.learning_goal || "No learning goal yet"} />
+                          <Fact label="Success criterion" value={goal.success_criterion || "No success criterion yet"} />
+                          {course.stage_view.name === "goals" ? (
+                            <button
+                              type="button"
+                              className="ghost studio-inline"
+                              onClick={() => setPopup({
+                                kind: "goal",
+                                mode: "edit",
+                                code: quest.code,
+                                position: goal.position,
+                                learningGoal: goal.learning_goal,
+                                success: goal.success_criterion,
+                              })}
+                            >
+                              Edit
+                            </button>
+                          ) : null}
                         </div>
                       ))}
-                      {quest.close ? <p className="studio-fact"><span>Close</span>{closeSummary(quest.close)}</p> : null}
+                      {course.stage_view.name === "goals" ? (
+                        <button
+                          type="button"
+                          className="ghost studio-inline"
+                          onClick={() => setPopup({ kind: "goal", mode: "add", code: quest.code, position: goals.length + 1, learningGoal: "", success: "" })}
+                        >
+                          Add goal
+                        </button>
+                      ) : null}
+                      <p className="studio-fact"><span>Close</span>{quest.close ? closeSummary(quest.close) : "No close yet"}</p>
                       {quest.close && quest.close.questions.length > 0 ? (
                         <ul className="studio-choices">
                           {quest.close.questions.map((item) => (
@@ -781,55 +825,46 @@ export function CreateCourse() {
                           ))}
                         </ul>
                       ) : null}
-                      {quest.close?.choice_mode === "dynamic" && quest.close.intent ? (
-                        <Fact label="Intent" value={quest.close.intent} />
-                      ) : null}
-                      {quest.close?.choice_mode === "predefined" ? (
+                      {quest.close?.items.length ? (
                         <ul className="studio-choices">
                           {quest.close.items.map((item) => (
-                            <li key={item.text}>{item.text}</li>
+                            <li key={item.text}>{item.correct ? `${item.text} (correct)` : item.text}</li>
                           ))}
                         </ul>
                       ) : null}
-                      <ul>
-                        {quest.moves.map((move) => (
-                          <Tier
-                            key={move.id}
-                            code={move.code}
-                            title={move.title}
-                            marks={[waveLabel(course, move.code)].filter((mark): mark is string => mark != null)}
-                            wave={listedCodes(course).includes(move.code)}
-                            open={open.has(move.code)}
-                            onToggle={() => toggle(move.code)}
-                            onEdit={() =>
-                              beginEdit({
-                                kind: "move",
-                                code: move.code,
-                                title: move.title,
-                                learningGoal: move.learning_goal,
-                                success: move.success_criterion,
-                              })
-                            }
-                          >
-                            {editing?.code === move.code ? (
-                              <EditRow draft={editing} busy={busy} onChange={setEditing} onSubmit={(event) => void saveEdit(event)} onCancel={() => setEditing(null)} />
-                            ) : null}
-                            <Fact label="Goal" value={move.learning_goal} />
-                            <Fact label="Success" value={move.success_criterion} />
-                          </Tier>
-                        ))}
-                      </ul>
+                      {course.stage_view.name === "close" ? (
+                        <button
+                          type="button"
+                          className="ghost studio-inline"
+                          onClick={() => setPopup(closePopupFrom(quest.code, quest.close))}
+                        >
+                          Edit
+                        </button>
+                      ) : null}
                     </Tier>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
+              <section className="studio-gap-panel" aria-label="Gaps and issues">
+                <h2>Gaps & Issues</h2>
+                {course.stage_gaps.length === 0 ? (
+                  <p className="ds-quiet">Nothing missing for this stage.</p>
+                ) : (
+                  <ul className="studio-gaps">
+                    {course.stage_gaps.map((gap) => (
+                      <li key={gap}>{gap}</li>
+                    ))}
+                  </ul>
+                )}
+              </section>
             </div>
             <div className="studio-chat">
               <div className="ds-scroll">
                 <div className="ds-column">
                   {messages.length === 0 ? (
                     <p className="ds-quiet">
-                      The quests appear here after you confirm them in the chat.
+                      The chat drafts this stage. The tree changes when you click Push draft to Tree.
                     </p>
                   ) : null}
                   {messages.map((message) => (
@@ -846,6 +881,11 @@ export function CreateCourse() {
                 <div className="banner" role="alert">
                   <p>{error}</p>
                 </div>
+              ) : null}
+              {course.stage_view.name !== "ready" ? (
+                <button type="button" className="button studio-push" disabled={busy} onClick={() => void pushDraft()}>
+                  Push draft to Tree
+                </button>
               ) : null}
               <form className="ds-composer-seat" onSubmit={(event) => void send(event)}>
                 <div className="ds-card">
@@ -882,6 +922,116 @@ export function CreateCourse() {
           </div>
         ) : null}
       </section>
+      {popup ? (
+        <div className="prompt-backdrop" role="presentation" onMouseDown={() => setPopup(null)}>
+          <div
+            className="prompt-dialog settings-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="studio-edit-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <h2 id="studio-edit-title">
+                  {popup.kind === "quest" ? (popup.mode === "add" ? "Add quest" : "Edit quest") : null}
+                  {popup.kind === "goal" ? (popup.mode === "add" ? "Add goal" : "Edit goal") : null}
+                  {popup.kind === "close" ? "Edit close" : null}
+                </h2>
+              </div>
+              <button type="button" className="ghost" onClick={() => setPopup(null)}>Close</button>
+            </header>
+            <form className="prompt-body" onSubmit={(event) => void savePopup(event)}>
+              {popup.kind === "quest" ? (
+                <label>
+                  Title
+                  <input value={popup.title} maxLength={240} required onChange={(event) => setPopup({ ...popup, title: event.target.value })} />
+                </label>
+              ) : null}
+              {popup.kind === "goal" ? (
+                <>
+                  <label>
+                    Learning goal
+                    <textarea rows={3} value={popup.learningGoal} onChange={(event) => setPopup({ ...popup, learningGoal: event.target.value })} />
+                  </label>
+                  <label>
+                    Success criterion
+                    <textarea rows={3} value={popup.success} onChange={(event) => setPopup({ ...popup, success: event.target.value })} />
+                  </label>
+                </>
+              ) : null}
+              {popup.kind === "close" ? (
+                <>
+                  <label>
+                    Close
+                    <select
+                      value={popup.mode}
+                      onChange={(event) => setPopup({ ...popup, mode: event.target.value as CloseMode })}
+                    >
+                      <option value="essay">Essay / Free response</option>
+                      <option value="single">Single choice</option>
+                      <option value="multi">Multi-choice</option>
+                      <option value="none">No questions</option>
+                    </select>
+                  </label>
+                  {popup.mode !== "none" ? (
+                    <label>
+                      Question
+                      <textarea rows={3} value={popup.question} onChange={(event) => setPopup({ ...popup, question: event.target.value })} />
+                    </label>
+                  ) : null}
+                  {popup.mode === "single" || popup.mode === "multi" ? (
+                    <fieldset className="studio-options">
+                      <legend>Options</legend>
+                      {popup.options.map((option, index) => (
+                        <div key={index} className="studio-option-row">
+                          <input
+                            value={option.text}
+                            placeholder={`Option ${index + 1}`}
+                            onChange={(event) => {
+                              const options = popup.options.map((item, itemIndex) => itemIndex === index ? { ...item, text: event.target.value } : item);
+                              setPopup({ ...popup, options });
+                            }}
+                          />
+                          <label>
+                            <input
+                              type={popup.mode === "single" ? "radio" : "checkbox"}
+                              name="correct-option"
+                              checked={option.correct}
+                              onChange={() => {
+                                const options = popup.options.map((item, itemIndex) => {
+                                  if (popup.mode === "single") return { ...item, correct: itemIndex === index };
+                                  if (itemIndex === index) return { ...item, correct: !item.correct };
+                                  return item;
+                                });
+                                setPopup({ ...popup, options });
+                              }}
+                            />
+                            Correct
+                          </label>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => setPopup({ ...popup, options: [...popup.options, { text: "", correct: false }] })}
+                      >
+                        Add option
+                      </button>
+                    </fieldset>
+                  ) : null}
+                </>
+              ) : null}
+              <div className="prompt-actions">
+                {popup.kind !== "close" && popup.mode === "edit" ? (
+                  <button type="button" className="ghost" disabled={busy} onClick={() => void deletePopup()}>Delete</button>
+                ) : null}
+                <button className="button" type="submit" disabled={busy}>Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
       {draft ? (
         <div className="prompt-backdrop" role="presentation" onMouseDown={cancelPrefs}>
           <div

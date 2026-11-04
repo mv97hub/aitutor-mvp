@@ -92,7 +92,7 @@ test("a good reply is saved, and a transport error is a banner", () => {
   });
   assert.equal(held.action, "save");
   if (held.action !== "save") return;
-  assert.match(held.text, /confirm/i);
+  assert.match(held.text, /Push draft to Tree/i);
   assert.equal(held.text.toLowerCase().includes("accept"), false);
   assert.deepEqual(held.proposal, { operations: [{ op: "add" }] });
 

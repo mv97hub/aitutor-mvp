@@ -1964,11 +1964,46 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
 
 .studio-gaps {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
+  flex-direction: column;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.studio-gap-panel {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+
+.studio-gap-panel h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.studio-push {
+  margin: 8px 16px 0;
+}
+
+.studio-options {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.studio-option-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.studio-goal-row {
+  margin-bottom: 8px;
 }
 
 .studio-strip {

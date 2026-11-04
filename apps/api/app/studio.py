@@ -410,7 +410,10 @@ def _items(value) -> list[dict]:
             raise StudioError("items", "each choice needs text")
         if not text or len(text) > 240:
             raise StudioError("items", "each choice needs short text")
-        cleaned.append({"text": text})
+        choice = {"text": text}
+        if isinstance(item, dict) and item.get("correct") is True:
+            choice["correct"] = True
+        cleaned.append(choice)
     return cleaned
 
 
@@ -530,6 +533,7 @@ def normalize_close(value, field: str = "close") -> dict:
             "items": [],
             "questions": questions,
             "intent": "",
+            "selection": None,
         }
     if mode not in CHOICE_MODES:
         raise StudioError("choice_mode", "must be predefined or dynamic")
@@ -538,6 +542,9 @@ def normalize_close(value, field: str = "close") -> dict:
             raise StudioError("items", "needs two to eight choices")
         if intent:
             raise StudioError("intent", "is stored only for dynamic choices")
+        selection = value.get("selection")
+        if selection not in ("single", "multi"):
+            selection = "single"
         return {
             "close_style": style,
             "answer_style": answer,
@@ -545,6 +552,7 @@ def normalize_close(value, field: str = "close") -> dict:
             "items": items,
             "questions": questions,
             "intent": "",
+            "selection": selection,
         }
     if items:
         raise StudioError("items", "dynamic choices store only the intent")
@@ -556,6 +564,7 @@ def normalize_close(value, field: str = "close") -> dict:
         "items": [],
         "questions": questions,
         "intent": intent,
+        "selection": None,
     }
 
 
@@ -997,21 +1006,30 @@ def _drop(nodes: dict[str, _Node], code: str) -> None:
     del nodes[code]
 
 
-def _pack_items(items: list, questions: list):
-    """Keep a choice list as a list. Questions share that JSON column."""
-    if questions:
-        return {"choices": list(items), "questions": list(questions)}
+def _pack_items(items: list, questions: list, selection: str | None = None):
+    """Keep a choice list as a list. Questions and the single/multi flag share that JSON column."""
+    if questions or selection in ("single", "multi"):
+        packed: dict = {"choices": list(items), "questions": list(questions)}
+        if selection in ("single", "multi"):
+            packed["selection"] = selection
+        return packed
     return list(items)
 
 
-def _unpack_items(stored) -> tuple[list, list]:
+def _unpack_close(stored) -> tuple[list, list, str | None]:
     if isinstance(stored, dict):
         choices = stored.get("choices") if isinstance(stored.get("choices"), list) else []
         questions = stored.get("questions") if isinstance(stored.get("questions"), list) else []
-        return choices, questions
+        selection = stored.get("selection") if stored.get("selection") in ("single", "multi") else None
+        return choices, questions, selection
     if isinstance(stored, list):
-        return list(stored), []
-    return [], []
+        return list(stored), [], None
+    return [], [], None
+
+
+def _unpack_items(stored) -> tuple[list, list]:
+    choices, questions, _selection = _unpack_close(stored)
+    return choices, questions
 
 
 def goal_rows(quest: StudioQuest) -> list[dict]:
@@ -1091,7 +1109,7 @@ def _fill_close(quest: StudioQuest, close: dict) -> None:
     row.close_style = close["close_style"]
     row.answer_style = close["answer_style"]
     row.choice_mode = close.get("choice_mode")
-    row.items = _pack_items(list(items), questions)
+    row.items = _pack_items(list(items), questions, close.get("selection"))
     row.intent = close.get("intent") or ""
 
 
@@ -1479,58 +1497,104 @@ def _confirm_text(text: str) -> str | None:
     return collapsed.rstrip(".!").strip().lower()
 
 
-def is_explicit_confirm(text: str) -> bool:
-    """A short yes that writes the held proposal. A question or a change request does not."""
-    normalized = _confirm_text(text)
-    if normalized is None:
-        return False
-    if normalized in _CONFIRM_EXACT:
-        return True
-    if re.match(r"^(?:yes|yeah|yep|ok|okay|sure)(?:\s*,\s*please|\s+please)$", normalized):
-        return True
-    if re.match(r"^(?:yes|ok|okay|sure)[,.]?\s+(?:add|commit|save|move)\b", normalized):
-        return True
-    if re.match(r"^add those\b", normalized):
-        return True
-    return re.match(r"^(?:please\s+)?(?:commit|save them|save those|move on)\b", normalized) is not None
+_STAGE_KEY = "stage"
+_STAGE_VIEW = "stage_view"
+_STAGE_MOVE = re.compile(
+    r"\b(?:next stage|next phase|move on|mark complete|final submit|go to (?:the )?(?:next|goals|close|ready))\b",
+    re.IGNORECASE,
+)
+_NEXT_STAGE = {"quests": "goals", "goals": "close", "close": "ready"}
 
 
-def _wants_next_stage(text: str) -> bool:
-    normalized = _confirm_text(text)
-    if normalized is None:
-        return False
-    return re.search(r"\b(?:move on|next stage|next phase)\b", normalized) is not None
+def _prefs_dict(course: StudioCourse) -> dict:
+    raw = course.preferences
+    return dict(raw) if isinstance(raw, dict) else {}
 
 
-def _stage_reply(course: StudioCourse, *, wrote: bool) -> str:
-    """Talk about the stage on screen. Do not ask the confirm question again."""
-    phase = course_phase(course)
-    per_quest = goals_per_quest_of(course)
-    quest_count = quest_count_of(course)
-    if phase["name"] == "goals":
-        lead = "Goals/Success Criteria is the stage on screen."
-        detail = (
-            "A quest can hold several goals, each with its own success criterion. "
-            f"I can draft {per_quest} goals for each open quest."
-        )
-    elif phase["name"] == "close":
-        lead = "Close is the stage on screen."
-        detail = (
-            "I can offer one close per quest, normally at least one question. "
-            "An empty question list is saved when you ask for it."
-        )
-    elif phase["name"] == "ready":
-        lead = "Ready is the stage on screen."
-        detail = "Mark ready can be turned on."
+def stored_stage(course: StudioCourse) -> str | None:
+    value = _prefs_dict(course).get(_STAGE_KEY)
+    if value == "structure":
+        value = "quests"
+    if value in ("quests", "goals", "close", "ready"):
+        return str(value)
+    return None
+
+
+def tracked_stage_name(course: StudioCourse) -> str:
+    """The stage Mark Complete has reached. Chat never moves this."""
+    stored = stored_stage(course)
+    if stored:
+        return stored
+    if course.ready:
+        return "ready"
+    return "quests"
+
+
+def active_stage_name(course: StudioCourse) -> str:
+    """The tab on screen. An earlier completed tab can be opened again."""
+    view = _prefs_dict(course).get(_STAGE_VIEW)
+    if view == "structure":
+        view = "quests"
+    stage = tracked_stage_name(course)
+    order = {"quests": 0, "goals": 1, "close": 2, "ready": 3}
+    if view in order and order[view] <= order[stage]:
+        return str(view)
+    return stage
+
+
+def _write_pref(course: StudioCourse, key: str, value) -> None:
+    prefs = _prefs_dict(course)
+    if value is None:
+        prefs.pop(key, None)
     else:
-        lead = "Quests is still the stage on screen."
-        detail = (
-            "A quest is one section of the course the learner works through. "
-            f"I can draft {quest_count} quests from the course description."
-        )
-    if wrote:
-        return f"Those changes are now in the course. {lead} {detail} You can undo this write."
-    return f"{lead} {detail}"
+        prefs[key] = value
+    course.preferences = prefs
+
+
+def wants_stage_change(text: str) -> bool:
+    return _STAGE_MOVE.search(text or "") is not None
+
+
+def stage_gaps_for(course: StudioCourse, stage: str) -> list[str]:
+    """What still blocks Mark Complete for this stage."""
+    quests = sorted(course.quests, key=lambda row: (row.position, row.code))
+    if stage == "ready":
+        return []
+    if not quests:
+        return ["No quests yet."]
+    if stage == "quests":
+        return []
+    gaps: list[str] = []
+    if stage == "goals":
+        for quest in quests:
+            rows = goal_rows(quest)
+            if not rows:
+                gaps.append(f"{quest.code}: no learning goal")
+                continue
+            for row in rows:
+                if not str(row["learning_goal"] or "").strip():
+                    gaps.append(f"{quest.code}: goal {row['position']} has no learning goal")
+                elif not str(row["success_criterion"] or "").strip():
+                    gaps.append(f"{quest.code}: goal {row['position']} has no success criterion")
+        return gaps
+    for quest in quests:
+        if quest.close is None:
+            gaps.append(f"{quest.code}: no close")
+            continue
+        if quest.close.answer_style == "multiple_choice":
+            items, _questions = _unpack_items(quest.close.items)
+            if len(items) < 2:
+                gaps.append(f"{quest.code}: a choice question needs at least 2 options")
+    return gaps
+
+
+def can_advance_stage(course: StudioCourse) -> bool:
+    if active_stage_name(course) != tracked_stage_name(course):
+        return False
+    stage = tracked_stage_name(course)
+    if stage == "ready":
+        return not bool(course.ready)
+    return not stage_gaps_for(course, stage)
 
 
 def description_is_specific(theme: str) -> bool:
@@ -1564,7 +1628,13 @@ def _course_subject(theme: str) -> str:
         count=1,
         flags=re.IGNORECASE,
     )
-    text = re.sub(r"^(?:a|an)\s+course\s+(?:about|on)\s+", "", text, count=1, flags=re.IGNORECASE)
+    text = re.sub(
+        r"^(?:a|an)\s+(?:short\s+|brief\s+)?course\s+(?:about|on|for)\s+",
+        "",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
     subject = re.split(r"[.!?]\s+|\s+\b(?:include|including|incl)\b", text, maxsplit=1, flags=re.IGNORECASE)[0]
     subject = subject.strip(" .,:;\"'")
     if not subject:
@@ -1647,41 +1717,102 @@ def reply_without_false_claim(reply: str) -> str:
     return text
 
 
-def _draft_success_reply(course: StudioCourse, titles: list[str]) -> str:
-    listed = "\n".join(f"{index}. {title}" for index, title in enumerate(titles, start=1))
-    return f"{listed}\n{_stage_reply(course, wrote=True)}"
+def _checker_view(course: StudioCourse, name: str):
+    """Point the patch checker at a stage, then put the previous view back."""
+    prefs = _prefs_dict(course)
+    previous = prefs.get("phase_view")
+    prefs["phase_view"] = name
+    course.preferences = prefs
+    return previous
 
 
-def commit_confirmed_draft(
-    db: Session,
-    course: StudioCourse,
-    content: str,
-    operations: list | None = None,
-    reply: str = "",
-    fallback: bool = False,
-) -> dict:
-    """Write quests for a confirm. The reply claims a write only after the patch is stored."""
-    text = content.strip()
-    if not is_explicit_confirm(text):
-        raise StudioError("content", "is not a confirm", plain="Say yes when you want these quests written.")
-    ops = _normalize_quest_adds(course, operations)
-    if not ops:
-        parsed = _titles_from_reply(reply)
+def _restore_checker_view(course: StudioCourse, previous) -> None:
+    prefs = _prefs_dict(course)
+    if previous is None:
+        prefs.pop("phase_view", None)
+    else:
+        prefs["phase_view"] = previous
+    course.preferences = prefs
+
+
+def _quests_opening(course: StudioCourse) -> str:
+    count = quest_count_of(course)
+    return (
+        "A quest is one section of the course the learner works through. "
+        f"Should I draft {count} quests from the course description? "
+        "Nothing is written until you click Push draft to Tree."
+    )
+
+
+def _goals_opening(course: StudioCourse) -> str:
+    per_quest = goals_per_quest_of(course)
+    return (
+        "A goal is what the learner should come away able to do, and each goal has an observable success criterion. "
+        f"I can draft {per_quest} goals for every quest, all in one go or one quest at a time. "
+        "Nothing is written until you click Push draft to Tree."
+    )
+
+
+def _close_opening(_course: StudioCourse) -> str:
+    return (
+        "A close is how a quest ends. It can be an essay, a single choice, a multi-choice, or no questions. "
+        "I can suggest a close for every quest, all in one go or one quest at a time. "
+        "Nothing is written until you click Push draft to Tree."
+    )
+
+
+def opening_for(course: StudioCourse) -> tuple[str, dict | None]:
+    """The stage on screen. Titles and closes stay in the draft until Push draft to Tree."""
+    stage = active_stage_name(course) if stored_stage(course) else "quests"
+    if stage == "goals":
+        return _goals_opening(course), None
+    if stage == "close":
+        return _close_opening(course), None
+    if stage == "ready":
+        return (
+            "The quests, goals, and closes are in place. "
+            "Click Final Submit above the tree when you want to mark the course ready."
+        ), None
+    return _quests_opening(course), None
+
+
+def seed_opening(db: Session, course: StudioCourse) -> list[StudioMessage]:
+    existing = list_messages(db, course)
+    if existing:
+        return existing
+    if stored_stage(course) is None:
+        _write_pref(course, _STAGE_KEY, "quests")
+    content, proposal = opening_for(course)
+    add_message(db, course, role="assistant", content=content, proposal=proposal)
+    return list_messages(db, course)
+
+
+def _stage_label(name: str) -> str:
+    return {
+        "quests": "Quests",
+        "goals": "Goals/Success Criteria",
+        "close": "Close",
+        "ready": "Ready",
+    }.get(name, "Quests")
+
+
+def _fallback_operations(course: StudioCourse, stage: str) -> list[dict]:
+    if stage == "quests":
         count = min(quest_count_of(course), 40)
-        ops = [
-            {
-                "op": "add",
-                "kind": "quest",
-                "code": f"{course.code}-Q{index}",
-                "parent": None,
-                "title": title[: TEXT_LIMITS["title"]],
-                "position": index,
-            }
-            for index, title in enumerate(parsed[:count], start=1)
-        ]
-    if not ops and fallback and not course.quests:
-        count = min(quest_count_of(course), 40)
-        ops = [
+        existing = sorted(course.quests, key=lambda row: (row.position, row.code))
+        if existing:
+            return [
+                {
+                    "op": "update",
+                    "kind": "quest",
+                    "code": quest.code,
+                    "parent": None,
+                    "title": quest.title,
+                    "position": quest.position,
+                }
+                for quest in existing
+            ]
+        return [
             {
                 "op": "add",
                 "kind": "quest",
@@ -1692,118 +1823,310 @@ def commit_confirmed_draft(
             }
             for index, title in enumerate(_draft_quest_titles(course.theme or "", count), start=1)
         ]
-    user = add_message(db, course, role="user", content=text, proposal=None)
-    if not ops:
-        assistant = add_message(
-            db,
-            course,
-            role="assistant",
-            content=reply_without_false_claim(reply),
-            proposal=None,
+    if stage == "goals":
+        per_quest = min(goals_per_quest_of(course), 40)
+        operations = []
+        for quest in sorted(course.quests, key=lambda row: (row.position, row.code)):
+            goals = [
+                {
+                    "position": index,
+                    "learning_goal": f"Work through {quest.title}, part {index}.",
+                    "success_criterion": f"States one fact from {quest.title}, part {index}.",
+                }
+                for index in range(1, per_quest + 1)
+            ]
+            operations.append(
+                {
+                    "op": "update",
+                    "kind": "quest",
+                    "code": quest.code,
+                    "parent": None,
+                    "goals": goals,
+                }
+            )
+        return operations
+    if stage == "close":
+        operations = []
+        for quest in sorted(course.quests, key=lambda row: (row.position, row.code)):
+            operations.append(
+                {
+                    "op": "update",
+                    "kind": "quest",
+                    "code": quest.code,
+                    "parent": None,
+                    "close": {
+                        "close_style": "one",
+                        "answer_style": "essay",
+                        "choice_mode": None,
+                        "items": [],
+                        "questions": [{"text": f"What should you remember from {quest.title}?"}],
+                        "intent": "",
+                    },
+                }
+            )
+        return operations
+    return []
+
+
+def _fallback_reply(course: StudioCourse, stage: str, operations: list[dict]) -> str:
+    if stage == "quests":
+        count = len(operations) or quest_count_of(course)
+        titles = [str(op.get("title") or "") for op in operations if op.get("title")]
+        listed = "\n".join(f"{index}. {title}" for index, title in enumerate(titles, start=1))
+        lead = (
+            f"Here is a draft of {count} quests from the course description. "
+            "Click Push draft to Tree to add them. Nothing is in the tree until then."
         )
-        fresh = load_course(db, course.id) or course
-        return {"wrote": False, "handled": True, "user": user, "assistant": assistant, "course": fresh}
-    _remember_undo(course, user)
-    apply_patch(db, course, {"operations": ops})
-    if course_phase(course)["name"] != "ready":
-        course.ready = False
-    course.updated_at = _now()
-    db.flush()
-    fresh = load_course(db, course.id) or course
-    titles = [quest.title for quest in sorted(fresh.quests, key=lambda row: (row.position, row.code))]
-    assistant = add_message(
-        db,
-        fresh,
-        role="assistant",
-        content=_draft_success_reply(fresh, titles),
-        proposal=None,
-    )
-    # The quests are already stored. Recording the patch must not run it through
-    # the Goals checker, which would reject the same adds and roll the write back.
-    assistant.proposal = {"operations": ops, "phase": "quests"}
-    assistant.applied = True
-    fresh.updated_at = _now()
-    db.flush()
-    fresh = load_course(db, course.id) or fresh
-    return {"wrote": True, "handled": True, "user": user, "assistant": assistant, "course": fresh}
+        return f"{lead}\n{listed}".strip()
+    if stage == "goals":
+        per_quest = goals_per_quest_of(course)
+        return (
+            f"Here is a draft of {per_quest} goals for each quest, each with a success criterion. "
+            "I can do them all in one go, or we can take one quest at a time. "
+            "Click Push draft to Tree when you want them in the tree."
+        )
+    if stage == "close":
+        return (
+            "Here is an essay close for each quest. "
+            "I can do them all in one go, or we can take one quest at a time. "
+            "Click Push draft to Tree when you want them in the tree."
+        )
+    return "This course is ready. Click Final Submit above the tree."
 
 
-def _quests_opening(course: StudioCourse) -> str:
-    """Two parts: what a quest is, then one question. No other phase."""
-    intro = (
-        "A quest is one section of the course the learner works through. "
-        "Nothing is written until you confirm."
-    )
-    if course.quests:
-        return f"{intro}\nQuests are already on this course. Tell me what you want to change."
-    count = quest_count_of(course)
-    return (
-        f"{intro}\n"
-        f"Should I draft {count} quests from the course description, or do you want something else?"
-    )
+def _save_unapplied(db: Session, course: StudioCourse, content: str, proposal: dict | None) -> StudioMessage:
+    stage = active_stage_name(course)
+    previous = _checker_view(course, stage)
+    try:
+        message = add_message(db, course, role="assistant", content=content, proposal=proposal)
+    finally:
+        _restore_checker_view(course, previous)
+    message.applied = False
+    return message
 
 
-def opening_for(course: StudioCourse) -> tuple[str, dict | None]:
-    """The first assistant message. Quest titles wait until the creator confirms."""
-    return _quests_opening(course), None
-
-
-def seed_opening(db: Session, course: StudioCourse) -> list[StudioMessage]:
-    existing = list_messages(db, course)
-    if existing:
-        return existing
-    content, proposal = opening_for(course)
-    add_message(db, course, role="assistant", content=content, proposal=proposal)
-    return list_messages(db, course)
-
-
-def _pending_proposals(messages: list[StudioMessage]) -> list[StudioMessage]:
-    return [
-        message
-        for message in messages
-        if message.role == "assistant" and message.proposal and not message.applied
-    ]
-
-
-def confirm_turn(db: Session, course: StudioCourse, content: str) -> dict | None:
-    """Write the held proposal when the chat message is an explicit confirm.
-
-    A second confirm, with nothing left to write, answers about the stage on
-    screen. It does not ask the confirm question again.
-    """
+def chat_turn(db: Session, course: StudioCourse, content: str) -> dict:
+    """Save a chat line. Never writes the tree and never advances the stage."""
     text = content.strip()
     if not text:
         raise StudioError("content", "is required")
     if len(text) > 20000:
         raise StudioError("content", "is too long")
-    if not is_explicit_confirm(text):
-        return None
-    pending = _pending_proposals(list_messages(db, course))
-    if not pending and not course.quests and course_phase(course)["name"] == "quests":
-        return {"wrote": False, "handled": False, "awaiting_draft": True}
     user = add_message(db, course, role="user", content=text, proposal=None)
-    wrote = False
-    if pending:
-        ops: list[dict] = []
-        for message in pending:
-            ops.extend(_proposal_ops(message))
-        _remember_writes(course, pending)
+    fresh = load_course(db, course.id) or course
+    if wants_stage_change(text):
+        assistant = add_message(
+            db,
+            fresh,
+            role="assistant",
+            content="Click Mark Complete above the tree to move to the next stage.",
+            proposal=None,
+        )
+        fresh = load_course(db, course.id) or fresh
+        return {"wrote": False, "handled": True, "user": user, "assistant": assistant, "course": fresh}
+    return {"wrote": False, "handled": False, "user": user, "course": fresh}
+
+
+def attach_fallback_draft(db: Session, course: StudioCourse, content: str) -> dict:
+    """A draft for the stage on screen. The tree stays as it is until Push draft to Tree."""
+    stage = active_stage_name(course)
+    if wants_stage_change(content):
+        assistant = add_message(
+            db,
+            course,
+            role="assistant",
+            content="Click Mark Complete above the tree to move to the next stage.",
+            proposal=None,
+        )
+        fresh = load_course(db, course.id) or course
+        return {"wrote": False, "user": None, "assistant": assistant, "course": fresh}
+    operations = _fallback_operations(course, stage)
+    proposal = {"operations": operations, "phase": stage} if operations else None
+    reply = reply_without_false_claim(_fallback_reply(course, stage, operations))
+    assistant = _save_unapplied(db, course, reply, proposal)
+    fresh = load_course(db, course.id) or course
+    return {"wrote": False, "assistant": assistant, "course": fresh}
+
+
+def _latest_draft(db: Session, course: StudioCourse) -> StudioMessage | None:
+    found = None
+    for message in list_messages(db, course):
+        if message.role == "assistant" and isinstance(message.proposal, dict) and message.proposal.get("operations"):
+            found = message
+    return found
+
+
+def push_draft(db: Session, course: StudioCourse) -> StudioCourse:
+    """Upsert the latest draft for the stage on screen. A second push updates the same codes."""
+    stage = active_stage_name(course)
+    if stage == "ready":
+        raise StudioError("stage", "ready has no draft", plain="Ready has nothing to push. Click Final Submit above the tree.")
+    message = _latest_draft(db, course)
+    if message is None:
+        raise StudioError("proposal", "there is no draft", plain="There is no draft to push yet.")
+    phase = _proposal_phase(message.proposal)
+    if phase and phase != stage:
+        raise StudioError("phase", "draft is for another stage", plain="That draft is for a different stage. Open that stage to push it.")
+    ops = _proposal_ops(message)
+    _remember_undo(course, message)
+    previous = _checker_view(course, stage)
+    try:
         apply_patch(db, course, {"operations": ops})
-        for message in pending:
-            message.applied = True
-        if course_phase(course)["name"] != "ready":
-            course.ready = False
+    finally:
+        _restore_checker_view(course, previous)
+    message.applied = True
+    course.ready = False
+    course.updated_at = _now()
+    db.flush()
+    return load_course(db, course.id) or course
+
+
+def advance_stage(db: Session, course: StudioCourse) -> StudioCourse:
+    """Mark Complete, then Final Submit. The only way the stage moves forward."""
+    if active_stage_name(course) != tracked_stage_name(course):
+        raise StudioError(
+            "stage",
+            "already complete",
+            plain="This stage is already complete. Open the current stage to mark the next one complete.",
+        )
+    stage = tracked_stage_name(course)
+    if stage == "ready":
+        course.ready = True
         course.updated_at = _now()
         db.flush()
-        wrote = True
+        return load_course(db, course.id) or course
+    gaps = stage_gaps_for(course, stage)
+    if gaps:
+        raise StudioError("stage", "still open", plain=" ".join(gaps))
+    _write_pref(course, _STAGE_KEY, _NEXT_STAGE[stage])
+    _write_pref(course, _STAGE_VIEW, None)
+    course.updated_at = _now()
+    db.flush()
     fresh = load_course(db, course.id) or course
-    if _wants_next_stage(text):
-        set_phase_view(fresh, course_phase(fresh)["name"])
-    assistant = add_message(db, fresh, role="assistant", content=_stage_reply(fresh, wrote=wrote), proposal=None)
-    fresh = load_course(db, course.id) or fresh
-    return {"wrote": wrote, "handled": True, "user": user, "assistant": assistant, "course": fresh}
+    content, proposal = opening_for(fresh)
+    add_message(db, fresh, role="assistant", content=content, proposal=proposal)
+    return load_course(db, course.id) or fresh
 
 
+def set_stage_view(course: StudioCourse, name: str) -> None:
+    """Open an earlier stage again. Later stages stay locked."""
+    if name == "structure":
+        name = "quests"
+    if name not in ("quests", "goals", "close", "ready"):
+        raise StudioError(
+            "stage",
+            "must be a course stage",
+            plain="Choose Quests, Goals/Success Criteria, Close, or Ready.",
+        )
+    order = {"quests": 0, "goals": 1, "close": 2, "ready": 3}
+    if order[name] > order[tracked_stage_name(course)]:
+        raise StudioError(
+            "stage",
+            "is later than the open stage",
+            plain=f"Mark {_stage_label(tracked_stage_name(course))} complete before opening {_stage_label(name)}.",
+        )
+    if name == tracked_stage_name(course):
+        _write_pref(course, _STAGE_VIEW, None)
+    else:
+        _write_pref(course, _STAGE_VIEW, name)
+    course.updated_at = _now()
+
+
+def _next_quest_code(course: StudioCourse) -> str:
+    taken = {quest.code for quest in course.quests}
+    number = 1
+    while f"{course.code}-Q{number}" in taken:
+        number += 1
+    return f"{course.code}-Q{number}"
+
+
+def _quest_by_code(course: StudioCourse, code: str) -> StudioQuest:
+    wanted = (code or "").strip().upper()
+    for quest in course.quests:
+        if quest.code == wanted:
+            return quest
+    raise StudioError("code", f"{wanted} is not in this course", plain=f"{wanted} is not in this course.")
+
+
+def edit_tree(
+    db: Session,
+    course: StudioCourse,
+    *,
+    action: str,
+    code: str | None = None,
+    title: str | None = None,
+    position: int | None = None,
+    learning_goal: str | None = None,
+    success_criterion: str | None = None,
+    close: dict | None = None,
+) -> None:
+    """A popup write for the stage on screen. Other stages stay locked."""
+    stage = active_stage_name(course)
+    quest_actions = {"add_quest", "update_quest", "delete_quest"}
+    goal_actions = {"add_goal", "update_goal", "delete_goal"}
+    if action in quest_actions and stage != "quests":
+        raise StudioError("stage", "quests only", plain="Quest edits are only open in the Quests stage.")
+    if action in goal_actions and stage != "goals":
+        raise StudioError("stage", "goals only", plain="Goal edits are only open in the Goals/Success Criteria stage.")
+    if action == "set_close" and stage != "close":
+        raise StudioError("stage", "close only", plain="Close edits are only open in the Close stage.")
+    _remember_undo(course, None)
+    if action == "add_quest":
+        label = _text("title", title or "", required=True)
+        row = StudioQuest(
+            course_id=course.id,
+            code=_next_quest_code(course),
+            position=len(course.quests) + 1,
+            title=label,
+            learning_goal="",
+            success_criterion="",
+        )
+        course.quests.append(row)
+    elif action == "update_quest":
+        quest = _quest_by_code(course, code or "")
+        quest.title = _text("title", title or "", required=True)
+    elif action == "delete_quest":
+        quest = _quest_by_code(course, code or "")
+        course.quests.remove(quest)
+        db.delete(quest)
+        _compact(list(course.quests))
+    elif action == "add_goal":
+        quest = _quest_by_code(course, code or "")
+        rows = goal_rows(quest)
+        rows.append(
+            {
+                "position": len(rows) + 1,
+                "learning_goal": _text("learning_goal", learning_goal or ""),
+                "success_criterion": _text("success_criterion", success_criterion or ""),
+            }
+        )
+        _replace_goals(quest, normalize_goals(rows))
+    elif action == "update_goal":
+        quest = _quest_by_code(course, code or "")
+        rows = goal_rows(quest)
+        slot = position or 1
+        found = False
+        for row in rows:
+            if row["position"] == slot:
+                row["learning_goal"] = _text("learning_goal", learning_goal or "")
+                row["success_criterion"] = _text("success_criterion", success_criterion or "")
+                found = True
+        if not found:
+            raise StudioError("position", "is not a goal on this quest", plain="That goal is not on this quest.")
+        _replace_goals(quest, normalize_goals(rows))
+    elif action == "delete_goal":
+        quest = _quest_by_code(course, code or "")
+        slot = position or 1
+        rows = [row for row in goal_rows(quest) if row["position"] != slot]
+        _replace_goals(quest, normalize_goals(rows) if rows else [])
+    elif action == "set_close":
+        quest = _quest_by_code(course, code or "")
+        _fill_close(quest, normalize_close(close))
+    else:
+        raise StudioError("action", "is not a tree edit", plain="That edit is not available.")
+    course.ready = False
+    course.updated_at = _now()
+    db.flush()
 _UNDO = "_undo"
 
 
@@ -1874,6 +2197,7 @@ def _close_snapshot(quest: StudioQuest) -> dict | None:
         "items": copy.deepcopy(items),
         "questions": copy.deepcopy(questions),
         "intent": quest.close.intent or "",
+        "selection": _unpack_close(quest.close.items)[2],
     }
 
 
@@ -2197,11 +2521,18 @@ def viewed_phase(course: StudioCourse) -> dict:
     """The phase the chat and the strip highlight. Earlier choices include filled items."""
     open_phase = course_phase(course)
     stored = _stored_phase_view(course)
-    if stored is None or PHASE_ORDER[stored] >= PHASE_ORDER[open_phase["name"]]:
+    if stored is None or stored == open_phase["name"]:
         return {
             "name": open_phase["name"],
             "label": open_phase["label"],
             "codes": list(open_phase["open_codes"]),
+            "stepped_back": False,
+        }
+    if PHASE_ORDER[stored] > PHASE_ORDER[open_phase["name"]]:
+        return {
+            "name": stored,
+            "label": PHASE_LABELS[stored],
+            "codes": _codes_in_phase(course, stored),
             "stepped_back": False,
         }
     return {
@@ -2253,7 +2584,58 @@ def set_phase_view(course: StudioCourse, name: str) -> None:
     course.updated_at = _now()
 
 
+def instruction_stage(course: StudioCourse) -> str:
+    """Once Mark Complete is in use, the prompt follows that stage. Older courses keep the inferred wave."""
+    if stored_stage(course):
+        return active_stage_name(course)
+    return viewed_phase(course)["name"]
+
+
+def _tracked_phase_instructions(course: StudioCourse) -> str:
+    stage = active_stage_name(course)
+    label = _stage_label(stage)
+    codes = ", ".join(code for code in _quest_codes(course)) or "none"
+    count = quest_count_of(course)
+    per_quest = goals_per_quest_of(course)
+    if stage == "quests":
+        focus = (
+            "Talk only about quests. "
+            f"Ask whether to draft {count} quests from the course description. "
+            "When they want a draft, include one add or update per quest, with a real title about the subject. "
+            "Do not copy or slice the description. Do not mention other stages. "
+            "Do not say the quests were added. The tree changes only when they click Push draft to Tree."
+        )
+    elif stage == "goals":
+        focus = (
+            "Talk only about goals and success criteria. "
+            f"Offer {per_quest} goals per quest, all in one go or one quest at a time. "
+            "Each goal needs an observable success criterion. "
+            "A patch updates each quest by code and sets parent to null. "
+            "Do not fill close style in this patch. "
+            "Do not say the goals were added. The tree changes only when they click Push draft to Tree."
+        )
+    elif stage == "close":
+        focus = (
+            "Talk only about closing questions. "
+            "Offer a close for each quest, all in one go or one quest at a time. "
+            "A close can be an essay, a single choice, a multi-choice, or no questions. "
+            "A choice question needs at least two options. "
+            "Do not say the closes were added. The tree changes only when they click Push draft to Tree."
+        )
+    else:
+        focus = "The course is ready to submit. If they ask to change a stage, tell them to click Mark Complete above the tree. Do not send a patch."
+    move = "If they ask to move to the next stage, tell them to click Mark Complete above the tree. Do not change the stage yourself."
+    return (
+        f"Current phase: {label}.\n"
+        f"Codes in this stage: {codes}.\n"
+        f"{focus}\n"
+        f"{move}\n"
+    )
+
+
 def phase_instructions(course: StudioCourse) -> str:
+    if stored_stage(course):
+        return _tracked_phase_instructions(course)
     view = viewed_phase(course)
     if view["stepped_back"]:
         codes = ", ".join(view["codes"]) if view["codes"] else "none"
@@ -2369,13 +2751,14 @@ def _close_out(close: dict | None) -> StudioCloseOut | None:
         items=list(close.get("items") or []),
         questions=list(close.get("questions") or []),
         intent=close["intent"],
+        selection=close.get("selection") if close.get("selection") in ("single", "multi") else None,
     )
 
 
 def _row_close(row: StudioQuestClose | None) -> StudioCloseOut | None:
     if row is None:
         return None
-    items, questions = _unpack_items(row.items)
+    items, questions, selection = _unpack_close(row.items)
     return StudioCloseOut(
         close_style=row.close_style,
         answer_style=row.answer_style,
@@ -2383,6 +2766,7 @@ def _row_close(row: StudioQuestClose | None) -> StudioCloseOut | None:
         items=items,
         questions=questions,
         intent=row.intent or "",
+        selection=selection,
     )
 
 
@@ -2439,8 +2823,39 @@ def course_out(course: StudioCourse) -> StudioCourseOut:
         quest_count=quest_count_of(course),
         goals_per_quest=goals_per_quest_of(course),
         undo=has_undo(course),
+        stage=_stage_out(course),
+        stage_strip=[StudioStripOut(**item) for item in _stage_strip(course)],
+        stage_view=_stage_view_out(course),
+        stage_gaps=stage_gaps_for(course, active_stage_name(course)),
+        can_advance=can_advance_stage(course),
         updated_at=course.updated_at,
     )
+
+
+def _stage_out(course: StudioCourse) -> StudioPhaseOut:
+    name = tracked_stage_name(course)
+    return StudioPhaseOut(name=name, label=_stage_label(name), open_codes=_quest_codes(course))
+
+
+def _stage_view_out(course: StudioCourse) -> StudioViewOut:
+    name = active_stage_name(course)
+    return StudioViewOut(name=name, label=_stage_label(name), codes=_quest_codes(course))
+
+
+def _stage_strip(course: StudioCourse) -> list[dict]:
+    tracked = tracked_stage_name(course)
+    active = active_stage_name(course)
+    order = {"quests": 0, "goals": 1, "close": 2, "ready": 3}
+    tracked_index = order[tracked]
+    return [
+        {
+            "name": name,
+            "label": label,
+            "filled": order[name] < tracked_index or (name == "ready" and bool(course.ready)),
+            "active": name == active,
+        }
+        for name, label in PHASES
+    ]
 
 
 def summary_out(course: StudioCourse) -> StudioCourseSummary:
@@ -2533,7 +2948,7 @@ def _phase_operation_schema(phase: str) -> dict:
 
 def response_schema(course: StudioCourse) -> dict:
     """The only patch shape the model may emit for the phase on screen."""
-    phase = viewed_phase(course)["name"]
+    phase = instruction_stage(course)
     return {
         "type": "object",
         "additionalProperties": False,
@@ -2543,7 +2958,7 @@ def response_schema(course: StudioCourse) -> dict:
                 "description": (
                     "What the creator reads. Talk through the suggestion for the phase on screen "
                     "and ask one clear question. Say which framework a suggestion comes from. "
-                    "Do not say the course was saved. The tree changes only after a confirm in the chat."
+                    "Do not say the course was saved. The tree changes only when the creator clicks Push draft to Tree."
                 ),
             },
             "patch": {
@@ -2593,12 +3008,12 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "You must say which framework a suggestion comes from. "
         "Label every curriculum idea as a suggestion.\n"
         "You have no web search and no document upload. Do not claim you searched the web or read an uploaded file.\n"
-        "Nothing is written until the creator confirms in the chat, for example yes, yes please, commit, add those, save them, or move on. "
-        "Until then the tree stays as it is. "
-        "Do not say you added the quests. The server writes a confirmed patch, and only then says they are in the course. "
+        "Nothing is written until the creator clicks Push draft to Tree. "
+        "Chat never changes the tree and never moves the stage. "
+        "If they ask to move to the next stage, tell them to click Mark Complete above the tree. "
+        "Do not say you added the quests. "
         "There is no Accept button and no Skip button. "
-        "After a confirm, talk about the stage now on screen. Do not ask the same confirm question again. "
-        "The server still checks. A rejected operation is skipped and the rest can be saved after a confirm. "
+        "The server still checks a pushed draft. A rejected operation is skipped and the rest can be saved. "
         "Do not say the course was saved, and do not say the structure was written.\n"
         "The response schema lists the only fields for this phase. "
         "Goals and Close refuse operations for any other code.\n"
@@ -2615,7 +3030,7 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "It is not a quiz item. "
         "Example: goal “Understand that the angles of a triangle add to 180°”, "
         "criterion “States that the three angles add to 180° and uses that to find a missing angle.” "
-        "Draft a criterion whenever you draft a goal. The tree changes only after a confirm in the chat.\n"
+        "Draft a criterion whenever you draft a goal. The tree changes only when the creator clicks Push draft to Tree.\n"
         "A position of 0 is invalid. Leave position null and the server fills the next free number. "
         "A position outside 1 to 200, or past the end of the list, is skipped and reported in one sentence. "
         "The other operations can still be saved.\n"
