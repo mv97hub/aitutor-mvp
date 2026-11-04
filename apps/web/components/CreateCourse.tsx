@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 
 import { BrandMark } from "@/components/BrandMark";
 import { api } from "@/lib/api";
+import { bulkPrompt, pendingInPhase, structureTemplate, type TemplateKind } from "@/lib/studio-build";
 import {
   AGE_BANDS,
   DEPTHS,
@@ -18,6 +19,14 @@ import {
   type StudioSettings,
   type StudioSummary,
 } from "@/lib/studio";
+
+type EditDraft = {
+  kind: "unit" | "quest" | "move";
+  code: string;
+  title: string;
+  learningGoal: string;
+  success: string;
+};
 
 type Prefs = {
   title: string;
@@ -119,6 +128,7 @@ function Tier({
   wave,
   open,
   onToggle,
+  onEdit,
   children,
 }: {
   code: string;
@@ -127,18 +137,26 @@ function Tier({
   wave: boolean;
   open: boolean;
   onToggle: () => void;
+  onEdit?: () => void;
   children?: ReactNode;
 }) {
   return (
     <li className="studio-tier">
-      <button type="button" className={`studio-tier-row${wave ? " is-wave" : ""}`} aria-expanded={open} onClick={onToggle}>
-        <span aria-hidden="true">{open ? "▾" : "▸"}</span>
-        <span className="studio-code">{code}</span>
-        <span className="studio-title">{title}</span>
-        {marks.map((mark) => (
-          <span key={mark} className="studio-gap">{mark}</span>
-        ))}
-      </button>
+      <div className="studio-tier-line">
+        <button type="button" className={`studio-tier-row${wave ? " is-wave" : ""}`} aria-expanded={open} onClick={onToggle}>
+          <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+          <span className="studio-code">{code}</span>
+          <span className="studio-title">{title}</span>
+          {marks.map((mark) => (
+            <span key={mark} className="studio-gap">{mark}</span>
+          ))}
+        </button>
+        {onEdit ? (
+          <button type="button" className="ghost studio-inline" onClick={onEdit}>
+            Edit
+          </button>
+        ) : null}
+      </div>
       {open ? <div className="studio-detail">{children}</div> : null}
     </li>
   );
@@ -151,6 +169,57 @@ function Fact({ label, value }: { label: string; value: string }) {
       <span>{label}</span>
       {value}
     </p>
+  );
+}
+
+function EditRow({
+  draft,
+  busy,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  draft: EditDraft;
+  busy: boolean;
+  onChange: (draft: EditDraft) => void;
+  onSubmit: (event: FormEvent) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <form className="studio-edit-form" onSubmit={onSubmit}>
+      <label>
+        Title
+        <input value={draft.title} maxLength={240} onChange={(event) => onChange({ ...draft, title: event.target.value })} />
+      </label>
+      {draft.kind === "unit" ? null : (
+        <>
+          <label>
+            Learning goal
+            <textarea
+              value={draft.learningGoal}
+              rows={2}
+              onChange={(event) => onChange({ ...draft, learningGoal: event.target.value })}
+            />
+          </label>
+          <label>
+            Success
+            <textarea
+              value={draft.success}
+              rows={2}
+              onChange={(event) => onChange({ ...draft, success: event.target.value })}
+            />
+          </label>
+        </>
+      )}
+      <div className="rail-actions">
+        <button className="button" type="submit" disabled={busy || draft.title.trim().length === 0}>
+          Save
+        </button>
+        <button className="ghost" type="button" disabled={busy} onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -173,6 +242,7 @@ export function CreateCourse() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [coursesOpen, setCoursesOpen] = useState(false);
   const [modelDraft, setModelDraft] = useState("gpt-4o-mini");
+  const [editing, setEditing] = useState<EditDraft | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -290,9 +360,7 @@ export function CreateCourse() {
     }
   }
 
-  async function send(event: FormEvent) {
-    event.preventDefault();
-    const text = input.trim();
+  async function ask(text: string) {
     if (!course || !text || busy) return;
     setBusy(true);
     setError(null);
@@ -315,22 +383,31 @@ export function CreateCourse() {
     }
   }
 
-  async function accept(message: StudioMessage) {
+  async function send(event: FormEvent) {
+    event.preventDefault();
+    await ask(input.trim());
+  }
+
+  function openUnits(nextCourse: StudioCourse) {
+    setOpen((prev) => {
+      const next = new Set(prev);
+      for (const unit of nextCourse.units) next.add(unit.code);
+      return next;
+    });
+  }
+
+  async function accept(message: StudioMessage, indexes?: number[]) {
     if (!course) return;
     setBusy(true);
     setError(null);
     try {
       const result = await api<{ course: StudioCourse; message: StudioMessage }>(
         `/studio/courses/${course.id}/messages/${message.id}/accept`,
-        { method: "POST" },
+        { method: "POST", body: JSON.stringify(indexes ? { indexes } : {}) },
       );
       setCourse(result.course);
       setMessages((prev) => prev.map((item) => (item.id === result.message.id ? result.message : item)));
-      setOpen((prev) => {
-        const next = new Set(prev);
-        for (const unit of result.course.units) next.add(unit.code);
-        return next;
-      });
+      openUnits(result.course);
       setSavedNote("Course updated");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save that change.");
@@ -339,18 +416,118 @@ export function CreateCourse() {
     }
   }
 
-  async function dismiss(message: StudioMessage) {
+  async function acceptWave() {
+    if (!course) return;
+    const pending = pendingInPhase(messages, course.view.name);
+    if (pending.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      let latest = course;
+      const updates = new Map<string, StudioMessage>();
+      for (const message of pending) {
+        const result = await api<{ course: StudioCourse; message: StudioMessage }>(
+          `/studio/courses/${latest.id}/messages/${message.id}/accept`,
+          { method: "POST", body: JSON.stringify({}) },
+        );
+        latest = result.course;
+        updates.set(result.message.id, result.message);
+      }
+      setCourse(latest);
+      setMessages((prev) => prev.map((item) => updates.get(item.id) ?? item));
+      openUnits(latest);
+      setSavedNote("Course updated");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save that change.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function dismiss(message: StudioMessage, indexes?: number[]) {
     if (!course) return;
     setBusy(true);
     setError(null);
     try {
       const next = await api<StudioMessage>(
         `/studio/courses/${course.id}/messages/${message.id}/dismiss`,
-        { method: "POST" },
+        { method: "POST", body: JSON.stringify(indexes ? { indexes } : {}) },
       );
       setMessages((prev) => prev.map((item) => (item.id === next.id ? next : item)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not dismiss that change.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function postTemplate(kind: TemplateKind) {
+    if (!course) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const built = structureTemplate(
+        course.code,
+        kind,
+        course.sources,
+        course.units.map((unit) => unit.code),
+      );
+      const message = await api<StudioMessage>(`/studio/courses/${course.id}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ role: "assistant", content: built.content, proposal: built.proposal }),
+      });
+      setMessages((prev) => [...prev, message]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add that outline.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function undo() {
+    if (!course) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api<StudioCourse>(`/studio/courses/${course.id}/undo`, { method: "POST" });
+      const history = await api<StudioMessage[]>(`/studio/courses/${course.id}/messages`);
+      setCourse(next);
+      setMessages(history);
+      setEditing(null);
+      setSavedNote("Undone");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not undo that accept.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function beginEdit(draft: EditDraft) {
+    setEditing(draft);
+    setOpen((prev) => new Set(prev).add(draft.code));
+  }
+
+  async function saveEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!course || !editing) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api<StudioCourse>(`/studio/courses/${course.id}/edit`, {
+        method: "POST",
+        body: JSON.stringify({
+          kind: editing.kind,
+          code: editing.code,
+          title: editing.title,
+          learning_goal: editing.kind === "unit" ? undefined : editing.learningGoal,
+          success_criterion: editing.kind === "unit" ? undefined : editing.success,
+        }),
+      });
+      setCourse(next);
+      setEditing(null);
+      setSavedNote("Course updated");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save that edit.");
     } finally {
       setBusy(false);
     }
@@ -522,6 +699,11 @@ export function CreateCourse() {
                 </div>
                 <div className="studio-prefs-actions">
                   {savedNote ? <span className="studio-saved">{savedNote}</span> : null}
+                  {course.undo ? (
+                    <button className="ghost" type="button" disabled={busy} onClick={() => void undo()}>
+                      Undo last accept
+                    </button>
+                  ) : null}
                   <button
                     className="button"
                     type="button"
@@ -563,6 +745,46 @@ export function CreateCourse() {
                     : "Mark ready can be turned on."
                   : `Codes: ${course.view.codes.join(", ") || "none"}`}
               </p>
+              <div className="studio-tools">
+                {course.view.name === "structure" ? (
+                  <>
+                    <button type="button" className="ghost" disabled={busy} onClick={() => void postTemplate("periods")}>
+                      Three periods
+                    </button>
+                    <button type="button" className="ghost" disabled={busy} onClick={() => void postTemplate("units")}>
+                      Units and quests
+                    </button>
+                    <button type="button" className="ghost" disabled={busy} onClick={() => void postTemplate("framework")}>
+                      Framework outline
+                    </button>
+                  </>
+                ) : null}
+                {course.view.name === "goals" && course.view.codes.length > 0 ? (
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy}
+                    onClick={() => void ask(bulkPrompt("goals", course.view.codes))}
+                  >
+                    Write learning goals
+                  </button>
+                ) : null}
+                {course.view.name === "close" && course.view.codes.length > 0 ? (
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy}
+                    onClick={() => void ask(bulkPrompt("close", course.view.codes))}
+                  >
+                    Write closes
+                  </button>
+                ) : null}
+                {pendingInPhase(messages, course.view.name).length > 0 ? (
+                  <button type="button" className="button" disabled={busy} onClick={() => void acceptWave()}>
+                    Accept all in {course.view.label}
+                  </button>
+                ) : null}
+              </div>
               <div className="studio-ready">
                 <button
                   type="button"
@@ -596,20 +818,44 @@ export function CreateCourse() {
                       wave={listedCodes(course).includes(unit.code)}
                       open={open.has(unit.code)}
                       onToggle={() => toggle(unit.code)}
+                      onEdit={() =>
+                        beginEdit({
+                          kind: "unit",
+                          code: unit.code,
+                          title: unit.title,
+                          learningGoal: unit.learning_goal,
+                          success: unit.success_criterion,
+                        })
+                      }
                     >
+                      {editing?.code === unit.code ? (
+                        <EditRow draft={editing} busy={busy} onChange={setEditing} onSubmit={(event) => void saveEdit(event)} onCancel={() => setEditing(null)} />
+                      ) : null}
                       <Fact label="Goal" value={unit.learning_goal} />
                       <Fact label="Success" value={unit.success_criterion} />
                       <ul>
                         {unit.quests.map((quest) => (
-                          <Tier
-                            key={quest.id}
-                            code={quest.code}
-                            title={quest.title}
-                            marks={[waveLabel(course, quest.code)].filter((mark): mark is string => mark != null)}
-                            wave={listedCodes(course).includes(quest.code)}
-                            open={open.has(quest.code)}
-                            onToggle={() => toggle(quest.code)}
-                          >
+                              <Tier
+                                key={quest.id}
+                                code={quest.code}
+                                title={quest.title}
+                                marks={[waveLabel(course, quest.code)].filter((mark): mark is string => mark != null)}
+                                wave={listedCodes(course).includes(quest.code)}
+                                open={open.has(quest.code)}
+                                onToggle={() => toggle(quest.code)}
+                                onEdit={() =>
+                                  beginEdit({
+                                    kind: "quest",
+                                    code: quest.code,
+                                    title: quest.title,
+                                    learningGoal: quest.learning_goal,
+                                    success: quest.success_criterion,
+                                  })
+                                }
+                              >
+                                {editing?.code === quest.code ? (
+                                  <EditRow draft={editing} busy={busy} onChange={setEditing} onSubmit={(event) => void saveEdit(event)} onCancel={() => setEditing(null)} />
+                                ) : null}
                             <Fact label="Goal" value={quest.learning_goal} />
                             <Fact label="Success" value={quest.success_criterion} />
                             {quest.close ? <p className="studio-fact"><span>Close</span>{closeSummary(quest.close)}</p> : null}
@@ -633,7 +879,19 @@ export function CreateCourse() {
                                   wave={listedCodes(course).includes(move.code)}
                                   open={open.has(move.code)}
                                   onToggle={() => toggle(move.code)}
+                                  onEdit={() =>
+                                    beginEdit({
+                                      kind: "move",
+                                      code: move.code,
+                                      title: move.title,
+                                      learningGoal: move.learning_goal,
+                                      success: move.success_criterion,
+                                    })
+                                  }
                                 >
+                                  {editing?.code === move.code ? (
+                                    <EditRow draft={editing} busy={busy} onChange={setEditing} onSubmit={(event) => void saveEdit(event)} onCancel={() => setEditing(null)} />
+                                  ) : null}
                                   <Fact label="Goal" value={move.learning_goal} />
                                   <Fact label="Success" value={move.success_criterion} />
                                 </Tier>
@@ -661,15 +919,27 @@ export function CreateCourse() {
                       {message.proposal && !message.applied ? (
                         <div className="studio-proposal">
                           <p>Accept this change to update the course.</p>
-                          <ul>
+                          <ul className="studio-ops">
                             {message.proposal.operations.map((op, index) => (
-                              <li key={`${op.op}-${op.code}-${index}`}>{describeOperation(op)}</li>
+                              <li key={`${op.op}-${op.code}-${index}`} className="studio-op">
+                                <span>{describeOperation(op)}</span>
+                                <span className="studio-op-actions">
+                                  <button type="button" className="button" disabled={busy} onClick={() => void accept(message, [index])}>
+                                    Accept
+                                  </button>
+                                  <button type="button" className="ghost" disabled={busy} onClick={() => void dismiss(message, [index])}>
+                                    Skip
+                                  </button>
+                                </span>
+                              </li>
                             ))}
                           </ul>
                           <div className="rail-actions">
-                            <button type="button" className="button" disabled={busy} onClick={() => void accept(message)}>
-                              Accept
-                            </button>
+                            {message.proposal.operations.length > 1 ? (
+                              <button type="button" className="button" disabled={busy} onClick={() => void accept(message)}>
+                                Accept all
+                              </button>
+                            ) : null}
                             <button type="button" className="ghost" disabled={busy} onClick={() => void dismiss(message)}>
                               Dismiss
                             </button>

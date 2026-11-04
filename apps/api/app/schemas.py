@@ -565,6 +565,7 @@ class StudioCourseOut(BaseModel):
     strip: list[StudioStripOut]
     view: StudioViewOut
     units: list[StudioUnitOut]
+    undo: bool = False
     updated_at: datetime
 
 
@@ -629,6 +630,18 @@ class StudioPromptOut(BaseModel):
     system_prompt: str
     response_schema: dict
     temperature: float
+
+
+class StudioIndexesIn(BaseModel):
+    indexes: list[int] | None = None
+
+
+class StudioEditIn(BaseModel):
+    kind: Literal["unit", "quest", "move"]
+    code: str = Field(min_length=1, max_length=40)
+    title: str | None = None
+    learning_goal: str | None = None
+    success_criterion: str | None = None
 
 
 class StudioAcceptOut(BaseModel):
