@@ -2348,3 +2348,97 @@ def test_a_close_draft_patches_only_the_quests_it_names() -> None:
         assert [item.get("correct", False) for item in close["items"]] == [True, True, False]
     finally:
         _wipe("ZZPART")
+
+
+def test_a_close_draft_does_not_push_while_the_stage_is_goals() -> None:
+    course = _make("ZZBACK", "Back to goals")
+    course_id = course["id"]
+    try:
+        opened = client.post(f"/studio/courses/{course_id}/opening")
+        assert opened.status_code == 200, opened.text
+        added = client.post(
+            f"/studio/courses/{course_id}/tree",
+            json={"action": "add_quest", "title": "First"},
+        )
+        assert added.status_code == 200, added.text
+        assert client.post(f"/studio/courses/{course_id}/advance-stage").status_code == 200
+        goal = client.post(
+            f"/studio/courses/{course_id}/tree",
+            json={
+                "action": "add_goal",
+                "code": "ZZBACK-Q1",
+                "learning_goal": "Name the first idea.",
+                "success_criterion": "States the first idea.",
+            },
+        )
+        assert goal.status_code == 200, goal.text
+        assert client.post(f"/studio/courses/{course_id}/advance-stage").status_code == 200
+
+        close = _proposal(
+            course_id,
+            "An essay close for the first quest.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZBACK-Q1",
+                    close={
+                        "close_style": "one",
+                        "answer_style": "essay",
+                        "choice_mode": None,
+                        "items": [],
+                        "questions": [{"text": "Why does this quest matter?"}],
+                        "intent": "",
+                    },
+                )
+            ],
+        )
+        assert close.status_code == 200, close.text
+        assert close.json()["proposal"]["phase"] == "close"
+        ready = client.get(f"/studio/courses/{course_id}")
+        assert ready.status_code == 200, ready.text
+        assert ready.json()["can_push"] is True
+        assert ready.json()["stage_view"]["name"] == "close"
+
+        stepped = client.post(f"/studio/courses/{course_id}/stage", json={"name": "goals"})
+        assert stepped.status_code == 200, stepped.text
+        assert stepped.json()["stage_view"]["name"] == "goals"
+        assert stepped.json()["can_push"] is False
+        ignored = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert ignored.status_code == 200, ignored.text
+        assert "different stage" not in ignored.text
+        quest = ignored.json()["quests"][0]
+        assert quest["close"] is None
+        assert quest["goals"][0]["success_criterion"] == "States the first idea."
+        assert ignored.json()["can_push"] is False
+
+        revised = _proposal(
+            course_id,
+            "Revise the goal for this stage.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZBACK-Q1",
+                    goals=[
+                        {
+                            "position": 1,
+                            "learning_goal": "Name the revised idea.",
+                            "success_criterion": "States the revised idea.",
+                        }
+                    ],
+                )
+            ],
+        )
+        assert revised.status_code == 200, revised.text
+        assert revised.json()["proposal"]["phase"] == "goals"
+        waiting = client.get(f"/studio/courses/{course_id}")
+        assert waiting.json()["can_push"] is True
+        pushed = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert pushed.status_code == 200, pushed.text
+        saved = pushed.json()["quests"][0]
+        assert saved["goals"][0]["success_criterion"] == "States the revised idea."
+        assert saved["close"] is None
+        assert pushed.json()["stage_view"]["name"] == "goals"
+    finally:
+        _wipe("ZZBACK")

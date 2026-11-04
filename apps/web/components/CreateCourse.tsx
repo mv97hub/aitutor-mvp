@@ -531,7 +531,7 @@ export function CreateCourse() {
   }
 
   async function pushDraft() {
-    if (!course) return;
+    if (!course || !course.can_push) return;
     setBusy(true);
     setError(null);
     try {
@@ -873,6 +873,9 @@ export function CreateCourse() {
                       {message.applied ? <p className="studio-saved">Saved to the course.</p> : null}
                     </div>
                   ))}
+                  {course.stage_view.name !== "ready" && !course.can_push ? (
+                    <p className="ds-quiet">Ask for the change on this stage.</p>
+                  ) : null}
                   <div ref={endRef} />
                 </div>
               </div>
@@ -883,7 +886,12 @@ export function CreateCourse() {
                 </div>
               ) : null}
               {course.stage_view.name !== "ready" ? (
-                <button type="button" className="button studio-push" disabled={busy} onClick={() => void pushDraft()}>
+                <button
+                  type="button"
+                  className="button studio-push"
+                  disabled={busy || !course.can_push}
+                  onClick={() => void pushDraft()}
+                >
                   Push draft to Tree
                 </button>
               ) : null}

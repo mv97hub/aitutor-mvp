@@ -1977,17 +1977,34 @@ def _latest_draft(db: Session, course: StudioCourse) -> StudioMessage | None:
     return found
 
 
+def stage_draft(db: Session, course: StudioCourse) -> StudioMessage | None:
+    """The latest draft, and only when it belongs to the stage on screen."""
+    stage = active_stage_name(course)
+    if stage == "ready":
+        return None
+    message = _latest_draft(db, course)
+    if message is None:
+        return None
+    if _proposal_phase(message.proposal) != stage:
+        return None
+    return message
+
+
+def can_push_draft(course: StudioCourse) -> bool:
+    session = object_session(course)
+    if session is None:
+        return False
+    return stage_draft(session, course) is not None
+
+
 def push_draft(db: Session, course: StudioCourse) -> StudioCourse:
-    """Upsert the latest draft for the stage on screen. A second push updates the same codes."""
+    """Upsert the latest draft for the stage on screen. A draft from another stage is ignored."""
     stage = active_stage_name(course)
     if stage == "ready":
         raise StudioError("stage", "ready has no draft", plain="Ready has nothing to push. Click Final Submit above the tree.")
-    message = _latest_draft(db, course)
+    message = stage_draft(db, course)
     if message is None:
-        raise StudioError("proposal", "there is no draft", plain="There is no draft to push yet.")
-    phase = _proposal_phase(message.proposal)
-    if phase and phase != stage:
-        raise StudioError("phase", "draft is for another stage", plain="That draft is for a different stage. Open that stage to push it.")
+        return load_course(db, course.id) or course
     ops = _proposal_ops(message)
     _remember_undo(course, message)
     previous = _checker_view(course, stage)
@@ -2859,6 +2876,7 @@ def course_out(course: StudioCourse) -> StudioCourseOut:
         stage_view=_stage_view_out(course),
         stage_gaps=stage_gaps_for(course, active_stage_name(course)),
         can_advance=can_advance_stage(course),
+        can_push=can_push_draft(course),
         updated_at=course.updated_at,
     )
 

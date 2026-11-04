@@ -573,6 +573,7 @@ class StudioCourseOut(BaseModel):
     stage_view: StudioViewOut | None = None
     stage_gaps: list[str] = Field(default_factory=list)
     can_advance: bool = False
+    can_push: bool = False
     updated_at: datetime
 
 
