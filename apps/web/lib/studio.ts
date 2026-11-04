@@ -3,7 +3,14 @@ export type StudioClose = {
   answer_style: "multiple_choice" | "essay" | "mixed";
   choice_mode: "predefined" | "dynamic" | null;
   items: { text: string }[];
+  questions: { text: string }[];
   intent: string;
+};
+
+export type StudioGoal = {
+  position: number;
+  learning_goal: string;
+  success_criterion: string;
 };
 
 export type StudioMove = {
@@ -22,38 +29,29 @@ export type StudioQuest = {
   title: string;
   learning_goal: string;
   success_criterion: string;
+  goals: StudioGoal[];
   close: StudioClose | null;
   moves: StudioMove[];
 };
 
-export type StudioUnit = {
-  id: string;
-  code: string;
-  position: number;
-  title: string;
-  learning_goal: string;
-  success_criterion: string;
-  quests: StudioQuest[];
-};
-
-export type StudioPhaseName = "structure" | "goals" | "close" | "ready";
+export type StudioPhaseName = "quests" | "goals" | "close" | "ready";
 
 export type StudioPhase = {
   name: StudioPhaseName;
-  label: "Structure" | "Goals" | "Close" | "Ready";
+  label: "Quests" | "Goals/Success Criteria" | "Close" | "Ready";
   open_codes: string[];
 };
 
 export type StudioStripPhase = {
   name: StudioPhaseName;
-  label: "Structure" | "Goals" | "Close" | "Ready";
+  label: "Quests" | "Goals/Success Criteria" | "Close" | "Ready";
   filled: boolean;
   active: boolean;
 };
 
 export type StudioView = {
   name: StudioPhaseName;
-  label: "Structure" | "Goals" | "Close" | "Ready";
+  label: "Quests" | "Goals/Success Criteria" | "Close" | "Ready";
   codes: string[];
 };
 
@@ -74,7 +72,9 @@ export type StudioCourse = {
   phase: StudioPhase;
   strip: StudioStripPhase[];
   view: StudioView;
-  units: StudioUnit[];
+  quests: StudioQuest[];
+  quest_count: number;
+  goals_per_quest: number;
   undo: boolean;
   updated_at: string;
 };
@@ -88,7 +88,7 @@ export type StudioSummary = {
 
 export type StudioOperation = {
   op: "add" | "update" | "remove";
-  kind: "course" | "unit" | "quest" | "move";
+  kind: "course" | "quest" | "move";
   code: string;
   parent?: string | null;
   title?: string | null;
@@ -130,7 +130,8 @@ export function describeOperation(op: StudioOperation): string {
 }
 
 export function closeSummary(close: StudioClose): string {
-  const question = close.close_style === "one" ? "One question" : "Several questions";
+  const count = close.questions?.length ?? 0;
+  const question = count === 0 ? "No questions" : close.close_style === "one" ? "One question" : "Several questions";
   const answer =
     close.answer_style === "multiple_choice"
       ? "Multiple choice"
