@@ -2217,3 +2217,134 @@ def test_quest_count_and_goals_per_quest_save_and_are_not_a_cap() -> None:
         assert planted.json()["course"]["quest_count"] == 4
     finally:
         _wipe("ZZQCNT")
+
+
+def test_a_close_draft_patches_only_the_quests_it_names() -> None:
+    course = _make("ZZPART", "Partial")
+    course_id = course["id"]
+    try:
+        opened = client.post(f"/studio/courses/{course_id}/opening")
+        assert opened.status_code == 200, opened.text
+        for title in ("First", "Second", "Third"):
+            added = client.post(
+                f"/studio/courses/{course_id}/tree",
+                json={"action": "add_quest", "title": title},
+            )
+            assert added.status_code == 200, added.text
+
+        retitle = _proposal(
+            course_id,
+            "Revise the second quest only.",
+            [_full("update", "quest", "ZZPART-Q2", title="Second revised")],
+        )
+        assert retitle.status_code == 200, retitle.text
+        quests_push = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert quests_push.status_code == 200, quests_push.text
+        titles = {quest["code"]: quest["title"] for quest in quests_push.json()["quests"]}
+        assert titles == {
+            "ZZPART-Q1": "First",
+            "ZZPART-Q2": "Second revised",
+            "ZZPART-Q3": "Third",
+        }
+
+        advanced = client.post(f"/studio/courses/{course_id}/advance-stage")
+        assert advanced.status_code == 200, advanced.text
+        for code in ("ZZPART-Q1", "ZZPART-Q2", "ZZPART-Q3"):
+            goal = client.post(
+                f"/studio/courses/{course_id}/tree",
+                json={
+                    "action": "add_goal",
+                    "code": code,
+                    "learning_goal": f"Goal for {code}",
+                    "success_criterion": f"States a fact from {code}.",
+                },
+            )
+            assert goal.status_code == 200, goal.text
+
+        goals = _proposal(
+            course_id,
+            "Revise only the second goal.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZPART-Q2",
+                    goals=[
+                        {
+                            "position": 1,
+                            "learning_goal": "Goal for ZZPART-Q2 revised",
+                            "success_criterion": "States the revised fact.",
+                        }
+                    ],
+                )
+            ],
+        )
+        assert goals.status_code == 200, goals.text
+        goals_push = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert goals_push.status_code == 200, goals_push.text
+        by_code = {quest["code"]: quest for quest in goals_push.json()["quests"]}
+        assert by_code["ZZPART-Q1"]["goals"][0]["success_criterion"] == "States a fact from ZZPART-Q1."
+        assert by_code["ZZPART-Q2"]["goals"][0]["success_criterion"] == "States the revised fact."
+        assert by_code["ZZPART-Q3"]["goals"][0]["success_criterion"] == "States a fact from ZZPART-Q3."
+
+        to_close = client.post(f"/studio/courses/{course_id}/advance-stage")
+        assert to_close.status_code == 200, to_close.text
+
+        def essay(text: str) -> dict:
+            return {
+                "close_style": "one",
+                "answer_style": "essay",
+                "choice_mode": None,
+                "items": [],
+                "questions": [{"text": text}],
+                "intent": "",
+            }
+
+        for code, text in (
+            ("ZZPART-Q1", "Essay one"),
+            ("ZZPART-Q2", "Essay two"),
+            ("ZZPART-Q3", "Essay three"),
+        ):
+            saved = client.post(
+                f"/studio/courses/{course_id}/tree",
+                json={"action": "set_close", "code": code, "close": essay(text)},
+            )
+            assert saved.status_code == 200, saved.text
+
+        multi = {
+            "close_style": "one",
+            "answer_style": "multiple_choice",
+            "choice_mode": "predefined",
+            "selection": "multi",
+            "items": [
+                {"text": "Science", "correct": True},
+                {"text": "Medicine", "correct": True},
+                {"text": "Farming", "correct": False},
+            ],
+            "questions": [{"text": "Which fields?"}],
+            "intent": "",
+        }
+        drafted = _proposal(
+            course_id,
+            "Change only the second close to multi-choice.",
+            [
+                _full("update", "quest", "ZZPART-Q2", close=multi),
+                _full("update", "quest", "ZZPART-Q1", title="Do not rename", close=None),
+            ],
+        )
+        assert drafted.status_code == 200, drafted.text
+        pushed = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert pushed.status_code == 200, pushed.text
+        quests = {quest["code"]: quest for quest in pushed.json()["quests"]}
+        assert quests["ZZPART-Q1"]["title"] == "First"
+        assert quests["ZZPART-Q1"]["close"]["answer_style"] == "essay"
+        assert quests["ZZPART-Q1"]["close"]["questions"][0]["text"] == "Essay one"
+        assert quests["ZZPART-Q3"]["close"]["answer_style"] == "essay"
+        assert quests["ZZPART-Q3"]["close"]["questions"][0]["text"] == "Essay three"
+        close = quests["ZZPART-Q2"]["close"]
+        assert close["answer_style"] == "multiple_choice"
+        assert close["selection"] == "multi"
+        assert [item["text"] for item in close["items"]] == ["Science", "Medicine", "Farming"]
+        assert [item.get("correct", False) for item in close["items"]] == [True, True, False]
+    finally:
+        _wipe("ZZPART")
