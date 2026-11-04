@@ -375,10 +375,10 @@ class StudioCourse(Base):
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
 
-    units: Mapped[list["StudioUnit"]] = relationship(
+    quests: Mapped[list["StudioQuest"]] = relationship(
         back_populates="course",
         cascade="all, delete-orphan",
-        order_by="StudioUnit.position",
+        order_by="StudioQuest.position",
     )
     messages: Mapped[list["StudioMessage"]] = relationship(
         back_populates="course",
@@ -387,32 +387,9 @@ class StudioCourse(Base):
     )
 
 
-class StudioUnit(Base):
-    __tablename__ = "studio_units"
-    __table_args__ = (
-        UniqueConstraint("course_id", "code", name="uq_studio_units_course_code"),
-        CheckConstraint("position >= 1", name="ck_studio_units_position"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    course_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("studio_courses.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    code: Mapped[str] = mapped_column(String(40), nullable=False)
-    position: Mapped[int] = mapped_column(Integer, nullable=False)
-    title: Mapped[str] = mapped_column(String(240), nullable=False)
-    learning_goal: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    success_criterion: Mapped[str] = mapped_column(Text, nullable=False, default="")
-
-    course: Mapped[StudioCourse] = relationship(back_populates="units")
-    quests: Mapped[list["StudioQuest"]] = relationship(
-        back_populates="unit",
-        cascade="all, delete-orphan",
-        order_by="StudioQuest.position",
-    )
-
-
 class StudioQuest(Base):
+    """A quest on the course. There is no unit tier."""
+
     __tablename__ = "studio_quests"
     __table_args__ = (
         UniqueConstraint("course_id", "code", name="uq_studio_quests_course_code"),
@@ -423,26 +400,48 @@ class StudioQuest(Base):
     course_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("studio_courses.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    unit_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("studio_units.id", ondelete="CASCADE"), nullable=False, index=True
-    )
     code: Mapped[str] = mapped_column(String(40), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(240), nullable=False)
     learning_goal: Mapped[str] = mapped_column(Text, nullable=False, default="")
     success_criterion: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
-    unit: Mapped[StudioUnit] = relationship(back_populates="quests")
+    course: Mapped[StudioCourse] = relationship(back_populates="quests")
     close: Mapped["StudioQuestClose | None"] = relationship(
         back_populates="quest",
         cascade="all, delete-orphan",
         uselist=False,
+    )
+    goals: Mapped[list["StudioQuestGoal"]] = relationship(
+        back_populates="quest",
+        cascade="all, delete-orphan",
+        order_by="StudioQuestGoal.position",
     )
     moves: Mapped[list["StudioMove"]] = relationship(
         back_populates="quest",
         cascade="all, delete-orphan",
         order_by="StudioMove.position",
     )
+
+
+class StudioQuestGoal(Base):
+    """A goal after the first. The quest columns remain goal 1."""
+
+    __tablename__ = "studio_quest_goals"
+    __table_args__ = (
+        UniqueConstraint("quest_id", "position", name="uq_studio_quest_goals_position"),
+        CheckConstraint("position >= 2", name="ck_studio_quest_goals_position"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    quest_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("studio_quests.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    learning_goal: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    success_criterion: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    quest: Mapped[StudioQuest] = relationship(back_populates="goals")
 
 
 class StudioMove(Base):

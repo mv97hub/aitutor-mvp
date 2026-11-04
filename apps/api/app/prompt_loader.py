@@ -5,13 +5,15 @@ The engine package itself does not import the database.
 
 from __future__ import annotations
 
-from sqlalchemy.orm import object_session
+from sqlalchemy import select
+from sqlalchemy.orm import object_session, selectinload
 
 from app.engine.assemble import assemble
 from app.engine.choices import pacing_for, strictness_for
 from app.engine.defaults import age_band_for
 from app.engine.placeholders import memory_layer, metacognition_layer
 from app.engine.types import (
+    GoalPoint,
     HintLadder,
     Layer1Beat,
     Layer2Student,
@@ -25,7 +27,7 @@ from app.engine.types import (
     WidgetGrade,
     WidgetTask,
 )
-from app.models import Beat, Session as TutorSession
+from app.models import Beat, Session as TutorSession, StudioCourse, StudioQuest
 from app.queries import (
     awaiting_tap_reply,
     choice_offer,
@@ -180,10 +182,41 @@ def _failed(tutor_session: TutorSession, beat_id) -> int:
     )
 
 
+def _studio_overlay(db, course_code: str, quest_code: str) -> tuple[tuple[GoalPoint, ...], bool]:
+    """Goals and an empty close from a studio quest with the same codes. Kid rows stay as they are."""
+    if db is None or not course_code or not quest_code:
+        return (), False
+    row = db.scalar(
+        select(StudioQuest)
+        .join(StudioCourse)
+        .where(StudioCourse.code == course_code, StudioQuest.code == quest_code)
+        .options(selectinload(StudioQuest.goals), selectinload(StudioQuest.close))
+    )
+    if row is None:
+        return (), False
+    extras = list(row.goals or [])
+    points: list[GoalPoint] = []
+    has_first = bool(str(row.learning_goal or "").strip() or str(row.success_criterion or "").strip())
+    if has_first or extras:
+        points.append(GoalPoint(row.learning_goal or "", row.success_criterion or ""))
+    for extra in sorted(extras, key=lambda item: item.position):
+        points.append(GoalPoint(extra.learning_goal or "", extra.success_criterion or ""))
+    empty_close = False
+    if row.close is not None:
+        stored = row.close.items
+        if isinstance(stored, dict) and isinstance(stored.get("questions"), list):
+            questions = stored["questions"]
+        else:
+            questions = []
+        empty_close = len(questions) == 0
+    return tuple(points), empty_close
+
+
 def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> PromptBundle:
     quest = tutor_session.quest
     unit = quest.unit
     course = unit.course
+    studio_goals, empty_close = _studio_overlay(object_session(tutor_session), course.code, quest.code)
     student = tutor_session.student
     beats = ordered_beats(quest)
     quest_objective = _quest_objective(quest)
@@ -249,6 +282,8 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             requires_teach_back=bool(quest.requires_teach_back),
             opening_idea=opening_idea,
             course_code=course.code,
+            goals=studio_goals,
+            empty_close=empty_close,
         )
         attempt_count = 0
     else:
@@ -280,6 +315,8 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             requires_teach_back=bool(quest.requires_teach_back),
             opening_idea=opening_idea,
             course_code=course.code,
+            goals=studio_goals,
+            empty_close=empty_close,
         )
         attempt_count = 0 if finished or current is None else _failed(tutor_session, current.id)
     interests = tuple(str(item) for item in (student.interests or []) if str(item).strip())

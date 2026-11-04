@@ -58,6 +58,14 @@ class WidgetTask:
 
 
 @dataclass(frozen=True)
+class GoalPoint:
+    """One studio goal and the criterion that finishes it."""
+
+    learning_goal: str
+    success_criterion: str
+
+
+@dataclass(frozen=True)
 class Layer1Beat:
     """Active Tier 4 beat, plus the unit continuity sentence."""
 
@@ -86,6 +94,8 @@ class Layer1Beat:
     requires_teach_back: bool = False
     opening_idea: str = ""
     course_code: str = ""
+    goals: tuple[GoalPoint, ...] = ()
+    empty_close: bool = False
 
 
 @dataclass(frozen=True)

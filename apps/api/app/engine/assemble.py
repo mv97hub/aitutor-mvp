@@ -464,6 +464,16 @@ def _layer1(
         )
     if beat.widget is not None and beat.beat_role in {"try", "show"} and not hold_widget:
         lines.extend(_widget_lines(beat.widget, reveal=reveal))
+    if beat.goals or beat.empty_close:
+        if beat.goals:
+            lines.append(
+                "Walk these goals in order. Each goal is a discussion point, finished by its own criterion, before the close."
+            )
+            for index, point in enumerate(beat.goals, start=1):
+                lines.append(f"Goal {index}: {point.learning_goal.strip() or 'None.'}")
+                lines.append(f"Criterion {index}: {point.success_criterion.strip() or 'None.'}")
+        if beat.empty_close and beat.beat_role == "show":
+            lines.append("The close has no question. End the quest without asking one. Set advance to true.")
     return lines
 
 

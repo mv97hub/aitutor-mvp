@@ -18,8 +18,8 @@ from app.models import (
     StudioMove,
     StudioQuest,
     StudioQuestClose,
+    StudioQuestGoal,
     StudioSettings,
-    StudioUnit,
 )
 from app.seed import seed
 from app.studio import description_is_specific, is_explicit_confirm, rejection_reply
@@ -29,6 +29,7 @@ client = TestClient(app)
 REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "009_studio.py"
 READY_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "010_studio_ready.py"
 QUIZ_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "011_studio_quiz_minutes.py"
+LIFT_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "012_quests_on_course.py"
 
 
 def _wipe(code: str) -> None:
@@ -140,10 +141,10 @@ def test_patch_checker_rejects_unknown_parent_bad_close_and_prose() -> None:
                     "operations": [
                         _full(
                             "add",
-                            "quest",
-                            "ZZGEO-U9-Q1",
+                            "move",
+                            "ZZGEO-U9-M1",
                             parent="ZZGEO-U9",
-                            title="Missing unit",
+                            title="Missing quest",
                         )
                     ]
                 },
@@ -159,12 +160,11 @@ def test_patch_checker_rejects_unknown_parent_bad_close_and_prose() -> None:
                 "content": "The close style is not allowed.",
                 "proposal": {
                     "operations": [
-                        _full("add", "unit", "ZZGEO-U1", parent="ZZGEO", title="Angles"),
+                        _full("add", "quest", "ZZGEO-Q1", title="Angles"),
                         _full(
                             "add",
                             "quest",
-                            "ZZGEO-U1-Q1",
-                            parent="ZZGEO-U1",
+                            "ZZGEO-Q2",
                             title="Name an angle",
                             close={
                                 "close_style": "quiz",
@@ -181,7 +181,7 @@ def test_patch_checker_rejects_unknown_parent_bad_close_and_prose() -> None:
         assert bad_close.status_code == 200, bad_close.text
         assert "Close style must be one or several." in bad_close.json()["content"]
         assert "close_style:" not in bad_close.json()["content"]
-        assert [op["code"] for op in bad_close.json()["proposal"]["operations"]] == ["ZZGEO-U1"]
+        assert [op["code"] for op in bad_close.json()["proposal"]["operations"]] == ["ZZGEO-Q1"]
 
         prose = client.post(
             f"/studio/courses/{course_id}/messages",
@@ -201,12 +201,11 @@ def test_patch_checker_rejects_unknown_parent_bad_close_and_prose() -> None:
                 "content": "Dynamic choices cannot store items.",
                 "proposal": {
                     "operations": [
-                        _full("add", "unit", "ZZGEO-U1", parent="ZZGEO", title="Angles"),
+                        _full("add", "quest", "ZZGEO-Q1", title="Angles"),
                         _full(
                             "add",
                             "quest",
-                            "ZZGEO-U1-Q1",
-                            parent="ZZGEO-U1",
+                            "ZZGEO-Q2",
                             title="Classify",
                             close={
                                 "close_style": "one",
@@ -223,15 +222,16 @@ def test_patch_checker_rejects_unknown_parent_bad_close_and_prose() -> None:
         assert dynamic_items.status_code == 200, dynamic_items.text
         assert "Dynamic choices store the intent, not the items." in dynamic_items.json()["content"]
         assert "items:" not in dynamic_items.json()["content"]
-        assert [op["code"] for op in dynamic_items.json()["proposal"]["operations"]] == ["ZZGEO-U1"]
+        assert [op["code"] for op in dynamic_items.json()["proposal"]["operations"]] == ["ZZGEO-Q1"]
 
         saved = client.get(f"/studio/courses/{course_id}").json()
-        assert saved["units"] == []
+        assert saved["quests"] == []
+        assert "units" not in saved
         stored = client.get(f"/studio/courses/{course_id}/messages").json()
         assert stored
         assert all(message["applied"] is False for message in stored)
         assert all(
-            op["code"] == "ZZGEO-U1" for message in stored for op in message["proposal"]["operations"]
+            op["code"] == "ZZGEO-Q1" for message in stored for op in message["proposal"]["operations"]
         )
         tutor_codes = [row["code"] for row in client.get("/courses").json()]
         assert "ZZGEO" not in tutor_codes
@@ -271,30 +271,19 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
             f"/studio/courses/{course_id}/messages",
             json={
                 "role": "assistant",
-                "content": "Add the first unit and two quests. Nothing is saved until you accept.",
+                "content": "Add two quests. Nothing is saved until you accept.",
                 "proposal": {
                     "operations": [
                         _full(
                             "add",
-                            "unit",
-                            "ZZGEO-U1",
-                            parent="ZZGEO",
-                            title="Triangles",
-                            learning_goal="A triangle is a three-sided polygon.",
-                            success_criterion="The learner names three sides.",
-                        ),
-                        _full(
-                            "add",
                             "quest",
                             "ZZGEO-U1-Q1",
-                            parent="ZZGEO-U1",
                             title="Three sides",
                         ),
                         _full(
                             "add",
                             "quest",
                             "ZZGEO-U1-Q2",
-                            parent="ZZGEO-U1",
                             title="Angle sum",
                             close={
                                 "close_style": "several",
@@ -322,7 +311,7 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
             },
         )
         assert draft.status_code == 200, draft.text
-        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+        assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
         message_id = draft.json()["id"]
 
         duplicate = client.post(
@@ -332,33 +321,32 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
                 "content": "That code is taken.",
                 "proposal": {
                     "operations": [
-                        _full("add", "unit", "ZZGEO-U1", parent="ZZGEO", title="Again"),
-                        _full("add", "quest", "ZZGEO-U1", parent="ZZGEO-U1", title="Same code"),
+                        _full("add", "quest", "ZZGEO-Q1", title="Again"),
+                        _full("add", "move", "ZZGEO-Q1", parent="ZZGEO-Q1", title="Same code"),
                     ]
                 },
             },
         )
         assert duplicate.status_code == 200, duplicate.text
-        assert "ZZGEO-U1 is already a unit." in duplicate.json()["content"]
+        assert "ZZGEO-Q1 is already a quest." in duplicate.json()["content"]
         assert "code:" not in duplicate.json()["content"]
-        assert [op["kind"] for op in duplicate.json()["proposal"]["operations"]] == ["unit"]
-        reply = rejection_reply("That code is taken.", "ZZGEO-U1 is already a unit.")
-        assert reply == "ZZGEO-U1 is already a unit."
+        assert [op["kind"] for op in duplicate.json()["proposal"]["operations"]] == ["quest"]
+        reply = rejection_reply("That code is taken.", "ZZGEO-Q1 is already a quest.")
+        assert reply == "ZZGEO-Q1 is already a quest."
         assert "saved" not in reply.lower()
         assert "accepted" not in reply.lower()
 
         accepted = client.post(f"/studio/courses/{course_id}/messages/{message_id}/accept")
         assert accepted.status_code == 200, accepted.text
         tree = accepted.json()["course"]
-        assert tree["units"][0]["code"] == "ZZGEO-U1"
+        assert [quest["code"] for quest in tree["quests"]] == ["ZZGEO-U1-Q1", "ZZGEO-U1-Q2"]
         assert tree["ready"] is False
         assert tree["close_default"]["choice_mode"] == "dynamic"
-        quests = {quest["code"]: quest for quest in tree["units"][0]["quests"]}
+        quests = {quest["code"]: quest for quest in tree["quests"]}
         assert quests["ZZGEO-U1-Q1"]["close"] is None
         assert quests["ZZGEO-U1-Q1"]["learning_goal"] == ""
         assert "ZZGEO-U1-Q1: no learning goal" in tree["gaps"]
         assert "ZZGEO-U1-Q1: no close style" in tree["gaps"]
-        assert "ZZGEO-U1: no learning goal" not in tree["gaps"]
         assert "ZZGEO-U1-Q1-M1: no learning goal" not in tree["gaps"]
         assert "ZZGEO-U1-Q2: no close style" not in tree["gaps"]
         assert quests["ZZGEO-U1-Q2"]["close"]["choice_mode"] == "predefined"
@@ -370,7 +358,7 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
         assert quests["ZZGEO-U1-Q1"]["moves"][0]["code"] == "ZZGEO-U1-Q1-M1"
         assert accepted.json()["message"]["applied"] is True
         fresh = client.get(f"/studio/courses/{course_id}").json()
-        fresh_quests = {quest["code"]: quest for quest in fresh["units"][0]["quests"]}
+        fresh_quests = {quest["code"]: quest for quest in fresh["quests"]}
         assert fresh_quests["ZZGEO-U1-Q1"]["close"] is None
         assert "ZZGEO-U1-Q1: no close style" in fresh["gaps"]
         assert fresh_quests["ZZGEO-U1-Q2"]["close"]["items"][1]["text"] == "180 degrees"
@@ -378,7 +366,7 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
         again = client.post(f"/studio/courses/{course_id}/messages/{message_id}/accept")
         assert again.status_code == 409
 
-        stepped = client.post(f"/studio/courses/{course_id}/phase", json={"name": "structure"})
+        stepped = client.post(f"/studio/courses/{course_id}/phase", json={"name": "quests"})
         assert stepped.status_code == 200, stepped.text
         renamed = client.post(
             f"/studio/courses/{course_id}/messages",
@@ -405,14 +393,14 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
         assert removed.status_code == 200, removed.text
         gone = client.post(f"/studio/courses/{course_id}/messages/{removed.json()['id']}/accept")
         assert gone.status_code == 200, gone.text
-        after_remove = gone.json()["course"]["units"][0]
-        assert [quest["code"] for quest in after_remove["quests"]] == ["ZZGEO-U1-Q2"]
+        after_remove = gone.json()["course"]["quests"]
+        assert [quest["code"] for quest in after_remove] == ["ZZGEO-U1-Q2"]
         stale = client.post(f"/studio/courses/{course_id}/messages/{renamed_id}/accept")
         assert stale.status_code == 200, stale.text
-        assert stale.json()["course"]["units"][0]["quests"][0]["title"] == "Interior angle sum"
+        assert stale.json()["course"]["quests"][0]["title"] == "Interior angle sum"
 
         panel = client.get(f"/studio/courses/{course_id}").json()
-        assert panel["units"][0]["quests"][0]["title"] == "Interior angle sum"
+        assert panel["quests"][0]["title"] == "Interior angle sum"
         assert panel["focus"] == "triangles"
     finally:
         _wipe("ZZGEO")
@@ -501,16 +489,6 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
         )
         db.add(course)
         db.flush()
-        unit = StudioUnit(
-            course_id=course.id,
-            code="ZZSEED-U1",
-            position=1,
-            title="Angles",
-            learning_goal="An angle is a turn.",
-            success_criterion="The learner points to the vertex.",
-        )
-        course.units.append(unit)
-        db.flush()
         studio_quest = StudioQuest(
             course_id=course.id,
             code="ZZSEED-U1-Q1",
@@ -519,7 +497,7 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
             learning_goal="Name the corner.",
             success_criterion="The learner says vertex.",
         )
-        unit.quests.append(studio_quest)
+        course.quests.append(studio_quest)
         db.flush()
         studio_quest.close = StudioQuestClose(
             close_style="several",
@@ -557,7 +535,6 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
         tutor_message_id = tutor_message.id
         ids = {
             "course": course.id,
-            "unit": unit.id,
             "quest": studio_quest.id,
             "close": studio_quest.close.id,
             "move": move.id,
@@ -565,7 +542,6 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
         }
         before = {
             "courses": db.scalar(select(func.count()).select_from(StudioCourse)),
-            "units": db.scalar(select(func.count()).select_from(StudioUnit)),
             "quests": db.scalar(select(func.count()).select_from(StudioQuest)),
             "moves": db.scalar(select(func.count()).select_from(StudioMove)),
             "closes": db.scalar(select(func.count()).select_from(StudioQuestClose)),
@@ -579,7 +555,6 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
 
         after = {
             "courses": db.scalar(select(func.count()).select_from(StudioCourse)),
-            "units": db.scalar(select(func.count()).select_from(StudioUnit)),
             "quests": db.scalar(select(func.count()).select_from(StudioQuest)),
             "moves": db.scalar(select(func.count()).select_from(StudioMove)),
             "closes": db.scalar(select(func.count()).select_from(StudioQuestClose)),
@@ -588,7 +563,6 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
         }
         assert after == before
         kept_course = db.get(StudioCourse, ids["course"])
-        kept_unit = db.get(StudioUnit, ids["unit"])
         kept_quest = db.get(StudioQuest, ids["quest"])
         kept_close = db.get(StudioQuestClose, ids["close"])
         kept_move = db.get(StudioMove, ids["move"])
@@ -597,7 +571,6 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
         assert kept_course is not None and kept_course.title == "Seed survivor"
         assert kept_course.focus == "angles"
         assert kept_course.schema_version == 1
-        assert kept_unit is not None and kept_unit.code == "ZZSEED-U1"
         assert kept_quest is not None and kept_quest.learning_goal == "Name the corner."
         assert kept_close is not None and kept_close.intent.startswith("Ask for a turn")
         assert kept_close.items == []
@@ -638,7 +611,7 @@ def test_rejected_position_does_not_save_or_claim_it_saved() -> None:
         rejected = _proposal(
             course_id,
             claim,
-            [_full("add", "unit", "ZZGEO-U1", parent="ZZGEO", title="Exile", position=0)],
+            [_full("add", "quest", "ZZGEO-U1", parent="ZZGEO", title="Exile", position=0)],
         )
         assert rejected.status_code == 422
         reason = rejected.json()["detail"]
@@ -647,40 +620,40 @@ def test_rejected_position_does_not_save_or_claim_it_saved() -> None:
         assert reply == reason
         assert "saved" not in reply.lower()
         assert "accepted" not in reply.lower()
-        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+        assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
         assert client.get(f"/studio/courses/{course_id}/messages").json() == []
 
         mixed = _proposal(
             course_id,
             claim,
             [
-                _full("add", "unit", "ZZGEO-U1", parent="ZZGEO", title="Exile", learning_goal="The story begins."),
-                _full("add", "quest", "ZZGEO-U1-Q1", parent="ZZGEO-U1", title="The bow", position=0),
+                _full("add", "quest", "ZZGEO-U1", title="Exile", learning_goal="The story begins."),
+                _full("add", "quest", "ZZGEO-U1-Q1", title="The bow", position=0),
             ],
         )
         assert mixed.status_code == 200, mixed.text
         assert "Position must be an integer from 1 to 200." in mixed.json()["content"]
         assert [op["code"] for op in mixed.json()["proposal"]["operations"]] == ["ZZGEO-U1"]
-        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+        assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
 
         outside = _proposal(
             course_id,
             claim,
-            [_full("add", "unit", "ZZGEO-U1", parent="ZZGEO", title="Exile", position=201)],
+            [_full("add", "quest", "ZZGEO-U1", parent="ZZGEO", title="Exile", position=201)],
         )
         assert outside.status_code == 422
         assert outside.json()["detail"] == "Position must be an integer from 1 to 200."
-        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+        assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
 
         past = _proposal(
             course_id,
             claim,
-            [_full("add", "unit", "ZZGEO-U1", parent="ZZGEO", title="Exile", position=5)],
+            [_full("add", "quest", "ZZGEO-U1", parent="ZZGEO", title="Exile", position=5)],
         )
         assert past.status_code == 422
         assert past.json()["detail"] == "Position is past the end of this list."
         assert "saved" not in past.json()["detail"].lower()
-        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+        assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
         assert len(client.get(f"/studio/courses/{course_id}/messages").json()) == 1
     finally:
         _wipe("ZZGEO")
@@ -690,7 +663,7 @@ def test_missing_position_is_filled_with_the_next_free_number() -> None:
     course = _make()
     course_id = course["id"]
     try:
-        omitted = _full("add", "unit", "ZZGEO-U2", parent="ZZGEO", title="Return", learning_goal="The city stands.")
+        omitted = _full("add", "quest", "ZZGEO-U2", parent="ZZGEO", title="Return", learning_goal="The city stands.")
         del omitted["position"]
         draft = _proposal(
             course_id,
@@ -698,7 +671,7 @@ def test_missing_position_is_filled_with_the_next_free_number() -> None:
             [
                 _full(
                     "add",
-                    "unit",
+                    "quest",
                     "ZZGEO-U1",
                     parent="ZZGEO",
                     title="Exile",
@@ -711,10 +684,10 @@ def test_missing_position_is_filled_with_the_next_free_number() -> None:
         assert draft.status_code == 200, draft.text
         accepted = client.post(f"/studio/courses/{course_id}/messages/{draft.json()['id']}/accept")
         assert accepted.status_code == 200, accepted.text
-        units = accepted.json()["course"]["units"]
+        units = accepted.json()["course"]["quests"]
         assert [(unit["code"], unit["position"]) for unit in units] == [("ZZGEO-U1", 1), ("ZZGEO-U2", 2)]
         fresh = client.get(f"/studio/courses/{course_id}").json()
-        assert [(unit["code"], unit["position"]) for unit in fresh["units"]] == [("ZZGEO-U1", 1), ("ZZGEO-U2", 2)]
+        assert [(unit["code"], unit["position"]) for unit in fresh["quests"]] == [("ZZGEO-U1", 1), ("ZZGEO-U2", 2)]
     finally:
         _wipe("ZZGEO")
 
@@ -727,15 +700,6 @@ def test_partial_quest_is_stored_and_reported_as_a_gap() -> None:
             course_id,
             "A quest can be saved before its goal and close are known.",
             [
-                _full(
-                    "add",
-                    "unit",
-                    "ZZGEO-U1",
-                    parent="ZZGEO",
-                    title="Exile",
-                    learning_goal="The story begins.",
-                    position=None,
-                ),
                 _full(
                     "add",
                     "quest",
@@ -752,7 +716,7 @@ def test_partial_quest_is_stored_and_reported_as_a_gap() -> None:
         accepted = client.post(f"/studio/courses/{course_id}/messages/{draft.json()['id']}/accept")
         assert accepted.status_code == 200, accepted.text
         tree = accepted.json()["course"]
-        quest = tree["units"][0]["quests"][0]
+        quest = tree["quests"][0]
         assert quest["code"] == "ZZGEO-U1-Q1"
         assert quest["position"] == 1
         assert quest["learning_goal"] == ""
@@ -769,7 +733,7 @@ def test_partial_quest_is_stored_and_reported_as_a_gap() -> None:
         assert "saved" not in blocked.json()["detail"].lower()
         still = client.get(f"/studio/courses/{course_id}").json()
         assert still["ready"] is False
-        assert still["units"][0]["quests"][0]["code"] == "ZZGEO-U1-Q1"
+        assert still["quests"][0]["code"] == "ZZGEO-U1-Q1"
         tutor_codes = [row["code"] for row in client.get("/courses").json()]
         assert "ZZGEO" not in tutor_codes
     finally:
@@ -786,19 +750,12 @@ def test_mark_ready_records_completion_and_reopens_when_a_gap_returns() -> None:
             [
                 _full(
                     "add",
-                    "unit",
-                    "ZZGEO-U1",
-                    parent="ZZGEO",
-                    title="Exile",
-                    learning_goal="The story begins.",
-                ),
-                _full(
-                    "add",
                     "quest",
                     "ZZGEO-U1-Q1",
                     parent="ZZGEO-U1",
                     title="The bow",
                     learning_goal="Name the bow.",
+                    success_criterion="States the name of the bow.",
                     close={
                         "close_style": "one",
                         "answer_style": "essay",
@@ -843,7 +800,7 @@ def test_mark_ready_records_completion_and_reopens_when_a_gap_returns() -> None:
         assert applied.status_code == 200, applied.text
         assert applied.json()["course"]["ready"] is False
         assert "ZZGEO-U1-Q1: no learning goal" in applied.json()["course"]["gaps"]
-        assert applied.json()["course"]["units"][0]["quests"][0]["title"] == "The bow"
+        assert applied.json()["course"]["quests"][0]["title"] == "The bow"
         blocked = client.post(f"/studio/courses/{course_id}/ready")
         assert blocked.status_code == 422
         assert client.get(f"/studio/courses/{course_id}").json()["ready"] is False
@@ -862,14 +819,6 @@ def test_parent_on_an_update_is_ignored_and_the_goal_is_written() -> None:
             [
                 _full(
                     "add",
-                    "unit",
-                    "ZZGEO-U1",
-                    parent="ZZGEO",
-                    title="Exile",
-                    learning_goal="The story begins.",
-                ),
-                _full(
-                    "add",
                     "quest",
                     "ZZGEO-U1-Q1",
                     parent="ZZGEO-U1",
@@ -882,7 +831,7 @@ def test_parent_on_an_update_is_ignored_and_the_goal_is_written() -> None:
         assert structure.status_code == 200, structure.text
         planted = client.post(f"/studio/courses/{course_id}/messages/{structure.json()['id']}/accept")
         assert planted.status_code == 200, planted.text
-        assert planted.json()["course"]["units"][0]["quests"][0]["close"] is None
+        assert planted.json()["course"]["quests"][0]["close"] is None
 
         kept = _proposal(
             course_id,
@@ -894,6 +843,7 @@ def test_parent_on_an_update_is_ignored_and_the_goal_is_written() -> None:
                     "ZZGEO-U1-Q1",
                     parent="ZZGEO-U9",
                     learning_goal="Name the bow.",
+                    success_criterion="States the name of the bow.",
                 )
             ],
         )
@@ -902,11 +852,11 @@ def test_parent_on_an_update_is_ignored_and_the_goal_is_written() -> None:
         assert "parent:" not in kept.json()["content"]
         applied = client.post(f"/studio/courses/{course_id}/messages/{kept.json()['id']}/accept")
         assert applied.status_code == 200, applied.text
-        quest = applied.json()["course"]["units"][0]["quests"][0]
+        quest = applied.json()["course"]["quests"][0]
         assert quest["learning_goal"] == "Name the bow."
         assert quest["close"] is None
         assert quest["code"] == "ZZGEO-U1-Q1"
-        assert applied.json()["course"]["units"][0]["code"] == "ZZGEO-U1"
+        assert applied.json()["course"]["quests"][0]["code"] == "ZZGEO-U1-Q1"
 
         echoed = _proposal(
             course_id,
@@ -924,7 +874,7 @@ def test_parent_on_an_update_is_ignored_and_the_goal_is_written() -> None:
         )
         assert echoed.status_code == 422
         assert echoed.json()["detail"] == "Close only updates the close for ZZGEO-U1-Q1."
-        stored = client.get(f"/studio/courses/{course_id}").json()["units"][0]["quests"][0]
+        stored = client.get(f"/studio/courses/{course_id}").json()["quests"][0]
         assert stored["learning_goal"] == "Name the bow."
         assert stored["close"] is None
     finally:
@@ -941,14 +891,6 @@ def test_goals_phase_limits_the_prompt_to_open_goal_codes() -> None:
             [
                 _full(
                     "add",
-                    "unit",
-                    "ZZGEO-U1",
-                    parent="ZZGEO",
-                    title="Exile",
-                    learning_goal="The story begins.",
-                ),
-                _full(
-                    "add",
                     "quest",
                     "ZZGEO-U1-Q1",
                     parent="ZZGEO-U1",
@@ -963,6 +905,7 @@ def test_goals_phase_limits_the_prompt_to_open_goal_codes() -> None:
                     parent="ZZGEO-U1",
                     title="The city",
                     learning_goal="Name the city the story returns to.",
+                    success_criterion="States the name of the city.",
                     close=None,
                 ),
             ],
@@ -973,7 +916,7 @@ def test_goals_phase_limits_the_prompt_to_open_goal_codes() -> None:
         tree = accepted.json()["course"]
         assert tree["phase"] == {
             "name": "goals",
-            "label": "Goals",
+            "label": "Goals/Success Criteria",
             "open_codes": ["ZZGEO-U1-Q1"],
         }
 
@@ -981,7 +924,7 @@ def test_goals_phase_limits_the_prompt_to_open_goal_codes() -> None:
         open_line = next(line for line in prompt.splitlines() if line.startswith("Codes still open in this phase:"))
         assert open_line == "Codes still open in this phase: ZZGEO-U1-Q1."
         assert "ZZGEO-U1-Q2" not in open_line
-        assert "Current phase: Goals." in prompt
+        assert "Current phase: Goals/Success Criteria." in prompt
         assert "Patch only those codes." in prompt
         assert "Offer a learning goal for each open quest, addressed by that quest's code." in prompt
         assert "sets parent to null" in prompt
@@ -996,6 +939,7 @@ def test_goals_phase_limits_the_prompt_to_open_goal_codes() -> None:
                     "quest",
                     "ZZGEO-U1-Q1",
                     learning_goal="Name the bow.",
+                    success_criterion="States the name of the bow.",
                     close=None,
                 )
             ],
@@ -1003,7 +947,7 @@ def test_goals_phase_limits_the_prompt_to_open_goal_codes() -> None:
         assert goals.status_code == 200, goals.text
         applied = client.post(f"/studio/courses/{course_id}/messages/{goals.json()['id']}/accept")
         assert applied.status_code == 200, applied.text
-        quests = {quest["code"]: quest for quest in applied.json()["course"]["units"][0]["quests"]}
+        quests = {quest["code"]: quest for quest in applied.json()["course"]["quests"]}
         assert quests["ZZGEO-U1-Q1"]["learning_goal"] == "Name the bow."
         assert quests["ZZGEO-U1-Q1"]["close"] is None
         assert quests["ZZGEO-U1-Q2"]["close"] is None
@@ -1023,19 +967,12 @@ def test_stepping_back_to_goals_keeps_the_close() -> None:
             [
                 _full(
                     "add",
-                    "unit",
-                    "ZZGEO-U1",
-                    parent="ZZGEO",
-                    title="Exile",
-                    learning_goal="The story begins.",
-                ),
-                _full(
-                    "add",
                     "quest",
                     "ZZGEO-U1-Q1",
                     parent="ZZGEO-U1",
                     title="The bow",
                     learning_goal="Name the bow.",
+                    success_criterion="States the name of the bow.",
                     close={
                         "close_style": "one",
                         "answer_style": "essay",
@@ -1051,6 +988,7 @@ def test_stepping_back_to_goals_keeps_the_close() -> None:
                     parent="ZZGEO-U1",
                     title="The city",
                     learning_goal="Name the city.",
+                    success_criterion="States the name of the city.",
                     close=None,
                 ),
             ],
@@ -1063,8 +1001,8 @@ def test_stepping_back_to_goals_keeps_the_close() -> None:
         assert opened["phase"]["open_codes"] == ["ZZGEO-U1-Q2"]
         assert opened["view"] == {"name": "close", "label": "Close", "codes": ["ZZGEO-U1-Q2"]}
         by_name = {item["name"]: item for item in opened["strip"]}
-        assert [item["label"] for item in opened["strip"]] == ["Structure", "Goals", "Close", "Ready"]
-        assert by_name["structure"]["filled"] is True and by_name["structure"]["active"] is False
+        assert [item["label"] for item in opened["strip"]] == ["Quests", "Goals/Success Criteria", "Close", "Ready"]
+        assert by_name["quests"]["filled"] is True and by_name["quests"]["active"] is False
         assert by_name["goals"]["filled"] is True and by_name["goals"]["active"] is False
         assert by_name["close"]["active"] is True and by_name["close"]["filled"] is False
         assert by_name["ready"]["active"] is False and by_name["ready"]["filled"] is False
@@ -1075,7 +1013,7 @@ def test_stepping_back_to_goals_keeps_the_close() -> None:
         assert looking["phase"]["name"] == "close"
         assert looking["view"] == {
             "name": "goals",
-            "label": "Goals",
+            "label": "Goals/Success Criteria",
             "codes": ["ZZGEO-U1-Q1", "ZZGEO-U1-Q2"],
         }
         stepped_strip = {item["name"]: item for item in looking["strip"]}
@@ -1084,7 +1022,7 @@ def test_stepping_back_to_goals_keeps_the_close() -> None:
         prompt = client.get(f"/studio/courses/{course_id}/prompt").json()["system_prompt"]
         codes_line = next(line for line in prompt.splitlines() if line.startswith("Codes in this phase:"))
         assert codes_line == "Codes in this phase: ZZGEO-U1-Q1, ZZGEO-U1-Q2."
-        assert "Current phase: Goals." in prompt
+        assert "Current phase: Goals/Success Criteria." in prompt
         assert "including items already filled" in prompt
         assert "Do not wipe close style." in prompt
         assert "The next unfinished wave is Close." in prompt
@@ -1097,7 +1035,7 @@ def test_stepping_back_to_goals_keeps_the_close() -> None:
         assert revised.status_code == 200, revised.text
         applied = client.post(f"/studio/courses/{course_id}/messages/{revised.json()['id']}/accept")
         assert applied.status_code == 200, applied.text
-        quests = {quest["code"]: quest for quest in applied.json()["course"]["units"][0]["quests"]}
+        quests = {quest["code"]: quest for quest in applied.json()["course"]["quests"]}
         assert quests["ZZGEO-U1-Q1"]["learning_goal"] == "Name the sacred bow."
         assert quests["ZZGEO-U1-Q1"]["close"]["answer_style"] == "essay"
         assert quests["ZZGEO-U1-Q1"]["close"]["close_style"] == "one"
@@ -1118,7 +1056,7 @@ def test_stepping_back_to_goals_keeps_the_close() -> None:
         again = client.get(f"/studio/courses/{course_id}/prompt").json()["system_prompt"]
         open_line = next(line for line in again.splitlines() if line.startswith("Codes still open in this phase:"))
         assert open_line == "Codes still open in this phase: ZZGEO-U1-Q2."
-        kept = client.get(f"/studio/courses/{course_id}").json()["units"][0]["quests"][0]
+        kept = client.get(f"/studio/courses/{course_id}").json()["quests"][0]
         assert kept["close"]["close_style"] == "one"
     finally:
         _wipe("ZZGEO")
@@ -1133,14 +1071,6 @@ def test_goal_patch_for_an_existing_quest_code_writes_the_goal() -> None:
             course_id,
             "Add a quest that still needs a goal.",
             [
-                _full(
-                    "add",
-                    "unit",
-                    "ZZGEO-U1",
-                    parent="ZZGEO",
-                    title="Exile",
-                    learning_goal="The story begins.",
-                ),
                 _full(
                     "add",
                     "quest",
@@ -1161,7 +1091,7 @@ def test_goal_patch_for_an_existing_quest_code_writes_the_goal() -> None:
         assert structure.status_code == 200, structure.text
         planted = client.post(f"/studio/courses/{course_id}/messages/{structure.json()['id']}/accept")
         assert planted.status_code == 200, planted.text
-        before = planted.json()["course"]["units"][0]["quests"][0]
+        before = planted.json()["course"]["quests"][0]
         assert before["learning_goal"] == ""
         assert before["close"]["close_style"] == "one"
 
@@ -1183,12 +1113,12 @@ def test_goal_patch_for_an_existing_quest_code_writes_the_goal() -> None:
         assert goals.status_code == 200, goals.text
         accepted = client.post(f"/studio/courses/{course_id}/messages/{goals.json()['id']}/accept")
         assert accepted.status_code == 200, accepted.text
-        quest = accepted.json()["course"]["units"][0]["quests"][0]
+        quest = accepted.json()["course"]["quests"][0]
         assert quest["learning_goal"] == "Name the bow."
         assert quest["title"] == "The bow"
         assert quest["close"]["close_style"] == "one"
         assert quest["close"]["answer_style"] == "essay"
-        stored = client.get(f"/studio/courses/{course_id}").json()["units"][0]["quests"][0]
+        stored = client.get(f"/studio/courses/{course_id}").json()["quests"][0]
         assert stored["learning_goal"] == "Name the bow."
         assert stored["close"]["close_style"] == "one"
     finally:
@@ -1217,7 +1147,6 @@ def test_wrong_password_does_nothing_and_the_right_password_deletes_the_studio_c
             course_id,
             "A quest with a close and a creation chat.",
             [
-                _full("add", "unit", "ZZDEL-U1", parent="ZZDEL", title="Exile", learning_goal="The story begins."),
                 _full(
                     "add",
                     "quest",
@@ -1253,8 +1182,8 @@ def test_wrong_password_does_nothing_and_the_right_password_deletes_the_studio_c
         assert "password:" not in wrong.json()["detail"]
         still = client.get(f"/studio/courses/{course_id}")
         assert still.status_code == 200
-        quest_id = still.json()["units"][0]["quests"][0]["id"]
-        assert still.json()["units"][0]["quests"][0]["close"]["close_style"] == "one"
+        quest_id = still.json()["quests"][0]["id"]
+        assert still.json()["quests"][0]["close"]["close_style"] == "one"
         assert client.get(f"/studio/courses/{course_id}/messages").json()
         assert client.get(f"/studio/courses/{kept['id']}").status_code == 200
         assert _table_counts() == before
@@ -1270,7 +1199,6 @@ def test_wrong_password_does_nothing_and_the_right_password_deletes_the_studio_c
         assert _table_counts() == before
         db = SessionLocal()
         try:
-            assert db.scalar(select(func.count()).select_from(StudioUnit).where(StudioUnit.course_id == course_id)) == 0
             assert db.scalar(select(func.count()).select_from(StudioQuest).where(StudioQuest.course_id == course_id)) == 0
             assert db.scalar(select(func.count()).select_from(StudioMove).where(StudioMove.course_id == course_id)) == 0
             assert db.scalar(select(func.count()).select_from(StudioMessage).where(StudioMessage.course_id == course_id)) == 0
@@ -1313,7 +1241,6 @@ def test_copy_writes_a_new_code_and_leaves_the_chat_behind() -> None:
             course_id,
             "Build the course, and keep this chat on the original.",
             [
-                _full("add", "unit", "ZZMAN-U1", parent="ZZMAN", title="Exile", learning_goal="The story begins."),
                 _full(
                     "add",
                     "quest",
@@ -1356,11 +1283,9 @@ def test_copy_writes_a_new_code_and_leaves_the_chat_behind() -> None:
         assert body["theme"] == "city planning"
         assert body["close_default"]["intent"] == "A new triangle question."
         assert body["ready"] is False
-        unit = body["units"][0]
-        assert unit["code"] == "ZZMAN2-U1"
-        assert unit["title"] == "Exile"
-        quest = unit["quests"][0]
+        quest = body["quests"][0]
         assert quest["code"] == "ZZMAN2-U1-Q1"
+        assert quest["title"] == "The bow"
         assert quest["learning_goal"] == "Name the shape."
         assert quest["close"]["close_style"] == "one"
         assert quest["close"]["answer_style"] == "essay"
@@ -1369,7 +1294,7 @@ def test_copy_writes_a_new_code_and_leaves_the_chat_behind() -> None:
         assert client.get(f"/studio/courses/{body['id']}/messages").json() == []
         source = client.get(f"/studio/courses/{course_id}").json()
         assert source["code"] == "ZZMAN"
-        assert source["units"][0]["quests"][0]["code"] == "ZZMAN-U1-Q1"
+        assert source["quests"][0]["code"] == "ZZMAN-U1-Q1"
         assert client.get(f"/studio/courses/{course_id}/messages").json()
         listed = {row["code"]: row["title"] for row in client.get("/studio/courses").json()}
         assert listed["ZZMAN2"] == "Copied course"
@@ -1496,26 +1421,17 @@ def test_unit_patch_with_depth_still_writes_the_unit() -> None:
     course_id = course["id"]
     try:
         assert course["depth"] == "standard"
-        assert course["units"] == []
+        assert course["quests"] == []
         draft = _proposal(
             course_id,
             "Add the opening period.",
             [
                 _full(
                     "add",
-                    "unit",
+                    "quest",
                     "ZZDEPTH-U1",
-                    parent="ZZDEPTH",
                     title="1992 to 1995",
                     learning_goal="Name the first Premier League winners.",
-                    depth="go_deep",
-                ),
-                _full(
-                    "add",
-                    "quest",
-                    "ZZDEPTH-U1-Q1",
-                    parent="ZZDEPTH-U1",
-                    title="First winners",
                     depth="go_deep",
                 ),
             ],
@@ -1526,27 +1442,20 @@ def test_unit_patch_with_depth_still_writes_the_unit() -> None:
         assert accepted.status_code == 200, accepted.text
         body = accepted.json()["course"]
         assert body["depth"] == "standard"
-        assert body["units"][0]["code"] == "ZZDEPTH-U1"
-        assert body["units"][0]["title"] == "1992 to 1995"
-        assert body["units"][0]["learning_goal"] == "Name the first Premier League winners."
-        assert body["units"][0]["quests"][0]["code"] == "ZZDEPTH-U1-Q1"
+        assert body["quests"][0]["code"] == "ZZDEPTH-U1"
+        assert body["quests"][0]["title"] == "1992 to 1995"
+        assert body["quests"][0]["learning_goal"] == "Name the first Premier League winners."
         stored = client.get(f"/studio/courses/{course_id}").json()
         assert stored["depth"] == "standard"
-        assert stored["units"][0]["title"] == "1992 to 1995"
+        assert stored["quests"][0]["title"] == "1992 to 1995"
 
-        stepped = client.post(f"/studio/courses/{course_id}/phase", json={"name": "structure"})
+        stepped = client.post(f"/studio/courses/{course_id}/phase", json={"name": "quests"})
         assert stepped.status_code == 200, stepped.text
         revised = _proposal(
             course_id,
             "Rename the opening period.",
             [
-                _full(
-                    "update",
-                    "unit",
-                    "ZZDEPTH-U1",
-                    title="1992 to 1995 winners",
-                    depth="survey",
-                )
+                _full("update", "quest", "ZZDEPTH-U1", title="1992 to 1995 winners", depth="survey"),
             ],
         )
         assert revised.status_code == 200, revised.text
@@ -1554,21 +1463,13 @@ def test_unit_patch_with_depth_still_writes_the_unit() -> None:
         assert renamed.status_code == 200, renamed.text
         renamed_course = renamed.json()["course"]
         assert renamed_course["depth"] == "standard"
-        assert renamed_course["units"][0]["title"] == "1992 to 1995 winners"
+        assert renamed_course["quests"][0]["title"] == "1992 to 1995 winners"
 
         another = _proposal(
             course_id,
             "Add the next period.",
             [
-                _full(
-                    "add",
-                    "unit",
-                    "ZZDEPTH-U2",
-                    parent="ZZDEPTH",
-                    title="1995 to 1998",
-                    audience="9-11",
-                    sources="Premier League records",
-                )
+                _full("add", "quest", "ZZDEPTH-U2", title="1995 to 1998", depth="go_deep", sources="records"),
             ],
         )
         assert another.status_code == 200, another.text
@@ -1576,8 +1477,8 @@ def test_unit_patch_with_depth_still_writes_the_unit() -> None:
         saved = client.post(f"/studio/courses/{course_id}/messages/{another.json()['id']}/accept")
         assert saved.status_code == 200, saved.text
         fresh = saved.json()["course"]
-        assert [unit["code"] for unit in fresh["units"]] == ["ZZDEPTH-U1", "ZZDEPTH-U2"]
-        assert fresh["units"][1]["title"] == "1995 to 1998"
+        assert [unit["code"] for unit in fresh["quests"]] == ["ZZDEPTH-U1", "ZZDEPTH-U2"]
+        assert fresh["quests"][1]["title"] == "1995 to 1998"
         assert fresh["depth"] == "standard"
         assert fresh["sources"] == ""
         assert fresh["audience"] == ""
@@ -1594,7 +1495,7 @@ def test_recoverable_checker_cases_normalize_and_position_stays_fatal(caplog) ->
         out_of_range = _proposal(
             course_id,
             claim,
-            [_full("add", "unit", "ZZNORM-U1", parent="ZZNORM", title="Opening", position=0)],
+            [_full("add", "quest", "ZZNORM-U1", parent="ZZNORM", title="Opening", position=0)],
         )
         assert out_of_range.status_code == 422
         reason = out_of_range.json()["detail"]
@@ -1603,12 +1504,12 @@ def test_recoverable_checker_cases_normalize_and_position_stays_fatal(caplog) ->
         reply = rejection_reply(claim, reason)
         assert reply == reason
         assert "saved" not in reply.lower()
-        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+        assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
 
         past = _proposal(
             course_id,
             claim,
-            [_full("add", "unit", "ZZNORM-U1", parent="ZZNORM", title="Opening", position=5)],
+            [_full("add", "quest", "ZZNORM-U1", parent="ZZNORM", title="Opening", position=5)],
         )
         assert past.status_code == 422
         assert past.json()["detail"] == "Position is past the end of this list."
@@ -1619,15 +1520,7 @@ def test_recoverable_checker_cases_normalize_and_position_stays_fatal(caplog) ->
             course_id,
             "Add the first period.",
             [
-                _full(
-                    "add",
-                    "unit",
-                    "ZZNORM-U1",
-                    parent="ZZNORM",
-                    title="1992 to 1995",
-                    depth="go_deep",
-                    sources="Premier League records",
-                )
+                _full("add", "quest", "ZZNORM-U1", title="Opening", depth="go_deep", sources="records"),
             ],
         )
         assert draft.status_code == 200, draft.text
@@ -1635,53 +1528,49 @@ def test_recoverable_checker_cases_normalize_and_position_stays_fatal(caplog) ->
         accepted = client.post(f"/studio/courses/{course_id}/messages/{draft.json()['id']}/accept")
         assert accepted.status_code == 200, accepted.text
         body = accepted.json()["course"]
-        assert body["units"][0]["code"] == "ZZNORM-U1"
-        assert body["units"][0]["position"] == 1
+        assert body["quests"][0]["code"] == "ZZNORM-U1"
+        assert body["quests"][0]["position"] == 1
         assert body["depth"] == "standard"
         assert body["sources"] == ""
         dropped = [record.message for record in caplog.records]
-        assert any("dropped sources on unit ZZNORM-U1" in message for message in dropped)
-        assert any("dropped depth on unit ZZNORM-U1" in message for message in dropped)
+        assert any("dropped sources on quest ZZNORM-U1" in message for message in dropped)
+        assert any("dropped depth on quest ZZNORM-U1" in message for message in dropped)
 
+        stepped = client.post(f"/studio/courses/{course_id}/phase", json={"name": "quests"})
+        assert stepped.status_code == 200, stepped.text
+        assert stepped.json()["view"]["name"] == "quests"
         again = _proposal(
             course_id,
             "Rename the period.",
             [
-                _full(
-                    "add",
-                    "unit",
-                    "ZZNORM-U1",
-                    parent="ZZNORM",
-                    title="1992 to 1995 winners",
-                    sources="still ignored",
-                )
+                _full("update", "quest", "ZZNORM-U1", title="1992 to 1995 winners", sources="records"),
             ],
         )
         assert again.status_code == 200, again.text
         renamed = client.post(f"/studio/courses/{course_id}/messages/{again.json()['id']}/accept")
         assert renamed.status_code == 200, renamed.text
         renamed_course = renamed.json()["course"]
-        assert [unit["code"] for unit in renamed_course["units"]] == ["ZZNORM-U1"]
-        assert renamed_course["units"][0]["title"] == "1992 to 1995 winners"
+        assert [unit["code"] for unit in renamed_course["quests"]] == ["ZZNORM-U1"]
+        assert renamed_course["quests"][0]["title"] == "1992 to 1995 winners"
         assert renamed_course["sources"] == ""
 
         moved = _proposal(
             course_id,
             "Retitle without moving.",
-            [_full("update", "unit", "ZZNORM-U1", parent="ZZNORM-U9", title="Opening years", sources="nope")],
+            [_full("update", "quest", "ZZNORM-U1", parent="ZZNORM-U9", title="Opening years", sources="nope")],
         )
         assert moved.status_code == 200, moved.text
         moved_ok = client.post(f"/studio/courses/{course_id}/messages/{moved.json()['id']}/accept")
         assert moved_ok.status_code == 200, moved_ok.text
-        assert moved_ok.json()["course"]["units"][0]["title"] == "Opening years"
-        assert any("dropped parent on unit ZZNORM-U1" in record.message for record in caplog.records)
+        assert moved_ok.json()["course"]["quests"][0]["title"] == "Opening years"
+        assert any("dropped parent on quest ZZNORM-U1" in record.message for record in caplog.records)
 
         mixed = _proposal(
             course_id,
             claim,
             [
-                _full("add", "unit", "ZZNORM-U2", parent="ZZNORM", title="Next", sources="records"),
-                _full("add", "quest", "ZZNORM-U2-Q1", parent="ZZNORM-U2", title="Winners", position=0),
+                _full("add", "quest", "ZZNORM-U2", title="Next", sources="records"),
+                _full("add", "quest", "ZZNORM-U2-Q1", title="Winners", position=0),
             ],
         )
         assert mixed.status_code == 200, mixed.text
@@ -1691,8 +1580,8 @@ def test_recoverable_checker_cases_normalize_and_position_stays_fatal(caplog) ->
         kept_mixed = client.post(f"/studio/courses/{course_id}/messages/{mixed.json()['id']}/accept")
         assert kept_mixed.status_code == 200, kept_mixed.text
         final = kept_mixed.json()["course"]
-        assert [unit["code"] for unit in final["units"]] == ["ZZNORM-U1", "ZZNORM-U2"]
-        assert final["units"][1]["quests"] == []
+        assert [quest["code"] for quest in final["quests"]] == ["ZZNORM-U1", "ZZNORM-U2"]
+        assert final["quests"][1]["moves"] == []
     finally:
         _wipe("ZZNORM")
 
@@ -1713,7 +1602,6 @@ def test_phase_schema_limits_fields_and_goals_skips_a_new_unit() -> None:
             course_id,
             "One quest still needs a goal.",
             [
-                _full("add", "unit", "ZZPHASE-U1", parent="ZZPHASE", title="Opening"),
                 _full("add", "quest", "ZZPHASE-U1-Q1", parent="ZZPHASE-U1", title="Winners", learning_goal=""),
             ],
         )
@@ -1724,7 +1612,7 @@ def test_phase_schema_limits_fields_and_goals_skips_a_new_unit() -> None:
 
         goal_schema = client.get(f"/studio/courses/{course_id}/prompt").json()["response_schema"]
         goal_props = goal_schema["properties"]["patch"]["anyOf"][1]["properties"]["operations"]["items"]["properties"]
-        assert set(goal_props) == {"op", "kind", "code", "learning_goal", "success_criterion"}
+        assert set(goal_props) == {"op", "kind", "code", "learning_goal", "success_criterion", "goals"}
         assert "close" not in goal_props
         assert "sources" not in goal_props
 
@@ -1732,7 +1620,7 @@ def test_phase_schema_limits_fields_and_goals_skips_a_new_unit() -> None:
             course_id,
             "A goal, and a unit outside this phase.",
             [
-                _full("add", "unit", "ZZPHASE-U2", parent="ZZPHASE", title="Later"),
+                _full("add", "quest", "ZZPHASE-Q9", title="Later"),
                 _full("update", "quest", "ZZPHASE-U1-Q1", learning_goal="Name the first winners."),
             ],
         )
@@ -1743,8 +1631,8 @@ def test_phase_schema_limits_fields_and_goals_skips_a_new_unit() -> None:
         accepted = client.post(f"/studio/courses/{course_id}/messages/{mixed.json()['id']}/accept")
         assert accepted.status_code == 200, accepted.text
         body = accepted.json()["course"]
-        assert [unit["code"] for unit in body["units"]] == ["ZZPHASE-U1"]
-        assert body["units"][0]["quests"][0]["learning_goal"] == "Name the first winners."
+        assert [quest["code"] for quest in body["quests"]] == ["ZZPHASE-U1-Q1"]
+        assert body["quests"][0]["learning_goal"] == "Name the first winners."
     finally:
         _wipe("ZZPHASE")
 
@@ -1759,12 +1647,12 @@ def test_one_item_can_be_accepted_edited_and_undone() -> None:
             course_id,
             "Two periods.",
             [
-                _full("add", "unit", "ZZEDIT-U1", parent="ZZEDIT", title="Opening"),
-                _full("add", "unit", "ZZEDIT-U2", parent="ZZEDIT", title="Later"),
+                _full("add", "quest", "ZZEDIT-U1", title="Opening"),
+                _full("add", "quest", "ZZEDIT-U2", title="Later"),
             ],
         )
         assert draft.status_code == 200, draft.text
-        assert draft.json()["proposal"]["phase"] == "structure"
+        assert draft.json()["proposal"]["phase"] == "quests"
         message_id = draft.json()["id"]
 
         skipped = client.post(
@@ -1773,7 +1661,7 @@ def test_one_item_can_be_accepted_edited_and_undone() -> None:
         )
         assert skipped.status_code == 200, skipped.text
         assert [op["code"] for op in skipped.json()["proposal"]["operations"]] == ["ZZEDIT-U2"]
-        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+        assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
 
         missing = client.post(
             f"/studio/courses/{course_id}/messages/{message_id}/accept",
@@ -1787,14 +1675,14 @@ def test_one_item_can_be_accepted_edited_and_undone() -> None:
             json={"indexes": [0]},
         )
         assert one.status_code == 200, one.text
-        assert [unit["code"] for unit in one.json()["course"]["units"]] == ["ZZEDIT-U2"]
+        assert [unit["code"] for unit in one.json()["course"]["quests"]] == ["ZZEDIT-U2"]
         assert one.json()["message"]["applied"] is True
         assert [op["code"] for op in one.json()["message"]["proposal"]["operations"]] == ["ZZEDIT-U2"]
         assert one.json()["course"]["undo"] is True
 
         undone = client.post(f"/studio/courses/{course_id}/undo")
         assert undone.status_code == 200, undone.text
-        assert undone.json()["units"] == []
+        assert undone.json()["quests"] == []
         assert undone.json()["undo"] is False
         restored = client.get(f"/studio/courses/{course_id}/messages").json()[-1]
         assert restored["applied"] is False
@@ -1804,19 +1692,22 @@ def test_one_item_can_be_accepted_edited_and_undone() -> None:
         assert again.status_code == 200, again.text
         edited = client.post(
             f"/studio/courses/{course_id}/edit",
-            json={"kind": "unit", "code": "ZZEDIT-U2", "title": "Later years"},
+            json={"kind": "quest", "code": "ZZEDIT-U2", "title": "Later years"},
         )
         assert edited.status_code == 200, edited.text
-        assert edited.json()["units"][0]["title"] == "Later years"
-        assert edited.json()["phase"]["name"] == "structure"
+        assert edited.json()["quests"][0]["title"] == "Later years"
+        assert edited.json()["phase"]["name"] == "goals"
         rolled = client.post(f"/studio/courses/{course_id}/undo")
         assert rolled.status_code == 200, rolled.text
-        assert rolled.json()["units"][0]["title"] == "Later"
+        assert rolled.json()["quests"][0]["title"] == "Later"
 
+        stepped = client.post(f"/studio/courses/{course_id}/phase", json={"name": "quests"})
+        assert stepped.status_code == 200, stepped.text
+        assert stepped.json()["view"]["name"] == "quests", stepped.json()["view"]
         quest = _proposal(
             course_id,
             "One quest, still in Goals after this.",
-            [_full("add", "quest", "ZZEDIT-U2-Q1", parent="ZZEDIT-U2", title="Winners")],
+            [_full("add", "quest", "ZZEDIT-U2-Q1", title="Winners")],
         )
         assert quest.status_code == 200, quest.text
         planted = client.post(f"/studio/courses/{course_id}/messages/{quest.json()['id']}/accept")
@@ -1824,10 +1715,10 @@ def test_one_item_can_be_accepted_edited_and_undone() -> None:
         assert planted.json()["course"]["phase"]["name"] == "goals"
         retitled = client.post(
             f"/studio/courses/{course_id}/edit",
-            json={"kind": "unit", "code": "ZZEDIT-U2", "title": "Still editable"},
+            json={"kind": "quest", "code": "ZZEDIT-U2", "title": "Still editable"},
         )
         assert retitled.status_code == 200, retitled.text
-        assert retitled.json()["units"][0]["title"] == "Still editable"
+        assert retitled.json()["quests"][0]["title"] == "Still editable"
         assert retitled.json()["phase"]["name"] == "goals"
 
         copied = client.post(f"/studio/courses/{course_id}/copy", json={"title": "Edit copy"})
@@ -1837,7 +1728,7 @@ def test_one_item_can_be_accepted_edited_and_undone() -> None:
         copy_undo = client.post(f"/studio/courses/{copied.json()['id']}/undo")
         assert copy_undo.status_code == 422
         assert copy_undo.json()["detail"] == "There is nothing to undo."
-        assert client.get(f"/studio/courses/{course_id}").json()["units"][0]["title"] == "Still editable"
+        assert client.get(f"/studio/courses/{course_id}").json()["quests"][0]["title"] == "Still editable"
         tutor_codes = [row["code"] for row in client.get("/courses").json()]
         assert "ZZEDIT" not in tutor_codes
     finally:
@@ -1887,17 +1778,17 @@ def test_confirm_phrases_and_a_thin_description_do_not_propose_units() -> None:
     course = _make("ZZOPEN", "Opening")
     course_id = course["id"]
     try:
-        assert course["units"] == []
+        assert course["quests"] == []
         opened = client.post(f"/studio/courses/{course_id}/opening")
         assert opened.status_code == 200, opened.text
         messages = opened.json()["messages"]
         assert len(messages) == 1
         text = messages[0]["content"]
-        assert "Structure" in text and "Goals" in text and "Close" in text and "Ready" in text
-        assert "will not propose units" in text
+        assert "Quests" in text and "Goals" in text and "Close" in text and "Ready" in text
+        assert "will not propose quests" in text
         assert "topic" in text and "audience" in text and "cover" in text
         assert messages[0]["proposal"] is None
-        assert opened.json()["course"]["units"] == []
+        assert opened.json()["course"]["quests"] == []
         again = client.post(f"/studio/courses/{course_id}/opening")
         assert again.status_code == 200, again.text
         assert len(again.json()["messages"]) == 1
@@ -1914,17 +1805,17 @@ def test_a_confirm_writes_the_held_units_and_other_replies_do_not() -> None:
         saved = client.patch(f"/studio/courses/{course_id}", json=_header("Angles", theme))
         assert saved.status_code == 200, saved.text
         assert saved.json()["theme"] == theme
-        assert saved.json()["units"] == []
+        assert saved.json()["quests"] == []
         opened = client.post(f"/studio/courses/{course_id}/opening")
         assert opened.status_code == 200, opened.text
         body = opened.json()
         proposal = body["messages"][0]["proposal"]
         assert proposal is not None
-        assert [op["kind"] for op in proposal["operations"]] == ["unit", "unit", "unit"]
-        assert [op["code"] for op in proposal["operations"]] == ["ZZCONF-U1", "ZZCONF-U2", "ZZCONF-U3"]
+        assert [op["kind"] for op in proposal["operations"]] == ["quest"] * 10
+        assert [op["code"] for op in proposal["operations"]] == [f"ZZCONF-Q{index}" for index in range(1, 11)]
         assert "opening" in body["messages"][0]["content"]
         assert "?" in body["messages"][0]["content"]
-        assert body["course"]["units"] == []
+        assert body["course"]["quests"] == []
         prompt = client.get(f"/studio/courses/{course_id}/prompt").json()["system_prompt"]
         assert f"Course description: {theme}" in prompt
         assert "follow this course description" in prompt
@@ -1943,7 +1834,7 @@ def test_a_confirm_writes_the_held_units_and_other_replies_do_not() -> None:
         )
         assert change.status_code == 200, change.text
         assert change.json()["wrote"] is False
-        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+        assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
         assert len(client.get(f"/studio/courses/{course_id}/messages").json()) == 1
 
         written = client.post(
@@ -1953,14 +1844,14 @@ def test_a_confirm_writes_the_held_units_and_other_replies_do_not() -> None:
         assert written.status_code == 200, written.text
         wrote = written.json()
         assert wrote["wrote"] is True
-        assert [unit["code"] for unit in wrote["course"]["units"]] == ["ZZCONF-U1", "ZZCONF-U2", "ZZCONF-U3"]
+        assert [quest["code"] for quest in wrote["course"]["quests"]] == [f"ZZCONF-Q{index}" for index in range(1, 11)]
         assert wrote["course"]["undo"] is True
         assert "now in the course" in wrote["assistant"]["content"]
         assert wrote["assistant"]["proposal"] is None
 
         undone = client.post(f"/studio/courses/{course_id}/undo")
         assert undone.status_code == 200, undone.text
-        assert undone.json()["units"] == []
+        assert undone.json()["quests"] == []
         assert undone.json()["undo"] is False
     finally:
         _wipe("ZZCONF")
@@ -2006,7 +1897,6 @@ def test_course_description_saves_and_a_blank_close_does_not_require_intent() ->
             course_id,
             "A first unit, with a close that has no intent yet.",
             [
-                _full("add", "unit", "ZZDESC-U1", parent="ZZDESC", title="Angles"),
                 _full(
                     "add",
                     "quest",
@@ -2025,52 +1915,50 @@ def test_course_description_saves_and_a_blank_close_does_not_require_intent() ->
         )
         assert posted.status_code == 200, posted.text
         assert "is required for dynamic choices" not in posted.text
-        assert [op["code"] for op in posted.json()["proposal"]["operations"]] == ["ZZDESC-U1", "ZZDESC-U1-Q1"]
+        assert [op["code"] for op in posted.json()["proposal"]["operations"]] == ["ZZDESC-U1-Q1"]
     finally:
         _wipe("ZZDESC")
 
 
-def test_a_unit_code_is_a_valid_parent_and_the_sentence_is_not_repeated() -> None:
+def test_a_missing_move_parent_is_one_sentence_and_a_quest_in_the_patch_is_not() -> None:
     course = _make("ZZPAR", "Parents")
     course_id = course["id"]
     try:
         missing = _proposal(
             course_id,
-            "Two quests under a unit that is not here.",
+            "Two moves under a quest that is not here.",
             [
-                _full("add", "quest", "ZZPAR-U9-Q1", parent="ZZPAR-U9", title="Held one"),
-                _full("add", "quest", "ZZPAR-U9-Q2", parent="ZZPAR-U9", title="Held two"),
+                _full("add", "move", "ZZPAR-Q9-M1", parent="ZZPAR-Q9", title="Held one"),
+                _full("add", "move", "ZZPAR-Q9-M2", parent="ZZPAR-Q9", title="Held two"),
             ],
         )
         assert missing.status_code == 422, missing.text
         detail = missing.json()["detail"]
-        assert detail == "The parent ZZPAR-U9 is not in this course yet."
-        assert detail.count("ZZPAR-U9") == 1
+        assert detail == "The parent ZZPAR-Q9 is not in this course yet."
+        assert detail.count("ZZPAR-Q9") == 1
         assert "must be a short code" not in detail
-        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+        assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
 
         ordered = _proposal(
             course_id,
-            "Quests first, then their unit.",
+            "The move is listed before its quest.",
             [
-                _full("add", "quest", "ZZPAR-U1-Q1", parent=None, title="First quest"),
-                _full("add", "quest", "ZZPAR-U1-Q2", parent="ZZPAR-U1", title="Second quest"),
-                _full("add", "unit", "ZZPAR-U1", parent=None, title="Opening unit"),
+                _full("add", "move", "ZZPAR-Q1-M1", parent=None, title="First move"),
+                _full("add", "quest", "ZZPAR-Q1", title="First quest"),
             ],
         )
         assert ordered.status_code == 200, ordered.text
         assert "must be a short code" not in ordered.text
         assert "is not in this course" not in ordered.text
         assert [op["code"] for op in ordered.json()["proposal"]["operations"]] == [
-            "ZZPAR-U1",
-            "ZZPAR-U1-Q1",
-            "ZZPAR-U1-Q2",
+            "ZZPAR-Q1",
+            "ZZPAR-Q1-M1",
         ]
         written = client.post(f"/studio/courses/{course_id}/messages/{ordered.json()['id']}/accept")
         assert written.status_code == 200, written.text
-        unit = written.json()["course"]["units"][0]
-        assert unit["code"] == "ZZPAR-U1"
-        assert [quest["code"] for quest in unit["quests"]] == ["ZZPAR-U1-Q1", "ZZPAR-U1-Q2"]
+        quest = written.json()["course"]["quests"][0]
+        assert quest["code"] == "ZZPAR-Q1"
+        assert [move["code"] for move in quest["moves"]] == ["ZZPAR-Q1-M1"]
     finally:
         _wipe("ZZPAR")
 
@@ -2085,7 +1973,7 @@ def test_commit_writes_the_held_operations_and_the_next_turn_does_not_repeat() -
         opened = client.post(f"/studio/courses/{course_id}/opening")
         assert opened.status_code == 200, opened.text
         question = opened.json()["messages"][0]["content"]
-        assert "should I write these units" in question
+        assert "should I write these quests" in question
 
         committed = client.post(
             f"/studio/courses/{course_id}/turns",
@@ -2095,8 +1983,8 @@ def test_commit_writes_the_held_operations_and_the_next_turn_does_not_repeat() -
         body = committed.json()
         assert body["wrote"] is True
         assert body["handled"] is True
-        assert [unit["code"] for unit in body["course"]["units"]] == ["ZZMOVE-U1", "ZZMOVE-U2", "ZZMOVE-U3"]
-        assert "should I write these units" not in body["assistant"]["content"]
+        assert [quest["code"] for quest in body["course"]["quests"]] == [f"ZZMOVE-Q{index}" for index in range(1, 11)]
+        assert "should I write these quests" not in body["assistant"]["content"]
         assert "What would you change" not in body["assistant"]["content"]
         assert "Goals" in body["assistant"]["content"]
 
@@ -2105,30 +1993,25 @@ def test_commit_writes_the_held_operations_and_the_next_turn_does_not_repeat() -
         second = again.json()
         assert second["wrote"] is False
         assert second["handled"] is True
-        assert [unit["code"] for unit in second["course"]["units"]] == ["ZZMOVE-U1", "ZZMOVE-U2", "ZZMOVE-U3"]
-        assert "should I write these units" not in second["assistant"]["content"]
+        assert [quest["code"] for quest in second["course"]["quests"]] == [f"ZZMOVE-Q{index}" for index in range(1, 11)]
+        assert "should I write these quests" not in second["assistant"]["content"]
         assert second["assistant"]["content"] != question
 
-        quest = _proposal(
-            course_id,
-            "Add the quests that open Goals.",
-            [
-                _full("add", "quest", f"ZZMOVE-U{index}-Q1", parent=f"ZZMOVE-U{index}", title="Name the angle")
-                for index in (1, 2, 3)
-            ],
-        )
-        assert quest.status_code == 200, quest.text
-        planted = client.post(f"/studio/courses/{course_id}/messages/{quest.json()['id']}/accept")
-        assert planted.status_code == 200, planted.text
-        assert planted.json()["course"]["phase"]["name"] == "goals"
+        assert body["course"]["phase"]["name"] == "goals"
 
         held_text = "Should I write this learning goal?"
         held = _proposal(
             course_id,
             held_text,
             [
-                _full("update", "quest", f"ZZMOVE-U{index}-Q1", learning_goal="Name an interior angle.")
-                for index in (1, 2, 3)
+                _full(
+                    "update",
+                    "quest",
+                    f"ZZMOVE-Q{index}",
+                    learning_goal="Name an interior angle.",
+                    success_criterion="States the name of one interior angle.",
+                )
+                for index in range(1, 11)
             ],
         )
         assert held.status_code == 200, held.text
@@ -2139,8 +2022,8 @@ def test_commit_writes_the_held_operations_and_the_next_turn_does_not_repeat() -
         assert moved.status_code == 200, moved.text
         advanced = moved.json()
         assert advanced["wrote"] is True
-        for unit in advanced["course"]["units"]:
-            assert unit["quests"][0]["learning_goal"] == "Name an interior angle."
+        for quest in advanced["course"]["quests"]:
+            assert quest["learning_goal"] == "Name an interior angle."
         assert advanced["course"]["phase"]["name"] == "close"
         assert advanced["course"]["view"]["name"] == "close"
         assert "Close is the stage on screen." in advanced["assistant"]["content"]
@@ -2151,15 +2034,174 @@ def test_commit_writes_the_held_operations_and_the_next_turn_does_not_repeat() -
         follow = repeated.json()
         assert follow["wrote"] is False
         assert held_text not in follow["assistant"]["content"]
-        assert "should I write these units" not in follow["assistant"]["content"]
-        for unit in follow["course"]["units"]:
-            assert unit["quests"][0]["learning_goal"] == "Name an interior angle."
+        assert "should I write these quests" not in follow["assistant"]["content"]
+        for quest in follow["course"]["quests"]:
+            assert quest["learning_goal"] == "Name an interior angle."
         prompts = [
             message["content"]
             for message in client.get(f"/studio/courses/{course_id}/messages").json()
             if message["role"] == "assistant"
         ]
-        assert sum("should I write these units" in text for text in prompts) == 1
+        assert sum("should I write these quests" in text for text in prompts) == 1
         assert sum(text == held_text for text in prompts) == 1
     finally:
         _wipe("ZZMOVE")
+
+
+def test_lift_revision_keeps_quests_and_drops_units() -> None:
+    text = LIFT_REVISION.read_text()
+    upgrade = text.split("def upgrade")[1].split("def downgrade")[0]
+    assert "studio_quest_goals" in upgrade
+    assert "UPDATE studio_quests" in upgrade
+    assert 'op.drop_table("studio_units")' in upgrade
+    assert "DELETE FROM" not in upgrade.upper()
+    for name in ("students", "courses", "units", "quests", "beats", "sessions", "messages"):
+        assert f'"{name}"' not in upgrade
+    listed = client.get("/studio/courses").json()
+    geo = next((row for row in listed if row["code"] == "GEO"), None)
+    if geo is None:
+        return
+    course = client.get(f"/studio/courses/{geo['id']}").json()
+    assert "units" not in course
+    assert any(quest["code"] == "GEO-U1-Q1" for quest in course["quests"])
+
+
+def test_several_goals_a_missing_criterion_and_an_empty_close() -> None:
+    course = _make("ZZGLS", "Several goals")
+    course_id = course["id"]
+    try:
+        draft = _proposal(
+            course_id,
+            "Three goals, and the second criterion is still open.",
+            [
+                _full(
+                    "add",
+                    "quest",
+                    "ZZGLS-Q1",
+                    title="Triangle angles",
+                    goals=[
+                        {
+                            "position": 1,
+                            "learning_goal": "Understand that the angles of a triangle add to 180°",
+                            "success_criterion": "States that the three angles add to 180° and uses that to find a missing angle.",
+                        },
+                        {
+                            "position": 2,
+                            "learning_goal": "Name an exterior angle",
+                            "success_criterion": "",
+                        },
+                        {
+                            "position": 3,
+                            "learning_goal": "Find a missing angle",
+                            "success_criterion": "Finds the missing angle of a drawn triangle.",
+                        },
+                    ],
+                )
+            ],
+        )
+        assert draft.status_code == 200, draft.text
+        planted = client.post(f"/studio/courses/{course_id}/messages/{draft.json()['id']}/accept")
+        assert planted.status_code == 200, planted.text
+        tree = planted.json()["course"]
+        quest = tree["quests"][0]
+        assert [goal["position"] for goal in quest["goals"]] == [1, 2, 3]
+        assert quest["learning_goal"].startswith("Understand")
+        assert tree["phase"]["name"] == "goals"
+        assert "ZZGLS-Q1: no success criterion" in tree["gaps"]
+
+        stepped = client.post(f"/studio/courses/{course_id}/phase", json={"name": "goals"})
+        assert stepped.status_code == 200, stepped.text
+        goals_only = _proposal(
+            course_id,
+            "Fill the missing criterion.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZGLS-Q1",
+                    goals=[
+                        {
+                            "position": 1,
+                            "learning_goal": "Understand that the angles of a triangle add to 180°",
+                            "success_criterion": "States that the three angles add to 180° and uses that to find a missing angle.",
+                        },
+                        {
+                            "position": 2,
+                            "learning_goal": "Name an exterior angle",
+                            "success_criterion": "Points to an exterior angle on a drawn triangle.",
+                        },
+                        {
+                            "position": 3,
+                            "learning_goal": "Find a missing angle",
+                            "success_criterion": "Finds the missing angle of a drawn triangle.",
+                        },
+                    ],
+                )
+            ],
+        )
+        assert goals_only.status_code == 200, goals_only.text
+        wrote_goals = client.post(f"/studio/courses/{course_id}/messages/{goals_only.json()['id']}/accept")
+        assert wrote_goals.status_code == 200, wrote_goals.text
+        assert "ZZGLS-Q1: no success criterion" not in wrote_goals.json()["course"]["gaps"]
+        closed = _proposal(
+            course_id,
+            "Save an empty question list.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZGLS-Q1",
+                    close={
+                        "close_style": "one",
+                        "answer_style": "essay",
+                        "choice_mode": None,
+                        "items": [],
+                        "questions": [],
+                        "intent": "",
+                    },
+                )
+            ],
+        )
+        assert closed.status_code == 200, closed.text
+        wrote_close = client.post(f"/studio/courses/{course_id}/messages/{closed.json()['id']}/accept")
+        assert wrote_close.status_code == 200, wrote_close.text
+        done = wrote_close.json()["course"]
+        assert done["quests"][0]["close"]["questions"] == []
+        assert done["phase"]["name"] == "ready"
+        assert "no close style" not in " ".join(done["gaps"])
+        assert all("question" not in gap for gap in done["gaps"])
+    finally:
+        _wipe("ZZGLS")
+
+
+def test_quest_count_and_goals_per_quest_save_and_are_not_a_cap() -> None:
+    course = _make("ZZQCNT", "Counts")
+    course_id = course["id"]
+    try:
+        assert course["quest_count"] == 10
+        assert course["goals_per_quest"] == 3
+        saved = client.patch(
+            f"/studio/courses/{course_id}",
+            json={**_header("Counts", "city planning"), "quest_count": 4, "goals_per_quest": 2},
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["quest_count"] == 4
+        assert saved.json()["goals_per_quest"] == 2
+        again = client.get(f"/studio/courses/{course_id}").json()
+        assert again["quest_count"] == 4
+        assert again["goals_per_quest"] == 2
+        extra = _proposal(
+            course_id,
+            "More quests than the target.",
+            [
+                _full("add", "quest", f"ZZQCNT-Q{index}", title=f"Quest {index}")
+                for index in range(1, 6)
+            ],
+        )
+        assert extra.status_code == 200, extra.text
+        planted = client.post(f"/studio/courses/{course_id}/messages/{extra.json()['id']}/accept")
+        assert planted.status_code == 200, planted.text
+        assert len(planted.json()["course"]["quests"]) == 5
+        assert planted.json()["course"]["quest_count"] == 4
+    finally:
+        _wipe("ZZQCNT")

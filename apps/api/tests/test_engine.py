@@ -494,6 +494,38 @@ def test_course_scope_rule_names_the_course_only_when_the_switch_is_on() -> None
     assert "acknowledge it in one short line and return to Ancient Rome." in revealed
 
 
+def test_studio_goals_are_walked_and_an_empty_show_close_ends_without_a_question() -> None:
+    from app.engine.types import GoalPoint
+
+    baseline = assemble(*_layers()).system_prompt
+    assert "Walk these goals in order" not in baseline
+    assert "The close has no question" not in baseline
+    layers = list(_layers())
+    layers[0] = _beat(
+        beat_role="show",
+        goals=(
+            GoalPoint(
+                "Understand that the angles of a triangle add to 180°",
+                "States that the three angles add to 180° and uses that to find a missing angle.",
+            ),
+            GoalPoint("Name an exterior angle", "Points to an exterior angle on a drawn triangle."),
+        ),
+    )
+    walked = assemble(*layers).system_prompt
+    assert "Walk these goals in order" in walked
+    assert "Goal 1:" in walked and "Goal 2:" in walked
+    assert "Criterion 1:" in walked and "Criterion 2:" in walked
+    assert "The close has no question" not in walked
+    layers[0] = _beat(beat_role="show", empty_close=True)
+    empty = assemble(*layers).system_prompt
+    assert "The close has no question. End the quest without asking one. Set advance to true." in empty
+    layers[0] = _beat(beat_role="engage")
+    engage_plain = assemble(*layers).system_prompt
+    layers[0] = _beat(beat_role="engage", empty_close=True)
+    assert assemble(*layers).system_prompt == engage_plain
+    assert "The close has no question" not in engage_plain
+
+
 def test_age_band_defaults() -> None:
     assert age_band_for(10) == "9-11"
     assert age_band_for(13) == "12-14"

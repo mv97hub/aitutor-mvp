@@ -491,7 +491,14 @@ class StudioCloseOut(BaseModel):
     answer_style: StudioAnswerStyle
     choice_mode: StudioChoiceMode | None = None
     items: list[StudioChoiceOut] = Field(default_factory=list)
+    questions: list[StudioChoiceOut] = Field(default_factory=list)
     intent: str = ""
+
+
+class StudioGoalOut(BaseModel):
+    position: int
+    learning_goal: str
+    success_criterion: str
 
 
 class StudioMoveOut(BaseModel):
@@ -510,41 +517,32 @@ class StudioQuestOut(BaseModel):
     title: str
     learning_goal: str
     success_criterion: str
+    goals: list[StudioGoalOut] = Field(default_factory=list)
     close: StudioCloseOut | None = None
     moves: list[StudioMoveOut]
 
 
-class StudioUnitOut(BaseModel):
-    id: UUID
-    code: str
-    position: int
-    title: str
-    learning_goal: str
-    success_criterion: str
-    quests: list[StudioQuestOut]
-
-
 class StudioPhaseOut(BaseModel):
-    name: Literal["structure", "goals", "close", "ready"]
-    label: Literal["Structure", "Goals", "Close", "Ready"]
+    name: Literal["quests", "goals", "close", "ready"]
+    label: Literal["Quests", "Goals/Success Criteria", "Close", "Ready"]
     open_codes: list[str]
 
 
 class StudioStripOut(BaseModel):
-    name: Literal["structure", "goals", "close", "ready"]
-    label: Literal["Structure", "Goals", "Close", "Ready"]
+    name: Literal["quests", "goals", "close", "ready"]
+    label: Literal["Quests", "Goals/Success Criteria", "Close", "Ready"]
     filled: bool
     active: bool
 
 
 class StudioViewOut(BaseModel):
-    name: Literal["structure", "goals", "close", "ready"]
-    label: Literal["Structure", "Goals", "Close", "Ready"]
+    name: Literal["quests", "goals", "close", "ready"]
+    label: Literal["Quests", "Goals/Success Criteria", "Close", "Ready"]
     codes: list[str]
 
 
 class StudioPhaseIn(BaseModel):
-    name: Literal["structure", "goals", "close", "ready"]
+    name: Literal["quests", "goals", "close", "ready", "structure"]
 
 
 class StudioCourseOut(BaseModel):
@@ -564,7 +562,9 @@ class StudioCourseOut(BaseModel):
     phase: StudioPhaseOut
     strip: list[StudioStripOut]
     view: StudioViewOut
-    units: list[StudioUnitOut]
+    quests: list[StudioQuestOut]
+    quest_count: int = 10
+    goals_per_quest: int = 3
     undo: bool = False
     updated_at: datetime
 
@@ -598,6 +598,8 @@ class StudioPreferencesIn(BaseModel):
     depth: StudioDepth = "standard"
     quiz_minutes: int = 5
     sources: str = ""
+    quest_count: int = 10
+    goals_per_quest: int = 3
     close_default: dict
 
 
@@ -638,7 +640,7 @@ class StudioIndexesIn(BaseModel):
 
 
 class StudioEditIn(BaseModel):
-    kind: Literal["unit", "quest", "move"]
+    kind: Literal["quest", "move"]
     code: str = Field(min_length=1, max_length=40)
     title: str | None = None
     learning_goal: str | None = None

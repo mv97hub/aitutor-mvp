@@ -20,7 +20,7 @@ import {
 } from "@/lib/studio";
 
 type EditDraft = {
-  kind: "unit" | "quest" | "move";
+  kind: "quest" | "move";
   code: string;
   title: string;
   learningGoal: string;
@@ -36,6 +36,8 @@ type Prefs = {
   depth: StudioCourse["depth"];
   quizMinutes: StudioCourse["quiz_minutes"];
   sources: string;
+  questCount: number;
+  goalsPerQuest: number;
   close_style: StudioClose["close_style"];
   answer_style: StudioClose["answer_style"];
   choice_mode: "predefined" | "dynamic";
@@ -53,6 +55,8 @@ function blankPrefs(): Prefs {
     depth: "standard",
     quizMinutes: 5,
     sources: "",
+    questCount: 10,
+    goalsPerQuest: 3,
     close_style: "one",
     answer_style: "essay",
     choice_mode: "dynamic",
@@ -71,6 +75,8 @@ function prefsFrom(course: StudioCourse): Prefs {
     depth: course.depth,
     quizMinutes: course.quiz_minutes,
     sources: course.sources,
+    questCount: course.quest_count || 10,
+    goalsPerQuest: course.goals_per_quest || 3,
     close_style: course.close_default.close_style,
     answer_style: course.close_default.answer_style,
     choice_mode: course.close_default.choice_mode ?? "dynamic",
@@ -86,6 +92,7 @@ function closeFrom(prefs: Prefs): StudioClose {
       answer_style: "essay",
       choice_mode: null,
       items: [],
+      questions: [],
       intent: "",
     };
   }
@@ -99,6 +106,7 @@ function closeFrom(prefs: Prefs): StudioClose {
         .map((line) => line.trim())
         .filter(Boolean)
         .map((text) => ({ text })),
+      questions: [],
       intent: "",
     };
   }
@@ -107,6 +115,7 @@ function closeFrom(prefs: Prefs): StudioClose {
     answer_style: prefs.answer_style,
     choice_mode: "dynamic",
     items: [],
+    questions: [],
     intent: prefs.intent.trim(),
   };
 }
@@ -132,11 +141,8 @@ function waveLabel(course: StudioCourse, code: string): string | null {
   const listed = listedCodes(course);
   if (!listed.includes(code)) return null;
   if (course.view.name === "goals" && course.gaps.includes(`${code}: no learning goal`)) return "Needs a learning goal";
+  if (course.view.name === "goals" && course.gaps.includes(`${code}: no success criterion`)) return "Needs a success criterion";
   if (course.view.name === "close" && course.gaps.includes(`${code}: no close style`)) return "Needs a close style";
-  if (course.view.name === "structure") {
-    const unit = course.units.find((item) => item.code === code);
-    if (unit && unit.quests.length === 0) return "Needs a quest";
-  }
   return null;
 }
 
@@ -210,26 +216,22 @@ function EditRow({
         Title
         <input value={draft.title} maxLength={240} onChange={(event) => onChange({ ...draft, title: event.target.value })} />
       </label>
-      {draft.kind === "unit" ? null : (
-        <>
-          <label>
-            Learning goal
-            <textarea
-              value={draft.learningGoal}
-              rows={2}
-              onChange={(event) => onChange({ ...draft, learningGoal: event.target.value })}
-            />
-          </label>
-          <label>
-            Success
-            <textarea
-              value={draft.success}
-              rows={2}
-              onChange={(event) => onChange({ ...draft, success: event.target.value })}
-            />
-          </label>
-        </>
-      )}
+      <label>
+        Learning goal
+        <textarea
+          value={draft.learningGoal}
+          rows={2}
+          onChange={(event) => onChange({ ...draft, learningGoal: event.target.value })}
+        />
+      </label>
+      <label>
+        Success
+        <textarea
+          value={draft.success}
+          rows={2}
+          onChange={(event) => onChange({ ...draft, success: event.target.value })}
+        />
+      </label>
       <div className="rail-actions">
         <button className="button" type="submit" disabled={busy || draft.title.trim().length === 0}>
           Save
@@ -311,7 +313,7 @@ export function CreateCourse() {
     setDraft(null);
     setDraftMode(null);
     setMessages(history);
-    setOpen(new Set(next.units.map((unit) => unit.code)));
+    setOpen(new Set(next.quests.map((quest) => quest.code)));
   }
 
   function cancelPrefs() {
@@ -330,6 +332,8 @@ export function CreateCourse() {
       depth: draft.depth,
       quiz_minutes: draft.quizMinutes,
       sources: draft.sources.trim() || "none",
+      quest_count: draft.questCount,
+      goals_per_quest: draft.goalsPerQuest,
       close_default: closeFrom(draft),
     };
   }
@@ -426,7 +430,7 @@ export function CreateCourse() {
         const history = await api<StudioMessage[]>(`/studio/courses/${body.course.id}/messages`);
         setCourse(body.course);
         setMessages(history);
-        openUnits(body.course);
+        openQuests(body.course);
         if (body.wrote) setSavedNote("Course updated");
       } else {
         setMessages((prev) => [...prev, body.user, body.assistant]);
@@ -444,10 +448,10 @@ export function CreateCourse() {
     await ask(input.trim());
   }
 
-  function openUnits(nextCourse: StudioCourse) {
+  function openQuests(nextCourse: StudioCourse) {
     setOpen((prev) => {
       const next = new Set(prev);
-      for (const unit of nextCourse.units) next.add(unit.code);
+      for (const quest of nextCourse.quests) next.add(quest.code);
       return next;
     });
   }
@@ -487,8 +491,8 @@ export function CreateCourse() {
           kind: editing.kind,
           code: editing.code,
           title: editing.title,
-          learning_goal: editing.kind === "unit" ? undefined : editing.learningGoal,
-          success_criterion: editing.kind === "unit" ? undefined : editing.success,
+          learning_goal: editing.learningGoal,
+          success_criterion: editing.success,
         }),
       });
       setCourse(next);
@@ -625,7 +629,7 @@ export function CreateCourse() {
       <section className="studio-stage">
         {!course || !prefs ? (
           <div className="ds-empty">
-            <p>Create a course. The description in that form is what the units follow.</p>
+            <p>Create a course. The description in that form is what the quests follow.</p>
           </div>
         ) : (
           <>
@@ -668,7 +672,7 @@ export function CreateCourse() {
             </div>
             <div className="studio-strip" aria-label="Course phases">
               {course.strip.map((item) => {
-                const order = ["structure", "goals", "close", "ready"];
+                const order = ["quests", "goals", "close", "ready"];
                 const later = order.indexOf(item.name) > order.indexOf(course.phase.name);
                 return (
                 <button
@@ -737,98 +741,81 @@ export function CreateCourse() {
                   </details>
                 ) : null}
               </div>
-              {course.units.length === 0 ? (
-                <p className="ds-quiet">No units yet. The tree stays as it is until you confirm a suggestion in the chat.</p>
+              {course.quests.length === 0 ? (
+                <p className="ds-quiet">No quests yet. The tree stays as it is until you confirm a suggestion in the chat.</p>
               ) : (
                 <ul className="studio-tree-list">
-                  {course.units.map((unit) => (
+                  {course.quests.map((quest) => (
                     <Tier
-                      key={unit.id}
-                      code={unit.code}
-                      title={unit.title}
-                      marks={[waveLabel(course, unit.code)].filter((mark): mark is string => mark != null)}
-                      wave={listedCodes(course).includes(unit.code)}
-                      open={open.has(unit.code)}
-                      onToggle={() => toggle(unit.code)}
+                      key={quest.id}
+                      code={quest.code}
+                      title={quest.title}
+                      marks={[waveLabel(course, quest.code)].filter((mark): mark is string => mark != null)}
+                      wave={listedCodes(course).includes(quest.code)}
+                      open={open.has(quest.code)}
+                      onToggle={() => toggle(quest.code)}
                       onEdit={() =>
                         beginEdit({
-                          kind: "unit",
-                          code: unit.code,
-                          title: unit.title,
-                          learningGoal: unit.learning_goal,
-                          success: unit.success_criterion,
+                          kind: "quest",
+                          code: quest.code,
+                          title: quest.title,
+                          learningGoal: quest.learning_goal,
+                          success: quest.success_criterion,
                         })
                       }
                     >
-                      {editing?.code === unit.code ? (
+                      {editing?.code === quest.code ? (
                         <EditRow draft={editing} busy={busy} onChange={setEditing} onSubmit={(event) => void saveEdit(event)} onCancel={() => setEditing(null)} />
                       ) : null}
-                      <Fact label="Goal" value={unit.learning_goal} />
-                      <Fact label="Success" value={unit.success_criterion} />
+                      {(quest.goals.length > 0 ? quest.goals : [{ position: 1, learning_goal: quest.learning_goal, success_criterion: quest.success_criterion }]).map((goal) => (
+                        <div key={goal.position}>
+                          <Fact label={quest.goals.length > 1 ? `Goal ${goal.position}` : "Goal"} value={goal.learning_goal} />
+                          <Fact label="Success" value={goal.success_criterion} />
+                        </div>
+                      ))}
+                      {quest.close ? <p className="studio-fact"><span>Close</span>{closeSummary(quest.close)}</p> : null}
+                      {quest.close && quest.close.questions.length > 0 ? (
+                        <ul className="studio-choices">
+                          {quest.close.questions.map((item) => (
+                            <li key={item.text}>{item.text}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {quest.close?.choice_mode === "dynamic" && quest.close.intent ? (
+                        <Fact label="Intent" value={quest.close.intent} />
+                      ) : null}
+                      {quest.close?.choice_mode === "predefined" ? (
+                        <ul className="studio-choices">
+                          {quest.close.items.map((item) => (
+                            <li key={item.text}>{item.text}</li>
+                          ))}
+                        </ul>
+                      ) : null}
                       <ul>
-                        {unit.quests.map((quest) => (
-                              <Tier
-                                key={quest.id}
-                                code={quest.code}
-                                title={quest.title}
-                                marks={[waveLabel(course, quest.code)].filter((mark): mark is string => mark != null)}
-                                wave={listedCodes(course).includes(quest.code)}
-                                open={open.has(quest.code)}
-                                onToggle={() => toggle(quest.code)}
-                                onEdit={() =>
-                                  beginEdit({
-                                    kind: "quest",
-                                    code: quest.code,
-                                    title: quest.title,
-                                    learningGoal: quest.learning_goal,
-                                    success: quest.success_criterion,
-                                  })
-                                }
-                              >
-                                {editing?.code === quest.code ? (
-                                  <EditRow draft={editing} busy={busy} onChange={setEditing} onSubmit={(event) => void saveEdit(event)} onCancel={() => setEditing(null)} />
-                                ) : null}
-                            <Fact label="Goal" value={quest.learning_goal} />
-                            <Fact label="Success" value={quest.success_criterion} />
-                            {quest.close ? <p className="studio-fact"><span>Close</span>{closeSummary(quest.close)}</p> : null}
-                            {quest.close?.choice_mode === "dynamic" && quest.close.intent ? (
-                              <Fact label="Intent" value={quest.close.intent} />
+                        {quest.moves.map((move) => (
+                          <Tier
+                            key={move.id}
+                            code={move.code}
+                            title={move.title}
+                            marks={[waveLabel(course, move.code)].filter((mark): mark is string => mark != null)}
+                            wave={listedCodes(course).includes(move.code)}
+                            open={open.has(move.code)}
+                            onToggle={() => toggle(move.code)}
+                            onEdit={() =>
+                              beginEdit({
+                                kind: "move",
+                                code: move.code,
+                                title: move.title,
+                                learningGoal: move.learning_goal,
+                                success: move.success_criterion,
+                              })
+                            }
+                          >
+                            {editing?.code === move.code ? (
+                              <EditRow draft={editing} busy={busy} onChange={setEditing} onSubmit={(event) => void saveEdit(event)} onCancel={() => setEditing(null)} />
                             ) : null}
-                            {quest.close?.choice_mode === "predefined" ? (
-                              <ul className="studio-choices">
-                                {quest.close.items.map((item) => (
-                                  <li key={item.text}>{item.text}</li>
-                                ))}
-                              </ul>
-                            ) : null}
-                            <ul>
-                              {quest.moves.map((move) => (
-                                <Tier
-                                  key={move.id}
-                                  code={move.code}
-                                  title={move.title}
-                                  marks={[waveLabel(course, move.code)].filter((mark): mark is string => mark != null)}
-                                  wave={listedCodes(course).includes(move.code)}
-                                  open={open.has(move.code)}
-                                  onToggle={() => toggle(move.code)}
-                                  onEdit={() =>
-                                    beginEdit({
-                                      kind: "move",
-                                      code: move.code,
-                                      title: move.title,
-                                      learningGoal: move.learning_goal,
-                                      success: move.success_criterion,
-                                    })
-                                  }
-                                >
-                                  {editing?.code === move.code ? (
-                                    <EditRow draft={editing} busy={busy} onChange={setEditing} onSubmit={(event) => void saveEdit(event)} onCancel={() => setEditing(null)} />
-                                  ) : null}
-                                  <Fact label="Goal" value={move.learning_goal} />
-                                  <Fact label="Success" value={move.success_criterion} />
-                                </Tier>
-                              ))}
-                            </ul>
+                            <Fact label="Goal" value={move.learning_goal} />
+                            <Fact label="Success" value={move.success_criterion} />
                           </Tier>
                         ))}
                       </ul>
@@ -842,7 +829,7 @@ export function CreateCourse() {
                 <div className="ds-column">
                   {messages.length === 0 ? (
                     <p className="ds-quiet">
-                      The studio walks through structure, goals, close, and ready. Nothing is written until you confirm it in the chat.
+                      The studio walks through quests, goals, close, and ready. Nothing is written until you confirm it in the chat.
                     </p>
                   ) : null}
                   {messages.map((message) => (
@@ -947,6 +934,26 @@ export function CreateCourse() {
                   maxLength={240}
                   placeholder="Who this is for, and what the course should cover"
                   onChange={(event) => setDraft({ ...draft, theme: event.target.value })}
+                />
+              </label>
+              <label>
+                Number of quests
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={draft.questCount}
+                  onChange={(event) => setDraft({ ...draft, questCount: Number(event.target.value) })}
+                />
+              </label>
+              <label>
+                Goals per quest
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={draft.goalsPerQuest}
+                  onChange={(event) => setDraft({ ...draft, goalsPerQuest: Number(event.target.value) })}
                 />
               </label>
               <label>
