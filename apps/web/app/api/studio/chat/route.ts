@@ -212,5 +212,11 @@ export async function POST(req: Request) {
     }
   }
 
-  return Response.json({ user, assistant });
+  let course: unknown = null;
+  try {
+    course = await api(`/studio/courses/${courseId}`);
+  } catch {
+    course = null;
+  }
+  return Response.json({ user, assistant, course, wrote: false });
 }

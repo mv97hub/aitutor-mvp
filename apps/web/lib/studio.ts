@@ -82,6 +82,7 @@ export type StudioCourse = {
   stage_view: StudioView;
   stage_gaps: string[];
   can_advance: boolean;
+  can_push: boolean;
   updated_at: string;
 };
 
