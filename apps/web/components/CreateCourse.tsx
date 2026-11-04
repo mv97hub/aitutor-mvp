@@ -5,13 +5,12 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 
 import { BrandMark } from "@/components/BrandMark";
 import { api } from "@/lib/api";
-import { bulkPrompt, pendingInPhase, structureTemplate, type TemplateKind } from "@/lib/studio-build";
+import { bulkPrompt } from "@/lib/studio-build";
 import {
   AGE_BANDS,
   DEPTHS,
   QUIZ_MINUTES,
   closeSummary,
-  describeOperation,
   type StudioClose,
   type StudioCourse,
   type StudioMessage,
@@ -29,6 +28,7 @@ type EditDraft = {
 };
 
 type Prefs = {
+  code: string;
   title: string;
   audience: string;
   focus: string;
@@ -43,8 +43,27 @@ type Prefs = {
   intent: string;
 };
 
+function blankPrefs(): Prefs {
+  return {
+    code: "",
+    title: "",
+    audience: "9-11",
+    focus: "",
+    theme: "",
+    depth: "standard",
+    quizMinutes: 5,
+    sources: "",
+    close_style: "one",
+    answer_style: "essay",
+    choice_mode: "dynamic",
+    itemsText: "",
+    intent: "",
+  };
+}
+
 function prefsFrom(course: StudioCourse): Prefs {
   return {
+    code: course.code,
     title: course.title,
     audience: (AGE_BANDS as readonly string[]).includes(course.audience) ? course.audience : "9-11",
     focus: course.focus,
@@ -229,11 +248,9 @@ export function CreateCourse() {
   const [messages, setMessages] = useState<StudioMessage[]>([]);
   const [settings, setSettings] = useState<StudioSettings | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
-  const [creating, setCreating] = useState(false);
-  const [draftCode, setDraftCode] = useState("");
-  const [draftTitle, setDraftTitle] = useState("");
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const [draft, setDraft] = useState<Prefs | null>(null);
+  const [draftMode, setDraftMode] = useState<"create" | "edit" | null>(null);
   const [prefError, setPrefError] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -292,65 +309,91 @@ export function CreateCourse() {
     ]);
     setCourse(next);
     setDraft(null);
+    setDraftMode(null);
     setMessages(history);
     setOpen(new Set(next.units.map((unit) => unit.code)));
   }
 
-  async function createCourse(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await api<StudioCourse>("/studio/courses", {
-        method: "POST",
-        body: JSON.stringify({ code: draftCode, title: draftTitle }),
-      });
-      setCourses((prev) => [
-        { id: created.id, code: created.code, title: created.title, updated_at: created.updated_at },
-        ...prev.filter((row) => row.id !== created.id),
-      ]);
-      setCourse(created);
-      setMessages([]);
-      setOpen(new Set());
-      setCreating(false);
-      setDraftCode("");
-      setDraftTitle("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create that course.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   function cancelPrefs() {
     setDraft(null);
+    setDraftMode(null);
     setPrefError(null);
+  }
+
+  function preferenceBody(nextTitle: string, focus: string) {
+    if (!draft) throw new Error("Preferences are closed.");
+    return {
+      title: nextTitle,
+      audience: draft.audience,
+      focus,
+      theme: draft.theme.trim(),
+      depth: draft.depth,
+      quiz_minutes: draft.quizMinutes,
+      sources: draft.sources.trim() || "none",
+      close_default: closeFrom(draft),
+    };
   }
 
   async function savePrefs(event: FormEvent) {
     event.preventDefault();
-    if (!course || !draft) return;
+    if (!draft) return;
     setBusy(true);
     setPrefError(null);
     try {
+      if (draftMode === "create") {
+        const created = await api<StudioCourse>("/studio/courses", {
+          method: "POST",
+          body: JSON.stringify({ code: draft.code.trim(), title: draft.title.trim() }),
+        });
+        try {
+          await api<StudioCourse>(`/studio/courses/${created.id}`, {
+            method: "PATCH",
+            body: JSON.stringify(preferenceBody(created.title, "")),
+          });
+          const opened = await api<{ course: StudioCourse; messages: StudioMessage[] }>(
+            `/studio/courses/${created.id}/opening`,
+            { method: "POST" },
+          );
+          setCourses((prev) => [
+            {
+              id: opened.course.id,
+              code: opened.course.code,
+              title: opened.course.title,
+              updated_at: opened.course.updated_at,
+            },
+            ...prev.filter((row) => row.id !== opened.course.id),
+          ]);
+          setCourse(opened.course);
+          setMessages(opened.messages);
+          setOpen(new Set());
+          setDraft(null);
+          setDraftMode(null);
+          setInput("");
+          setSavedNote(null);
+        } catch (err) {
+          setCourses((prev) => [
+            { id: created.id, code: created.code, title: created.title, updated_at: created.updated_at },
+            ...prev.filter((row) => row.id !== created.id),
+          ]);
+          setCourse(created);
+          setMessages([]);
+          setDraft(null);
+          setDraftMode(null);
+          setError(err instanceof Error ? err.message : "Could not finish that course.");
+        }
+        return;
+      }
+      if (!course) return;
       const next = await api<StudioCourse>(`/studio/courses/${course.id}`, {
         method: "PATCH",
-        body: JSON.stringify({
-          title: course.title,
-          audience: draft.audience,
-          focus: course.focus,
-          theme: draft.theme.trim(),
-          depth: draft.depth,
-          quiz_minutes: draft.quizMinutes,
-          sources: draft.sources.trim() || "none",
-          close_default: closeFrom(draft),
-        }),
+        body: JSON.stringify(preferenceBody(course.title, course.focus)),
       });
       setCourse(next);
       setCourses((rows) =>
         rows.map((row) => (row.id === next.id ? { ...row, title: next.title, updated_at: next.updated_at } : row)),
       );
       setDraft(null);
+      setDraftMode(null);
       setPrefError(null);
       setSavedNote("Saved");
     } catch (err) {
@@ -373,8 +416,16 @@ export function CreateCourse() {
       });
       const raw = await response.text();
       if (!response.ok) throw new Error(readError(raw));
-      const body = JSON.parse(raw) as { user: StudioMessage; assistant: StudioMessage };
-      setMessages((prev) => [...prev, body.user, body.assistant]);
+      const body = JSON.parse(raw) as { user: StudioMessage; assistant: StudioMessage; course?: StudioCourse };
+      if (body.course) {
+        const history = await api<StudioMessage[]>(`/studio/courses/${body.course.id}/messages`);
+        setCourse(body.course);
+        setMessages(history);
+        openUnits(body.course);
+        setSavedNote("Course updated");
+      } else {
+        setMessages((prev) => [...prev, body.user, body.assistant]);
+      }
     } catch (err) {
       setInput(text);
       setError(err instanceof Error ? err.message : "The studio could not answer.");
@@ -396,94 +447,6 @@ export function CreateCourse() {
     });
   }
 
-  async function accept(message: StudioMessage, indexes?: number[]) {
-    if (!course) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await api<{ course: StudioCourse; message: StudioMessage }>(
-        `/studio/courses/${course.id}/messages/${message.id}/accept`,
-        { method: "POST", body: JSON.stringify(indexes ? { indexes } : {}) },
-      );
-      setCourse(result.course);
-      setMessages((prev) => prev.map((item) => (item.id === result.message.id ? result.message : item)));
-      openUnits(result.course);
-      setSavedNote("Course updated");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save that change.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function acceptWave() {
-    if (!course) return;
-    const pending = pendingInPhase(messages, course.view.name);
-    if (pending.length === 0) return;
-    setBusy(true);
-    setError(null);
-    try {
-      let latest = course;
-      const updates = new Map<string, StudioMessage>();
-      for (const message of pending) {
-        const result = await api<{ course: StudioCourse; message: StudioMessage }>(
-          `/studio/courses/${latest.id}/messages/${message.id}/accept`,
-          { method: "POST", body: JSON.stringify({}) },
-        );
-        latest = result.course;
-        updates.set(result.message.id, result.message);
-      }
-      setCourse(latest);
-      setMessages((prev) => prev.map((item) => updates.get(item.id) ?? item));
-      openUnits(latest);
-      setSavedNote("Course updated");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save that change.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function dismiss(message: StudioMessage, indexes?: number[]) {
-    if (!course) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const next = await api<StudioMessage>(
-        `/studio/courses/${course.id}/messages/${message.id}/dismiss`,
-        { method: "POST", body: JSON.stringify(indexes ? { indexes } : {}) },
-      );
-      setMessages((prev) => prev.map((item) => (item.id === next.id ? next : item)));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not dismiss that change.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function postTemplate(kind: TemplateKind) {
-    if (!course) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const built = structureTemplate(
-        course.code,
-        kind,
-        course.sources,
-        course.units.map((unit) => unit.code),
-      );
-      const message = await api<StudioMessage>(`/studio/courses/${course.id}/messages`, {
-        method: "POST",
-        body: JSON.stringify({ role: "assistant", content: built.content, proposal: built.proposal }),
-      });
-      setMessages((prev) => [...prev, message]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not add that outline.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function undo() {
     if (!course) return;
     setBusy(true);
@@ -496,7 +459,7 @@ export function CreateCourse() {
       setEditing(null);
       setSavedNote("Undone");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not undo that accept.");
+      setError(err instanceof Error ? err.message : "Could not undo that write.");
     } finally {
       setBusy(false);
     }
@@ -584,8 +547,8 @@ export function CreateCourse() {
     }
   }
 
-  const choicesOpen = draft != null && draft.answer_style !== "essay";
   const detailLabel = DEPTHS.find((item) => item.value === prefs?.depth)?.label ?? "Standard";
+  const lockingIdentity = draftMode === "edit";
 
   return (
     <main className="ds-shell studio-shell">
@@ -595,38 +558,17 @@ export function CreateCourse() {
         </div>
         <p className="ds-learner">Create course</p>
         <Link href="/manage-courses" className="studio-manage-link">Manage courses</Link>
-        <button type="button" className="button studio-new" onClick={() => setCreating((openForm) => !openForm)}>
+        <button
+          type="button"
+          className="button studio-new"
+          onClick={() => {
+            setPrefError(null);
+            setDraftMode("create");
+            setDraft(blankPrefs());
+          }}
+        >
           New course
         </button>
-        {creating ? (
-          <form className="studio-new-form" onSubmit={(event) => void createCourse(event)}>
-            <label>
-              Code
-              <input
-                value={draftCode}
-                onChange={(event) => setDraftCode(event.target.value)}
-                placeholder="GEO"
-                maxLength={16}
-                required
-                autoComplete="off"
-              />
-            </label>
-            <label>
-              Title
-              <input
-                value={draftTitle}
-                onChange={(event) => setDraftTitle(event.target.value)}
-                placeholder="Triangles"
-                maxLength={240}
-                required
-              />
-            </label>
-            <div className="rail-actions">
-              <button className="button" type="submit" disabled={busy}>Create</button>
-              <button type="button" className="ghost" onClick={() => setCreating(false)}>Cancel</button>
-            </div>
-          </form>
-        ) : null}
         <button
           type="button"
           className="studio-courses-toggle"
@@ -678,7 +620,7 @@ export function CreateCourse() {
       <section className="studio-stage">
         {!course || !prefs ? (
           <div className="ds-empty">
-            <p>Create a course, then describe the focus in the chat.</p>
+            <p>Create a course. The description in that form is what the units follow.</p>
           </div>
         ) : (
           <>
@@ -701,7 +643,7 @@ export function CreateCourse() {
                   {savedNote ? <span className="studio-saved">{savedNote}</span> : null}
                   {course.undo ? (
                     <button className="ghost" type="button" disabled={busy} onClick={() => void undo()}>
-                      Undo last accept
+                      Undo last write
                     </button>
                   ) : null}
                   <button
@@ -710,6 +652,7 @@ export function CreateCourse() {
                     disabled={busy}
                     onClick={() => {
                       setPrefError(null);
+                      setDraftMode("edit");
                       setDraft(prefsFrom(course));
                     }}
                   >
@@ -745,46 +688,29 @@ export function CreateCourse() {
                     : "Mark ready can be turned on."
                   : `Codes: ${course.view.codes.join(", ") || "none"}`}
               </p>
-              <div className="studio-tools">
-                {course.view.name === "structure" ? (
-                  <>
-                    <button type="button" className="ghost" disabled={busy} onClick={() => void postTemplate("periods")}>
-                      Three periods
+              {(course.view.name === "goals" || course.view.name === "close") && course.view.codes.length > 0 ? (
+                <div className="studio-tools">
+                  {course.view.name === "goals" ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={busy}
+                      onClick={() => void ask(bulkPrompt("goals", course.view.codes))}
+                    >
+                      Write learning goals
                     </button>
-                    <button type="button" className="ghost" disabled={busy} onClick={() => void postTemplate("units")}>
-                      Units and quests
+                  ) : (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={busy}
+                      onClick={() => void ask(bulkPrompt("close", course.view.codes))}
+                    >
+                      Write closes
                     </button>
-                    <button type="button" className="ghost" disabled={busy} onClick={() => void postTemplate("framework")}>
-                      Framework outline
-                    </button>
-                  </>
-                ) : null}
-                {course.view.name === "goals" && course.view.codes.length > 0 ? (
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy}
-                    onClick={() => void ask(bulkPrompt("goals", course.view.codes))}
-                  >
-                    Write learning goals
-                  </button>
-                ) : null}
-                {course.view.name === "close" && course.view.codes.length > 0 ? (
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy}
-                    onClick={() => void ask(bulkPrompt("close", course.view.codes))}
-                  >
-                    Write closes
-                  </button>
-                ) : null}
-                {pendingInPhase(messages, course.view.name).length > 0 ? (
-                  <button type="button" className="button" disabled={busy} onClick={() => void acceptWave()}>
-                    Accept all in {course.view.label}
-                  </button>
-                ) : null}
-              </div>
+                  )}
+                </div>
+              ) : null}
               <div className="studio-ready">
                 <button
                   type="button"
@@ -806,7 +732,7 @@ export function CreateCourse() {
                 ) : null}
               </div>
               {course.units.length === 0 ? (
-                <p className="ds-quiet">No units yet. The tree updates after you accept a change.</p>
+                <p className="ds-quiet">No units yet. The tree stays as it is until you confirm a suggestion in the chat.</p>
               ) : (
                 <ul className="studio-tree-list">
                   {course.units.map((unit) => (
@@ -910,42 +836,12 @@ export function CreateCourse() {
                 <div className="ds-column">
                   {messages.length === 0 ? (
                     <p className="ds-quiet">
-                      State a focus, such as grade 6 geometry. Suggestions name the framework they come from. Nothing is saved until you accept it.
+                      The studio walks through structure, goals, close, and ready. Nothing is written until you confirm it in the chat.
                     </p>
                   ) : null}
                   {messages.map((message) => (
                     <div key={message.id} className={`bubble ${message.role === "user" ? "user" : "assistant"}`}>
                       <p>{message.content}</p>
-                      {message.proposal && !message.applied ? (
-                        <div className="studio-proposal">
-                          <p>Accept this change to update the course.</p>
-                          <ul className="studio-ops">
-                            {message.proposal.operations.map((op, index) => (
-                              <li key={`${op.op}-${op.code}-${index}`} className="studio-op">
-                                <span>{describeOperation(op)}</span>
-                                <span className="studio-op-actions">
-                                  <button type="button" className="button" disabled={busy} onClick={() => void accept(message, [index])}>
-                                    Accept
-                                  </button>
-                                  <button type="button" className="ghost" disabled={busy} onClick={() => void dismiss(message, [index])}>
-                                    Skip
-                                  </button>
-                                </span>
-                              </li>
-                            ))}
-                          </ul>
-                          <div className="rail-actions">
-                            {message.proposal.operations.length > 1 ? (
-                              <button type="button" className="button" disabled={busy} onClick={() => void accept(message)}>
-                                Accept all
-                              </button>
-                            ) : null}
-                            <button type="button" className="ghost" disabled={busy} onClick={() => void dismiss(message)}>
-                              Dismiss
-                            </button>
-                          </div>
-                        </div>
-                      ) : null}
                       {message.applied ? <p className="studio-saved">Saved to the course.</p> : null}
                     </div>
                   ))}
@@ -1003,12 +899,49 @@ export function CreateCourse() {
           >
             <header>
               <div>
-                <h2 id="studio-pref-title">Preferences</h2>
-                <p>A quest can still use a different close.</p>
+                <h2 id="studio-pref-title">{draftMode === "create" ? "New course" : "Preferences"}</h2>
+                <p>
+                  {draftMode === "create"
+                    ? "The course is created when you save. Code and name stay fixed after that."
+                    : "Code and name stay as they are. A quest can still use a different close."}
+                </p>
               </div>
               <button type="button" className="ghost" onClick={cancelPrefs}>Close</button>
             </header>
             <form className="prompt-body" onSubmit={(event) => void savePrefs(event)}>
+              <label>
+                Course description
+                <textarea
+                  value={draft.theme}
+                  rows={3}
+                  maxLength={240}
+                  placeholder="Who this is for, and what the course should cover"
+                  onChange={(event) => setDraft({ ...draft, theme: event.target.value })}
+                />
+              </label>
+              <label>
+                Code
+                <input
+                  value={draft.code}
+                  maxLength={16}
+                  placeholder="GEO"
+                  required
+                  autoComplete="off"
+                  disabled={lockingIdentity}
+                  onChange={(event) => setDraft({ ...draft, code: event.target.value })}
+                />
+              </label>
+              <label>
+                Name
+                <input
+                  value={draft.title}
+                  maxLength={240}
+                  placeholder="Triangles"
+                  required
+                  disabled={lockingIdentity}
+                  onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+                />
+              </label>
               <label>
                 Detail
                 <select
@@ -1057,48 +990,6 @@ export function CreateCourse() {
                   <option value="essay">Essay</option>
                   <option value="mixed">Mixed</option>
                 </select>
-              </label>
-              {choicesOpen ? (
-                <label>
-                  Multiple choice source
-                  <select
-                    value={draft.choice_mode}
-                    onChange={(event) =>
-                      setDraft({ ...draft, choice_mode: event.target.value as Prefs["choice_mode"] })
-                    }
-                  >
-                    <option value="predefined">Predefined</option>
-                    <option value="dynamic">Written later in the kid session</option>
-                  </select>
-                </label>
-              ) : null}
-              {choicesOpen && draft.choice_mode === "predefined" ? (
-                <label>
-                  Predefined choices
-                  <textarea
-                    value={draft.itemsText}
-                    placeholder="One choice per line"
-                    onChange={(event) => setDraft({ ...draft, itemsText: event.target.value })}
-                  />
-                </label>
-              ) : null}
-              {choicesOpen && draft.choice_mode === "dynamic" ? (
-                <label>
-                  What the later choices should test
-                  <input
-                    value={draft.intent}
-                    onChange={(event) => setDraft({ ...draft, intent: event.target.value })}
-                  />
-                </label>
-              ) : null}
-              <label>
-                Theme
-                <input
-                  value={draft.theme}
-                  maxLength={240}
-                  placeholder="None"
-                  onChange={(event) => setDraft({ ...draft, theme: event.target.value })}
-                />
               </label>
               <label>
                 Audience

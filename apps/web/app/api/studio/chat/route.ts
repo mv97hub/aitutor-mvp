@@ -47,6 +47,29 @@ export async function POST(req: Request) {
   if (!courseId) return new Response("courseId is required.", { status: 400 });
   if (!content) return new Response("content is required.", { status: 400 });
 
+  try {
+    const turn = await api<{
+      wrote: boolean;
+      user?: StudioMessage;
+      assistant?: StudioMessage;
+      course?: unknown;
+    }>(`/studio/courses/${courseId}/turns`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    });
+    if (turn.wrote && turn.user && turn.assistant) {
+      return Response.json({
+        user: turn.user,
+        assistant: turn.assistant,
+        course: turn.course,
+        wrote: true,
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not read that message.";
+    return new Response(message, { status: 502 });
+  }
+
   if (!process.env.OPENAI_API_KEY?.trim()) {
     return new Response(MISSING_KEY, {
       status: 503,

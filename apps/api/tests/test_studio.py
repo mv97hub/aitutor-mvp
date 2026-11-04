@@ -22,7 +22,7 @@ from app.models import (
     StudioUnit,
 )
 from app.seed import seed
-from app.studio import rejection_reply
+from app.studio import description_is_specific, is_explicit_confirm, rejection_reply
 
 client = TestClient(app)
 
@@ -444,6 +444,8 @@ def test_unknown_model_is_rejected_and_prompt_names_the_framework_rule() -> None
         assert "success criterion" in prompt["system_prompt"]
         assert "quest-close choices" in prompt["system_prompt"]
         assert "A position of 0 is invalid." in prompt["system_prompt"]
+        assert "Course description: none yet" in prompt["system_prompt"]
+        assert "choice_mode is predefined" not in prompt["system_prompt"]
         assert "tools" not in prompt["response_schema"]
 
         switched = client.put("/studio/settings", json={"model": "gpt-4o"})
@@ -1842,3 +1844,118 @@ def test_one_item_can_be_accepted_edited_and_undone() -> None:
         if copy_code:
             _wipe(copy_code)
         _wipe("ZZEDIT")
+
+
+def _header(title: str, theme: str) -> dict:
+    return {
+        "title": title,
+        "audience": "12-14",
+        "focus": "",
+        "theme": theme,
+        "depth": "standard",
+        "quiz_minutes": 5,
+        "sources": "none",
+        "close_default": {
+            "close_style": "one",
+            "answer_style": "essay",
+            "choice_mode": None,
+            "items": [],
+            "intent": "",
+        },
+    }
+
+
+def test_confirm_phrases_and_a_thin_description_do_not_propose_units() -> None:
+    assert is_explicit_confirm("yes, add those three units")
+    assert is_explicit_confirm("Yes.")
+    assert is_explicit_confirm("add those")
+    assert is_explicit_confirm("ok, add the units")
+    assert not is_explicit_confirm("yes but change the third")
+    assert not is_explicit_confirm("what about adding a unit?")
+    assert not is_explicit_confirm("not yet")
+    assert not is_explicit_confirm("do not add those")
+    assert not description_is_specific("")
+    assert not description_is_specific("city planning")
+    assert not description_is_specific("no theme")
+    assert description_is_specific("Triangle interior angles for learners aged 12 to 14")
+
+    course = _make("ZZOPEN", "Opening")
+    course_id = course["id"]
+    try:
+        assert course["units"] == []
+        opened = client.post(f"/studio/courses/{course_id}/opening")
+        assert opened.status_code == 200, opened.text
+        messages = opened.json()["messages"]
+        assert len(messages) == 1
+        text = messages[0]["content"]
+        assert "Structure" in text and "Goals" in text and "Close" in text and "Ready" in text
+        assert "will not propose units" in text
+        assert "topic" in text and "audience" in text and "cover" in text
+        assert messages[0]["proposal"] is None
+        assert opened.json()["course"]["units"] == []
+        again = client.post(f"/studio/courses/{course_id}/opening")
+        assert again.status_code == 200, again.text
+        assert len(again.json()["messages"]) == 1
+        assert client.get(f"/studio/courses/{course_id}/messages").json()[0]["id"] == messages[0]["id"]
+    finally:
+        _wipe("ZZOPEN")
+
+
+def test_a_confirm_writes_the_held_units_and_other_replies_do_not() -> None:
+    theme = "Triangle interior angles for learners aged 12 to 14"
+    course = _make("ZZCONF", "Angles")
+    course_id = course["id"]
+    try:
+        saved = client.patch(f"/studio/courses/{course_id}", json=_header("Angles", theme))
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["theme"] == theme
+        assert saved.json()["units"] == []
+        opened = client.post(f"/studio/courses/{course_id}/opening")
+        assert opened.status_code == 200, opened.text
+        body = opened.json()
+        proposal = body["messages"][0]["proposal"]
+        assert proposal is not None
+        assert [op["kind"] for op in proposal["operations"]] == ["unit", "unit", "unit"]
+        assert [op["code"] for op in proposal["operations"]] == ["ZZCONF-U1", "ZZCONF-U2", "ZZCONF-U3"]
+        assert "opening" in body["messages"][0]["content"]
+        assert "?" in body["messages"][0]["content"]
+        assert body["course"]["units"] == []
+        prompt = client.get(f"/studio/courses/{course_id}/prompt").json()["system_prompt"]
+        assert f"Course description: {theme}" in prompt
+        assert "follow this course description" in prompt
+        assert "choice_mode is predefined" not in prompt
+        assert "ask one clear question" in prompt
+
+        question = client.post(
+            f"/studio/courses/{course_id}/turns",
+            json={"content": "what about adding a unit?"},
+        )
+        assert question.status_code == 200, question.text
+        assert question.json()["wrote"] is False
+        change = client.post(
+            f"/studio/courses/{course_id}/turns",
+            json={"content": "yes but change the third"},
+        )
+        assert change.status_code == 200, change.text
+        assert change.json()["wrote"] is False
+        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+        assert len(client.get(f"/studio/courses/{course_id}/messages").json()) == 1
+
+        written = client.post(
+            f"/studio/courses/{course_id}/turns",
+            json={"content": "yes, add those three units"},
+        )
+        assert written.status_code == 200, written.text
+        wrote = written.json()
+        assert wrote["wrote"] is True
+        assert [unit["code"] for unit in wrote["course"]["units"]] == ["ZZCONF-U1", "ZZCONF-U2", "ZZCONF-U3"]
+        assert wrote["course"]["undo"] is True
+        assert "now in the course" in wrote["assistant"]["content"]
+        assert wrote["assistant"]["proposal"] is None
+
+        undone = client.post(f"/studio/courses/{course_id}/undo")
+        assert undone.status_code == 200, undone.text
+        assert undone.json()["units"] == []
+        assert undone.json()["undo"] is False
+    finally:
+        _wipe("ZZCONF")

@@ -647,3 +647,19 @@ class StudioEditIn(BaseModel):
 class StudioAcceptOut(BaseModel):
     course: StudioCourseOut
     message: StudioMessageOut
+
+
+class StudioOpeningOut(BaseModel):
+    course: StudioCourseOut
+    messages: list[StudioMessageOut]
+
+
+class StudioTurnIn(BaseModel):
+    content: str = Field(min_length=1, max_length=20000)
+
+
+class StudioTurnOut(BaseModel):
+    wrote: bool
+    user: StudioMessageOut | None = None
+    assistant: StudioMessageOut | None = None
+    course: StudioCourseOut | None = None

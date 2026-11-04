@@ -83,6 +83,19 @@ test("a good reply is saved, and a transport error is a banner", () => {
     proposal: null,
   });
 
+  const held = settleModelResult({
+    attempt: 0,
+    failure: null,
+    kind: null,
+    reply: "   ",
+    operations: [{ op: "add" }],
+  });
+  assert.equal(held.action, "save");
+  if (held.action !== "save") return;
+  assert.match(held.text, /confirm/i);
+  assert.equal(held.text.toLowerCase().includes("accept"), false);
+  assert.deepEqual(held.proposal, { operations: [{ op: "add" }] });
+
   const down = settleModelResult({
     attempt: 0,
     failure: detailFrom({ detail: "Could not save the reply." }, "fallback"),
