@@ -98,8 +98,8 @@ def _close_schema() -> dict:
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "properties": {"text": {"type": "string"}},
-                    "required": ["text"],
+                    "properties": {"text": {"type": "string"}, "correct": {"type": "boolean"}},
+                    "required": ["text", "correct"],
                 },
             },
             "questions": {
@@ -112,8 +112,15 @@ def _close_schema() -> dict:
                 },
             },
             "intent": {"type": "string"},
+            "selection": {
+                "anyOf": [
+                    {"type": "null"},
+                    {"type": "string", "enum": ["single", "multi"]},
+                ],
+                "description": "single or multi for a choice question. Null for an essay or no questions.",
+            },
         },
-        "required": ["close_style", "answer_style", "choice_mode", "items", "questions", "intent"],
+        "required": ["close_style", "answer_style", "choice_mode", "items", "questions", "intent", "selection"],
     }
 
 
@@ -625,7 +632,9 @@ def _operations(patch) -> list:
 
 
 _STRUCTURAL = ("op", "kind", "code")
-_CLOSE_FIELDS = frozenset({"close_style", "answer_style", "choice_mode", "items", "questions", "intent"})
+_CLOSE_FIELDS = frozenset(
+    {"close_style", "answer_style", "choice_mode", "items", "questions", "intent", "selection"}
+)
 # Parent is accepted on an add only. On an update it is redundant and dropped.
 _TIER_FIELDS = {
     "course": frozenset(COURSE_FIELDS),
@@ -673,16 +682,28 @@ def _keep_tier_fields(raw: dict, op_name: str) -> dict:
     return cleaned
 
 
+def _patch_view(course: StudioCourse) -> dict:
+    """A tracked stage can patch any quest in that stage. Older courses still use the open wave."""
+    if stored_stage(course):
+        name = active_stage_name(course)
+        return {
+            "name": name,
+            "label": _stage_label(name),
+            "codes": _codes_in_phase(course, name),
+        }
+    return viewed_phase(course)
+
+
 def _phase_only(course: StudioCourse, phase: str) -> str:
-    listed = ", ".join(viewed_phase(course)["codes"]) or "the open quests"
+    listed = ", ".join(_patch_view(course)["codes"]) or "the open quests"
     if phase == "goals":
         return f"Goals only updates learning goals for {listed}."
     return f"Close only updates the close for {listed}."
 
 
 def _outside_phase(course: StudioCourse, op_name: str, kind: str, code) -> str | None:
-    """Goals and Close only touch the quests listed for that wave. Quests stays on the list."""
-    view = viewed_phase(course)
+    """Goals and Close only touch quests in this course. A draft does not have to name every quest."""
+    view = _patch_view(course)
     phase = view["name"]
     codes = {str(item).upper() for item in view["codes"]}
     code_text = str(code or "").strip().upper()
@@ -781,7 +802,7 @@ def split_patch(course: StudioCourse, patch) -> tuple[list[dict], list[str], lis
     planned: list[dict] = []
     skipped: list[str] = []
     kept: list[dict] = []
-    phase = viewed_phase(course)["name"]
+    phase = _patch_view(course)["name"]
     for raw in _order_writes(_operations(patch)):
         try:
             if not isinstance(raw, dict):
@@ -1447,7 +1468,7 @@ def add_message(
             raise StudioError("patch", "needs at least one add, update, or remove", plain=plain)
         phase = _phase_name(proposal.get("phase")) if isinstance(proposal, dict) else None
         if phase is None:
-            phase = viewed_phase(course)["name"]
+            phase = _patch_view(course)["name"]
         stored = {"operations": copy.deepcopy(kept), "phase": phase}
         if skipped:
             text = text.rstrip() + "\n" + "\n".join(skipped)
@@ -1971,7 +1992,13 @@ def push_draft(db: Session, course: StudioCourse) -> StudioCourse:
     _remember_undo(course, message)
     previous = _checker_view(course, stage)
     try:
-        apply_patch(db, course, {"operations": ops})
+        planned, skipped, _kept = split_patch(course, {"operations": ops})
+        if not planned:
+            plain = " ".join(skipped) if skipped else "That change had nothing to save."
+            raise StudioError("patch", "needs at least one add, update, or remove", plain=plain)
+        _apply(course, planned)
+        course.updated_at = _now()
+        db.flush()
     finally:
         _restore_checker_view(course, previous)
     message.applied = True
@@ -2601,7 +2628,8 @@ def _tracked_phase_instructions(course: StudioCourse) -> str:
         focus = (
             "Talk only about quests. "
             f"Ask whether to draft {count} quests from the course description. "
-            "When they want a draft, include one add or update per quest, with a real title about the subject. "
+            "When they want a draft, include one add or update per quest you are changing, with a real title about the subject. "
+            "A patch does not remove quests it leaves out. "
             "Do not copy or slice the description. Do not mention other stages. "
             "Do not say the quests were added. The tree changes only when they click Push draft to Tree."
         )
@@ -2610,6 +2638,7 @@ def _tracked_phase_instructions(course: StudioCourse) -> str:
             "Talk only about goals and success criteria. "
             f"Offer {per_quest} goals per quest, all in one go or one quest at a time. "
             "Each goal needs an observable success criterion. "
+            "A patch may name only the quests you are changing. Quests you leave out keep their goals. "
             "A patch updates each quest by code and sets parent to null. "
             "Do not fill close style in this patch. "
             "Do not say the goals were added. The tree changes only when they click Push draft to Tree."
@@ -2620,6 +2649,8 @@ def _tracked_phase_instructions(course: StudioCourse) -> str:
             "Offer a close for each quest, all in one go or one quest at a time. "
             "A close can be an essay, a single choice, a multi-choice, or no questions. "
             "A choice question needs at least two options. "
+            "Set selection to single or multi, and mark correct on the right options. "
+            "A patch may name only the quests you are changing. Quests you leave out keep their close. "
             "Do not say the closes were added. The tree changes only when they click Push draft to Tree."
         )
     else:
@@ -3016,7 +3047,8 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "The server still checks a pushed draft. A rejected operation is skipped and the rest can be saved. "
         "Do not say the course was saved, and do not say the structure was written.\n"
         "The response schema lists the only fields for this phase. "
-        "Goals and Close refuse operations for any other code.\n"
+        "Goals and Close refuse a code that is not a quest in this course.\n"
+        "A Goals or Close patch does not have to name every quest. Quests left out stay as they are.\n"
         f"{phase_instructions(course)}"
         "Return a reply plus an optional patch. The patch is a list of operations. "
         "Each operation is add, update, or remove, and it names a code. "
