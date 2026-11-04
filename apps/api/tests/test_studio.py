@@ -2442,3 +2442,150 @@ def test_a_close_draft_does_not_push_while_the_stage_is_goals() -> None:
         assert pushed.json()["stage_view"]["name"] == "goals"
     finally:
         _wipe("ZZBACK")
+
+
+def test_stepping_back_can_push_and_mark_complete_returns_to_the_furthest_stage() -> None:
+    course = _make("ZZRET", "Return")
+    course_id = course["id"]
+    try:
+        assert client.post(f"/studio/courses/{course_id}/opening").status_code == 200
+        added = client.post(
+            f"/studio/courses/{course_id}/tree",
+            json={"action": "add_quest", "title": "First"},
+        )
+        assert added.status_code == 200, added.text
+        assert client.post(f"/studio/courses/{course_id}/advance-stage").status_code == 200
+        goal = client.post(
+            f"/studio/courses/{course_id}/tree",
+            json={
+                "action": "add_goal",
+                "code": "ZZRET-Q1",
+                "learning_goal": "Name the first idea.",
+                "success_criterion": "States the first idea.",
+            },
+        )
+        assert goal.status_code == 200, goal.text
+        opened_close = client.post(f"/studio/courses/{course_id}/advance-stage")
+        assert opened_close.status_code == 200, opened_close.text
+        assert opened_close.json()["stage"]["name"] == "close"
+
+        stepped = client.post(f"/studio/courses/{course_id}/stage", json={"name": "goals"})
+        assert stepped.status_code == 200, stepped.text
+        assert stepped.json()["stage_view"]["name"] == "goals"
+        drafted = _proposal(
+            course_id,
+            "Add one more goal.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZRET-Q1",
+                    goals=[
+                        {
+                            "position": 1,
+                            "learning_goal": "Name the first idea.",
+                            "success_criterion": "States the first idea.",
+                        },
+                        {
+                            "position": 2,
+                            "learning_goal": "Name a second idea.",
+                            "success_criterion": "States the second idea.",
+                        },
+                    ],
+                )
+            ],
+        )
+        assert drafted.status_code == 200, drafted.text
+        assert drafted.json()["proposal"]["phase"] == "goals"
+        pushed = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert pushed.status_code == 200, pushed.text
+        goals = pushed.json()["quests"][0]["goals"]
+        assert [row["learning_goal"] for row in goals] == ["Name the first idea.", "Name a second idea."]
+        assert pushed.json()["can_advance"] is True
+        assert pushed.json()["stage"]["name"] == "close"
+        returned = client.post(f"/studio/courses/{course_id}/advance-stage")
+        assert returned.status_code == 200, returned.text
+        assert returned.json()["stage"]["name"] == "close"
+        assert returned.json()["stage_view"]["name"] == "close"
+        assert [row["learning_goal"] for row in returned.json()["quests"][0]["goals"]] == [
+            "Name the first idea.",
+            "Name a second idea.",
+        ]
+
+        back_quests = client.post(f"/studio/courses/{course_id}/stage", json={"name": "quests"})
+        assert back_quests.status_code == 200, back_quests.text
+        assert back_quests.json()["stage_view"]["name"] == "quests"
+        retitle = _proposal(
+            course_id,
+            "Rename the first quest.",
+            [_full("update", "quest", "ZZRET-Q1", title="First revised")],
+        )
+        assert retitle.status_code == 200, retitle.text
+        assert retitle.json()["proposal"]["phase"] == "quests"
+        quests_push = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert quests_push.status_code == 200, quests_push.text
+        assert quests_push.json()["quests"][0]["title"] == "First revised"
+        assert quests_push.json()["can_advance"] is True
+        quests_back = client.post(f"/studio/courses/{course_id}/advance-stage")
+        assert quests_back.status_code == 200, quests_back.text
+        assert quests_back.json()["stage"]["name"] == "close"
+        assert quests_back.json()["stage_view"]["name"] == "close"
+        assert quests_back.json()["quests"][0]["title"] == "First revised"
+        assert len(quests_back.json()["quests"][0]["goals"]) == 2
+
+        essay = client.post(
+            f"/studio/courses/{course_id}/tree",
+            json={
+                "action": "set_close",
+                "code": "ZZRET-Q1",
+                "close": {
+                    "close_style": "one",
+                    "answer_style": "essay",
+                    "choice_mode": None,
+                    "items": [],
+                    "questions": [{"text": "Why does this quest matter?"}],
+                    "intent": "",
+                },
+            },
+        )
+        assert essay.status_code == 200, essay.text
+        to_ready = client.post(f"/studio/courses/{course_id}/advance-stage")
+        assert to_ready.status_code == 200, to_ready.text
+        assert to_ready.json()["stage"]["name"] == "ready"
+        assert to_ready.json()["ready"] is False
+        back_close = client.post(f"/studio/courses/{course_id}/stage", json={"name": "close"})
+        assert back_close.status_code == 200, back_close.text
+        assert back_close.json()["stage_view"]["name"] == "close"
+        revised_close = _proposal(
+            course_id,
+            "Change the closing question.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZRET-Q1",
+                    close={
+                        "close_style": "one",
+                        "answer_style": "essay",
+                        "choice_mode": None,
+                        "items": [],
+                        "questions": [{"text": "What should you remember?"}],
+                        "intent": "",
+                    },
+                )
+            ],
+        )
+        assert revised_close.status_code == 200, revised_close.text
+        close_push = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert close_push.status_code == 200, close_push.text
+        assert close_push.json()["quests"][0]["close"]["questions"][0]["text"] == "What should you remember?"
+        assert close_push.json()["can_advance"] is True
+        close_back = client.post(f"/studio/courses/{course_id}/advance-stage")
+        assert close_back.status_code == 200, close_back.text
+        assert close_back.json()["stage"]["name"] == "ready"
+        assert close_back.json()["stage_view"]["name"] == "ready"
+        assert close_back.json()["ready"] is False
+        assert close_back.json()["quests"][0]["close"]["questions"][0]["text"] == "What should you remember?"
+        assert close_back.json()["quests"][0]["title"] == "First revised"
+    finally:
+        _wipe("ZZRET")

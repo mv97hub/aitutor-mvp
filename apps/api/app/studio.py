@@ -1609,12 +1609,14 @@ def stage_gaps_for(course: StudioCourse, stage: str) -> list[str]:
     return gaps
 
 
+_STAGE_ORDER = {"quests": 0, "goals": 1, "close": 2, "ready": 3}
+
+
 def can_advance_stage(course: StudioCourse) -> bool:
-    if active_stage_name(course) != tracked_stage_name(course):
-        return False
-    stage = tracked_stage_name(course)
+    """Mark Complete is on when the stage on screen has no gaps, including after stepping back."""
+    stage = active_stage_name(course)
     if stage == "ready":
-        return not bool(course.ready)
+        return tracked_stage_name(course) == "ready" and not bool(course.ready)
     return not stage_gaps_for(course, stage)
 
 
@@ -2026,15 +2028,16 @@ def push_draft(db: Session, course: StudioCourse) -> StudioCourse:
 
 
 def advance_stage(db: Session, course: StudioCourse) -> StudioCourse:
-    """Mark Complete, then Final Submit. The only way the stage moves forward."""
-    if active_stage_name(course) != tracked_stage_name(course):
-        raise StudioError(
-            "stage",
-            "already complete",
-            plain="This stage is already complete. Open the current stage to mark the next one complete.",
-        )
-    stage = tracked_stage_name(course)
+    """Mark Complete on the stage on screen. Stepping back returns to the furthest stage."""
+    stage = active_stage_name(course)
+    tracked = tracked_stage_name(course)
     if stage == "ready":
+        if tracked != "ready":
+            raise StudioError(
+                "stage",
+                "is later than the open stage",
+                plain=f"Mark {_stage_label(tracked)} complete before opening Ready.",
+            )
         course.ready = True
         course.updated_at = _now()
         db.flush()
@@ -2042,6 +2045,11 @@ def advance_stage(db: Session, course: StudioCourse) -> StudioCourse:
     gaps = stage_gaps_for(course, stage)
     if gaps:
         raise StudioError("stage", "still open", plain=" ".join(gaps))
+    if _STAGE_ORDER[stage] < _STAGE_ORDER[tracked]:
+        _write_pref(course, _STAGE_VIEW, None)
+        course.updated_at = _now()
+        db.flush()
+        return load_course(db, course.id) or course
     _write_pref(course, _STAGE_KEY, _NEXT_STAGE[stage])
     _write_pref(course, _STAGE_VIEW, None)
     course.updated_at = _now()
@@ -2062,8 +2070,7 @@ def set_stage_view(course: StudioCourse, name: str) -> None:
             "must be a course stage",
             plain="Choose Quests, Goals/Success Criteria, Close, or Ready.",
         )
-    order = {"quests": 0, "goals": 1, "close": 2, "ready": 3}
-    if order[name] > order[tracked_stage_name(course)]:
+    if _STAGE_ORDER[name] > _STAGE_ORDER[tracked_stage_name(course)]:
         raise StudioError(
             "stage",
             "is later than the open stage",

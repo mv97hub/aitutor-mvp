@@ -755,7 +755,7 @@ export function CreateCourse() {
                   disabled={busy || !course.can_advance}
                   onClick={() => void advanceStage()}
                 >
-                  {course.ready ? "Submitted" : course.stage.name === "ready" ? "Final Submit" : "Mark Complete"}
+                  {course.ready ? "Submitted" : course.stage_view.name === "ready" ? "Final Submit" : "Mark Complete"}
                 </button>
                 {course.stage_view.name === "quests" ? (
                   <button
