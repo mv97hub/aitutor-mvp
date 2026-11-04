@@ -430,8 +430,7 @@ def normalize_close(value, field: str = "close") -> dict:
         }
     if items:
         raise StudioError("items", "dynamic choices store only the intent")
-    if not intent:
-        raise StudioError("intent", "is required for dynamic choices")
+    # A blank close can name dynamic choices before anyone writes an intent.
     return {
         "close_style": style,
         "answer_style": answer,
@@ -587,6 +586,48 @@ def _nodes_for(course: StudioCourse) -> dict[str, _Node]:
     return nodes
 
 
+def _parent_from_code(course_code: str, kind: str, code: str) -> str | None:
+    if kind == "unit":
+        return course_code
+    if kind not in ("quest", "move") or "-" not in code or not code.startswith(f"{course_code}-"):
+        return None
+    return code.rsplit("-", 1)[0]
+
+
+def _with_inferred_parent(course_code: str, raw: dict) -> dict:
+    """A well-formed code supplies its parent when the patch left that field empty."""
+    if raw.get("op") != "add" or raw.get("kind") not in ("unit", "quest", "move"):
+        return raw
+    code = raw.get("code")
+    if not isinstance(code, str) or not code.strip():
+        return raw
+    normalized = code.strip().upper()
+    inferred = _parent_from_code(course_code, raw.get("kind"), normalized)
+    parent = raw.get("parent")
+    if isinstance(parent, str) and parent.strip():
+        candidate = parent.strip().upper()
+        if raw.get("kind") == "unit":
+            return raw
+        if NODE_CODE.fullmatch(candidate) and candidate.startswith(f"{course_code}-"):
+            return raw
+    if not inferred:
+        return raw
+    copied = dict(raw)
+    copied["parent"] = inferred
+    return copied
+
+
+def _order_adds(ops: list) -> list:
+    """Plan units before the quests and moves that name them."""
+    rank = {"unit": 0, "quest": 1, "move": 2}
+    indexes = [index for index, op in enumerate(ops) if isinstance(op, dict) and op.get("op") == "add"]
+    adds = sorted((ops[index] for index in indexes), key=lambda op: rank.get(op.get("kind"), 9))
+    ordered = list(ops)
+    for index, op in zip(indexes, adds):
+        ordered[index] = op
+    return ordered
+
+
 def split_patch(course: StudioCourse, patch) -> tuple[list[dict], list[str], list[dict]]:
     """Plan each operation. A bad sibling is skipped. Nothing is written."""
     nodes = _nodes_for(course)
@@ -603,10 +644,11 @@ def split_patch(course: StudioCourse, patch) -> tuple[list[dict], list[str], lis
     skipped: list[str] = []
     kept: list[dict] = []
     phase = viewed_phase(course)["name"]
-    for raw in _operations(patch):
+    for raw in _order_adds(_operations(patch)):
         try:
             if not isinstance(raw, dict):
                 raise StudioError("patch", "each change must be an object")
+            raw = _with_inferred_parent(course.code, raw)
             op_name = raw.get("op")
             kind = raw.get("kind")
             if op_name not in OPS:
@@ -640,7 +682,8 @@ def split_patch(course: StudioCourse, patch) -> tuple[list[dict], list[str], lis
             else:
                 step = _plan_remove(course.code, cleaned, nodes)
         except StudioError as exc:
-            skipped.append(exc.plain)
+            if exc.plain not in skipped:
+                skipped.append(exc.plain)
             continue
         if step is not None:
             planned.append(step)
@@ -685,7 +728,11 @@ def _plan_add(course_code: str, raw: dict, nodes: dict[str, _Node], state: dict)
         parent_code = normalize_node_code(raw.get("parent"), course_code, "parent")
     parent = nodes.get(parent_code)
     if parent is None:
-        raise StudioError("parent", f"{parent_code} is not in this course")
+        raise StudioError(
+            "parent",
+            f"{parent_code} is not in this course yet",
+            plain=f"The parent {parent_code} is not in this course yet.",
+        )
     if parent.kind != PARENT_KIND[kind]:
         raise StudioError("parent", f"{code} must be added under a {PARENT_KIND[kind]}")
     title = _text("title", raw.get("title"), required=True)
@@ -1092,7 +1139,12 @@ def update_preferences(course: StudioCourse, body: dict) -> None:
     course.title = _text("title", body.get("title"), required=True)
     course.audience = normalize_audience(body.get("audience", ""))
     course.focus = _text("focus", body.get("focus", ""))
-    theme = _text("theme", body.get("theme", ""))
+    theme_value = body.get("theme", None)
+    if not isinstance(theme_value, str) or not theme_value.strip():
+        described = body.get("description", "")
+        if isinstance(described, str) and described.strip():
+            theme_value = described
+    theme = _text("theme", theme_value or "")
     if theme.lower() in {"none", "no theme"}:
         theme = ""
     course.theme = theme
@@ -1201,20 +1253,54 @@ _CONFIRM_EXACT = frozenset(
 )
 _CONFIRM_BLOCK = re.compile(r"\b(?:but|except|change|instead|don't|do not|wait|not yet)\b", re.IGNORECASE)
 _THIN_DESCRIPTION = frozenset({"", "none", "no theme", "no description"})
-_CONFIRM_ACK = "Those changes are now in the course. You can undo this write."
+
+
+def _confirm_text(text: str) -> str | None:
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    if not collapsed or "?" in collapsed or _CONFIRM_BLOCK.search(collapsed):
+        return None
+    return collapsed.rstrip(".!").strip().lower()
 
 
 def is_explicit_confirm(text: str) -> bool:
     """A short yes that writes the held proposal. A question or a change request does not."""
-    collapsed = re.sub(r"\s+", " ", text).strip()
-    if not collapsed or "?" in collapsed or _CONFIRM_BLOCK.search(collapsed):
+    normalized = _confirm_text(text)
+    if normalized is None:
         return False
-    normalized = collapsed.rstrip(".!").strip().lower()
     if normalized in _CONFIRM_EXACT:
         return True
-    if re.match(r"^(?:yes|ok|okay|sure)[,.]?\s+add\b", normalized):
+    if re.match(r"^(?:yes|ok|okay|sure)[,.]?\s+(?:add|commit|save|move)\b", normalized):
         return True
-    return re.match(r"^add those\b", normalized) is not None
+    if re.match(r"^add those\b", normalized):
+        return True
+    return re.match(r"^(?:please\s+)?(?:commit|save them|save those|move on)\b", normalized) is not None
+
+
+def _wants_next_stage(text: str) -> bool:
+    normalized = _confirm_text(text)
+    if normalized is None:
+        return False
+    return re.search(r"\b(?:move on|next stage|next phase)\b", normalized) is not None
+
+
+def _stage_reply(course: StudioCourse, *, wrote: bool) -> str:
+    """Talk about the stage on screen. Do not ask the confirm question again."""
+    phase = course_phase(course)
+    if phase["name"] == "goals":
+        lead = "Goals is the stage on screen."
+        detail = "Each open quest needs a learning goal and a success criterion."
+    elif phase["name"] == "close":
+        lead = "Close is the stage on screen."
+        detail = "Each open quest needs a close style."
+    elif phase["name"] == "ready":
+        lead = "Ready is the stage on screen."
+        detail = "Mark ready can be turned on."
+    else:
+        lead = "Structure is still the stage on screen."
+        detail = "The next stage is Goals, after each unit has a quest."
+    if wrote:
+        return f"Those changes are now in the course. {lead} {detail} You can undo this write."
+    return f"{lead} {detail}"
 
 
 def description_is_specific(theme: str) -> bool:
@@ -1303,9 +1389,10 @@ def _pending_proposals(messages: list[StudioMessage]) -> list[StudioMessage]:
 
 
 def confirm_turn(db: Session, course: StudioCourse, content: str) -> dict | None:
-    """Write the one held proposal when the chat message is an explicit confirm.
+    """Write the held proposal when the chat message is an explicit confirm.
 
-    Any other message is left for the model. Nothing is stored in that case.
+    A second confirm, with nothing left to write, answers about the stage on
+    screen. It does not ask the confirm question again.
     """
     text = content.strip()
     if not text:
@@ -1315,13 +1402,17 @@ def confirm_turn(db: Session, course: StudioCourse, content: str) -> dict | None
     if not is_explicit_confirm(text):
         return None
     pending = _pending_proposals(list_messages(db, course))
-    if len(pending) != 1:
-        return None
     user = add_message(db, course, role="user", content=text, proposal=None)
-    accept_proposal(db, course, pending[0])
-    assistant = add_message(db, course, role="assistant", content=_CONFIRM_ACK, proposal=None)
+    wrote = False
+    if pending:
+        accept_proposal(db, course, pending[-1])
+        wrote = True
     fresh = load_course(db, course.id) or course
-    return {"wrote": True, "user": user, "assistant": assistant, "course": fresh}
+    if _wants_next_stage(text):
+        set_phase_view(fresh, course_phase(fresh)["name"])
+    assistant = add_message(db, fresh, role="assistant", content=_stage_reply(fresh, wrote=wrote), proposal=None)
+    fresh = load_course(db, course.id) or fresh
+    return {"wrote": wrote, "handled": True, "user": user, "assistant": assistant, "course": fresh}
 
 
 _UNDO = "_undo"
@@ -2024,8 +2115,9 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "You must say which framework a suggestion comes from. "
         "Label every curriculum idea as a suggestion.\n"
         "You have no web search and no document upload. Do not claim you searched the web or read an uploaded file.\n"
-        "Nothing is written until the creator confirms in the chat. "
+        "Nothing is written until the creator confirms in the chat, for example commit, yes, add those, save them, or move on. "
         "Until then the tree stays as it is. "
+        "After a confirm, talk about the stage now on screen. Do not ask the same confirm question again. "
         "The server still checks. A rejected operation is skipped and the rest can be saved after a confirm. "
         "Do not say the course was saved, and do not say the structure was written.\n"
         "The response schema lists the only fields for this phase. "

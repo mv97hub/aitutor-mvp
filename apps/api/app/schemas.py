@@ -594,6 +594,7 @@ class StudioPreferencesIn(BaseModel):
     audience: str = ""
     focus: str = ""
     theme: str = ""
+    description: str = ""
     depth: StudioDepth = "standard"
     quiz_minutes: int = 5
     sources: str = ""
@@ -660,6 +661,7 @@ class StudioTurnIn(BaseModel):
 
 class StudioTurnOut(BaseModel):
     wrote: bool
+    handled: bool = False
     user: StudioMessageOut | None = None
     assistant: StudioMessageOut | None = None
     course: StudioCourseOut | None = None
