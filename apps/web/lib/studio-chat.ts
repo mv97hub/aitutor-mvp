@@ -33,6 +33,14 @@ export function retryNote(reason: string): string {
   return `The previous reply was rejected. ${reason.trim()} Send a patch that fixes this. Do not say the course was saved.`;
 }
 
+export function replyIfUnwritten(text: string): string {
+  if (/\b(i['’]ve added|i have added|i added|added the quests|now in the course)\b/i.test(text)) {
+    return "Those quests are not in the course yet.";
+  }
+  const trimmed = text.trim();
+  return trimmed || "Those quests are not in the course yet.";
+}
+
 export function settleModelResult(input: {
   attempt: number;
   failure: string | null;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { detailFrom, plainFailure, retryNote, settleModelResult } from "./studio-chat.ts";
+import { detailFrom, plainFailure, replyIfUnwritten, retryNote, settleModelResult } from "./studio-chat.ts";
 
 const schemaDump =
   'No object generated: response did not match schema. {"close_style":"quiz","path":"patch.operations.0"}';
@@ -104,6 +104,11 @@ test("a good reply is saved, and a transport error is a banner", () => {
     operations: [],
   });
   assert.deepEqual(down, { action: "banner", text: "Could not save the reply." });
+});
+
+test("replyIfUnwritten refuses a claim that the quests were added", () => {
+  assert.equal(replyIfUnwritten("I've added the quests"), "Those quests are not in the course yet.");
+  assert.equal(replyIfUnwritten("Those titles are a draft."), "Those titles are a draft.");
 });
 
 test("plainFailure keeps a short sentence and drops a field path", () => {

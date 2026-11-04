@@ -1486,6 +1486,8 @@ def is_explicit_confirm(text: str) -> bool:
         return False
     if normalized in _CONFIRM_EXACT:
         return True
+    if re.match(r"^(?:yes|yeah|yep|ok|okay|sure)(?:\s*,\s*please|\s+please)$", normalized):
+        return True
     if re.match(r"^(?:yes|ok|okay|sure)[,.]?\s+(?:add|commit|save|move)\b", normalized):
         return True
     if re.match(r"^add those\b", normalized):
@@ -1523,8 +1525,8 @@ def _stage_reply(course: StudioCourse, *, wrote: bool) -> str:
     else:
         lead = "Quests is still the stage on screen."
         detail = (
-            "A quest is one piece of the course. "
-            f"I can draft {quest_count} quests around the course description."
+            "A quest is one section of the course the learner works through. "
+            f"I can draft {quest_count} quests from the course description."
         )
     if wrote:
         return f"Those changes are now in the course. {lead} {detail} You can undo this write."
@@ -1538,82 +1540,212 @@ def description_is_specific(theme: str) -> bool:
     return len(re.findall(r"[A-Za-z0-9']+", text)) >= 8
 
 
-def _quest_titles(theme: str, count: int) -> list[str]:
+_QUEST_SECTIONS = (
+    "Introducing {subject}",
+    "Where {subject} comes from",
+    "The main ideas in {subject}",
+    "How {subject} works",
+    "A careful look at {subject}",
+    "Trying {subject} yourself",
+    "Common questions about {subject}",
+    "Checking what you know about {subject}",
+    "Pulling {subject} together",
+    "What to remember about {subject}",
+)
+
+
+def _course_subject(theme: str) -> str:
+    """The subject the quests are about. One phrase, not a slice of the sentence."""
+    text = re.sub(r"\s+", " ", (theme or "").strip())
+    text = re.sub(
+        r"^(?:please\s+)?(?:create|make|build|design)\s+(?:me\s+)?(?:a|an)\s+course\s+(?:about|on|for)\s+",
+        "",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"^(?:a|an)\s+course\s+(?:about|on)\s+", "", text, count=1, flags=re.IGNORECASE)
+    subject = re.split(r"[.!?]\s+|\s+\b(?:include|including|incl)\b", text, maxsplit=1, flags=re.IGNORECASE)[0]
+    subject = subject.strip(" .,:;\"'")
+    if not subject:
+        subject = "this subject"
+    room = TEXT_LIMITS["title"] - len("Checking what you know about ")
+    if len(subject) > room:
+        trimmed = subject[:room].rsplit(" ", 1)[0].strip()
+        subject = trimmed or subject[:room]
+    return subject
+
+
+def _draft_quest_titles(theme: str, count: int) -> list[str]:
+    """Real section titles about the subject. Never copies or slices the description."""
     count = max(1, min(count, 40))
-    parts = [part.strip(" .") for part in re.split(r"\s*,\s*|\s+\band\b\s+", theme, flags=re.IGNORECASE)]
-    parts = [part[: TEXT_LIMITS["title"]] for part in parts if part]
-    titles: list[str] = []
-    for part in parts:
-        if len(titles) >= count:
-            break
-        titles.append(part)
-    short = theme.strip()
-    if len(short) > 60:
-        short = short[:60].rstrip()
-    stems = ("opening", "practice", "close")
-    number = 1
+    subject = _course_subject(theme)
+    titles = [pattern.format(subject=subject) for pattern in _QUEST_SECTIONS]
     while len(titles) < count:
-        if number <= len(stems):
-            titles.append(f"{short}: {stems[number - 1]}"[: TEXT_LIMITS["title"]])
-        else:
-            titles.append(f"{short}: quest {number}"[: TEXT_LIMITS["title"]])
-        number += 1
-    return titles[:count]
+        part = len(titles) - len(_QUEST_SECTIONS) + 1
+        titles.append(f"Going further with {subject}, part {part}")
+    return [title[: TEXT_LIMITS["title"]] for title in titles[:count]]
 
 
-def _opening_text(course: StudioCourse) -> str:
+def _titles_from_reply(reply: str) -> list[str]:
+    """Numbered titles the assistant already listed. Not slices of the description."""
+    titles: list[str] = []
+    for line in (reply or "").splitlines():
+        match = re.match(r"\s*(?:\d{1,2}[.)]\s+|[-*]\s+)(.+)", line)
+        if not match:
+            continue
+        title = match.group(1).strip().strip(" .")
+        if len(title) < 3 or len(title) > TEXT_LIMITS["title"]:
+            continue
+        lowered = title.lower()
+        if lowered.startswith("i've added") or lowered.startswith("i have added") or lowered.startswith("i added"):
+            continue
+        titles.append(title)
+    return titles
+
+
+def _normalize_quest_adds(course: StudioCourse, operations: list | None) -> list[dict]:
+    adds: list[dict] = []
+    for raw in operations or []:
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("op") or "add") != "add":
+            continue
+        if str(raw.get("kind") or "quest") != "quest":
+            continue
+        title = str(raw.get("title") or "").strip()
+        if not title:
+            continue
+        adds.append(raw)
+    normalized: list[dict] = []
+    for index, raw in enumerate(adds, start=1):
+        code = str(raw.get("code") or f"{course.code}-Q{index}").strip().upper()
+        normalized.append(
+            {
+                "op": "add",
+                "kind": "quest",
+                "code": code,
+                "parent": None,
+                "title": str(raw["title"]).strip()[: TEXT_LIMITS["title"]],
+                "position": index,
+            }
+        )
+    return normalized
+
+
+_FALSE_CLAIM = re.compile(
+    r"\b(i've added|i have added|i added|added the quests|now in the course)\b",
+    re.IGNORECASE,
+)
+
+
+def reply_without_false_claim(reply: str) -> str:
+    """A chat line may list titles. It may not say they were written until the write succeeds."""
+    text = (reply or "").strip()
+    if not text or _FALSE_CLAIM.search(text):
+        return "Those quests are not in the course yet."
+    return text
+
+
+def _draft_success_reply(course: StudioCourse, titles: list[str]) -> str:
+    listed = "\n".join(f"{index}. {title}" for index, title in enumerate(titles, start=1))
+    return f"{listed}\n{_stage_reply(course, wrote=True)}"
+
+
+def commit_confirmed_draft(
+    db: Session,
+    course: StudioCourse,
+    content: str,
+    operations: list | None = None,
+    reply: str = "",
+    fallback: bool = False,
+) -> dict:
+    """Write quests for a confirm. The reply claims a write only after the patch is stored."""
+    text = content.strip()
+    if not is_explicit_confirm(text):
+        raise StudioError("content", "is not a confirm", plain="Say yes when you want these quests written.")
+    ops = _normalize_quest_adds(course, operations)
+    if not ops:
+        parsed = _titles_from_reply(reply)
+        count = min(quest_count_of(course), 40)
+        ops = [
+            {
+                "op": "add",
+                "kind": "quest",
+                "code": f"{course.code}-Q{index}",
+                "parent": None,
+                "title": title[: TEXT_LIMITS["title"]],
+                "position": index,
+            }
+            for index, title in enumerate(parsed[:count], start=1)
+        ]
+    if not ops and fallback and not course.quests:
+        count = min(quest_count_of(course), 40)
+        ops = [
+            {
+                "op": "add",
+                "kind": "quest",
+                "code": f"{course.code}-Q{index}",
+                "parent": None,
+                "title": title,
+                "position": index,
+            }
+            for index, title in enumerate(_draft_quest_titles(course.theme or "", count), start=1)
+        ]
+    user = add_message(db, course, role="user", content=text, proposal=None)
+    if not ops:
+        assistant = add_message(
+            db,
+            course,
+            role="assistant",
+            content=reply_without_false_claim(reply),
+            proposal=None,
+        )
+        fresh = load_course(db, course.id) or course
+        return {"wrote": False, "handled": True, "user": user, "assistant": assistant, "course": fresh}
+    _remember_undo(course, user)
+    apply_patch(db, course, {"operations": ops})
+    if course_phase(course)["name"] != "ready":
+        course.ready = False
+    course.updated_at = _now()
+    db.flush()
+    fresh = load_course(db, course.id) or course
+    titles = [quest.title for quest in sorted(fresh.quests, key=lambda row: (row.position, row.code))]
+    assistant = add_message(
+        db,
+        fresh,
+        role="assistant",
+        content=_draft_success_reply(fresh, titles),
+        proposal=None,
+    )
+    # The quests are already stored. Recording the patch must not run it through
+    # the Goals checker, which would reject the same adds and roll the write back.
+    assistant.proposal = {"operations": ops, "phase": "quests"}
+    assistant.applied = True
+    fresh.updated_at = _now()
+    db.flush()
+    fresh = load_course(db, course.id) or fresh
+    return {"wrote": True, "handled": True, "user": user, "assistant": assistant, "course": fresh}
+
+
+def _quests_opening(course: StudioCourse) -> str:
+    """Two parts: what a quest is, then one question. No other phase."""
+    intro = (
+        "A quest is one section of the course the learner works through. "
+        "Nothing is written until you confirm."
+    )
+    if course.quests:
+        return f"{intro}\nQuests are already on this course. Tell me what you want to change."
     count = quest_count_of(course)
-    per_quest = goals_per_quest_of(course)
     return (
-        "This studio builds one course with you. "
-        "Nothing is written into the tree until you confirm it in the chat.\n"
-        "A quest is one piece of the course the learner works through. "
-        f"Quests asks whether to draft {count} quests around the course description.\n"
-        "Goals/Success Criteria says a quest can hold several goals, each with its own criterion. "
-        f"That phase can offer {per_quest} goals per quest.\n"
-        "Close offers one close per quest, normally at least one question, and an empty list when you ask for it.\n"
-        "Ready is when those three are filled and you say the draft is complete."
+        f"{intro}\n"
+        f"Should I draft {count} quests from the course description, or do you want something else?"
     )
 
 
 def opening_for(course: StudioCourse) -> tuple[str, dict | None]:
-    """The first assistant message. A thin description does not carry a quest patch."""
-    intro = _opening_text(course)
-    theme = (course.theme or "").strip()
-    if course.quests:
-        return (
-            f"{intro}\n"
-            "Quests is already started. Tell me what you want to change in the phase on screen.",
-            None,
-        )
-    if not description_is_specific(theme):
-        return (
-            f"{intro}\n"
-            "The course description is still thin, so I will not propose quests yet. "
-            "What is the topic, who is the audience, and what should the course cover?",
-            None,
-        )
-    count = min(quest_count_of(course), 40)
-    titles = _quest_titles(theme, count)
-    listed = "\n".join(f"{index}. {title}" for index, title in enumerate(titles, start=1))
-    operations = [
-        {
-            "op": "add",
-            "kind": "quest",
-            "code": f"{course.code}-Q{index}",
-            "parent": None,
-            "title": title,
-            "position": index,
-        }
-        for index, title in enumerate(titles, start=1)
-    ]
-    return (
-        f"{intro}\n"
-        f"The course description is specific enough to draft {count} quests. "
-        f"I would add these quests:\n{listed}\n"
-        "What would you change, or should I write these quests?",
-        {"operations": operations, "phase": "quests"},
-    )
+    """The first assistant message. Quest titles wait until the creator confirms."""
+    return _quests_opening(course), None
 
 
 def seed_opening(db: Session, course: StudioCourse) -> list[StudioMessage]:
@@ -1647,6 +1779,8 @@ def confirm_turn(db: Session, course: StudioCourse, content: str) -> dict | None
     if not is_explicit_confirm(text):
         return None
     pending = _pending_proposals(list_messages(db, course))
+    if not pending and not course.quests and course_phase(course)["name"] == "quests":
+        return {"wrote": False, "handled": False, "awaiting_draft": True}
     user = add_message(db, course, role="user", content=text, proposal=None)
     wrote = False
     if pending:
@@ -2151,28 +2285,32 @@ def phase_instructions(course: StudioCourse) -> str:
     per_quest = goals_per_quest_of(course)
     if phase["name"] == "quests":
         focus = (
-            f"A quest is one piece of the course. Ask whether to draft {count} quests around the course description. "
-            "Add the missing quests. Empty learning goals are allowed."
+            "A quest is one section of the course the learner works through. "
+            "Nothing is written until the creator confirms. "
+            f"If no quests are on the course yet, ask whether to draft {count} quests from the course description, "
+            "or whether they want something else. Do not send quest titles before that yes. "
+            f"When they say yes, draft {count} real quest titles about the subject in the course description. "
+            "Do not copy the description, and do not slice the description sentence into titles. "
+            "Do not explain other phases in this reply. "
+            "Empty learning goals are allowed."
         )
-        later = (
-            "Later phases, in one line: Goals/Success Criteria, then Close, then Ready. "
-            "Do not fill learning goals or close style in this patch."
-        )
+        later = "Do not fill learning goals or close style in this patch."
     elif phase["name"] == "goals":
         focus = (
+            "A quest can hold several goals, each with its own criterion. "
+            f"Offer {per_quest} goals per quest. "
             "Offer a learning goal for each open quest, addressed by that quest's code. "
-            f"A quest can hold several goals, each with its own criterion. Offer {per_quest} goals per quest. "
             "Draft a criterion whenever you draft a goal. "
             "An update names that quest's code and sets parent to null."
         )
-        later = "Later phases, in one line: Close, then Ready. Do not fill close style in this patch."
+        later = "Do not fill close style in this patch."
     elif phase["name"] == "close":
         focus = (
-            "Offer one close per quest, addressed by that quest's code. "
-            "Normally include at least one question. An empty question list is saved when asked. "
+            "Offer one close per quest, normally at least one question. "
+            "An empty question list is saved when asked. "
             "An update names that code and sets parent to null."
         )
-        later = "Later phase, in one line: Ready. Do not add new goals in this patch."
+        later = "Do not add new goals in this patch."
     else:
         focus = "Quests, learning goals, and close styles are in place. Mark ready can be turned on."
         later = "There is no later phase. Do not send a patch unless the creator asks for a change."
@@ -2449,14 +2587,16 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "You are helping a person build one course in the CreateCourse studio.\n"
         f"Course description: {description}\n"
         "Quests, learning goals, and close items follow this course description.\n"
-        "The creator states a focus. You propose the next slice for the phase on screen, "
+        "The creator states a focus. You propose the next change for the phase on screen, "
         "talk through it, and ask one clear question about what to change.\n"
         "You may use widely known national curricula and standard texts as suggestions. "
         "You must say which framework a suggestion comes from. "
         "Label every curriculum idea as a suggestion.\n"
         "You have no web search and no document upload. Do not claim you searched the web or read an uploaded file.\n"
-        "Nothing is written until the creator confirms in the chat, for example commit, yes, add those, save them, or move on. "
+        "Nothing is written until the creator confirms in the chat, for example yes, yes please, commit, add those, save them, or move on. "
         "Until then the tree stays as it is. "
+        "Do not say you added the quests. The server writes a confirmed patch, and only then says they are in the course. "
+        "There is no Accept button and no Skip button. "
         "After a confirm, talk about the stage now on screen. Do not ask the same confirm question again. "
         "The server still checks. A rejected operation is skipped and the rest can be saved after a confirm. "
         "Do not say the course was saved, and do not say the structure was written.\n"

@@ -664,6 +664,14 @@ class StudioTurnIn(BaseModel):
 class StudioTurnOut(BaseModel):
     wrote: bool
     handled: bool = False
+    awaiting_draft: bool = False
     user: StudioMessageOut | None = None
     assistant: StudioMessageOut | None = None
     course: StudioCourseOut | None = None
+
+
+class StudioDraftIn(BaseModel):
+    content: str = Field(min_length=1, max_length=20000)
+    operations: list[dict[str, Any]] | None = None
+    reply: str = ""
+    fallback: bool = False
