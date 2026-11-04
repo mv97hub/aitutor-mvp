@@ -18,11 +18,14 @@ from app.schemas import (
     StudioIndexesIn,
     StudioMessageIn,
     StudioMessageOut,
+    StudioOpeningOut,
     StudioPhaseIn,
     StudioPreferencesIn,
     StudioPromptOut,
     StudioSettingsIn,
     StudioSettingsOut,
+    StudioTurnIn,
+    StudioTurnOut,
 )
 from app.studio import (
     STUDIO_MODELS,
@@ -30,6 +33,7 @@ from app.studio import (
     StudioError,
     accept_proposal,
     add_message,
+    confirm_turn,
     copy_studio_course,
     course_out,
     create_course,
@@ -43,6 +47,7 @@ from app.studio import (
     mark_ready,
     message_out,
     response_schema,
+    seed_opening,
     set_model,
     set_phase_view,
     summary_out,
@@ -147,6 +152,34 @@ def post_phase(course_id: UUID, body: StudioPhaseIn, db: Session = Depends(get_d
 def get_messages(course_id: UUID, db: Session = Depends(get_db)) -> list[StudioMessageOut]:
     course = _course(db, course_id)
     return [message_out(message) for message in list_messages(db, course)]
+
+
+@router.post("/courses/{course_id}/opening", response_model=StudioOpeningOut)
+def post_opening(course_id: UUID, db: Session = Depends(get_db)) -> StudioOpeningOut:
+    course = _course(db, course_id)
+    try:
+        messages = seed_opening(db, course)
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    fresh = load_course(db, course_id) or course
+    return StudioOpeningOut(course=course_out(fresh), messages=[message_out(message) for message in messages])
+
+
+@router.post("/courses/{course_id}/turns", response_model=StudioTurnOut)
+def post_turn(course_id: UUID, body: StudioTurnIn, db: Session = Depends(get_db)) -> StudioTurnOut:
+    course = _course(db, course_id)
+    try:
+        result = confirm_turn(db, course, body.content)
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    if result is None:
+        return StudioTurnOut(wrote=False)
+    return StudioTurnOut(
+        wrote=True,
+        user=message_out(result["user"]),
+        assistant=message_out(result["assistant"]),
+        course=course_out(result["course"]),
+    )
 
 
 @router.post("/courses/{course_id}/messages", response_model=StudioMessageOut)

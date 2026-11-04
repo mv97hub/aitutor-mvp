@@ -2,7 +2,7 @@
 
 The tutor seed does not import this module. Patches are checked before they
 are written. A model reply can describe a change, and the tree stays as it
-is until that patch is accepted.
+is until the creator confirms that change in the chat.
 """
 
 from __future__ import annotations
@@ -1179,6 +1179,151 @@ def add_message(
     return message
 
 
+_CONFIRM_EXACT = frozenset(
+    {
+        "yes",
+        "yeah",
+        "yep",
+        "ok",
+        "okay",
+        "sure",
+        "confirm",
+        "do it",
+        "go ahead",
+        "write it",
+        "write that",
+        "save that",
+        "add them",
+        "add those",
+        "add it",
+        "add that",
+    }
+)
+_CONFIRM_BLOCK = re.compile(r"\b(?:but|except|change|instead|don't|do not|wait|not yet)\b", re.IGNORECASE)
+_THIN_DESCRIPTION = frozenset({"", "none", "no theme", "no description"})
+_CONFIRM_ACK = "Those changes are now in the course. You can undo this write."
+
+
+def is_explicit_confirm(text: str) -> bool:
+    """A short yes that writes the held proposal. A question or a change request does not."""
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    if not collapsed or "?" in collapsed or _CONFIRM_BLOCK.search(collapsed):
+        return False
+    normalized = collapsed.rstrip(".!").strip().lower()
+    if normalized in _CONFIRM_EXACT:
+        return True
+    if re.match(r"^(?:yes|ok|okay|sure)[,.]?\s+add\b", normalized):
+        return True
+    return re.match(r"^add those\b", normalized) is not None
+
+
+def description_is_specific(theme: str) -> bool:
+    text = (theme or "").strip()
+    if text.lower() in _THIN_DESCRIPTION:
+        return False
+    return len(re.findall(r"[A-Za-z0-9']+", text)) >= 8
+
+
+def _unit_titles(theme: str) -> list[str]:
+    parts = [part.strip(" .") for part in re.split(r"\s*,\s*|\s+\band\b\s+", theme, flags=re.IGNORECASE)]
+    parts = [part for part in parts if part]
+    if len(parts) >= 2:
+        return [part[: TEXT_LIMITS["title"]] for part in parts[:3]]
+    short = theme.strip()
+    if len(short) > 80:
+        short = short[:80].rstrip()
+    return [f"{short}: opening", f"{short}: practice", f"{short}: close"]
+
+
+def _opening_text() -> str:
+    return (
+        "This studio builds one course with you. "
+        "Nothing is written into the tree until you confirm it in the chat.\n"
+        "Structure is the units and quests, and each one needs a title. "
+        "Goals is a learning goal and a success criterion for each quest. "
+        "Close is how each quest ends. "
+        "Ready is when those three are filled and you say the draft is complete."
+    )
+
+
+def opening_for(course: StudioCourse) -> tuple[str, dict | None]:
+    """The first assistant message. A thin description does not carry a unit patch."""
+    intro = _opening_text()
+    theme = (course.theme or "").strip()
+    if course.units:
+        return (
+            f"{intro}\n"
+            "Structure is already started. Tell me what you want to change in the phase on screen.",
+            None,
+        )
+    if not description_is_specific(theme):
+        return (
+            f"{intro}\n"
+            "The course description is still thin, so I will not propose units yet. "
+            "What is the topic, who is the audience, and what should the course cover?",
+            None,
+        )
+    titles = _unit_titles(theme)
+    listed = "\n".join(f"{index}. {title}" for index, title in enumerate(titles, start=1))
+    operations = [
+        {
+            "op": "add",
+            "kind": "unit",
+            "code": f"{course.code}-U{index}",
+            "parent": course.code,
+            "title": title,
+            "position": index,
+        }
+        for index, title in enumerate(titles, start=1)
+    ]
+    return (
+        f"{intro}\n"
+        "The course description is specific enough to start structure. "
+        f"I would add these units:\n{listed}\n"
+        "What would you change, or should I write these units?",
+        {"operations": operations, "phase": "structure"},
+    )
+
+
+def seed_opening(db: Session, course: StudioCourse) -> list[StudioMessage]:
+    existing = list_messages(db, course)
+    if existing:
+        return existing
+    content, proposal = opening_for(course)
+    add_message(db, course, role="assistant", content=content, proposal=proposal)
+    return list_messages(db, course)
+
+
+def _pending_proposals(messages: list[StudioMessage]) -> list[StudioMessage]:
+    return [
+        message
+        for message in messages
+        if message.role == "assistant" and message.proposal and not message.applied
+    ]
+
+
+def confirm_turn(db: Session, course: StudioCourse, content: str) -> dict | None:
+    """Write the one held proposal when the chat message is an explicit confirm.
+
+    Any other message is left for the model. Nothing is stored in that case.
+    """
+    text = content.strip()
+    if not text:
+        raise StudioError("content", "is required")
+    if len(text) > 20000:
+        raise StudioError("content", "is too long")
+    if not is_explicit_confirm(text):
+        return None
+    pending = _pending_proposals(list_messages(db, course))
+    if len(pending) != 1:
+        return None
+    user = add_message(db, course, role="user", content=text, proposal=None)
+    accept_proposal(db, course, pending[0])
+    assistant = add_message(db, course, role="assistant", content=_CONFIRM_ACK, proposal=None)
+    fresh = load_course(db, course.id) or course
+    return {"wrote": True, "user": user, "assistant": assistant, "course": fresh}
+
+
 _UNDO = "_undo"
 
 
@@ -1827,8 +1972,9 @@ def response_schema(course: StudioCourse) -> dict:
             "reply": {
                 "type": "string",
                 "description": (
-                    "What the creator reads. Say which framework a suggestion comes from. "
-                    "Do not say the course was saved or that the structure was accepted."
+                    "What the creator reads. Talk through the suggestion for the phase on screen "
+                    "and ask one clear question. Say which framework a suggestion comes from. "
+                    "Do not say the course was saved. The tree changes only after a confirm in the chat."
                 ),
             },
             "patch": {
@@ -1860,22 +2006,28 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
     for message in messages:
         if message.proposal and not message.applied:
             pending.append(message.proposal)
-    pending_note = "There is no unaccepted patch."
+    pending_note = "There is no held patch."
     if pending:
         pending_note = (
-            "These patches are not saved yet. They are not part of the course JSON below:\n"
+            "These patches are held and are not part of the course JSON below. "
+            "They are written only after the creator confirms in the chat:\n"
             + "\n".join(str(item) for item in pending)
         )
+    description = course.theme.strip() if course.theme and course.theme.strip() else "none yet"
     return (
         "You are helping a person build one course in the CreateCourse studio.\n"
-        "The creator states a focus. You propose a short structure of units, quests, and moves.\n"
+        f"Course description: {description}\n"
+        "Units, learning goals, and close items follow this course description.\n"
+        "The creator states a focus. You propose the next slice for the phase on screen, "
+        "talk through it, and ask one clear question about what to change.\n"
         "You may use widely known national curricula and standard texts as suggestions. "
         "You must say which framework a suggestion comes from. "
         "Label every curriculum idea as a suggestion.\n"
         "You have no web search and no document upload. Do not claim you searched the web or read an uploaded file.\n"
-        "Nothing is saved until the creator accepts the patch. "
-        "The server still checks. A rejected operation is skipped and the rest can be saved. "
-        "Do not say the course was saved, and do not say the structure was accepted.\n"
+        "Nothing is written until the creator confirms in the chat. "
+        "Until then the tree stays as it is. "
+        "The server still checks. A rejected operation is skipped and the rest can be saved after a confirm. "
+        "Do not say the course was saved, and do not say the structure was written.\n"
         "The response schema lists the only fields for this phase. "
         "Goals and Close refuse operations for any other code.\n"
         f"{phase_instructions(course)}"
@@ -1905,8 +2057,6 @@ def system_prompt(course: StudioCourse, messages: list[StudioMessage]) -> str:
         "and the move parent is a quest code.\n"
         "Codes stay inside this course. Use null for a field you are not changing. An add requires a title.\n"
         "close_style is one or several. answer_style is multiple_choice, essay, or mixed. "
-        "Multiple choice choice_mode is predefined or dynamic. "
-        "Predefined stores the items and no intent. Dynamic stores only the intent and no items. "
         "Essay stores neither items nor intent.\n"
         "depth, sources, audience, focus, and theme are course preferences. "
         "depth is survey, standard, or go_deep. "

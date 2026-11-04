@@ -51,6 +51,8 @@ export function settleModelResult(input: {
   const proposal = input.operations.length > 0 ? { operations: input.operations } : null;
   const text =
     input.reply.trim() ||
-    (proposal ? "Here is a change to accept." : "I don't have a change for the course yet.");
+    (proposal
+      ? "Here is a suggestion. Say what to change, or confirm and I will write it."
+      : "I don't have a change for the course yet.");
   return { action: "save", text, proposal };
 }
