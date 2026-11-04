@@ -1765,6 +1765,8 @@ def test_confirm_phrases_and_a_thin_description_do_not_propose_units() -> None:
     assert is_explicit_confirm("commit them and move on")
     assert is_explicit_confirm("save them")
     assert is_explicit_confirm("move on")
+    assert is_explicit_confirm("yes please")
+    assert is_explicit_confirm("yes, please")
     assert not is_explicit_confirm("yes but change the third")
     assert not is_explicit_confirm("commit but change the third")
     assert not is_explicit_confirm("what about adding a unit?")
@@ -1784,9 +1786,11 @@ def test_confirm_phrases_and_a_thin_description_do_not_propose_units() -> None:
         messages = opened.json()["messages"]
         assert len(messages) == 1
         text = messages[0]["content"]
-        assert "Quests" in text and "Goals" in text and "Close" in text and "Ready" in text
-        assert "will not propose quests" in text
-        assert "topic" in text and "audience" in text and "cover" in text
+        assert "one section of the course" in text
+        assert "Nothing is written until you confirm." in text
+        assert "Should I draft 10 quests from the course description, or do you want something else?" in text
+        for banned in ("Goals", "Close", "Ready"):
+            assert banned not in text
         assert messages[0]["proposal"] is None
         assert opened.json()["course"]["quests"] == []
         again = client.post(f"/studio/courses/{course_id}/opening")
@@ -1809,18 +1813,18 @@ def test_a_confirm_writes_the_held_units_and_other_replies_do_not() -> None:
         opened = client.post(f"/studio/courses/{course_id}/opening")
         assert opened.status_code == 200, opened.text
         body = opened.json()
-        proposal = body["messages"][0]["proposal"]
-        assert proposal is not None
-        assert [op["kind"] for op in proposal["operations"]] == ["quest"] * 10
-        assert [op["code"] for op in proposal["operations"]] == [f"ZZCONF-Q{index}" for index in range(1, 11)]
-        assert "opening" in body["messages"][0]["content"]
-        assert "?" in body["messages"][0]["content"]
+        assert body["messages"][0]["proposal"] is None
+        opening = body["messages"][0]["content"]
+        assert "Should I draft 10 quests from the course description, or do you want something else?" in opening
+        for banned in ("Goals", "Close", "Ready"):
+            assert banned not in opening
         assert body["course"]["quests"] == []
         prompt = client.get(f"/studio/courses/{course_id}/prompt").json()["system_prompt"]
         assert f"Course description: {theme}" in prompt
         assert "follow this course description" in prompt
         assert "choice_mode is predefined" not in prompt
         assert "ask one clear question" in prompt
+        assert "There is no Accept button and no Skip button." in prompt
 
         question = client.post(
             f"/studio/courses/{course_id}/turns",
@@ -1828,6 +1832,7 @@ def test_a_confirm_writes_the_held_units_and_other_replies_do_not() -> None:
         )
         assert question.status_code == 200, question.text
         assert question.json()["wrote"] is False
+        assert question.json()["awaiting_draft"] is False
         change = client.post(
             f"/studio/courses/{course_id}/turns",
             json={"content": "yes but change the third"},
@@ -1837,17 +1842,32 @@ def test_a_confirm_writes_the_held_units_and_other_replies_do_not() -> None:
         assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
         assert len(client.get(f"/studio/courses/{course_id}/messages").json()) == 1
 
+        waiting = client.post(f"/studio/courses/{course_id}/turns", json={"content": "yes please"})
+        assert waiting.status_code == 200, waiting.text
+        assert waiting.json()["awaiting_draft"] is True
+        assert waiting.json()["wrote"] is False
+        assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
+
         written = client.post(
-            f"/studio/courses/{course_id}/turns",
-            json={"content": "yes, add those three units"},
+            f"/studio/courses/{course_id}/drafts",
+            json={"content": "yes please", "fallback": True},
         )
         assert written.status_code == 200, written.text
         wrote = written.json()
         assert wrote["wrote"] is True
-        assert [quest["code"] for quest in wrote["course"]["quests"]] == [f"ZZCONF-Q{index}" for index in range(1, 11)]
-        assert wrote["course"]["undo"] is True
+        quests = wrote["course"]["quests"]
+        assert [quest["code"] for quest in quests] == [f"ZZCONF-Q{index}" for index in range(1, 11)]
+        for quest in quests:
+            assert ": quest" not in quest["title"]
+            assert not quest["title"].startswith(theme[:24])
+            assert "triangle interior angles" in quest["title"].lower()
         assert "now in the course" in wrote["assistant"]["content"]
-        assert wrote["assistant"]["proposal"] is None
+        assert "I've added" not in wrote["assistant"]["content"]
+        assert "several goals" in wrote["assistant"]["content"]
+        assert "3 goals" in wrote["assistant"]["content"]
+        assert wrote["course"]["undo"] is True
+        assert wrote["assistant"]["proposal"] is not None
+        assert wrote["assistant"]["applied"] is True
 
         undone = client.post(f"/studio/courses/{course_id}/undo")
         assert undone.status_code == 200, undone.text
@@ -1855,6 +1875,94 @@ def test_a_confirm_writes_the_held_units_and_other_replies_do_not() -> None:
         assert undone.json()["undo"] is False
     finally:
         _wipe("ZZCONF")
+
+
+def test_a_yes_writes_model_quest_titles_and_a_false_claim_does_not() -> None:
+    theme = "Create a course about the history of Imperial College. Include the founding and later milestones."
+    course = _make("ZZYES", "Imperial")
+    course_id = course["id"]
+    titles = [
+        "Founding of Imperial College",
+        "Historical milestones",
+        "The campus and the city",
+        "Science and medicine",
+        "Engineering at Imperial",
+        "People who shaped the college",
+        "Research that changed practice",
+        "Student life through the years",
+        "Imperial in the wider world",
+        "What the history adds up to",
+    ]
+    try:
+        saved = client.patch(
+            f"/studio/courses/{course_id}",
+            json={**_header("Imperial", theme), "quest_count": 10, "goals_per_quest": 3},
+        )
+        assert saved.status_code == 200, saved.text
+        opened = client.post(f"/studio/courses/{course_id}/opening")
+        assert opened.status_code == 200, opened.text
+        opening = opened.json()["messages"][0]["content"]
+        assert "Should I draft 10 quests from the course description, or do you want something else?" in opening
+        for banned in ("Goals", "Close", "Ready"):
+            assert banned not in opening
+        assert opened.json()["messages"][0]["proposal"] is None
+
+        claim = "I've added the quests.\n" + "\n".join(
+            f"{index}. {title}" for index, title in enumerate(titles, start=1)
+        )
+        operations = [
+            {"op": "add", "kind": "quest", "code": f"ZZYES-Q{index}", "parent": None, "title": title, "position": index}
+            for index, title in enumerate(titles, start=1)
+        ]
+        written = client.post(
+            f"/studio/courses/{course_id}/drafts",
+            json={"content": "yes please", "operations": operations, "reply": claim, "fallback": False},
+        )
+        assert written.status_code == 200, written.text
+        body = written.json()
+        assert body["wrote"] is True
+        assert [quest["title"] for quest in body["course"]["quests"]] == titles
+        assert "I've added" not in body["assistant"]["content"]
+        assert "now in the course" in body["assistant"]["content"]
+        assert "several goals" in body["assistant"]["content"]
+        assert "3 goals" in body["assistant"]["content"]
+        assert "one close per quest" not in body["assistant"]["content"]
+
+        undone = client.post(f"/studio/courses/{course_id}/undo")
+        assert undone.status_code == 200, undone.text
+        assert undone.json()["quests"] == []
+
+        from_reply = client.post(
+            f"/studio/courses/{course_id}/drafts",
+            json={"content": "yes please", "operations": [], "reply": claim, "fallback": False},
+        )
+        assert from_reply.status_code == 200, from_reply.text
+        listed = from_reply.json()
+        assert listed["wrote"] is True
+        assert [quest["title"] for quest in listed["course"]["quests"]] == titles
+        assert "I've added" not in listed["assistant"]["content"]
+
+        cleared = client.post(f"/studio/courses/{course_id}/undo")
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["quests"] == []
+
+        empty = client.post(
+            f"/studio/courses/{course_id}/drafts",
+            json={
+                "content": "yes please",
+                "operations": [],
+                "reply": "I've added the quests",
+                "fallback": False,
+            },
+        )
+        assert empty.status_code == 200, empty.text
+        missed = empty.json()
+        assert missed["wrote"] is False
+        assert missed["course"]["quests"] == []
+        assert missed["assistant"]["content"] == "Those quests are not in the course yet."
+        assert "I've added" not in missed["assistant"]["content"]
+    finally:
+        _wipe("ZZYES")
 
 
 def test_course_description_saves_and_a_blank_close_does_not_require_intent() -> None:
@@ -1973,20 +2081,24 @@ def test_commit_writes_the_held_operations_and_the_next_turn_does_not_repeat() -
         opened = client.post(f"/studio/courses/{course_id}/opening")
         assert opened.status_code == 200, opened.text
         question = opened.json()["messages"][0]["content"]
-        assert "should I write these quests" in question
+        assert "or do you want something else?" in question
+        assert opened.json()["messages"][0]["proposal"] is None
+        for banned in ("Goals", "Close", "Ready"):
+            assert banned not in question
 
         committed = client.post(
-            f"/studio/courses/{course_id}/turns",
-            json={"content": "commit them and move on"},
+            f"/studio/courses/{course_id}/drafts",
+            json={"content": "commit them and move on", "fallback": True},
         )
         assert committed.status_code == 200, committed.text
         body = committed.json()
         assert body["wrote"] is True
         assert body["handled"] is True
         assert [quest["code"] for quest in body["course"]["quests"]] == [f"ZZMOVE-Q{index}" for index in range(1, 11)]
-        assert "should I write these quests" not in body["assistant"]["content"]
+        assert "or do you want something else?" not in body["assistant"]["content"]
         assert "What would you change" not in body["assistant"]["content"]
-        assert "Goals" in body["assistant"]["content"]
+        assert "several goals" in body["assistant"]["content"]
+        assert "I've added" not in body["assistant"]["content"]
 
         again = client.post(f"/studio/courses/{course_id}/turns", json={"content": "move on"})
         assert again.status_code == 200, again.text
@@ -1994,7 +2106,7 @@ def test_commit_writes_the_held_operations_and_the_next_turn_does_not_repeat() -
         assert second["wrote"] is False
         assert second["handled"] is True
         assert [quest["code"] for quest in second["course"]["quests"]] == [f"ZZMOVE-Q{index}" for index in range(1, 11)]
-        assert "should I write these quests" not in second["assistant"]["content"]
+        assert "or do you want something else?" not in second["assistant"]["content"]
         assert second["assistant"]["content"] != question
 
         assert body["course"]["phase"]["name"] == "goals"
@@ -2026,7 +2138,9 @@ def test_commit_writes_the_held_operations_and_the_next_turn_does_not_repeat() -
             assert quest["learning_goal"] == "Name an interior angle."
         assert advanced["course"]["phase"]["name"] == "close"
         assert advanced["course"]["view"]["name"] == "close"
-        assert "Close is the stage on screen." in advanced["assistant"]["content"]
+        assert "one close per quest" in advanced["assistant"]["content"]
+        assert "at least one question" in advanced["assistant"]["content"]
+        assert "Quests is still the stage" not in advanced["assistant"]["content"]
         assert held_text not in advanced["assistant"]["content"]
 
         repeated = client.post(f"/studio/courses/{course_id}/turns", json={"content": "move on"})
@@ -2034,7 +2148,7 @@ def test_commit_writes_the_held_operations_and_the_next_turn_does_not_repeat() -
         follow = repeated.json()
         assert follow["wrote"] is False
         assert held_text not in follow["assistant"]["content"]
-        assert "should I write these quests" not in follow["assistant"]["content"]
+        assert "or do you want something else?" not in follow["assistant"]["content"]
         for quest in follow["course"]["quests"]:
             assert quest["learning_goal"] == "Name an interior angle."
         prompts = [
@@ -2042,7 +2156,7 @@ def test_commit_writes_the_held_operations_and_the_next_turn_does_not_repeat() -
             for message in client.get(f"/studio/courses/{course_id}/messages").json()
             if message["role"] == "assistant"
         ]
-        assert sum("should I write these quests" in text for text in prompts) == 1
+        assert sum("or do you want something else?" in text for text in prompts) == 1
         assert sum(text == held_text for text in prompts) == 1
     finally:
         _wipe("ZZMOVE")

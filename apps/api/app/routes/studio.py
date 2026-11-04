@@ -14,6 +14,7 @@ from app.schemas import (
     StudioCourseOut,
     StudioCourseSummary,
     StudioDeleteIn,
+    StudioDraftIn,
     StudioEditIn,
     StudioIndexesIn,
     StudioMessageIn,
@@ -34,6 +35,7 @@ from app.studio import (
     accept_proposal,
     add_message,
     confirm_turn,
+    commit_confirmed_draft,
     copy_studio_course,
     course_out,
     create_course,
@@ -174,6 +176,31 @@ def post_turn(course_id: UUID, body: StudioTurnIn, db: Session = Depends(get_db)
         raise _fail(exc) from exc
     if result is None:
         return StudioTurnOut(wrote=False, handled=False)
+    if result.get("awaiting_draft"):
+        return StudioTurnOut(wrote=False, handled=False, awaiting_draft=True)
+    return StudioTurnOut(
+        wrote=bool(result["wrote"]),
+        handled=True,
+        user=message_out(result["user"]),
+        assistant=message_out(result["assistant"]),
+        course=course_out(result["course"]),
+    )
+
+
+@router.post("/courses/{course_id}/drafts", response_model=StudioTurnOut)
+def post_draft(course_id: UUID, body: StudioDraftIn, db: Session = Depends(get_db)) -> StudioTurnOut:
+    course = _course(db, course_id)
+    try:
+        result = commit_confirmed_draft(
+            db,
+            course,
+            body.content,
+            body.operations,
+            body.reply,
+            body.fallback,
+        )
+    except StudioError as exc:
+        raise _fail(exc) from exc
     return StudioTurnOut(
         wrote=bool(result["wrote"]),
         handled=True,

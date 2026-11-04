@@ -829,7 +829,7 @@ export function CreateCourse() {
                 <div className="ds-column">
                   {messages.length === 0 ? (
                     <p className="ds-quiet">
-                      The studio walks through quests, goals, close, and ready. Nothing is written until you confirm it in the chat.
+                      The quests appear here after you confirm them in the chat.
                     </p>
                   ) : null}
                   {messages.map((message) => (
