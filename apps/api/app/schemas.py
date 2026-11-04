@@ -484,6 +484,7 @@ StudioChoiceMode = Literal["predefined", "dynamic"]
 
 class StudioChoiceOut(BaseModel):
     text: str
+    correct: bool = False
 
 
 class StudioCloseOut(BaseModel):
@@ -493,6 +494,7 @@ class StudioCloseOut(BaseModel):
     items: list[StudioChoiceOut] = Field(default_factory=list)
     questions: list[StudioChoiceOut] = Field(default_factory=list)
     intent: str = ""
+    selection: Literal["single", "multi"] | None = None
 
 
 class StudioGoalOut(BaseModel):
@@ -566,6 +568,11 @@ class StudioCourseOut(BaseModel):
     quest_count: int = 10
     goals_per_quest: int = 3
     undo: bool = False
+    stage: StudioPhaseOut | None = None
+    stage_strip: list[StudioStripOut] = Field(default_factory=list)
+    stage_view: StudioViewOut | None = None
+    stage_gaps: list[str] = Field(default_factory=list)
+    can_advance: bool = False
     updated_at: datetime
 
 
@@ -675,3 +682,25 @@ class StudioDraftIn(BaseModel):
     operations: list[dict[str, Any]] | None = None
     reply: str = ""
     fallback: bool = False
+
+
+class StudioFallbackIn(BaseModel):
+    content: str = Field(default="", max_length=20000)
+
+
+class StudioTreeEditIn(BaseModel):
+    action: Literal[
+        "add_quest",
+        "update_quest",
+        "delete_quest",
+        "add_goal",
+        "update_goal",
+        "delete_goal",
+        "set_close",
+    ]
+    code: str | None = None
+    title: str | None = None
+    position: int | None = None
+    learning_goal: str | None = None
+    success_criterion: str | None = None
+    close: dict[str, Any] | None = None

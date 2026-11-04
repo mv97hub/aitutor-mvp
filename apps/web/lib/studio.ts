@@ -2,9 +2,10 @@ export type StudioClose = {
   close_style: "one" | "several";
   answer_style: "multiple_choice" | "essay" | "mixed";
   choice_mode: "predefined" | "dynamic" | null;
-  items: { text: string }[];
+  items: { text: string; correct?: boolean }[];
   questions: { text: string }[];
   intent: string;
+  selection?: "single" | "multi" | null;
 };
 
 export type StudioGoal = {
@@ -76,6 +77,11 @@ export type StudioCourse = {
   quest_count: number;
   goals_per_quest: number;
   undo: boolean;
+  stage: StudioPhase;
+  stage_strip: StudioStripPhase[];
+  stage_view: StudioView;
+  stage_gaps: string[];
+  can_advance: boolean;
   updated_at: string;
 };
 
@@ -138,7 +144,10 @@ export function closeSummary(close: StudioClose): string {
       : close.answer_style === "essay"
         ? "Essay"
         : "Mixed";
+  if (close.answer_style === "essay" && count === 0) return "No questions";
   if (close.answer_style === "essay") return `${question} · ${answer}`;
+  if (close.selection === "multi") return `${question} · Multi-choice`;
+  if (close.answer_style === "multiple_choice") return `${question} · Single choice`;
   const mode = close.choice_mode === "predefined" ? "Predefined choices" : "Dynamic choices";
   return `${question} · ${answer} · ${mode}`;
 }

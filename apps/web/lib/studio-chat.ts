@@ -60,7 +60,7 @@ export function settleModelResult(input: {
   const text =
     input.reply.trim() ||
     (proposal
-      ? "Here is a suggestion. Say what to change, or confirm and I will write it."
+      ? "Here is a draft. Click Push draft to Tree when you want it in the course."
       : "I don't have a change for the course yet.");
   return { action: "save", text, proposal };
 }

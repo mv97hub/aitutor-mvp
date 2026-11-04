@@ -16,6 +16,8 @@ from app.schemas import (
     StudioDeleteIn,
     StudioDraftIn,
     StudioEditIn,
+    StudioFallbackIn,
+    StudioTreeEditIn,
     StudioIndexesIn,
     StudioMessageIn,
     StudioMessageOut,
@@ -34,14 +36,16 @@ from app.studio import (
     StudioError,
     accept_proposal,
     add_message,
-    confirm_turn,
-    commit_confirmed_draft,
+    advance_stage,
+    attach_fallback_draft,
+    chat_turn,
     copy_studio_course,
     course_out,
     create_course,
     delete_studio_course,
     dismiss_proposal,
     edit_item,
+    edit_tree,
     ensure_settings,
     list_courses,
     list_messages,
@@ -50,8 +54,10 @@ from app.studio import (
     message_out,
     response_schema,
     seed_opening,
+    push_draft,
     set_model,
     set_phase_view,
+    set_stage_view,
     summary_out,
     system_prompt,
     undo_last,
@@ -171,43 +177,83 @@ def post_opening(course_id: UUID, db: Session = Depends(get_db)) -> StudioOpenin
 def post_turn(course_id: UUID, body: StudioTurnIn, db: Session = Depends(get_db)) -> StudioTurnOut:
     course = _course(db, course_id)
     try:
-        result = confirm_turn(db, course, body.content)
+        result = chat_turn(db, course, body.content)
     except StudioError as exc:
         raise _fail(exc) from exc
-    if result is None:
-        return StudioTurnOut(wrote=False, handled=False)
-    if result.get("awaiting_draft"):
-        return StudioTurnOut(wrote=False, handled=False, awaiting_draft=True)
+    assistant = result.get("assistant")
     return StudioTurnOut(
-        wrote=bool(result["wrote"]),
+        wrote=False,
+        handled=bool(result.get("handled")),
+        user=message_out(result["user"]) if result.get("user") else None,
+        assistant=message_out(assistant) if assistant else None,
+        course=course_out(result["course"]) if result.get("course") else None,
+    )
+
+
+@router.post("/courses/{course_id}/fallback", response_model=StudioTurnOut)
+def post_fallback(course_id: UUID, body: StudioFallbackIn, db: Session = Depends(get_db)) -> StudioTurnOut:
+    course = _course(db, course_id)
+    try:
+        result = attach_fallback_draft(db, course, body.content)
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    return StudioTurnOut(
+        wrote=False,
         handled=True,
-        user=message_out(result["user"]),
         assistant=message_out(result["assistant"]),
         course=course_out(result["course"]),
     )
 
 
-@router.post("/courses/{course_id}/drafts", response_model=StudioTurnOut)
-def post_draft(course_id: UUID, body: StudioDraftIn, db: Session = Depends(get_db)) -> StudioTurnOut:
+@router.post("/courses/{course_id}/push-draft", response_model=StudioCourseOut)
+def post_push_draft(course_id: UUID, db: Session = Depends(get_db)) -> StudioCourseOut:
     course = _course(db, course_id)
     try:
-        result = commit_confirmed_draft(
+        fresh = push_draft(db, course)
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    return course_out(fresh)
+
+
+@router.post("/courses/{course_id}/advance-stage", response_model=StudioCourseOut)
+def post_advance_stage(course_id: UUID, db: Session = Depends(get_db)) -> StudioCourseOut:
+    course = _course(db, course_id)
+    try:
+        fresh = advance_stage(db, course)
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    return course_out(fresh)
+
+
+@router.post("/courses/{course_id}/stage", response_model=StudioCourseOut)
+def post_stage(course_id: UUID, body: StudioPhaseIn, db: Session = Depends(get_db)) -> StudioCourseOut:
+    course = _course(db, course_id)
+    try:
+        set_stage_view(course, body.name)
+    except StudioError as exc:
+        raise _fail(exc) from exc
+    return course_out(course)
+
+
+@router.post("/courses/{course_id}/tree", response_model=StudioCourseOut)
+def post_tree(course_id: UUID, body: StudioTreeEditIn, db: Session = Depends(get_db)) -> StudioCourseOut:
+    course = _course(db, course_id)
+    try:
+        edit_tree(
             db,
             course,
-            body.content,
-            body.operations,
-            body.reply,
-            body.fallback,
+            action=body.action,
+            code=body.code,
+            title=body.title,
+            position=body.position,
+            learning_goal=body.learning_goal,
+            success_criterion=body.success_criterion,
+            close=body.close,
         )
     except StudioError as exc:
         raise _fail(exc) from exc
-    return StudioTurnOut(
-        wrote=bool(result["wrote"]),
-        handled=True,
-        user=message_out(result["user"]),
-        assistant=message_out(result["assistant"]),
-        course=course_out(result["course"]),
-    )
+    fresh = load_course(db, course_id) or course
+    return course_out(fresh)
 
 
 @router.post("/courses/{course_id}/messages", response_model=StudioMessageOut)

@@ -47,12 +47,11 @@ export async function POST(req: Request) {
   if (!courseId) return new Response("courseId is required.", { status: 400 });
   if (!content) return new Response("content is required.", { status: 400 });
 
-  let awaitingDraft = false;
+  let user: StudioMessage | undefined;
   try {
     const turn = await api<{
       wrote: boolean;
       handled?: boolean;
-      awaiting_draft?: boolean;
       user?: StudioMessage;
       assistant?: StudioMessage;
       course?: unknown;
@@ -60,20 +59,13 @@ export async function POST(req: Request) {
       method: "POST",
       body: JSON.stringify({ content }),
     });
-    awaitingDraft = Boolean(turn.awaiting_draft);
-    if (awaitingDraft && !process.env.OPENAI_API_KEY?.trim()) {
-      const drafted = await api(`/studio/courses/${courseId}/drafts`, {
-        method: "POST",
-        body: JSON.stringify({ content, fallback: true }),
-      });
-      return Response.json(drafted);
-    }
-    if (!awaitingDraft && (turn.wrote || turn.handled) && turn.user && turn.assistant) {
+    user = turn.user;
+    if (turn.handled && turn.user && turn.assistant) {
       return Response.json({
         user: turn.user,
         assistant: turn.assistant,
         course: turn.course,
-        wrote: Boolean(turn.wrote),
+        wrote: false,
         handled: true,
       });
     }
@@ -83,21 +75,23 @@ export async function POST(req: Request) {
   }
 
   if (!process.env.OPENAI_API_KEY?.trim()) {
-    return new Response(MISSING_KEY, {
-      status: 503,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-    });
-  }
-
-  let user: StudioMessage | undefined;
-  if (!awaitingDraft) {
     try {
-      user = await api<StudioMessage>(`/studio/courses/${courseId}/messages`, {
-        method: "POST",
-        body: JSON.stringify({ role: "user", content }),
+      const drafted = await api<{ assistant: StudioMessage; course?: unknown }>(
+        `/studio/courses/${courseId}/fallback`,
+        {
+          method: "POST",
+          body: JSON.stringify({ content }),
+        },
+      );
+      return Response.json({
+        user,
+        assistant: drafted.assistant,
+        course: drafted.course,
+        wrote: false,
+        handled: true,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not save that message.";
+      const message = error instanceof Error ? error.message : "Could not draft that reply.";
       return new Response(message, { status: 502 });
     }
   }
@@ -121,13 +115,6 @@ export async function POST(req: Request) {
     role: message.role,
     parts: [{ type: "text", text: message.content }],
   }));
-  if (awaitingDraft) {
-    uiMessages.push({
-      id: "confirm",
-      role: "user",
-      parts: [{ type: "text", text: content }],
-    });
-  }
   const modelMessages = await convertToModelMessages(uiMessages);
 
   let assistantText = "";
@@ -177,9 +164,9 @@ export async function POST(req: Request) {
     if (decision.action !== "save") {
       return new Response("The model reply could not be read.", { status: 502 });
     }
-    assistantText = decision.text;
+    assistantText = replyIfUnwritten(decision.text);
     proposal = decision.proposal;
-    if (awaitingDraft || !proposal) break;
+    if (!proposal) break;
 
     const saved = await fetch(`${apiBase()}/studio/courses/${courseId}/messages`, {
       method: "POST",
@@ -211,37 +198,6 @@ export async function POST(req: Request) {
     assistantText = failed.text;
     proposal = null;
     break;
-  }
-
-  if (awaitingDraft) {
-    try {
-      const drafted = await api(`/studio/courses/${courseId}/drafts`, {
-        method: "POST",
-        body: JSON.stringify({
-          content,
-          operations: proposal?.operations ?? [],
-          reply: assistantText,
-          fallback: false,
-        }),
-      });
-      return Response.json(drafted);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Those quests are not in the course yet.";
-      try {
-        user = await api<StudioMessage>(`/studio/courses/${courseId}/messages`, {
-          method: "POST",
-          body: JSON.stringify({ role: "user", content }),
-        });
-        assistant = await api<StudioMessage>(`/studio/courses/${courseId}/messages`, {
-          method: "POST",
-          body: JSON.stringify({ role: "assistant", content: replyIfUnwritten(message) }),
-        });
-      } catch (saveError) {
-        const saved = saveError instanceof Error ? saveError.message : "Could not save the reply.";
-        return new Response(saved, { status: 502 });
-      }
-      return Response.json({ user, assistant, wrote: false });
-    }
   }
 
   if (!assistant) {
