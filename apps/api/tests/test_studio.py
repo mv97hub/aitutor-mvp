@@ -1870,7 +1870,12 @@ def test_confirm_phrases_and_a_thin_description_do_not_propose_units() -> None:
     assert is_explicit_confirm("Yes.")
     assert is_explicit_confirm("add those")
     assert is_explicit_confirm("ok, add the units")
+    assert is_explicit_confirm("commit")
+    assert is_explicit_confirm("commit them and move on")
+    assert is_explicit_confirm("save them")
+    assert is_explicit_confirm("move on")
     assert not is_explicit_confirm("yes but change the third")
+    assert not is_explicit_confirm("commit but change the third")
     assert not is_explicit_confirm("what about adding a unit?")
     assert not is_explicit_confirm("not yet")
     assert not is_explicit_confirm("do not add those")
@@ -1959,3 +1964,202 @@ def test_a_confirm_writes_the_held_units_and_other_replies_do_not() -> None:
         assert undone.json()["undo"] is False
     finally:
         _wipe("ZZCONF")
+
+
+def test_course_description_saves_and_a_blank_close_does_not_require_intent() -> None:
+    course = _make("ZZDESC", "Described")
+    course_id = course["id"]
+    theme = "Learners aged 12 to 14 studying interior angles"
+    try:
+        saved = client.patch(
+            f"/studio/courses/{course_id}",
+            json={**_header("Described", ""), "description": theme},
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["theme"] == theme
+        assert "is required for dynamic choices" not in saved.text
+        reloaded = client.get(f"/studio/courses/{course_id}").json()
+        assert reloaded["theme"] == theme
+
+        revised = "A course about interior angles for learners aged 12 to 14"
+        again = client.patch(
+            f"/studio/courses/{course_id}",
+            json={
+                **_header("Described", revised),
+                "close_default": {
+                    "close_style": "one",
+                    "answer_style": "multiple_choice",
+                    "choice_mode": "dynamic",
+                    "items": [],
+                    "intent": "",
+                },
+            },
+        )
+        assert again.status_code == 200, again.text
+        assert again.json()["theme"] == revised
+        assert again.json()["close_default"]["choice_mode"] == "dynamic"
+        assert again.json()["close_default"]["intent"] == ""
+        assert "is required for dynamic choices" not in again.text
+        assert client.get(f"/studio/courses/{course_id}").json()["theme"] == revised
+
+        posted = _proposal(
+            course_id,
+            "A first unit, with a close that has no intent yet.",
+            [
+                _full("add", "unit", "ZZDESC-U1", parent="ZZDESC", title="Angles"),
+                _full(
+                    "add",
+                    "quest",
+                    "ZZDESC-U1-Q1",
+                    parent="ZZDESC-U1",
+                    title="Name the angle",
+                    close={
+                        "close_style": "one",
+                        "answer_style": "multiple_choice",
+                        "choice_mode": "dynamic",
+                        "items": [],
+                        "intent": "",
+                    },
+                ),
+            ],
+        )
+        assert posted.status_code == 200, posted.text
+        assert "is required for dynamic choices" not in posted.text
+        assert [op["code"] for op in posted.json()["proposal"]["operations"]] == ["ZZDESC-U1", "ZZDESC-U1-Q1"]
+    finally:
+        _wipe("ZZDESC")
+
+
+def test_a_unit_code_is_a_valid_parent_and_the_sentence_is_not_repeated() -> None:
+    course = _make("ZZPAR", "Parents")
+    course_id = course["id"]
+    try:
+        missing = _proposal(
+            course_id,
+            "Two quests under a unit that is not here.",
+            [
+                _full("add", "quest", "ZZPAR-U9-Q1", parent="ZZPAR-U9", title="Held one"),
+                _full("add", "quest", "ZZPAR-U9-Q2", parent="ZZPAR-U9", title="Held two"),
+            ],
+        )
+        assert missing.status_code == 422, missing.text
+        detail = missing.json()["detail"]
+        assert detail == "The parent ZZPAR-U9 is not in this course yet."
+        assert detail.count("ZZPAR-U9") == 1
+        assert "must be a short code" not in detail
+        assert client.get(f"/studio/courses/{course_id}").json()["units"] == []
+
+        ordered = _proposal(
+            course_id,
+            "Quests first, then their unit.",
+            [
+                _full("add", "quest", "ZZPAR-U1-Q1", parent=None, title="First quest"),
+                _full("add", "quest", "ZZPAR-U1-Q2", parent="ZZPAR-U1", title="Second quest"),
+                _full("add", "unit", "ZZPAR-U1", parent=None, title="Opening unit"),
+            ],
+        )
+        assert ordered.status_code == 200, ordered.text
+        assert "must be a short code" not in ordered.text
+        assert "is not in this course" not in ordered.text
+        assert [op["code"] for op in ordered.json()["proposal"]["operations"]] == [
+            "ZZPAR-U1",
+            "ZZPAR-U1-Q1",
+            "ZZPAR-U1-Q2",
+        ]
+        written = client.post(f"/studio/courses/{course_id}/messages/{ordered.json()['id']}/accept")
+        assert written.status_code == 200, written.text
+        unit = written.json()["course"]["units"][0]
+        assert unit["code"] == "ZZPAR-U1"
+        assert [quest["code"] for quest in unit["quests"]] == ["ZZPAR-U1-Q1", "ZZPAR-U1-Q2"]
+    finally:
+        _wipe("ZZPAR")
+
+
+def test_commit_writes_the_held_operations_and_the_next_turn_does_not_repeat() -> None:
+    theme = "Triangle interior angles for learners aged 12 to 14"
+    course = _make("ZZMOVE", "Move on")
+    course_id = course["id"]
+    try:
+        saved = client.patch(f"/studio/courses/{course_id}", json=_header("Move on", theme))
+        assert saved.status_code == 200, saved.text
+        opened = client.post(f"/studio/courses/{course_id}/opening")
+        assert opened.status_code == 200, opened.text
+        question = opened.json()["messages"][0]["content"]
+        assert "should I write these units" in question
+
+        committed = client.post(
+            f"/studio/courses/{course_id}/turns",
+            json={"content": "commit them and move on"},
+        )
+        assert committed.status_code == 200, committed.text
+        body = committed.json()
+        assert body["wrote"] is True
+        assert body["handled"] is True
+        assert [unit["code"] for unit in body["course"]["units"]] == ["ZZMOVE-U1", "ZZMOVE-U2", "ZZMOVE-U3"]
+        assert "should I write these units" not in body["assistant"]["content"]
+        assert "What would you change" not in body["assistant"]["content"]
+        assert "Goals" in body["assistant"]["content"]
+
+        again = client.post(f"/studio/courses/{course_id}/turns", json={"content": "move on"})
+        assert again.status_code == 200, again.text
+        second = again.json()
+        assert second["wrote"] is False
+        assert second["handled"] is True
+        assert [unit["code"] for unit in second["course"]["units"]] == ["ZZMOVE-U1", "ZZMOVE-U2", "ZZMOVE-U3"]
+        assert "should I write these units" not in second["assistant"]["content"]
+        assert second["assistant"]["content"] != question
+
+        quest = _proposal(
+            course_id,
+            "Add the quests that open Goals.",
+            [
+                _full("add", "quest", f"ZZMOVE-U{index}-Q1", parent=f"ZZMOVE-U{index}", title="Name the angle")
+                for index in (1, 2, 3)
+            ],
+        )
+        assert quest.status_code == 200, quest.text
+        planted = client.post(f"/studio/courses/{course_id}/messages/{quest.json()['id']}/accept")
+        assert planted.status_code == 200, planted.text
+        assert planted.json()["course"]["phase"]["name"] == "goals"
+
+        held_text = "Should I write this learning goal?"
+        held = _proposal(
+            course_id,
+            held_text,
+            [
+                _full("update", "quest", f"ZZMOVE-U{index}-Q1", learning_goal="Name an interior angle.")
+                for index in (1, 2, 3)
+            ],
+        )
+        assert held.status_code == 200, held.text
+        moved = client.post(
+            f"/studio/courses/{course_id}/turns",
+            json={"content": "save them and move on"},
+        )
+        assert moved.status_code == 200, moved.text
+        advanced = moved.json()
+        assert advanced["wrote"] is True
+        for unit in advanced["course"]["units"]:
+            assert unit["quests"][0]["learning_goal"] == "Name an interior angle."
+        assert advanced["course"]["phase"]["name"] == "close"
+        assert advanced["course"]["view"]["name"] == "close"
+        assert "Close is the stage on screen." in advanced["assistant"]["content"]
+        assert held_text not in advanced["assistant"]["content"]
+
+        repeated = client.post(f"/studio/courses/{course_id}/turns", json={"content": "move on"})
+        assert repeated.status_code == 200, repeated.text
+        follow = repeated.json()
+        assert follow["wrote"] is False
+        assert held_text not in follow["assistant"]["content"]
+        assert "should I write these units" not in follow["assistant"]["content"]
+        for unit in follow["course"]["units"]:
+            assert unit["quests"][0]["learning_goal"] == "Name an interior angle."
+        prompts = [
+            message["content"]
+            for message in client.get(f"/studio/courses/{course_id}/messages").json()
+            if message["role"] == "assistant"
+        ]
+        assert sum("should I write these units" in text for text in prompts) == 1
+        assert sum(text == held_text for text in prompts) == 1
+    finally:
+        _wipe("ZZMOVE")

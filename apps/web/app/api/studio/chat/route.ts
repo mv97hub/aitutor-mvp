@@ -50,6 +50,7 @@ export async function POST(req: Request) {
   try {
     const turn = await api<{
       wrote: boolean;
+      handled?: boolean;
       user?: StudioMessage;
       assistant?: StudioMessage;
       course?: unknown;
@@ -57,12 +58,13 @@ export async function POST(req: Request) {
       method: "POST",
       body: JSON.stringify({ content }),
     });
-    if (turn.wrote && turn.user && turn.assistant) {
+    if ((turn.wrote || turn.handled) && turn.user && turn.assistant) {
       return Response.json({
         user: turn.user,
         assistant: turn.assistant,
         course: turn.course,
-        wrote: true,
+        wrote: Boolean(turn.wrote),
+        handled: true,
       });
     }
   } catch (error) {

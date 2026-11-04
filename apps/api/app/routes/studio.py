@@ -173,9 +173,10 @@ def post_turn(course_id: UUID, body: StudioTurnIn, db: Session = Depends(get_db)
     except StudioError as exc:
         raise _fail(exc) from exc
     if result is None:
-        return StudioTurnOut(wrote=False)
+        return StudioTurnOut(wrote=False, handled=False)
     return StudioTurnOut(
-        wrote=True,
+        wrote=bool(result["wrote"]),
+        handled=True,
         user=message_out(result["user"]),
         assistant=message_out(result["assistant"]),
         course=course_out(result["course"]),

@@ -416,13 +416,18 @@ export function CreateCourse() {
       });
       const raw = await response.text();
       if (!response.ok) throw new Error(readError(raw));
-      const body = JSON.parse(raw) as { user: StudioMessage; assistant: StudioMessage; course?: StudioCourse };
+      const body = JSON.parse(raw) as {
+        user: StudioMessage;
+        assistant: StudioMessage;
+        course?: StudioCourse;
+        wrote?: boolean;
+      };
       if (body.course) {
         const history = await api<StudioMessage[]>(`/studio/courses/${body.course.id}/messages`);
         setCourse(body.course);
         setMessages(history);
         openUnits(body.course);
-        setSavedNote("Course updated");
+        if (body.wrote) setSavedNote("Course updated");
       } else {
         setMessages((prev) => [...prev, body.user, body.assistant]);
       }
@@ -661,26 +666,27 @@ export function CreateCourse() {
                 </div>
               </div>
             </div>
+            <div className="studio-strip" aria-label="Course phases">
+              {course.strip.map((item) => {
+                const order = ["structure", "goals", "close", "ready"];
+                const later = order.indexOf(item.name) > order.indexOf(course.phase.name);
+                return (
+                <button
+                  key={item.name}
+                  type="button"
+                  className={`studio-strip-phase${item.active ? " is-active" : ""}${item.filled ? " is-filled" : ""}`}
+                  aria-current={item.active ? "step" : undefined}
+                  disabled={busy || later}
+                  onClick={() => void choosePhase(item.name)}
+                >
+                  <span>{item.label}</span>
+                  {item.filled ? <span className="studio-strip-filled">Filled</span> : null}
+                </button>
+                );
+              })}
+            </div>
+            <div className="studio-columns">
             <div className="studio-tree" aria-label="Course so far">
-              <div className="studio-strip" aria-label="Course phases">
-                {course.strip.map((item) => {
-                  const order = ["structure", "goals", "close", "ready"];
-                  const later = order.indexOf(item.name) > order.indexOf(course.phase.name);
-                  return (
-                  <button
-                    key={item.name}
-                    type="button"
-                    className={`studio-strip-phase${item.active ? " is-active" : ""}${item.filled ? " is-filled" : ""}`}
-                    aria-current={item.active ? "step" : undefined}
-                    disabled={busy || later}
-                    onClick={() => void choosePhase(item.name)}
-                  >
-                    <span>{item.label}</span>
-                    {item.filled ? <span className="studio-strip-filled">Filled</span> : null}
-                  </button>
-                  );
-                })}
-              </div>
               <p className="studio-phase-codes" aria-label="Phase codes">
                 {course.view.name === course.phase.name
                   ? course.phase.open_codes.length > 0
@@ -880,6 +886,7 @@ export function CreateCourse() {
                 </div>
               </form>
             </div>
+            </div>
           </>
         )}
         {error && !course ? (
@@ -910,16 +917,6 @@ export function CreateCourse() {
             </header>
             <form className="prompt-body" onSubmit={(event) => void savePrefs(event)}>
               <label>
-                Course description
-                <textarea
-                  value={draft.theme}
-                  rows={3}
-                  maxLength={240}
-                  placeholder="Who this is for, and what the course should cover"
-                  onChange={(event) => setDraft({ ...draft, theme: event.target.value })}
-                />
-              </label>
-              <label>
                 Code
                 <input
                   value={draft.code}
@@ -940,6 +937,16 @@ export function CreateCourse() {
                   required
                   disabled={lockingIdentity}
                   onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+                />
+              </label>
+              <label>
+                Course description
+                <textarea
+                  value={draft.theme}
+                  rows={3}
+                  maxLength={240}
+                  placeholder="Who this is for, and what the course should cover"
+                  onChange={(event) => setDraft({ ...draft, theme: event.target.value })}
                 />
               </label>
               <label>
