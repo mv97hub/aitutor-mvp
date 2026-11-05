@@ -2589,3 +2589,143 @@ def test_stepping_back_can_push_and_mark_complete_returns_to_the_furthest_stage(
         assert close_back.json()["quests"][0]["title"] == "First revised"
     finally:
         _wipe("ZZRET")
+
+
+def _goals_stage(code: str) -> str:
+    course = _make(code, "Goals")
+    course_id = course["id"]
+    opened = client.post(f"/studio/courses/{course_id}/opening")
+    assert opened.status_code == 200, opened.text
+    for title in ("First", "Second"):
+        added = client.post(
+            f"/studio/courses/{course_id}/tree",
+            json={"action": "add_quest", "title": title},
+        )
+        assert added.status_code == 200, added.text
+    advanced = client.post(f"/studio/courses/{course_id}/advance-stage")
+    assert advanced.status_code == 200, advanced.text
+    assert advanced.json()["stage"]["name"] == "goals"
+    return course_id
+
+
+def _goal(position: int, goal: str, criterion: str, **extra) -> dict:
+    row = {"position": position, "learning_goal": goal, "success_criterion": criterion}
+    row.update(extra)
+    return row
+
+
+def test_a_goals_draft_writes_every_quest_it_names() -> None:
+    try:
+        course_id = _goals_stage("ZZGOAL2")
+        prompt = client.get(f"/studio/courses/{course_id}/prompt").json()
+        assert "Do not stop after the first quest." in prompt["system_prompt"]
+        assert "one block per quest" in prompt["system_prompt"]
+        items = prompt["response_schema"]["properties"]["patch"]["anyOf"][1]["properties"]["operations"]["items"]
+        assert items["description"] == "One update per quest code. Do not stop after the first quest."
+        assert items["properties"]["goals"]["description"] == "Only this quest's goals. Later quests get their own operation."
+
+        both = _proposal(
+            course_id,
+            "Goals for both quests.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZGOAL2-Q1",
+                    goals=[_goal(1, "Name the first idea.", "States the first idea.")],
+                ),
+                _full(
+                    "update",
+                    "quest",
+                    "ZZGOAL2-Q2",
+                    goals=[_goal(1, "Name the second idea.", "States the second idea.")],
+                ),
+            ],
+        )
+        assert both.status_code == 200, both.text
+        pushed = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert pushed.status_code == 200, pushed.text
+        by_code = {quest["code"]: quest for quest in pushed.json()["quests"]}
+        assert by_code["ZZGOAL2-Q1"]["goals"][0]["learning_goal"] == "Name the first idea."
+        assert by_code["ZZGOAL2-Q1"]["goals"][0]["success_criterion"] == "States the first idea."
+        assert by_code["ZZGOAL2-Q2"]["goals"][0]["learning_goal"] == "Name the second idea."
+        assert by_code["ZZGOAL2-Q2"]["goals"][0]["success_criterion"] == "States the second idea."
+        assert pushed.json()["can_advance"] is True
+        advanced = client.post(f"/studio/courses/{course_id}/advance-stage")
+        assert advanced.status_code == 200, advanced.text
+        assert advanced.json()["stage"]["name"] == "close"
+        kept = {quest["code"]: quest for quest in advanced.json()["quests"]}
+        assert kept["ZZGOAL2-Q1"]["goals"][0]["success_criterion"] == "States the first idea."
+        assert kept["ZZGOAL2-Q2"]["goals"][0]["success_criterion"] == "States the second idea."
+    finally:
+        _wipe("ZZGOAL2")
+
+    try:
+        course_id = _goals_stage("ZZGOAL2")
+        reply = "\n".join(
+            [
+                "ZZGOAL2-Q1",
+                "Goal: Name the first idea.",
+                "Success criterion: States the first idea.",
+                "ZZGOAL2-Q2",
+                "Goal: Name the second idea.",
+                "Success criterion: States the second idea.",
+            ]
+        )
+        truncated = _proposal(
+            course_id,
+            reply,
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZGOAL2-Q1",
+                    goals=[_goal(1, "Name the first idea.", "States the first idea.")],
+                )
+            ],
+        )
+        assert truncated.status_code == 200, truncated.text
+        saved_codes = [op["code"] for op in truncated.json()["proposal"]["operations"]]
+        assert saved_codes == ["ZZGOAL2-Q1", "ZZGOAL2-Q2"]
+        pushed = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert pushed.status_code == 200, pushed.text
+        by_code = {quest["code"]: quest for quest in pushed.json()["quests"]}
+        assert by_code["ZZGOAL2-Q1"]["goals"][0]["success_criterion"] == "States the first idea."
+        assert by_code["ZZGOAL2-Q2"]["goals"][0]["learning_goal"] == "Name the second idea."
+        assert by_code["ZZGOAL2-Q2"]["goals"][0]["success_criterion"] == "States the second idea."
+        assert pushed.json()["can_advance"] is True
+        assert "Skipped" not in pushed.text
+    finally:
+        _wipe("ZZGOAL2")
+
+    try:
+        course_id = _goals_stage("ZZSKIPG")
+        only_first = _proposal(
+            course_id,
+            "A goal for the first quest only.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZSKIPG-Q1",
+                    goals=[_goal(1, "Name the first idea.", "States the first idea.")],
+                )
+            ],
+        )
+        assert only_first.status_code == 200, only_first.text
+        pushed = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert pushed.status_code == 200, pushed.text
+        by_code = {quest["code"]: quest for quest in pushed.json()["quests"]}
+        assert by_code["ZZSKIPG-Q1"]["goals"][0]["success_criterion"] == "States the first idea."
+        assert by_code["ZZSKIPG-Q2"]["goals"] == []
+        assert pushed.json()["can_advance"] is False
+        messages = client.get(f"/studio/courses/{course_id}/messages").json()
+        assert messages[-1]["content"] == (
+            "Skipped ZZSKIPG-Q2, which still needs a goal and a success criterion."
+        )
+        assert messages[-1]["proposal"] is None
+        blocked = client.post(f"/studio/courses/{course_id}/advance-stage")
+        assert blocked.status_code == 422
+        assert "ZZSKIPG-Q2" in blocked.json()["detail"]
+    finally:
+        _wipe("ZZSKIPG")
