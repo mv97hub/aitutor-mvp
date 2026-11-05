@@ -13,7 +13,7 @@ from app.flow import (
     grade_widget,
     open_session,
 )
-from app.models import ModelPrompt, Quest, Session as TutorSession, Unit
+from app.models import ModelPrompt, Quest, Session as TutorSession
 from app.present import board, message_out, prompt_out, session_admin, session_summary
 from app.prompt_loader import load_prompt
 from app.queries import load_session
@@ -39,7 +39,7 @@ router = APIRouter()
 def _session_options():
     return (
         selectinload(TutorSession.student),
-        selectinload(TutorSession.quest).selectinload(Quest.unit).selectinload(Unit.course),
+        selectinload(TutorSession.quest).selectinload(Quest.course),
         selectinload(TutorSession.messages),
         selectinload(TutorSession.results),
     )
@@ -103,7 +103,7 @@ def grade_widget_route(session_id: UUID, body: WidgetIn, db: Session = Depends(g
 def check_diagram_route(session_id: UUID, body: DiagramCheckIn, db: Session = Depends(get_db)) -> dict:
     """Check a diagram before it reaches the client. A refusal still returns 200."""
     tutor_session = load_session(db, session_id)
-    course_code = tutor_session.quest.unit.course.code
+    course_code = tutor_session.quest.course.code
     guarded = guard_reply({"reply": "", "diagram": body.diagram}, course_code)
     return {"diagram": guarded.get("diagram")}
 

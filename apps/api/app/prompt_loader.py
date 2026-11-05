@@ -5,8 +5,7 @@ The engine package itself does not import the database.
 
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.orm import object_session, selectinload
+from sqlalchemy.orm import object_session
 
 from app.engine.assemble import assemble
 from app.engine.choices import pacing_for, strictness_for
@@ -27,7 +26,7 @@ from app.engine.types import (
     WidgetGrade,
     WidgetTask,
 )
-from app.models import Beat, Session as TutorSession, StudioCourse, StudioQuest
+from app.models import Beat, Session as TutorSession
 from app.queries import (
     awaiting_tap_reply,
     choice_offer,
@@ -182,41 +181,43 @@ def _failed(tutor_session: TutorSession, beat_id) -> int:
     )
 
 
-def _studio_overlay(db, course_code: str, quest_code: str) -> tuple[tuple[GoalPoint, ...], bool]:
-    """Goals and an empty close from a studio quest with the same codes. Kid rows stay as they are."""
-    if db is None or not course_code or not quest_code:
-        return (), False
-    row = db.scalar(
-        select(StudioQuest)
-        .join(StudioCourse)
-        .where(StudioCourse.code == course_code, StudioQuest.code == quest_code)
-        .options(selectinload(StudioQuest.goals), selectinload(StudioQuest.close))
+def _quest_walk(quest, *, reveal_close: bool) -> tuple[tuple[GoalPoint, ...], bool, str]:
+    """Goals, then the close, from the quest the kid is playing.
+
+    The close kind is always named. The question and choices stay hidden until
+    the show move is on screen, so a later check is not sitting in the kickoff.
+    """
+    rows = sorted(quest.goals or [], key=lambda item: item.position)
+    points = tuple(
+        GoalPoint(row.learning_goal or "", row.success_criterion or "")
+        for row in rows
+        if str(row.learning_goal or "").strip() or str(row.success_criterion or "").strip()
     )
-    if row is None:
-        return (), False
-    extras = list(row.goals or [])
-    points: list[GoalPoint] = []
-    has_first = bool(str(row.learning_goal or "").strip() or str(row.success_criterion or "").strip())
-    if has_first or extras:
-        points.append(GoalPoint(row.learning_goal or "", row.success_criterion or ""))
-    for extra in sorted(extras, key=lambda item: item.position):
-        points.append(GoalPoint(extra.learning_goal or "", extra.success_criterion or ""))
-    empty_close = False
-    if row.close is not None:
-        stored = row.close.items
-        if isinstance(stored, dict) and isinstance(stored.get("questions"), list):
-            questions = stored["questions"]
-        else:
-            questions = []
-        empty_close = len(questions) == 0
-    return tuple(points), empty_close
+    close = quest.close
+    if close is None:
+        return points, False, ""
+    kind = close.kind
+    question = (close.question or "").strip()
+    if kind == "none":
+        return points, True, "Close: No questions."
+    if kind == "essay":
+        if not reveal_close:
+            return points, False, "Close: Essay."
+        return points, False, f"Close: Essay. Question: {question or 'Ask for a short written answer.'}"
+    label = "Multi-choice" if kind == "multi" else "Single choice"
+    if not reveal_close:
+        return points, False, f"Close: {label}."
+    choices = []
+    for item in close.items or []:
+        if isinstance(item, dict) and str(item.get("text") or "").strip():
+            choices.append(str(item["text"]).strip())
+    choice_line = f" Choices: {'; '.join(choices)}." if choices else ""
+    return points, False, f"Close: {label}. Question: {question or 'Choose the best answer.'}{choice_line}"
 
 
 def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> PromptBundle:
     quest = tutor_session.quest
-    unit = quest.unit
-    course = unit.course
-    studio_goals, empty_close = _studio_overlay(object_session(tutor_session), course.code, quest.code)
+    course = quest.course
     student = tutor_session.student
     beats = ordered_beats(quest)
     quest_objective = _quest_objective(quest)
@@ -242,6 +243,10 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
         submitted = choice_submitted(tutor_session, source)
         answering_tap = awaiting_tap_reply(tutor_session, source)
     include_widget = offer is not None or answering_tap
+    on_show = source is not None and show is not None and source.id == show.id
+    show_has_widget = show is not None and isinstance(show.widget, dict)
+    reveal_close = finished or (on_show and (include_widget or not show_has_widget))
+    studio_goals, empty_close, close_line = _quest_walk(quest, reveal_close=reveal_close)
     held = (
         source is not None
         and not finished
@@ -258,8 +263,8 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
     if source is None:
         beat_layer = Layer1Beat(
             course_title=course.title,
-            unit_title=unit.title,
-            continuity=unit.continuity_summary,
+            unit_title="",
+            continuity="",
             quest_code=quest.code,
             quest_title=quest.title,
             beat_role="",
@@ -284,13 +289,14 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             course_code=course.code,
             goals=studio_goals,
             empty_close=empty_close,
+            close_line=close_line,
         )
         attempt_count = 0
     else:
         beat_layer = Layer1Beat(
             course_title=course.title,
-            unit_title=unit.title,
-            continuity=unit.continuity_summary,
+            unit_title="",
+            continuity="",
             quest_code=quest.code,
             quest_title=quest.title,
             beat_role=source.role,
@@ -317,6 +323,7 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             course_code=course.code,
             goals=studio_goals,
             empty_close=empty_close,
+            close_line=close_line,
         )
         attempt_count = 0 if finished or current is None else _failed(tutor_session, current.id)
     interests = tuple(str(item) for item in (student.interests or []) if str(item).strip())

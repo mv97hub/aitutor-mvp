@@ -11,9 +11,12 @@ from app.schemas import (
     BoardBeat,
     BoardOut,
     BoardResult,
+    CatalogQuest,
+    CloseOut,
     CourseSummary,
     CourseTree,
     CurrentBlock,
+    GoalOut,
     MessageOut,
     ModelPromptOut,
     QuestDetail,
@@ -28,7 +31,6 @@ from app.schemas import (
     SessionQuest,
     SessionSummary,
     StudentOut,
-    UnitNode,
 )
 from app.widgets import hint_text, public_quiz
 
@@ -85,16 +87,36 @@ def prompt_out(row: ModelPrompt) -> ModelPromptOut:
     )
 
 
+def _goal_out(goal) -> GoalOut:
+    return GoalOut(
+        position=goal.position,
+        learning_goal=goal.learning_goal or "",
+        success_criterion=goal.success_criterion or "",
+    )
+
+
+def _close_out(close) -> CloseOut | None:
+    if close is None:
+        return None
+    return CloseOut(
+        kind=close.kind,
+        question=close.question or "",
+        items=list(close.items or []),
+    )
+
+
 def course_summary(course: Course) -> CourseSummary:
-    quests = [quest for unit in course.units for quest in unit.quests]
     return CourseSummary(
         id=course.id,
         code=course.code,
         title=course.title,
         age_band=course.age_band,
         standards_alignment=course.standards_alignment,
-        unit_count=len(course.units),
-        quest_count=len(quests),
+        description=course.description or "",
+        audience=course.audience or course.age_band,
+        quest_count=len(course.quests),
+        goals_per_quest=course.goals_per_quest,
+        quiz_minutes=course.quiz_minutes,
     )
 
 
@@ -111,37 +133,38 @@ def _quest_node(quest: Quest) -> QuestNode:
     )
 
 
+def _catalog_quest(quest: Quest) -> CatalogQuest:
+    return CatalogQuest(
+        id=quest.id,
+        code=quest.code,
+        title=quest.title,
+        position=quest.position,
+        goals=[_goal_out(goal) for goal in sorted(quest.goals, key=lambda item: item.position)],
+        close=_close_out(quest.close),
+    )
+
+
 def course_tree(course: Course) -> CourseTree:
-    units = []
-    for unit in sorted(course.units, key=lambda item: item.number):
-        units.append(
-            UnitNode(
-                id=unit.id,
-                number=unit.number,
-                title=unit.title,
-                enduring_understanding=unit.enduring_understanding,
-                continuity_summary=unit.continuity_summary,
-                is_diagnostic=unit.is_diagnostic,
-                is_capstone=unit.is_capstone,
-                quests=[
-                    _quest_node(quest)
-                    for quest in sorted(unit.quests, key=lambda item: item.position)
-                ],
-            )
-        )
     return CourseTree(
         id=course.id,
         code=course.code,
         title=course.title,
         age_band=course.age_band,
         standards_alignment=course.standards_alignment,
+        description=course.description or "",
+        audience=course.audience or course.age_band,
+        quest_count=course.quest_count,
+        goals_per_quest=course.goals_per_quest,
+        quiz_minutes=course.quiz_minutes,
         competency_dictionary=list(course.competency_dictionary or []),
-        units=units,
+        quests=[
+            _catalog_quest(quest)
+            for quest in sorted(course.quests, key=lambda item: item.position)
+        ],
     )
 
 
 def quest_list_item(quest: Quest) -> QuestListItem:
-    unit = quest.unit
     return QuestListItem(
         id=quest.id,
         code=quest.code,
@@ -149,8 +172,8 @@ def quest_list_item(quest: Quest) -> QuestListItem:
         quest_type=quest.quest_type,
         prerequisite_codes=list(quest.prerequisite_codes or []),
         competency_tags=list(quest.competency_tags or []),
-        unit_number=unit.number,
-        unit_title=unit.title,
+        unit_number=0,
+        unit_title="",
         position=quest.position,
     )
 
@@ -173,8 +196,9 @@ def beat_out(beat: Beat) -> BeatOut:
 def quest_detail(quest: Quest) -> QuestDetail:
     return QuestDetail(
         **_quest_node(quest).model_dump(),
-        unit_id=quest.unit_id,
-        course_id=quest.unit.course_id,
+        course_id=quest.course_id,
+        goals=[_goal_out(goal) for goal in sorted(quest.goals, key=lambda item: item.position)],
+        close=_close_out(quest.close),
         learning_goal=quest.learning_goal or "",
         success_criterion=list(quest.success_criterion or []),
         requires_teach_back=bool(quest.requires_teach_back),
@@ -268,12 +292,12 @@ def board(tutor_session: TutorSession) -> BoardOut:
         created_at=tutor_session.created_at,
         updated_at=tutor_session.updated_at,
         student=student_out(tutor_session.student),
-        course_code=quest.unit.course.code,
-        course_title=quest.unit.course.title,
+        course_code=quest.course.code,
+        course_title=quest.course.title,
         quest_id=quest.id,
         quest_code=quest.code,
         quest_title=quest.title,
-        enduring_understanding=quest.unit.enduring_understanding,
+        enduring_understanding=quest.course.description or "",
         current_beat_id=tutor_session.current_beat_id,
         beats=board_beats,
         messages=[message_out(message) for message in tutor_session.messages],
@@ -308,7 +332,7 @@ def session_summary(tutor_session: TutorSession) -> SessionSummary:
         quest_id=quest.id,
         quest_code=quest.code,
         quest_title=quest.title,
-        course_title=quest.unit.course.title,
+        course_title=quest.course.title,
         status=tutor_session.status,
         created_at=tutor_session.created_at,
         updated_at=tutor_session.updated_at,
@@ -329,8 +353,8 @@ def session_admin(tutor_session: TutorSession) -> SessionAdminOut:
             id=quest.id,
             code=quest.code,
             title=quest.title,
-            course_code=quest.unit.course.code,
-            course_title=quest.unit.course.title,
+            course_code=quest.course.code,
+            course_title=quest.course.title,
         ),
         current_beat_id=tutor_session.current_beat_id,
         beats=[

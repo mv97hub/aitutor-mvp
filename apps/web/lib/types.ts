@@ -54,8 +54,11 @@ export type CourseSummary = {
   title: string;
   age_band: string;
   standards_alignment: string;
-  unit_count: number;
+  description: string;
+  audience: string;
   quest_count: number;
+  goals_per_quest: number;
+  quiz_minutes: number;
 };
 
 export type QuestListItem = {
@@ -86,15 +89,25 @@ export type QuestNode = {
   position: number;
 };
 
-export type UnitNode = {
+export type CourseGoal = {
+  position: number;
+  learning_goal: string;
+  success_criterion: string;
+};
+
+export type CourseClose = {
+  kind: "essay" | "single" | "multi" | "none";
+  question: string;
+  items: { text: string; correct?: boolean }[];
+};
+
+export type CatalogQuest = {
   id: string;
-  number: number;
+  code: string;
   title: string;
-  enduring_understanding: string;
-  continuity_summary: string;
-  is_diagnostic: boolean;
-  is_capstone: boolean;
-  quests: QuestNode[];
+  position: number;
+  goals: CourseGoal[];
+  close: CourseClose | null;
 };
 
 export type CourseTree = {
@@ -103,8 +116,13 @@ export type CourseTree = {
   title: string;
   age_band: string;
   standards_alignment: string;
+  description: string;
+  audience: string;
+  quest_count: number;
+  goals_per_quest: number;
+  quiz_minutes: number;
   competency_dictionary: Competency[];
-  units: UnitNode[];
+  quests: CatalogQuest[];
 };
 
 export type RubricRowInput = {
@@ -154,12 +172,13 @@ export type BeatOut = {
 };
 
 export type QuestDetail = QuestNode & {
-  unit_id: string;
   course_id: string;
   learning_goal: string;
   success_criterion: RubricRowInput[];
   requires_teach_back: boolean;
   beats: BeatOut[];
+  goals: CourseGoal[];
+  close: CourseClose | null;
 };
 
 export type BoardResult = {

@@ -4,7 +4,7 @@ from app.models import BEAT_ROLES
 
 
 def _quests(course):
-    return [quest for unit in course["units"] for quest in unit["quests"]]
+    return course["quests"]
 
 
 def test_seed_courses_match_the_cycle() -> None:
@@ -16,7 +16,10 @@ def test_seed_courses_match_the_cycle() -> None:
     assert "NCSS C3" in by_code["rome"]["standards_alignment"]
     assert "HSG" in by_code["geometry"]["standards_alignment"]
     assert "AP Macro" in by_code["macro"]["standards_alignment"]
-    assert len(by_code["macro"]["units"]) == 6
+    assert "units" not in by_code["rome"]
+    assert by_code["rome"]["audience"] == "9-11"
+    assert by_code["rome"]["quiz_minutes"] == 5
+    assert by_code["macro"]["quest_count"] == 18
 
     rome = _quests(by_code["rome"])
     geometry = _quests(by_code["geometry"])
@@ -48,6 +51,10 @@ def test_seed_courses_match_the_cycle() -> None:
     assert show["rubric"] == consuls["success_criterion"]
     assert sum(row["weight"] for row in consuls["success_criterion"]) == 100
     assert 2 <= len(consuls["success_criterion"]) <= 3
+    assert len(consuls["goals"]) == len(consuls["success_criterion"])
+    assert all(isinstance(goal["success_criterion"], str) and goal["success_criterion"] for goal in consuls["goals"])
+    assert consuls["close"]["kind"] in {"essay", "single", "multi", "none"}
+    assert all(quest["close"]["kind"] in {"essay", "single", "multi", "none"} for quest in rome)
 
     truss = next(quest for quest in geometry if quest["code"] == "GEO-U2-Q2")
     assert truss["requires_teach_back"] is True

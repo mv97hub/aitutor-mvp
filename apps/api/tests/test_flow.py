@@ -8,7 +8,7 @@ from app.course_io import CourseFileError, update_course_in_place
 from app.curriculum import COURSES
 from app.database import SessionLocal
 from app.main import app
-from app.models import Beat, Course, Message, Quest, Session as TutorSession, Student, Unit
+from app.models import Beat, Course, Message, Quest, QuestClose, QuestGoal, Session as TutorSession, Student
 from app.prompt_loader import course_scope_on
 from app.seed import seed
 from app.tutor_profile import reset_default_profile
@@ -23,6 +23,8 @@ def setup_function() -> None:
         db.commit()
         seed(db)
         reset_default_profile(db)
+        for course in db.scalars(select(Course).where(Course.code.in_(["rome", "geometry", "macro"]))).all():
+            course.in_catalog = True
         db.commit()
     finally:
         db.close()
@@ -60,10 +62,9 @@ def test_seed_is_idempotent_and_counts_the_map() -> None:
         courses = db.scalar(select(func.count()).select_from(Course))
         quests = db.scalar(select(func.count()).select_from(Quest))
         beats = db.scalar(select(func.count()).select_from(Beat))
-        rome = db.scalar(select(func.count()).select_from(Quest).join(Unit).join(Course).where(Course.code == "rome"))
-        macro_units = db.scalar(
-            select(func.count()).select_from(Unit).join(Course).where(Course.code == "macro")
-        )
+        rome = db.scalar(select(func.count()).select_from(Quest).join(Course).where(Course.code == "rome"))
+        goals = db.scalar(select(func.count()).select_from(QuestGoal))
+        closes = db.scalar(select(func.count()).select_from(QuestClose))
         ages = {student.slug: student.age for student in db.scalars(select(Student)).all()}
         storm = db.scalar(select(Student).where(Student.slug == "storm"))
         persona = storm.tutor_persona
@@ -76,7 +77,8 @@ def test_seed_is_idempotent_and_counts_the_map() -> None:
     assert quests == 50
     assert beats > 48
     assert rome == 16
-    assert macro_units == 6
+    assert goals > quests
+    assert closes == quests
     assert ages["storm"] == 10
     assert ages["wolverine"] == 16
     assert "Co-Explorer" in persona
@@ -126,6 +128,11 @@ def test_reseed_keeps_sessions_and_refreshes_quest_text() -> None:
         assert kept_message.session_id == session_id
         assert kept_message.content == "Two consuls can veto each other."
         assert refreshed.learning_goal == original_goal
+        first_goal = db.scalar(
+            select(QuestGoal).where(QuestGoal.quest_id == quest_id, QuestGoal.position == 1)
+        )
+        assert first_goal.learning_goal == original_goal
+        assert first_goal.success_criterion
         assert refreshed_beat.id == beat_id
         assert refreshed_beat.prompt == original_prompt
     finally:
@@ -886,7 +893,12 @@ def test_stay_on_course_rule_follows_the_profile_switch() -> None:
     on = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
     assert f"Stay on {course}." in on.split("Layer 1", 1)[0]
     assert f"Depth inside {course} stays allowed" in on
-    assert "unit The Republic, and quest The Two-Captain Rule: Consuls and Veto Power" in on
+    assert "and quest The Two-Captain Rule: Consuls and Veto Power" in on
+    assert "unit The Republic" not in on
+    assert "Walk these goals in order" in on
+    assert "Goal 1:" in on
+    assert "Goal 2:" in on
+    assert "Close: No questions." in on
     assert "including closely related ideas that serve this learning goal." in on
     assert f"acknowledge it in one short line and return to {course}." in on
     assert "Do not explain that subject." in on
@@ -930,3 +942,144 @@ def test_model_prompt_round_trip() -> None:
     detail = client.get(f"/sessions/{session_id}").json()
     assert detail["prompts"][0]["message_id"] == first.json()["id"]
     assert detail["quest"]["code"] == "ROM-U1-Q1"
+
+
+def test_tutor_revision_lifts_quests_and_keeps_chat_tables() -> None:
+    from pathlib import Path
+
+    text = Path(__file__).resolve().parents[1].joinpath(
+        "alembic", "versions", "013_tutor_quests_on_course.py"
+    ).read_text()
+    upgrade = text.split("def upgrade")[1].split("def downgrade")[0]
+    assert 'op.drop_table("units")' in upgrade
+    assert '"quest_goals"' in upgrade
+    assert '"quest_closes"' in upgrade
+    assert "DELETE FROM sessions" not in upgrade
+    assert "DELETE FROM messages" not in upgrade
+    assert "delete(TutorSession)" not in upgrade
+
+
+def test_import_copies_a_draft_and_remove_keeps_the_chat() -> None:
+    from app.models import StudioCourse, StudioQuest, StudioQuestClose, StudioQuestGoal
+
+    db = SessionLocal()
+    studio_id = None
+    try:
+        studio = StudioCourse(
+            code="ZZIMP",
+            title="Imported angles",
+            audience="12-14",
+            theme="Triangle angles for learners aged 12 to 14.",
+            focus="Why a triangle's angles add to 180 degrees.",
+            quiz_minutes=10,
+            preferences={
+                "quest_count": 4,
+                "goals_per_quest": 2,
+                "quiz_minutes": 10,
+                "audience": "12-14",
+                "theme": "Triangle angles for learners aged 12 to 14.",
+            },
+        )
+        db.add(studio)
+        db.flush()
+        quest = StudioQuest(
+            course_id=studio.id,
+            code="ZZIMP-Q1",
+            position=1,
+            title="Angles",
+            learning_goal="Understand that the angles of a triangle add to 180 degrees.",
+            success_criterion="States that the three angles add to 180 degrees.",
+        )
+        db.add(quest)
+        db.flush()
+        quest.goals.append(
+            StudioQuestGoal(
+                position=2,
+                learning_goal="Name an exterior angle.",
+                success_criterion="Points to an exterior angle on a drawn triangle.",
+            )
+        )
+        quest.close = StudioQuestClose(
+            close_style="one",
+            answer_style="multiple_choice",
+            choice_mode="predefined",
+            items={
+                "choices": [
+                    {"text": "180 degrees", "correct": True},
+                    {"text": "90 degrees", "correct": False},
+                ],
+                "questions": [{"text": "What do the angles add to?"}],
+                "selection": "single",
+            },
+            intent="",
+        )
+        db.commit()
+        studio_id = str(studio.id)
+    finally:
+        db.close()
+
+    try:
+        imported = client.post("/courses/import-studio", json={"studio_course_id": studio_id})
+        assert imported.status_code == 200, imported.text
+        body = imported.json()
+        assert body["code"] == "ZZIMP"
+        assert body["description"] == "Triangle angles for learners aged 12 to 14."
+        assert body["audience"] == "12-14"
+        assert body["quest_count"] == 4
+        assert body["goals_per_quest"] == 2
+        assert body["quiz_minutes"] == 10
+        assert len(body["quests"]) == 1
+        quest_body = body["quests"][0]
+        assert [goal["learning_goal"] for goal in quest_body["goals"]] == [
+            "Understand that the angles of a triangle add to 180 degrees.",
+            "Name an exterior angle.",
+        ]
+        assert quest_body["goals"][0]["success_criterion"] == "States that the three angles add to 180 degrees."
+        assert quest_body["close"]["kind"] == "single"
+        assert quest_body["close"]["question"] == "What do the angles add to?"
+        kept = client.get(f"/studio/courses/{studio_id}")
+        assert kept.status_code == 200
+        assert kept.json()["code"] == "ZZIMP"
+
+        storm = _student("storm")
+        opened = client.post(
+            "/sessions",
+            json={"student_id": storm["id"], "quest_id": quest_body["id"], "fresh": True},
+        )
+        assert opened.status_code == 200
+        session_id = opened.json()["id"]
+        client.post(
+            f"/sessions/{session_id}/messages",
+            json={"role": "user", "content": "The angles add to 180.", "client_id": "zzimp-keep"},
+        )
+        prompt = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "Walk these goals in order" in prompt
+        assert "Close: Single choice." in prompt
+
+        removed = client.post(f"/courses/{body['id']}/remove")
+        assert removed.status_code == 204
+        codes = [course["code"] for course in client.get("/courses").json()]
+        assert "ZZIMP" not in codes
+        detail = client.get(f"/sessions/{session_id}")
+        assert detail.status_code == 200
+        assert any(message["content"] == "The angles add to 180." for message in detail.json()["messages"])
+        still = client.get(f"/studio/courses/{studio_id}")
+        assert still.status_code == 200
+    finally:
+        db = SessionLocal()
+        try:
+            course = db.scalar(select(Course).where(Course.code == "ZZIMP"))
+            if course is not None:
+                db.execute(delete(TutorSession).where(TutorSession.quest_id.in_(
+                    select(Quest.id).where(Quest.course_id == course.id)
+                )))
+                db.delete(course)
+            if studio_id is not None:
+                from app.models import StudioCourse as StudioRow
+
+                row = db.get(StudioRow, studio_id)
+                if row is not None:
+                    db.delete(row)
+            db.commit()
+        finally:
+            db.close()
