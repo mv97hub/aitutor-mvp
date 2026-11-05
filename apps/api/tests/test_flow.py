@@ -54,6 +54,15 @@ def _quest(code: str) -> dict:
     raise AssertionError(code)
 
 
+def test_a_starter_try_has_no_placeholder_card() -> None:
+    from app.flow import blank_beats
+
+    beats = blank_beats()
+    try_beat = next(beat for beat in beats if beat["role"] == "try")
+    assert try_beat["widget"] is None
+    assert all(beat["role"] != "try" or beat["widget"] is None for beat in beats)
+
+
 def test_seed_is_idempotent_and_counts_the_map() -> None:
     db = SessionLocal()
     try:
@@ -320,32 +329,54 @@ def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
     assert waiting["current_block"]["kind"] == "try"
     assert waiting["current_block"]["quiz"] is None
     _speak(session_id, "try")
-    early = client.get(f"/sessions/{session_id}/board").json()
-    assert early["current_block"]["kind"] == "try"
-    assert early["current_block"]["quiz"] is None
     _answer_in_words(session_id, "try")
-    board = client.get(f"/sessions/{session_id}/board").json()
-    quiz = board["current_block"]["quiz"]
-    assert quiz["type"] == "single"
-    assert "answer" not in quiz
-    wrong = client.post(
-        f"/sessions/{session_id}/grade-widget",
-        json={"choice": "walkout", "explanation": "They left the city."},
-    )
-    assert wrong.json()["passed"] is False
-    assert "later" in wrong.json()["misconception"].lower()
-    right = client.post(
-        f"/sessions/{session_id}/grade-widget",
-        json={"choice": "deadlock", "explanation": ""},
-    )
-    assert right.json()["passed"] is True
-    moved = client.post(
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["quiz"] is None
+    taught = client.post(
         f"/sessions/{session_id}/turn-score",
         json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
     )
+    assert taught.json()["graded_by"] == "model"
+    assert taught.json()["advanced"] is True
+
+    banker = client.post(
+        "/sessions",
+        json={"student_id": storm, "quest_id": _quest("MAC-U5-Q1")["id"], "fresh": True},
+    )
+    banker_id = banker.json()["id"]
+    client.post(
+        f"/sessions/{banker_id}/turn-score",
+        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    client.post(
+        f"/sessions/{banker_id}/turn-score",
+        json={"rubric_met": ["link"], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    assert client.get(f"/sessions/{banker_id}/board").json()["current_block"]["kind"] == "show"
+    assert client.get(f"/sessions/{banker_id}/board").json()["current_block"]["quiz"] is None
+    question = "Which segment of the FOMC memo has the policy flaw?"
+    asking = client.get(f"/sessions/{banker_id}/prompt").json()["system_prompt"]
+    assert "exactly this question" in asking
+    assert question in asking
+    assert "Do not ask an open question." in asking
+    client.post(
+        f"/sessions/{banker_id}/messages",
+        json={"role": "assistant", "content": question, "client_id": "bank-ask"},
+    )
+    quiz = client.get(f"/sessions/{banker_id}/board").json()["current_block"]["quiz"]
+    assert quiz["type"] == "flaw"
+    assert quiz["prompt"] == question
+    assert "answer" not in quiz
+    wrong = client.post(
+        f"/sessions/{banker_id}/grade-widget",
+        json={"choice": "s1", "explanation": ""},
+    )
+    assert wrong.json()["passed"] is False
+    moved = client.post(
+        f"/sessions/{banker_id}/turn-score",
+        json={"rubric_met": [], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
     assert moved.json()["graded_by"] == "widget"
-    assert moved.json()["advanced"] is True
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "name"
+    assert moved.json()["advanced"] is False
 
 
 def test_choice_widget_waits_until_the_tutor_has_spoken_for_the_move() -> None:
@@ -373,14 +404,13 @@ def test_choice_widget_waits_until_the_tutor_has_spoken_for_the_move() -> None:
     )
     held = client.post(
         f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
+        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": False},
     )
-    assert held.json()["graded_by"] == "opening"
+    assert held.json()["graded_by"] == "model"
     assert held.json()["advanced"] is False
     board = client.get(f"/sessions/{session_id}/board").json()
     assert board["current_block"]["kind"] == "try"
     assert board["current_block"]["quiz"] is None
-    assert board["beats"][0]["latest_result"] is None
 
     client.post(
         f"/sessions/{session_id}/messages",
@@ -395,15 +425,9 @@ def test_choice_widget_waits_until_the_tutor_has_spoken_for_the_move() -> None:
     assert taught["current_block"]["quiz"] is None
     still_held = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
     assert "Invite them to choose" not in still_held
-    assert "not on screen yet" in still_held
+    assert "exactly this question" not in still_held
     _answer_in_words(session_id, "open")
-    shown = client.get(f"/sessions/{session_id}/board").json()
-    assert shown["current_block"]["quiz"]["type"] == "multi"
-    assert "answer" not in shown["current_block"]["quiz"]
-    follow = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-    assert "Invite them to choose" in follow
-    assert "own words" in follow
-    assert "Correct answer, for you only" not in follow
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["quiz"] is None
 
     banker = client.post(
         "/sessions",
@@ -415,21 +439,10 @@ def test_choice_widget_waits_until_the_tutor_has_spoken_for_the_move() -> None:
     banker_kickoff = client.get(f"/sessions/{banker_id}/prompt", params={"kickoff": True}).json()
     assert "FOMC" not in banker_kickoff["system_prompt"]
     assert "simultaneously cure" not in banker_kickoff["system_prompt"].lower()
-    _speak(banker_id, "bank")
-    assert client.get(f"/sessions/{banker_id}/board").json()["current_block"]["quiz"] is None
-    _answer_in_words(banker_id, "bank")
-    ready = client.get(f"/sessions/{banker_id}/board").json()
-    assert ready["current_block"]["quiz"]["type"] == "single"
-    assert "FOMC" not in ready["current_block"]["quiz"]["prompt"]
-    client.post(
-        f"/sessions/{banker_id}/grade-widget",
-        json={"choice": "shift", "explanation": ""},
-    )
     client.post(
         f"/sessions/{banker_id}/turn-score",
         json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
     )
-    assert client.get(f"/sessions/{banker_id}/board").json()["current_block"]["kind"] == "name"
     client.post(
         f"/sessions/{banker_id}/turn-score",
         json={"rubric_met": ["link"], "misconception": None, "hint_tier": "nudge", "advance": True},
@@ -437,106 +450,87 @@ def test_choice_widget_waits_until_the_tutor_has_spoken_for_the_move() -> None:
     show = client.get(f"/sessions/{banker_id}/board").json()
     assert show["current_block"]["kind"] == "show"
     assert show["current_block"]["quiz"] is None
-    _speak(banker_id, "show")
-    assert client.get(f"/sessions/{banker_id}/board").json()["current_block"]["quiz"] is None
-    _answer_in_words(banker_id, "show")
-    show = client.get(f"/sessions/{banker_id}/board").json()
-    assert show["current_block"]["quiz"]["type"] == "flaw"
-    assert "memo" in show["current_block"]["quiz"]["prompt"].lower()
+    question = "Which segment of the FOMC memo has the policy flaw?"
+    invite = client.get(f"/sessions/{banker_id}/prompt").json()["system_prompt"]
+    assert "exactly this question" in invite
+    assert question in invite
+    assert "Do not ask an open question." in invite
+    client.post(
+        f"/sessions/{banker_id}/messages",
+        json={"role": "assistant", "content": question, "client_id": "bank-question"},
+    )
+    ready = client.get(f"/sessions/{banker_id}/board").json()
+    assert ready["current_block"]["quiz"]["prompt"] == question
+    assert "answer" not in ready["current_block"]["quiz"]
 
 
-def test_unstick_comes_before_the_answer_and_a_later_check_is_a_new_message() -> None:
-    storm = _student("storm")["id"]
-    client.put("/tutor-profile", json=_profile(struggle_window="standard"))
+def _reach_show(student_id: str, quest_code: str) -> str:
     opened = client.post(
         "/sessions",
-        json={"student_id": storm, "quest_id": _quest("ROM-U1-Q1")["id"], "fresh": True},
+        json={"student_id": student_id, "quest_id": _quest(quest_code)["id"], "fresh": True},
     )
     session_id = opened.json()["id"]
     client.post(
-        f"/sessions/{session_id}/messages",
-        json={
-            "role": "assistant",
-            "content": "A find is an object you can dig up. A story is not.",
-            "client_id": "stuck-teach",
-        },
-    )
-    client.post(
-        f"/sessions/{session_id}/messages",
-        json={"role": "user", "content": "I don't know which pile is which.", "client_id": "stuck-words"},
-    )
-    missed = client.post(
         f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": [], "misconception": "Sorted the story with the finds.", "hint_tier": "nudge", "advance": True},
+        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
     )
-    assert missed.json()["graded_by"] == "discussion"
-    assert missed.json()["advanced"] is False
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["quiz"] is None
+    client.post(
+        f"/sessions/{session_id}/turn-score",
+        json={"rubric_met": ["link"], "misconception": None, "hint_tier": "nudge", "advance": True},
+    )
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "show"
+    return session_id
+
+
+def test_a_wrong_close_gets_one_explanation_then_another_try() -> None:
+    storm = _student("storm")["id"]
+    client.put("/tutor-profile", json=_profile(struggle_window="standard"))
+    session_id = _reach_show(storm, "MAC-U5-Q1")
+    question = "Which segment of the FOMC memo has the policy flaw?"
     client.post(
         f"/sessions/{session_id}/messages",
-        json={
-            "role": "assistant",
-            "content": "The wall is something you could hold. The wolf story is not.",
-            "client_id": "stuck-follow",
-        },
+        json={"role": "assistant", "content": question, "client_id": "miss-ask"},
     )
-    offered = client.get(f"/sessions/{session_id}/board").json()
-    assert offered["current_block"]["quiz"]["type"] == "multi"
-    unstick = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-    assert "one structured try" in unstick
-    assert "about to open" in unstick
-    assert "Correct answer, for you only" not in unstick
-    assert "The struggle window is over" not in unstick
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["quiz"]["prompt"] == question
     wrong = client.post(
         f"/sessions/{session_id}/grade-widget",
-        json={"choice": ["wolf"], "explanation": ""},
+        json={"choice": "s1", "explanation": ""},
     )
     assert wrong.json()["passed"] is False
     assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["quiz"] is None
-    revealed = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-    assert "The struggle window is over" in revealed
-    assert "Correct answer, for you only" in revealed
+    explained = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+    assert "Explain that miss" in explained
+    assert "another try" in explained
+    assert "Do not ask an open question." in explained
+    assert "Correct answer, for you only" not in explained
+    assert "The struggle window is over" not in explained
+    client.post(
+        f"/sessions/{session_id}/messages",
+        json={"role": "assistant", "content": f"That sentence only names the shock. {question}", "client_id": "miss-explain"},
+    )
+    again = client.get(f"/sessions/{session_id}/board").json()
+    assert again["current_block"]["quiz"]["prompt"] == question
 
-    widened = client.put("/tutor-profile", json=_profile(struggle_window="long"))
-    assert widened.status_code == 200
+    client.put("/tutor-profile", json=_profile(struggle_window="short"))
     try:
-        again = client.post(
-            "/sessions",
-            json={"student_id": storm, "quest_id": _quest("ROM-U1-Q1")["id"], "fresh": True},
-        )
-        later_id = again.json()["id"]
+        closed_id = _reach_show(storm, "MAC-U5-Q1")
         client.post(
-            f"/sessions/{later_id}/messages",
-            json={"role": "assistant", "content": "A find can be checked again. A story carries a meaning.", "client_id": "later-teach"},
-        )
-        _answer_in_words(later_id, "later")
-        assert client.get(f"/sessions/{later_id}/board").json()["current_block"]["quiz"]["type"] == "multi"
-        client.post(
-            f"/sessions/{later_id}/grade-widget",
-            json={"choice": ["wolf"], "explanation": ""},
-        )
-        assert client.get(f"/sessions/{later_id}/board").json()["current_block"]["quiz"] is None
-        client.post(
-            f"/sessions/{later_id}/messages",
-            json={
-                "role": "assistant",
-                "content": "That pile was the story. A find is the object in the ground.",
-                "client_id": "later-reply",
-            },
+            f"/sessions/{closed_id}/messages",
+            json={"role": "assistant", "content": question, "client_id": "closed-ask"},
         )
         client.post(
-            f"/sessions/{later_id}/messages",
-            json={"role": "user", "content": "The wall and the pottery are the finds.", "client_id": "later-again"},
+            f"/sessions/{closed_id}/grade-widget",
+            json={"choice": "s1", "explanation": ""},
         )
+        revealed = client.get(f"/sessions/{closed_id}/prompt").json()["system_prompt"]
+        assert "The struggle window is over" in revealed
+        assert "Correct answer, for you only" in revealed
+        assert "exactly this question" not in revealed
         client.post(
-            f"/sessions/{later_id}/messages",
-            json={"role": "assistant", "content": "You named the objects. We can check that list.", "client_id": "later-again-follow"},
+            f"/sessions/{closed_id}/messages",
+            json={"role": "assistant", "content": "The flawed sentence is the one that promises both goals.", "client_id": "closed-answer"},
         )
-        retry = client.get(f"/sessions/{later_id}/board").json()
-        assert retry["current_block"]["quiz"]["type"] == "multi"
-        retry_prompt = client.get(f"/sessions/{later_id}/prompt").json()["system_prompt"]
-        assert "explained in their own words" in retry_prompt
-        assert "They have not submitted the widget yet." in retry_prompt
+        assert client.get(f"/sessions/{closed_id}/board").json()["current_block"]["quiz"] is None
     finally:
         client.put("/tutor-profile", json=_profile(struggle_window="standard"))
 
@@ -573,11 +567,7 @@ def test_moves_finish_the_quest_and_a_met_criterion_skips_teach_back() -> None:
     )
     session_id = opened.json()["id"]
     assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "try"
-    graded = client.post(
-        f"/sessions/{session_id}/grade-widget",
-        json={"choice": ["wall", "pottery"], "explanation": ""},
-    )
-    assert graded.json()["passed"] is True
+    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["quiz"] is None
     client.post(
         f"/sessions/{session_id}/turn-score",
         json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
@@ -603,10 +593,6 @@ def test_moves_finish_the_quest_and_a_met_criterion_skips_teach_back() -> None:
     client.post(
         f"/sessions/{session_id}/turn-score",
         json={"rubric_met": ["advantage", "problem"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    client.post(
-        f"/sessions/{session_id}/grade-widget",
-        json={"choice": "deadlock", "explanation": ""},
     )
     client.post(
         f"/sessions/{session_id}/turn-score",

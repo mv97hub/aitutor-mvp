@@ -233,6 +233,7 @@ export async function POST(req: Request) {
     instructions: system,
     messages: modelMessages,
     temperature: bundle.temperature,
+    abortSignal: AbortSignal.timeout(60_000),
   });
 
   const stream = createUIMessageStream({
@@ -272,7 +273,8 @@ export async function POST(req: Request) {
             }),
           });
         } catch (error) {
-          console.error("Could not store the turn score", error);
+          const message = error instanceof Error ? error.message : "Could not save the score.";
+          throw new Error(message);
         }
       }
       if (lastUser && sent.trim()) {

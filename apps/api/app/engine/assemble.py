@@ -385,7 +385,7 @@ def _widget_lines(widget: WidgetTask, *, reveal: bool) -> list[str]:
         lines.append("No written explanation is required.")
     grade = widget.grade
     if grade is None:
-        lines.append("They have not submitted the widget yet. Invite them to choose. Set advance to false.")
+        lines.append("They have not submitted the card yet. Do not ask a second question. Set advance to false.")
         return lines
     lines.append(
         f"Server grade of the taps: {'passed' if grade.passed else 'not passed'}, score {grade.score}."
@@ -885,26 +885,30 @@ def assemble(
                 ]
             )
         )
-    elif widget_offer == "unstick" and not beat.finished:
-        lines.append(
-            "\n".join(
-                [
-                    "The choices are one message in the chat. They are stuck, and the struggle window is about to open.",
-                    "This is one structured try before you state the answer. Invite them to choose. Do not name the correct choice.",
-                    "Set advance to false until they submit.",
-                ]
+    elif widget_offer == "ask" and not beat.finished:
+        question = (beat.widget.prompt if beat.widget is not None else "").strip() or "Choose the best answer."
+        missed_card = beat.widget is not None and beat.widget.grade is not None and not beat.widget.grade.passed
+        if missed_card:
+            lines.append(
+                "\n".join(
+                    [
+                        "They missed the choice. Explain that miss in one or two sentences.",
+                        f"Then your last sentence is exactly: {question}",
+                        "The choice card is on screen for another try. Do not ask an open question.",
+                        "Do not name the correct choice. Set advance to false.",
+                    ]
+                )
             )
-        )
-    elif widget_offer == "check" and not beat.finished:
-        lines.append(
-            "\n".join(
-                [
-                    "The choices are one message in the chat, to check the idea they explained in their own words.",
-                    "Invite them to choose. Do not teach a new idea. Do not state the correct choice.",
-                    "Set advance to false until they submit.",
-                ]
+        else:
+            lines.append(
+                "\n".join(
+                    [
+                        "The choice card is on screen.",
+                        f"Your reply is exactly this question and nothing else: {question}",
+                        "Do not ask an open question. Do not name the correct choice. Set advance to false.",
+                    ]
+                )
             )
-        )
     return PromptBundle(
         system_prompt="\n\n".join(lines),
         response_schema=RESPONSE_SCHEMA,

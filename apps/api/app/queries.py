@@ -209,38 +209,109 @@ def awaiting_tap_reply(tutor_session: TutorSession, beat: Beat) -> bool:
     return True
 
 
-def choice_offer(tutor_session: TutorSession, beat: Beat) -> str | None:
-    """Why the live choices are on screen: "check", "unstick", or nothing.
+def _placeholder_widget(widget: dict) -> bool:
+    choices = widget.get("choices") or []
+    return any(
+        isinstance(choice, dict) and choice.get("text") == "The choice that matches the quest idea."
+        for choice in choices
+    )
 
-    Check: the idea was explained and the student answered in their own words.
-    Unstick: they are stuck and the struggle window is about to open, so the
-    choices are the structured try before the answer. Opening, Engage, and
-    Name stay talk. A stored Try is not enough, and the first tutor message
-    is not enough.
+
+def _widget_from_close(close) -> dict | None:
+    items = close.items if isinstance(close.items, list) else []
+    choices = []
+    answers = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        choice_id = f"c{index}"
+        choices.append(
+            {
+                "id": choice_id,
+                "text": text,
+                "misconception": "" if item.get("correct") else "That choice answers a different question.",
+            }
+        )
+        if item.get("correct"):
+            answers.append(choice_id)
+    if len(choices) < 2:
+        return None
+    if not answers:
+        answers = [choices[0]["id"]]
+    kind = "multi" if close.kind == "multi" else "single"
+    return {
+        "type": kind,
+        "prompt": (close.question or "").strip() or "Choose the best answer.",
+        "choices": choices,
+        "answer": answers if kind == "multi" else answers[0],
+        "explain": False,
+        "misconception": "Stay on the question this quest asked.",
+    }
+
+
+def close_choice_widget(quest, beat: Beat) -> dict | None:
+    """The quest close, when it is a single or multi-choice card.
+
+    Engage, Name, and Try stay talk. A placeholder Try widget is not a card.
+    Essay and empty closes are typed, or they end the quest.
     """
-    quiz = beat.widget if isinstance(beat.widget, dict) else None
-    if not quiz or beat.role not in {"try", "show"}:
+    if beat is None or beat.role != "show":
+        return None
+    close = getattr(quest, "close", None)
+    if close is not None and close.kind in {"none", "essay"}:
+        return None
+    widget = beat.widget if isinstance(beat.widget, dict) else None
+    if widget and (_placeholder_widget(widget) or widget.get("type") not in {"single", "multi", "flaw"}):
+        widget = None
+    if widget is not None:
+        return widget
+    if close is not None and close.kind in {"single", "multi"}:
+        return _widget_from_close(close)
+    return None
+
+
+def _window_closed_on(tutor_session: TutorSession, beat: Beat) -> bool:
+    if _latest_choice(tutor_session, beat) is None:
+        return False
+    window = load_profile(object_session(tutor_session)).struggle_window or "standard"
+    return _failed_attempts(tutor_session, beat.id) >= struggle_limit(window)
+
+
+def choice_offer(tutor_session: TutorSession, beat: Beat) -> str | None:
+    """"ask" when this turn's prompt should know the close card is on screen.
+
+    The card is the quest close, and only the close. After a wrong choice the
+    window can replace another try with the worked answer.
+    """
+    if close_choice_widget(tutor_session.quest, beat) is None:
         return None
     if tutor_session.current_beat_id != beat.id:
         return None
-    span, submitted = _offer_span(tutor_session, beat)
-    if not _check_ready(span):
+    if _window_closed_on(tutor_session, beat):
         return None
-    failed = _failed_attempts(tutor_session, beat.id)
-    window = load_profile(object_session(tutor_session)).struggle_window or "standard"
-    limit = struggle_limit(window)
-    if not submitted:
-        if failed >= max(limit - 1, 1):
-            return "unstick"
-        return "check"
-    if failed >= limit:
-        return None
-    return "check"
+    return "ask"
+
+
+def _invited(tutor_session: TutorSession, beat: Beat) -> bool:
+    """The reply that asks for the pick is already in the chat."""
+    latest = _latest_choice(tutor_session, beat)
+    for message in _move_messages(tutor_session, beat):
+        if latest is not None and latest.created_at is not None:
+            if message.created_at is None or message.created_at <= latest.created_at:
+                continue
+        if message.role == "assistant" and _message_text(message):
+            return True
+    return False
 
 
 def choice_widget_visible(tutor_session: TutorSession, beat: Beat) -> bool:
-    """The live choice message. It is gone once that offer has been answered."""
-    return choice_offer(tutor_session, beat) is not None
+    """The card hangs on the inviting reply, not on a teaching turn."""
+    if choice_offer(tutor_session, beat) is None:
+        return False
+    return _invited(tutor_session, beat)
 
 
 def next_position(values: list[int]) -> int:
