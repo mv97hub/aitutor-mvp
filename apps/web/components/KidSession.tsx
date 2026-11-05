@@ -247,21 +247,49 @@ function ChatPanel({
     () => new DefaultChatTransport({ api: "/api/chat", body: { sessionId } }),
     [sessionId],
   );
-  const { messages, sendMessage, status, error, clearError } = useChat({
+  const { messages, sendMessage, regenerate, stop, status, error, clearError } = useChat({
     id: sessionId,
     messages: toUiMessages(seed),
     transport,
     onFinish: () => onTurn(),
   });
   const [input, setInput] = useState("");
+  const [timedOut, setTimedOut] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
   const awaitingReply = useRef(false);
+  const pendingWidget = useRef<{ choice: string | string[]; explanation: string } | null>(null);
   const busy = status === "submitted" || status === "streaming";
+  const failed = Boolean(error) || timedOut;
   const [offers, setOffers] = useState<ChoiceOffer[]>([]);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   const liveOffer = offers.some((item) => item.settled == null);
+  const composerLocked = liveOffer || (busy && !failed);
+
+  useEffect(() => {
+    if (!busy) return;
+    const handle = window.setTimeout(() => {
+      void stop();
+      setTimedOut(true);
+    }, 60_000);
+    return () => window.clearTimeout(handle);
+  }, [busy, stop]);
+
+  function retryTurn() {
+    clearError();
+    setTimedOut(false);
+    const widget = pendingWidget.current;
+    const alreadySent = messagesRef.current.some((message) => message.role === "user");
+    if (alreadySent) {
+      void regenerate(widget ? { body: { widget } } : undefined);
+      return;
+    }
+    const text = input.trim();
+    if (!text) return;
+    setInput("");
+    void sendMessage({ text });
+  }
 
   useEffect(() => {
     const quiz = block?.quiz;
@@ -358,6 +386,8 @@ function ChatPanel({
                         ),
                       );
                       clearError();
+                      setTimedOut(false);
+                      pendingWidget.current = { choice, explanation };
                       void sendMessage({ text: transcript }, { body: { widget: { choice, explanation } } });
                     }}
                   />
@@ -381,6 +411,8 @@ function ChatPanel({
                     ),
                   );
                   clearError();
+                  setTimedOut(false);
+                  pendingWidget.current = { choice, explanation };
                   void sendMessage({ text: transcript }, { body: { widget: { choice, explanation } } });
                 }}
               />
@@ -389,20 +421,10 @@ function ChatPanel({
         </div>
       </div>
       {busy ? <p className="ds-typing">Tutor is writing…</p> : null}
-      {error ? (
+      {failed ? (
         <div className="banner" role="alert">
-          <p>{error.message}</p>
-          <button
-            type="button"
-            className="ghost"
-            onClick={() => {
-              clearError();
-              const text = input.trim() || KICKOFF;
-              setInput("");
-              if (draftRef.current) draftRef.current.style.height = "auto";
-              void sendMessage({ text });
-            }}
-          >
+          <p>{error?.message || "That took too long. The reply did not finish."}</p>
+          <button type="button" className="ghost" onClick={retryTurn}>
             Try again
           </button>
         </div>
@@ -412,8 +434,10 @@ function ChatPanel({
         onSubmit={(event) => {
           event.preventDefault();
           const text = input.trim();
-          if (!text || busy || liveOffer) return;
+          if (!text || composerLocked) return;
           clearError();
+          setTimedOut(false);
+          pendingWidget.current = null;
           setInput("");
           if (draftRef.current) draftRef.current.style.height = "auto";
           void sendMessage({ text });
@@ -437,11 +461,11 @@ function ChatPanel({
             }}
             placeholder={liveOffer ? "Choose an answer above" : "Message"}
             aria-label="Your answer"
-            disabled={busy || liveOffer}
+            disabled={composerLocked}
             maxLength={2000}
           />
           <div className="ds-card-row">
-            <button className="ds-send" type="submit" aria-label="Send" disabled={busy || liveOffer || input.trim().length === 0}>
+            <button className="ds-send" type="submit" aria-label="Send" disabled={composerLocked || input.trim().length === 0}>
               <SendIcon />
             </button>
           </div>

@@ -17,6 +17,7 @@ from app.queries import (
     awaiting_tap_reply,
     choice_offer,
     choice_submitted,
+    close_choice_widget,
     latest_result,
     locate_beat,
     next_position,
@@ -287,10 +288,27 @@ def grade_widget(
     beat = locate_beat(tutor_session.quest, tutor_session.current_beat_id)
     if beat is None:
         return {"ok": False, "reason": "This quest is finished, so there is nothing to score."}
-    quiz = beat.widget if isinstance(beat.widget, dict) else None
+    quiz = close_choice_widget(tutor_session.quest, beat)
     if quiz is None:
         return {"ok": False, "reason": "This move is a typed reply, not a choice widget."}
     ids = choice_ids(choice)
+    if awaiting_tap_reply(tutor_session, beat):
+        latest = latest_result(tutor_session, beat.id)
+        same = (
+            latest is not None
+            and isinstance(latest.choice, dict)
+            and list(latest.choice.get("ids") or []) == ids
+        )
+        if same:
+            return {
+                "ok": True,
+                "correct": bool(latest.passed),
+                "passed": latest.passed,
+                "score": latest.score,
+                "misconception": latest.misconception,
+                "hint_tier": latest.hint_tier,
+                "hint_text": hint_text(beat.hint_ladder, latest.hint_tier or "nudge"),
+            }
     if not ids:
         return {"ok": False, "reason": "Choose an answer before sending."}
     graded = grade_choice(
@@ -365,6 +383,9 @@ def _advance_move(
     passed: bool,
 ) -> bool:
     """Leave this move. A met criterion on Try or Show ends the quest."""
+    close = tutor_session.quest.close
+    if beat.role == "show" and close is not None and close.kind == "none" and advance_flag:
+        return bool(_complete(db, tutor_session).get("ok"))
     if beat.role in {"try", "show"} and _criterion_met(tutor_session.quest, met):
         return bool(_complete(db, tutor_session).get("ok"))
     if beat.role == "show" and reveal and advance_flag:
@@ -388,7 +409,7 @@ def apply_turn_score(
     weights = _weights(beat)
     met = [row_id for row_id in rubric_met if row_id in weights]
     latest = latest_result(tutor_session, beat.id)
-    quiz = beat.widget if isinstance(beat.widget, dict) else None
+    quiz = close_choice_widget(tutor_session.quest, beat)
     note = blank_to_none(misconception)
     submitted = choice_submitted(tutor_session, beat) if quiz is not None else True
     reveal = _window_closed(db, tutor_session, beat) and submitted
@@ -516,7 +537,19 @@ def apply_turn_score(
         hint_tier=tier,
     )
     advanced = False
-    if advance_flag and (passed or reveal):
+    close = tutor_session.quest.close
+    empty_close = beat.role == "show" and close is not None and close.kind == "none"
+    if empty_close and advance_flag:
+        advanced = _advance_move(
+            db,
+            tutor_session,
+            beat,
+            met,
+            reveal=True,
+            advance_flag=True,
+            passed=passed,
+        )
+    elif advance_flag and (passed or reveal):
         advanced = _advance_move(
             db,
             tutor_session,
@@ -547,7 +580,7 @@ def blank_beats(criterion: list[dict] | None = None) -> list[dict]:
     ]
     roles = (
         ("engage", "understand", "The idea has one fact, a picture the student can retell, and a reason it matters for this goal."),
-        ("try", "apply", "One short attempt before the explanation."),
+        ("try", "apply", "Teach this goal in words the student could retell."),
         ("name", "understand", "The try and the goal are the same idea: name the fact and why it matters."),
         ("show", "analyze", "Ask for the evidence in the success criterion."),
     )
@@ -558,23 +591,6 @@ def blank_beats(criterion: list[dict] | None = None) -> list[dict]:
             {"id": "part-a", "text": "Names the first part of the idea.", "weight": 50},
             {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
         ]
-        if role == "try":
-            rubric = [{"id": "choice", "text": "Selects the choice that matches the quest idea.", "weight": 100}]
-            widget = {
-                "type": "single",
-                "prompt": prompt,
-                "choices": [
-                    {"id": "match", "text": "The choice that matches the quest idea.", "misconception": ""},
-                    {
-                        "id": "trap",
-                        "text": "A nearby idea that does not answer this question.",
-                        "misconception": "That choice belongs to a different question.",
-                    },
-                ],
-                "answer": "match",
-                "explain": False,
-                "misconception": "Stay on the question this quest asked.",
-            }
         beats.append(
             {
                 "role": role,

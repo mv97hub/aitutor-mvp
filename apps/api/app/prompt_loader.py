@@ -31,10 +31,10 @@ from app.queries import (
     awaiting_tap_reply,
     choice_offer,
     choice_submitted,
+    close_choice_widget,
     latest_result,
     locate_beat,
     ordered_beats,
-    replied_after_teaching,
 )
 from app.tutor_profile import load_profile
 
@@ -91,8 +91,10 @@ def _widget(
     beat: Beat,
     *,
     include_grade: bool,
+    quiz: dict | None = None,
 ) -> WidgetTask | None:
-    quiz = beat.widget if isinstance(beat.widget, dict) else None
+    if quiz is None:
+        quiz = beat.widget if isinstance(beat.widget, dict) else None
     if quiz is None:
         return None
     choices = tuple(
@@ -242,24 +244,16 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
         offer = choice_offer(tutor_session, source)
         submitted = choice_submitted(tutor_session, source)
         answering_tap = awaiting_tap_reply(tutor_session, source)
-    include_widget = offer is not None or answering_tap
+    close_card = close_choice_widget(quest, source) if source is not None and not finished else None
+    offer = "ask" if close_card is not None and offer == "ask" else None
+    include_widget = close_card is not None and (offer == "ask" or answering_tap)
     on_show = source is not None and show is not None and source.id == show.id
-    show_has_widget = show is not None and isinstance(show.widget, dict)
-    reveal_close = finished or (on_show and (include_widget or not show_has_widget))
+    show_card = close_choice_widget(quest, show) if show is not None else None
+    reveal_close = finished or (on_show and (offer == "ask" or answering_tap or show_card is None))
     studio_goals, empty_close, close_line = _quest_walk(quest, reveal_close=reveal_close)
-    held = (
-        source is not None
-        and not finished
-        and isinstance(source.widget, dict)
-        and not include_widget
-    )
-    grade_writing = bool(held and source is not None and replied_after_teaching(tutor_session, source))
-    withhold_answer = bool(
-        source is not None
-        and not finished
-        and isinstance(source.widget, dict)
-        and not submitted
-    )
+    held = False
+    grade_writing = False
+    withhold_answer = offer == "ask"
     if source is None:
         beat_layer = Layer1Beat(
             course_title=course.title,
@@ -310,7 +304,12 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
             hint_ladder=_ladder(source),
             widget=None
             if finished or not include_widget
-            else _widget(tutor_session, source, include_grade=offer is None),
+            else _widget(
+                tutor_session,
+                source,
+                include_grade=submitted or answering_tap,
+                quiz=close_card,
+            ),
             pass_score=PASS_SCORE,
             gate_cleared=gate_cleared,
             finished=finished,

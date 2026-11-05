@@ -14,6 +14,7 @@ from app.engine.types import (
     MisconceptionTrap,
     RubricCriterion,
     WidgetChoice,
+    WidgetGrade,
     WidgetTask,
 )
 
@@ -263,16 +264,45 @@ def test_check_and_unstick_are_the_only_times_the_choices_appear() -> None:
         attempt_count=2,
         zpd="support",
     )
-    check = assemble(*layers, widget_offer="check", withhold_answer=True).system_prompt
-    assert "explained in their own words" in check
-    assert "Invite them to choose" in check
+    check = assemble(*layers, widget_offer="ask", withhold_answer=True).system_prompt
+    assert "exactly this question" in check
+    assert "Do not ask an open question." in check
+    assert "Which of these are archaeological clues?" in check
     assert "Correct answer, for you only" not in check
     assert "The struggle window is over" not in check
-    unstick = assemble(*layers, widget_offer="unstick", withhold_answer=True).system_prompt
-    assert "one structured try" in unstick
-    assert "about to open" in unstick
-    assert "Correct answer, for you only" not in unstick
-    assert "The struggle window is over" not in unstick
+    missed = assemble(
+        *layers,
+        widget_offer="ask",
+        withhold_answer=True,
+    ).system_prompt
+    layers[0] = _beat(
+        widget=WidgetTask(
+            type="multi",
+            prompt="Which of these are archaeological clues?",
+            choices=(
+                WidgetChoice("wall", "A wall dated to early Rome.", ""),
+                WidgetChoice("pottery", "Pottery found under the Forum.", ""),
+            ),
+            answer=("wall", "pottery"),
+            explain=False,
+            grade=WidgetGrade(
+                correct=False,
+                score=0,
+                passed=False,
+                misconception="Sorted the story with the finds.",
+                choice_ids=("wolf",),
+                explanation="",
+            ),
+        ),
+        beat_role="show",
+        prompt="Sort a find from a story.",
+    )
+    retry = assemble(*layers, widget_offer="ask", withhold_answer=True).system_prompt
+    assert "Explain that miss" in retry
+    assert "another try" in retry
+    assert "Do not ask an open question." in retry
+    assert "Correct answer, for you only" not in retry
+    assert missed  # the first ask stays a question, not an explanation
 
 
 def test_widget_answer_stays_hidden_until_the_window() -> None:
