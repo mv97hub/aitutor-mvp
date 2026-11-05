@@ -1445,6 +1445,196 @@ def list_messages(db: Session, course: StudioCourse) -> list[StudioMessage]:
     )
 
 
+_GOAL_LINE = re.compile(r"(?:learning\s+)?goal\s*:\s*(.+)", re.IGNORECASE)
+_CRITERION_LINE = re.compile(r"(?:success\s+)?criterion\s*:\s*(.+)", re.IGNORECASE)
+
+
+def _clean_goal_line(raw_line: str) -> str:
+    line = re.sub(r"[*_#`]", "", raw_line).strip().lstrip("-•").strip()
+    line = re.sub(r"^\d+[.)]\s*", "", line).strip()
+    return re.sub(r"^quest\s+", "", line, flags=re.IGNORECASE).strip()
+
+
+def _header_code(line: str, codes: set[str]) -> tuple[str, str] | None:
+    """A block starts with the quest code. The rest of the line may hold the goal."""
+    if _GOAL_LINE.match(line) or _CRITERION_LINE.match(line):
+        return None
+    for code in sorted(codes, key=len, reverse=True):
+        match = re.match(rf"{re.escape(code)}\b\s*[:\-–—]?\s*(.*)$", line, flags=re.IGNORECASE)
+        if match:
+            return code, match.group(1).strip()
+    return None
+
+
+def _remember_goal(found: dict[str, list[dict]], code: str, goal: str, criterion: str) -> None:
+    goal = goal.strip()
+    criterion = criterion.strip()
+    if not goal or not criterion:
+        return
+    found.setdefault(code, []).append(
+        {
+            "position": len(found.get(code, [])) + 1,
+            "learning_goal": goal,
+            "success_criterion": criterion,
+        }
+    )
+
+
+def _parse_goal_blocks(text: str, codes: set[str]) -> dict[str, list[dict]]:
+    """Goal blocks in a reply, keyed by quest code. A block starts with the code."""
+    found: dict[str, list[dict]] = {}
+    current: str | None = None
+    pending: str | None = None
+    for raw_line in (text or "").splitlines():
+        line = _clean_goal_line(raw_line)
+        if not line:
+            continue
+        header = _header_code(line, codes)
+        if header:
+            current, remainder = header
+            found.setdefault(current, [])
+            pending = None
+            criterion = _CRITERION_LINE.search(remainder)
+            if criterion:
+                before = remainder[: criterion.start()].strip(" .:-")
+                goal_match = _GOAL_LINE.match(before)
+                goal = goal_match.group(1).strip() if goal_match else before
+                _remember_goal(found, current, goal, criterion.group(1))
+                continue
+            goal_match = _GOAL_LINE.match(remainder)
+            if goal_match:
+                pending = goal_match.group(1).strip()
+            continue
+        if current is None:
+            continue
+        goal_line = _GOAL_LINE.match(line)
+        criterion_line = _CRITERION_LINE.match(line)
+        if goal_line:
+            pending = goal_line.group(1).strip()
+            continue
+        if criterion_line and pending:
+            _remember_goal(found, current, pending, criterion_line.group(1))
+            pending = None
+    return {code: rows for code, rows in found.items() if rows}
+
+
+def _operation_goal_rows(op: dict) -> list[dict] | None:
+    goals = op.get("goals")
+    if isinstance(goals, list) and goals:
+        return [item for item in goals if isinstance(item, dict)]
+    goal = op.get("learning_goal")
+    criterion = op.get("success_criterion")
+    if isinstance(goal, str) and goal.strip() or isinstance(criterion, str) and criterion.strip():
+        return [
+            {
+                "position": 1,
+                "learning_goal": goal if isinstance(goal, str) else "",
+                "success_criterion": criterion if isinstance(criterion, str) else "",
+            }
+        ]
+    return None
+
+
+def _split_goals_by_quest_code(operations: list, codes: set[str]) -> list:
+    """A goals array that names later quests is one update per quest, not extra goals on the first."""
+    expanded: list = []
+    for op in operations:
+        if not isinstance(op, dict):
+            expanded.append(op)
+            continue
+        goals = op.get("goals")
+        if not isinstance(goals, list):
+            expanded.append(op)
+            continue
+        buckets: dict[str, list] = {}
+        plain: list = []
+        for item in goals:
+            if not isinstance(item, dict):
+                plain.append(item)
+                continue
+            named = str(item.get("code") or "").strip().upper()
+            if named in codes:
+                buckets.setdefault(named, []).append(item)
+            else:
+                plain.append(item)
+        if not buckets:
+            expanded.append(op)
+            continue
+        own = str(op.get("code") or "").strip().upper()
+        if plain:
+            copied = dict(op)
+            copied["goals"] = plain
+            expanded.append(copied)
+        elif own and own not in buckets:
+            copied = dict(op)
+            copied.pop("goals", None)
+            expanded.append(copied)
+        for code, rows in buckets.items():
+            expanded.append(
+                {
+                    "op": "update",
+                    "kind": "quest",
+                    "code": code,
+                    "parent": None,
+                    "goals": [
+                        {
+                            "position": index,
+                            "learning_goal": row.get("learning_goal") or "",
+                            "success_criterion": row.get("success_criterion") or "",
+                        }
+                        for index, row in enumerate(rows, start=1)
+                        if isinstance(row, dict)
+                    ],
+                }
+            )
+    return expanded
+
+
+def _expand_goals_operations(course: StudioCourse, operations: list, text: str) -> list:
+    """Keep every quest the reply or the patch names. Do not stop after the first quest."""
+    codes = {quest.code for quest in course.quests}
+    operations = _split_goals_by_quest_code(list(operations), codes)
+    covered: set[str] = set()
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        code = str(op.get("code") or "").strip().upper()
+        if code in codes and _operation_goal_rows(op):
+            covered.add(code)
+    parsed = _parse_goal_blocks(text, codes)
+    for quest in sorted(course.quests, key=lambda row: (row.position, row.code)):
+        rows = parsed.get(quest.code)
+        if not rows or quest.code in covered:
+            continue
+        operations.append(
+            {
+                "op": "update",
+                "kind": "quest",
+                "code": quest.code,
+                "parent": None,
+                "goals": rows,
+            }
+        )
+        covered.add(quest.code)
+    return operations
+
+
+def _skipped_goals_sentence(codes: list[str]) -> str:
+    if len(codes) == 1:
+        return f"Skipped {codes[0]}, which still needs a goal and a success criterion."
+    listed = ", ".join(codes[:-1]) + " and " + codes[-1]
+    return f"Skipped {listed}, which still need a goal and a success criterion."
+
+
+def _note_skipped_goals(db: Session, course: StudioCourse, codes: list[str]) -> None:
+    """One sentence naming the quests this goals push left without a goal."""
+    sentence = _skipped_goals_sentence(codes)
+    messages = list_messages(db, course)
+    if messages and messages[-1].content.strip() == sentence:
+        return
+    add_message(db, course, role="assistant", content=sentence, proposal=None)
+
+
 def add_message(
     db: Session,
     course: StudioCourse,
@@ -1462,6 +1652,14 @@ def add_message(
         raise StudioError("proposal", "a creator message cannot carry a patch")
     stored = None
     if proposal is not None:
+        if isinstance(proposal, dict):
+            phase_hint = _phase_name(proposal.get("phase")) or (
+                active_stage_name(course) if stored_stage(course) else viewed_phase(course)["name"]
+            )
+            ops = proposal.get("operations")
+            if phase_hint == "goals" and isinstance(ops, list):
+                proposal = dict(proposal)
+                proposal["operations"] = _expand_goals_operations(course, ops, text)
         _planned, skipped, kept = split_patch(course, proposal)
         if not kept:
             plain = " ".join(skipped) if skipped else "That change had nothing to save."
@@ -2008,6 +2206,8 @@ def push_draft(db: Session, course: StudioCourse) -> StudioCourse:
     if message is None:
         return load_course(db, course.id) or course
     ops = _proposal_ops(message)
+    if stage == "goals":
+        ops = _expand_goals_operations(course, ops, message.content)
     _remember_undo(course, message)
     previous = _checker_view(course, stage)
     try:
@@ -2024,7 +2224,17 @@ def push_draft(db: Session, course: StudioCourse) -> StudioCourse:
     course.ready = False
     course.updated_at = _now()
     db.flush()
-    return load_course(db, course.id) or course
+    fresh = load_course(db, course.id) or course
+    if stage == "goals":
+        missing = [
+            quest.code
+            for quest in sorted(fresh.quests, key=lambda row: (row.position, row.code))
+            if _goals_incomplete(quest)
+        ]
+        if missing:
+            _note_skipped_goals(db, fresh, missing)
+            fresh = load_course(db, course.id) or fresh
+    return fresh
 
 
 def advance_stage(db: Session, course: StudioCourse) -> StudioCourse:
@@ -2662,6 +2872,10 @@ def _tracked_phase_instructions(course: StudioCourse) -> str:
             "Talk only about goals and success criteria. "
             f"Offer {per_quest} goals per quest, all in one go or one quest at a time. "
             "Each goal needs an observable success criterion. "
+            "When a draft covers more than one quest, write one block per quest that starts with that quest's code, "
+            "then a Goal line and a Success criterion line for each goal. "
+            "The patch has one update for every one of those codes. Do not stop after the first quest. "
+            "Do not attach a later quest's goals to the first quest. "
             "A patch may name only the quests you are changing. Quests you leave out keep their goals. "
             "A patch updates each quest by code and sets parent to null. "
             "Do not fill close style in this patch. "
@@ -2737,6 +2951,7 @@ def phase_instructions(course: StudioCourse) -> str:
             "A quest can hold several goals, each with its own criterion. "
             f"Offer {per_quest} goals per quest. "
             "Offer a learning goal for each open quest, addressed by that quest's code. "
+            "Do not stop after the first quest. One update per quest code. "
             "Draft a criterion whenever you draft a goal. "
             "An update names that quest's code and sets parent to null."
         )
@@ -2937,6 +3152,7 @@ def message_out(message: StudioMessage) -> StudioMessageOut:
 
 def _goals_schema() -> dict:
     return {
+        "description": "Only this quest's goals. Later quests get their own operation.",
         "anyOf": [
             {"type": "null"},
             {
@@ -2952,7 +3168,7 @@ def _goals_schema() -> dict:
                     "required": ["learning_goal", "success_criterion", "position"],
                 },
             },
-        ]
+        ],
     }
 
 
@@ -2994,12 +3210,15 @@ def _phase_operation_schema(phase: str) -> dict:
             "title": {"type": ["string", "null"]},
             "position": {"anyOf": [{"type": "null"}, {"type": "integer"}]},
         }
-    return {
+    schema = {
         "type": "object",
         "additionalProperties": False,
         "properties": properties,
         "required": list(properties),
     }
+    if phase == "goals":
+        schema["description"] = "One update per quest code. Do not stop after the first quest."
+    return schema
 
 
 def response_schema(course: StudioCourse) -> dict:
@@ -3018,7 +3237,12 @@ def response_schema(course: StudioCourse) -> dict:
                 ),
             },
             "patch": {
-                "description": "Null when nothing should change. Otherwise operations allowed in this phase.",
+                "description": (
+                    "Null when nothing should change. Otherwise one update per quest code, "
+                    "and do not stop after the first quest. Each operation's goals belong only to that quest."
+                    if phase == "goals"
+                    else "Null when nothing should change. Otherwise operations allowed in this phase."
+                ),
                 "anyOf": [
                     {"type": "null"},
                     {
