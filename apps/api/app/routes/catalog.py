@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.course_io import (
     CourseFileError,
     check_moves,
+    copy_studio_into_catalog,
     export_course,
     normalize_criterion,
     normalize_goal,
@@ -15,7 +16,7 @@ from app.course_io import (
 )
 from app.database import get_db
 from app.engine.defaults import profile_for_age
-from app.flow import apply_student_profile, blank_beats, now, unique_course_code, unique_student_slug
+from app.flow import apply_student_profile, now, unique_course_code, unique_student_slug
 from app.models import (
     AGE_BANDS,
     Beat,
@@ -23,26 +24,23 @@ from app.models import (
     Quest,
     Session as TutorSession,
     Student,
-    Unit,
 )
 from app.present import course_summary, course_tree, quest_detail, quest_list_item, student_out
-from app.queries import load_course, load_quest, next_position, quest_in_use
+from app.queries import load_course, load_quest, quest_in_use
 from app.schemas import (
     BeatWrite,
     CourseCreate,
     CoursePatch,
     CourseSummary,
     CourseTree,
+    StudioImportIn,
     ProfileDefaults,
-    QuestCreate,
     QuestDetail,
     QuestListItem,
     QuestPatch,
     StudentCreate,
     StudentOut,
     StudentPatch,
-    UnitCreate,
-    UnitPatch,
 )
 
 router = APIRouter()
@@ -164,7 +162,12 @@ def patch_student(student_id: UUID, body: StudentPatch, db: Session = Depends(ge
 def list_courses(age_band: str | None = None, db: Session = Depends(get_db)) -> list[CourseSummary]:
     if age_band is not None and age_band not in AGE_BANDS:
         raise HTTPException(status_code=422, detail="age_band must be 6-8, 9-11, 12-14, or 15-17")
-    stmt = select(Course).options(selectinload(Course.units).selectinload(Unit.quests)).order_by(Course.title)
+    stmt = (
+        select(Course)
+        .where(Course.in_catalog.is_(True))
+        .options(selectinload(Course.quests))
+        .order_by(Course.title)
+    )
     if age_band is not None:
         stmt = stmt.where(Course.age_band == age_band)
     return [course_summary(course) for course in db.scalars(stmt).all()]
@@ -179,8 +182,13 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db)) -> CourseTr
         code=code,
         title=body.title.strip(),
         age_band=body.age_band,
+        audience=body.age_band,
         standards_alignment=body.standards_alignment.strip(),
+        description=body.standards_alignment.strip(),
         competency_dictionary=[],
+        quest_count=1,
+        goals_per_quest=1,
+        quiz_minutes=5,
         updated_at=now(),
     )
     db.add(course)
@@ -209,14 +217,33 @@ def export_course_route(course_id: UUID, db: Session = Depends(get_db)) -> dict:
     return export_course(load_course(db, course_id))
 
 
+@router.post("/courses/import-studio", response_model=CourseTree)
+def import_studio_course(body: StudioImportIn, db: Session = Depends(get_db)) -> CourseTree:
+    try:
+        course = copy_studio_into_catalog(db, body.studio_course_id)
+    except CourseFileError as exc:
+        status = 404 if exc.field == "studio_course_id" else 422
+        raise HTTPException(status_code=status, detail=f"{exc.field}: {exc.message}") from exc
+    return course_tree(load_course(db, course.id))
+
+
+@router.post("/courses/{course_id}/remove", status_code=204)
+def remove_course(course_id: UUID, db: Session = Depends(get_db)) -> None:
+    """Drop the course from the kid catalog. Sessions and messages stay."""
+    course = db.get(Course, course_id)
+    if course is None:
+        raise HTTPException(status_code=404, detail="Course not found")
+    course.in_catalog = False
+    course.updated_at = now()
+
+
 @router.get("/courses/{course_id}/quests", response_model=list[QuestListItem])
 def list_course_quests(course_id: UUID, db: Session = Depends(get_db)) -> list[QuestListItem]:
     course = load_course(db, course_id)
-    rows: list[QuestListItem] = []
-    for unit in sorted(course.units, key=lambda item: item.number):
-        for quest in sorted(unit.quests, key=lambda item: item.position):
-            rows.append(quest_list_item(quest))
-    return rows
+    return [
+        quest_list_item(quest)
+        for quest in sorted(course.quests, key=lambda item: item.position)
+    ]
 
 
 @router.patch("/courses/{course_id}", response_model=CourseTree)
@@ -239,7 +266,7 @@ def patch_course(course_id: UUID, body: CoursePatch, db: Session = Depends(get_d
 @router.delete("/courses/{course_id}", status_code=204)
 def delete_course(course_id: UUID, db: Session = Depends(get_db)) -> None:
     course = load_course(db, course_id)
-    quest_ids = [quest.id for unit in course.units for quest in unit.quests]
+    quest_ids = [quest.id for quest in course.quests]
     if quest_ids:
         in_use = db.scalar(
             select(func.count()).select_from(TutorSession).where(TutorSession.quest_id.in_(quest_ids))
@@ -247,119 +274,6 @@ def delete_course(course_id: UUID, db: Session = Depends(get_db)) -> None:
         if in_use:
             raise HTTPException(status_code=409, detail="This course has classes, so it cannot be deleted.")
     db.delete(course)
-
-
-@router.post("/courses/{course_id}/units", response_model=CourseTree)
-def create_unit(course_id: UUID, body: UnitCreate, db: Session = Depends(get_db)) -> CourseTree:
-    course = load_course(db, course_id)
-    number = body.number or next_position([unit.number for unit in course.units])
-    if any(unit.number == number for unit in course.units):
-        raise HTTPException(status_code=409, detail="That unit number is already used.")
-    course.units.append(
-        Unit(
-            number=number,
-            title=body.title.strip(),
-            enduring_understanding=body.enduring_understanding.strip(),
-            continuity_summary=body.continuity_summary.strip(),
-            is_diagnostic=body.is_diagnostic,
-            is_capstone=body.is_capstone,
-        )
-    )
-    course.updated_at = now()
-    db.flush()
-    return course_tree(course)
-
-
-@router.patch("/units/{unit_id}", response_model=CourseTree)
-def patch_unit(unit_id: UUID, body: UnitPatch, db: Session = Depends(get_db)) -> CourseTree:
-    unit = db.get(Unit, unit_id)
-    if unit is None:
-        raise HTTPException(status_code=404, detail="Unit not found")
-    course = load_course(db, unit.course_id)
-    current = next(item for item in course.units if item.id == unit.id)
-    if any(item.number == body.number and item.id != current.id for item in course.units):
-        raise HTTPException(status_code=409, detail="That unit number is already used.")
-    current.number = body.number
-    current.title = body.title.strip()
-    current.enduring_understanding = body.enduring_understanding.strip()
-    current.continuity_summary = body.continuity_summary.strip()
-    current.is_diagnostic = body.is_diagnostic
-    current.is_capstone = body.is_capstone
-    course.updated_at = now()
-    db.flush()
-    return course_tree(course)
-
-
-@router.delete("/units/{unit_id}", response_model=CourseTree)
-def delete_unit(unit_id: UUID, db: Session = Depends(get_db)) -> CourseTree:
-    unit = db.get(Unit, unit_id)
-    if unit is None:
-        raise HTTPException(status_code=404, detail="Unit not found")
-    course = load_course(db, unit.course_id)
-    current = next(item for item in course.units if item.id == unit.id)
-    if any(quest_in_use(db, quest.id) for quest in current.quests):
-        raise HTTPException(status_code=409, detail="This unit has classes, so it cannot be deleted.")
-    course.units.remove(current)
-    course.updated_at = now()
-    db.flush()
-    return course_tree(course)
-
-
-@router.post("/units/{unit_id}/quests", response_model=QuestDetail)
-def create_quest(unit_id: UUID, body: QuestCreate, db: Session = Depends(get_db)) -> QuestDetail:
-    unit = db.get(Unit, unit_id)
-    if unit is None:
-        raise HTTPException(status_code=404, detail="Unit not found")
-    code = body.code.strip()
-    if db.scalar(select(Quest.id).where(Quest.code == code)):
-        raise HTTPException(status_code=409, detail="That quest code is already used.")
-    course = load_course(db, unit.course_id)
-    current = next(item for item in course.units if item.id == unit.id)
-    try:
-        goal = normalize_goal(body.learning_goal, "learning_goal")
-        criterion = normalize_criterion(
-            body.success_criterion
-            or [
-                {"id": "part-a", "text": "Names the first part of the idea.", "weight": 50},
-                {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
-            ],
-            "success_criterion",
-        )
-    except CourseFileError as exc:
-        raise HTTPException(status_code=422, detail=f"{exc.field}: {exc.message}") from exc
-    quest = Quest(
-        code=code,
-        title=body.title.strip(),
-        quest_type=body.quest_type,
-        prerequisite_codes=_clean_list(body.prerequisite_codes),
-        competency_tags=_clean_list(body.competency_tags)[:2],
-        dinner_prompt=body.dinner_prompt.strip(),
-        learning_goal=goal,
-        success_criterion=criterion,
-        requires_teach_back=False,
-        position=next_position([item.position for item in current.quests]),
-    )
-    current.quests.append(quest)
-    db.flush()
-    for index, beat_body in enumerate(blank_beats(criterion), start=1):
-        from app.models import Beat
-
-        quest.beats.append(
-            Beat(
-                position=index,
-                role=beat_body["role"],
-                bloom_level=beat_body["bloom_level"],
-                cognitive_load=beat_body["cognitive_load"],
-                prompt=beat_body["prompt"],
-                rubric=beat_body["rubric"],
-                misconception_map=beat_body["misconception_map"],
-                hint_ladder=beat_body["hint_ladder"],
-                widget=beat_body["widget"],
-            )
-        )
-    course.updated_at = now()
-    db.flush()
-    return quest_detail(load_quest(db, quest.id))
 
 
 @router.get("/quests/{quest_id}", response_model=QuestDetail)
@@ -391,7 +305,7 @@ def patch_quest(quest_id: UUID, body: QuestPatch, db: Session = Depends(get_db))
     quest.learning_goal = goal
     quest.success_criterion = criterion
     quest.requires_teach_back = body.requires_teach_back
-    quest.unit.course.updated_at = now()
+    quest.course.updated_at = now()
     db.flush()
     return quest_detail(quest)
 
@@ -452,6 +366,6 @@ def put_beats(quest_id: UUID, body: BeatWrite, db: Session = Depends(get_db)) ->
             beat.misconception_map = fields["misconception_map"]
             beat.hint_ladder = fields["hint_ladder"]
             beat.widget = fields["widget"]
-    quest.unit.course.updated_at = now()
+    quest.course.updated_at = now()
     db.flush()
     return quest_detail(quest)

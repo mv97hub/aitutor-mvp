@@ -191,11 +191,10 @@ def _course_scope_rule(discourse: Layer4Discourse, beat: Layer1Beat) -> str | No
     if not discourse.stay_on_course:
         return None
     course = beat.course_title.strip() or "this course"
-    unit = beat.unit_title.strip() or "this unit"
     quest = beat.quest_title.strip() or "this quest"
     return (
         f"Stay on {course}. Depth inside {course} stays allowed: go as deep as the student needs "
-        f"on {course}, unit {unit}, and quest {quest}, including closely related ideas that serve this learning goal. "
+        f"on {course} and quest {quest}, including closely related ideas that serve this learning goal. "
         f"If the student brings up a different subject, acknowledge it in one short line and return to {course}. "
         "Do not explain that subject. Do not keep chatting about it."
     )
@@ -412,13 +411,18 @@ def _layer1(
     lines = [
         "Layer 1 — Active move",
         f"Course: {beat.course_title}.",
-        f"Unit: {beat.unit_title}.",
-        f"Unit continuity: {beat.continuity.strip() or 'None.'}",
-        f"Quest {beat.quest_code}: {beat.quest_title}.",
-        f"Learning goal: {goal}",
-        f"Success criterion: {_criterion_line(beat)}",
-        f"Pass score: {beat.pass_score}. The quest finishes when those rows are met. After the struggle window on Show, explain why the answer fits and finish the quest.",
     ]
+    if beat.unit_title.strip():
+        lines.append(f"Unit: {beat.unit_title}.")
+        lines.append(f"Unit continuity: {beat.continuity.strip() or 'None.'}")
+    lines.extend(
+        [
+            f"Quest {beat.quest_code}: {beat.quest_title}.",
+            f"Learning goal: {goal}",
+            f"Success criterion: {_criterion_line(beat)}",
+            f"Pass score: {beat.pass_score}. The quest finishes when those rows are met. After the struggle window on Show, explain why the answer fits and finish the quest.",
+        ]
+    )
     if beat.finished:
         lines.append(
             "This quest is finished. Congratulate the student in one or two sentences. Do not start another quest. Set advance to false, rubric_met to [], and misconception to null."
@@ -464,7 +468,7 @@ def _layer1(
         )
     if beat.widget is not None and beat.beat_role in {"try", "show"} and not hold_widget:
         lines.extend(_widget_lines(beat.widget, reveal=reveal))
-    if beat.goals or beat.empty_close:
+    if beat.goals or beat.empty_close or beat.close_line.strip():
         if beat.goals:
             lines.append(
                 "Walk these goals in order. Each goal is a discussion point, finished by its own criterion, before the close."
@@ -472,6 +476,8 @@ def _layer1(
             for index, point in enumerate(beat.goals, start=1):
                 lines.append(f"Goal {index}: {point.learning_goal.strip() or 'None.'}")
                 lines.append(f"Criterion {index}: {point.success_criterion.strip() or 'None.'}")
+        if beat.close_line.strip():
+            lines.append(beat.close_line.strip())
         if beat.empty_close and beat.beat_role == "show":
             lines.append("The close has no question. End the quest without asking one. Set advance to true.")
     return lines

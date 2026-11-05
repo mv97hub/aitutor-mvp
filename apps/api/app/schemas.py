@@ -117,6 +117,10 @@ class Competency(BaseModel):
     description: str
 
 
+class StudioImportIn(BaseModel):
+    studio_course_id: UUID
+
+
 class CourseCreate(BaseModel):
     title: str = Field(min_length=1, max_length=240)
     code: str | None = None
@@ -216,8 +220,11 @@ class CourseSummary(BaseModel):
     title: str
     age_band: str
     standards_alignment: str
-    unit_count: int
+    description: str = ""
+    audience: str = ""
     quest_count: int
+    goals_per_quest: int = 1
+    quiz_minutes: int = 5
 
 
 class QuestNode(BaseModel):
@@ -231,15 +238,25 @@ class QuestNode(BaseModel):
     position: int
 
 
-class UnitNode(BaseModel):
+class GoalOut(BaseModel):
+    position: int
+    learning_goal: str = ""
+    success_criterion: str = ""
+
+
+class CloseOut(BaseModel):
+    kind: Literal["essay", "single", "multi", "none"]
+    question: str = ""
+    items: list[dict] = Field(default_factory=list)
+
+
+class CatalogQuest(BaseModel):
     id: UUID
-    number: int
+    code: str
     title: str
-    enduring_understanding: str
-    continuity_summary: str
-    is_diagnostic: bool
-    is_capstone: bool
-    quests: list[QuestNode]
+    position: int
+    goals: list[GoalOut] = Field(default_factory=list)
+    close: CloseOut | None = None
 
 
 class CourseTree(BaseModel):
@@ -248,8 +265,13 @@ class CourseTree(BaseModel):
     title: str
     age_band: str
     standards_alignment: str
+    description: str = ""
+    audience: str = ""
+    quest_count: int = 1
+    goals_per_quest: int = 1
+    quiz_minutes: int = 5
     competency_dictionary: list[dict]
-    units: list[UnitNode]
+    quests: list[CatalogQuest]
 
 
 class QuestListItem(BaseModel):
@@ -278,12 +300,13 @@ class BeatOut(BaseModel):
 
 
 class QuestDetail(QuestNode):
-    unit_id: UUID
     course_id: UUID
     learning_goal: str = ""
     success_criterion: list[dict] = Field(default_factory=list)
     requires_teach_back: bool = False
     beats: list[BeatOut]
+    goals: list[GoalOut] = Field(default_factory=list)
+    close: CloseOut | None = None
 
 
 class MessageOut(BaseModel):

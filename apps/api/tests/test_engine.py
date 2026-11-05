@@ -461,8 +461,8 @@ def test_course_scope_rule_names_the_course_only_when_the_switch_is_on() -> None
     assert "Stay on Ancient Rome." in on.split("Layer 1", 1)[0]
     assert "Depth inside Ancient Rome stays allowed" in on
     assert (
-        "go as deep as the student needs on Ancient Rome, unit The Republic, "
-        "and quest The Two-Captain Rule, including closely related ideas that serve this learning goal."
+        "go as deep as the student needs on Ancient Rome and quest The Two-Captain Rule, "
+        "including closely related ideas that serve this learning goal."
     ) in on
     assert "acknowledge it in one short line and return to Ancient Rome." in on
     assert "Do not explain that subject." in on

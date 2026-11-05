@@ -96,6 +96,7 @@ class Layer1Beat:
     course_code: str = ""
     goals: tuple[GoalPoint, ...] = ()
     empty_close: bool = False
+    close_line: str = ""
 
 
 @dataclass(frozen=True)

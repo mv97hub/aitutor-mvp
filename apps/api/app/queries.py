@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.engine.assemble import struggle_limit
-from app.models import Beat, BeatResult, Course, Message, Quest, Session as TutorSession, Unit
+from app.models import Beat, BeatResult, Course, Message, Quest, Session as TutorSession
 from app.tutor_profile import load_profile
 
 KICKOFF_TEXT = "Hi! I'm ready to learn."
@@ -17,7 +17,11 @@ def load_course(db: Session, course_id: uuid.UUID) -> Course:
     course = db.scalar(
         select(Course)
         .where(Course.id == course_id)
-        .options(selectinload(Course.units).selectinload(Unit.quests))
+        .options(
+            selectinload(Course.quests).selectinload(Quest.goals),
+            selectinload(Course.quests).selectinload(Quest.close),
+            selectinload(Course.quests).selectinload(Quest.beats),
+        )
     )
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -30,7 +34,9 @@ def load_quest(db: Session, quest_id: uuid.UUID) -> Quest:
         .where(Quest.id == quest_id)
         .options(
             selectinload(Quest.beats),
-            selectinload(Quest.unit).selectinload(Unit.course),
+            selectinload(Quest.goals),
+            selectinload(Quest.close),
+            selectinload(Quest.course),
         )
     )
     if quest is None:
@@ -44,11 +50,10 @@ def load_session(db: Session, session_id: uuid.UUID) -> TutorSession:
         .where(TutorSession.id == session_id)
         .options(
             selectinload(TutorSession.student),
-            selectinload(TutorSession.quest)
-            .selectinload(Quest.beats),
-            selectinload(TutorSession.quest)
-            .selectinload(Quest.unit)
-            .selectinload(Unit.course),
+            selectinload(TutorSession.quest).selectinload(Quest.beats),
+            selectinload(TutorSession.quest).selectinload(Quest.goals),
+            selectinload(TutorSession.quest).selectinload(Quest.close),
+            selectinload(TutorSession.quest).selectinload(Quest.course),
             selectinload(TutorSession.messages),
             selectinload(TutorSession.prompts),
             selectinload(TutorSession.results).selectinload(BeatResult.beat).selectinload(Beat.quest),
