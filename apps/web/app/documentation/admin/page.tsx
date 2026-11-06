@@ -29,9 +29,6 @@ export default function AdminDocsPage() {
           Agent customizations holds one tutor profile. Saving it changes how the kid tutor and KC Tutor speak, for every child.
           The page says that name, age, reading level, modality, and interests stay on the child.
         </p>
-        <p>
-          Agent profiles and Tutor configuration are pages under admin. Each says it is not set up yet. They are not shown in the admin bar.
-        </p>
 
         <h2>Settings you can change</h2>
         <p>

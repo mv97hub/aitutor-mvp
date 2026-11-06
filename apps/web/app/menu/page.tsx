@@ -6,8 +6,6 @@ const pages = [
   { href: "/", label: "Home" },
   { href: "/admin", label: "Admin" },
   { href: "/admin/agent-customizations", label: "Agent customizations" },
-  { href: "/admin/agent-profiles", label: "Agent profiles" },
-  { href: "/admin/tutor-configuration", label: "Tutor configuration" },
   { href: "/create-course", label: "Create course" },
   { href: "/manage-courses", label: "Manage courses" },
   { href: "/viewchats", label: "View chats" },
