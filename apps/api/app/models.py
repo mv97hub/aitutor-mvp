@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -511,3 +512,182 @@ class StudioSettings(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     model: Mapped[str] = mapped_column(String(64), nullable=False, default="gpt-4o-mini")
+
+
+class KcNode(Base):
+    """One knowledge component. The kid chat and the course catalog do not read this table."""
+
+    __tablename__ = "kc_nodes"
+    __table_args__ = (
+        CheckConstraint(
+            "kc_type IS NULL OR kc_type IN ('factual', 'procedural', 'conceptual', 'causal', 'synthesis')",
+            name="ck_kc_nodes_type",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    kc_type: Mapped[str | None] = mapped_column(String(32))
+    core_truth: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    type_fields: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    rubric: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    misconceptions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    prerequisite_codes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    encompasses_codes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class KcEdge(Base):
+    """A prerequisite or an encompasses link. Both ends are knowledge components."""
+
+    __tablename__ = "kc_edges"
+    __table_args__ = (
+        UniqueConstraint("from_kc", "to_kc", "kind", name="uq_kc_edges_ends_kind"),
+        CheckConstraint(
+            "kind IN ('prerequisite_of', 'encompasses')",
+            name="ck_kc_edges_kind",
+        ),
+        CheckConstraint("from_kc <> to_kc", name="ck_kc_edges_distinct"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    from_kc: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_nodes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    to_kc: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_nodes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    weight: Mapped[float] = mapped_column(Float, nullable=False, default=1)
+
+
+class KcGoal(Base):
+    """A Plane 2 course: a goal made of knowledge components. Not a quest course."""
+
+    __tablename__ = "kc_goals"
+    __table_args__ = (
+        CheckConstraint(
+            "audience IN ('6-8', '9-11', '12-14', '15-17')",
+            name="ck_kc_goals_audience",
+        ),
+        CheckConstraint(
+            "kind IN ('mastery', 'time_boxed', 'curiosity')",
+            name="ck_kc_goals_kind",
+        ),
+        CheckConstraint(
+            "minutes IS NULL OR minutes > 0",
+            name="ck_kc_goals_minutes",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    audience: Mapped[str] = mapped_column(String(8), nullable=False, default="9-11")
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="mastery")
+    minutes: Mapped[int | None] = mapped_column(Integer)
+    target_kc_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class KcState(Base):
+    """What one student knows about one component."""
+
+    __tablename__ = "kc_states"
+    __table_args__ = (
+        UniqueConstraint("student_id", "kc_id", name="uq_kc_states_student_kc"),
+        CheckConstraint(
+            "status IN ('unknown', 'fragile', 'known')",
+            name="ck_kc_states_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    kc_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_nodes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
+    stability: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    last_practiced: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class KcSession(Base):
+    """One session is one component. Tutor settings are not copied onto this row."""
+
+    __tablename__ = "kc_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('in_progress', 'completed')",
+            name="ck_kc_sessions_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    goal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_goals.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kc_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_nodes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    recipe: Mapped[str] = mapped_column(String(40), nullable=False)
+    step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    score: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    redirect_kc_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_nodes.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+    messages: Mapped[list["KcMessage"]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="KcMessage.seq",
+    )
+
+
+class KcMessage(Base):
+    """A turn inside one component session. Not a kid-chat message."""
+
+    __tablename__ = "kc_messages"
+    __table_args__ = (
+        UniqueConstraint("session_id", "seq", name="uq_kc_messages_session_seq"),
+        CheckConstraint("role IN ('user', 'assistant')", name="ck_kc_messages_role"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+    session: Mapped[KcSession] = relationship(back_populates="messages")

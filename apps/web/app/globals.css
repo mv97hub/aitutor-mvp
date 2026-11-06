@@ -2401,3 +2401,163 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
   font-weight: 500;
   line-height: 22px;
 }
+
+.kc-app {
+  min-height: 100dvh;
+  background: #f6f3ee;
+  color: #1c1915;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.kc-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: baseline;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e2d3bd;
+  background: #fffaf3;
+}
+
+.kc-bar a { font-weight: 700; text-decoration: none; }
+.kc-bar span { color: #5c5348; }
+
+.kc-studio, .kc-tutor {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 300px;
+  height: calc(100dvh - 58px);
+  min-height: 0;
+}
+
+.kc-tutor { grid-template-columns: minmax(280px, 420px) minmax(0, 1fr); }
+
+.kc-rail, .kc-chat, .kc-picker, .kc-lesson, .kc-main {
+  min-width: 0;
+  min-height: 0;
+  padding: 18px;
+  overflow: auto;
+}
+
+.kc-rail, .kc-chat, .kc-picker { background: rgba(255, 250, 243, 0.8); }
+.kc-rail, .kc-picker { border-right: 1px solid #e2d3bd; }
+.kc-chat { border-left: 1px solid #e2d3bd; }
+
+.kc-app h2, .kc-app h3 { margin: 0 0 8px; font-family: Georgia, serif; }
+.kc-app label, .kc-app fieldset { display: grid; gap: 4px; margin: 0 0 10px; font-size: 0.92rem; }
+.kc-app input, .kc-app textarea, .kc-app select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #e2d3bd;
+  border-radius: 10px;
+  background: #fff;
+}
+.kc-app button {
+  border: 1px solid #e2d3bd;
+  border-radius: 999px;
+  background: #fff;
+  padding: 7px 12px;
+}
+.kc-app button.kc-primary { background: #0f6e6b; color: #fff; border-color: #0f6e6b; }
+.kc-actions, .kc-row-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.kc-actions a {
+  border: 1px solid #e2d3bd;
+  border-radius: 999px;
+  background: #fff;
+  padding: 7px 12px;
+  text-decoration: none;
+  color: inherit;
+}
+.kc-course, .kc-detail, .kc-create { display: grid; gap: 8px; }
+.kc-course { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.kc-wide { grid-column: 1 / -1; }
+.kc-quiet { color: #5c5348; }
+.kc-error { padding: 10px 12px; border-radius: 12px; background: #fdeceb; color: #8d2f2a; }
+
+.kc-course-list, .kc-structure ul, .kc-cards, .kc-edge-list { list-style: none; margin: 0; padding: 0; }
+.kc-course-list { display: grid; gap: 6px; margin: 0 0 16px; }
+.kc-course-list button, .kc-structure li, .kc-cards button {
+  width: 100%;
+  text-align: left;
+  border-radius: 14px;
+}
+.kc-course-list a, .kc-course-list button {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  text-decoration: none;
+  color: inherit;
+  border: 1px solid #e2d3bd;
+  border-radius: 14px;
+  background: #fff;
+  padding: 8px 12px;
+}
+.kc-course-list a.is-on, .kc-course-list .is-on, .kc-structure li button:hover {
+  border-color: #0f6e6b;
+  background: #e7f3f2;
+}
+.kc-structure { margin-top: 18px; display: grid; gap: 14px; }
+.kc-structure li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.kc-structure li a, .kc-structure li button {
+  display: grid;
+  gap: 2px;
+  text-decoration: none;
+  color: inherit;
+  padding: 8px 12px;
+  border: 1px solid #e2d3bd;
+  border-radius: 14px;
+  background: #fff;
+}
+.kc-structure em { color: #8d2f2a; font-style: normal; font-size: 0.85rem; }
+.kc-add { display: flex; gap: 8px; align-items: end; }
+.kc-add label { flex: 1; }
+
+.kc-transcript { display: grid; gap: 8px; margin: 0 0 12px; padding: 0; list-style: none; }
+.kc-transcript li { padding: 10px 12px; border-radius: 14px; background: #fff; border: 1px solid #e2d3bd; }
+.kc-transcript .user { background: #e7f3f2; }
+.kc-draft-list { margin: 0 0 12px; padding-left: 18px; }
+.kc-check { display: flex; grid-auto-flow: column; align-items: center; gap: 8px; }
+.kc-check input { width: auto; }
+.kc-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.kc-modal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(28, 25, 21, 0.35);
+}
+.kc-modal-card {
+  width: min(920px, 100%);
+  max-height: calc(100dvh - 40px);
+  overflow: auto;
+  padding: 18px;
+  border-radius: 18px;
+  background: #fffaf3;
+}
+.kc-net { width: 100%; height: auto; background: #fff; border-radius: 12px; }
+.kc-net circle { fill: #0f6e6b; }
+.kc-net circle.is-patch { fill: #c4491d; }
+.kc-net text { font-size: 12px; fill: #1c1915; }
+.kc-net .is-prereq { stroke: #0f6e6b; stroke-width: 2; }
+.kc-net .is-encompass { stroke: #c4491d; stroke-width: 2; stroke-dasharray: 5 4; }
+
+.kc-ring { margin: 12px 0; }
+.kc-ring svg { width: 160px; height: 160px; }
+.kc-ring text { font-size: 16px; font-weight: 700; fill: #1c1915; }
+.kc-minutes { font-weight: 700; }
+.kc-cards { display: grid; gap: 10px; }
+.kc-cards a, .kc-cards button { display: grid; gap: 4px; padding: 12px; border-radius: 14px; text-decoration: none; color: inherit; background: #fff; border: 1px solid #e4d9cc; }
+.kc-actions a, .kc-structure a { text-decoration: none; }
+.kc-cards span { color: #0f6e6b; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.kc-step { font-weight: 700; }
+.kc-redirect { color: #c4491d; }
+
+@media (max-width: 980px) {
+  .kc-studio, .kc-tutor { grid-template-columns: 1fr; }
+  .kc-rail, .kc-chat, .kc-picker { border: 0; }
+  .kc-course { grid-template-columns: 1fr; }
+}

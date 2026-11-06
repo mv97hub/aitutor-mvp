@@ -1,9 +1,12 @@
-"""Idempotent seed: four learners and the default tutor profile.
+"""Idempotent seed: four learners, the default tutor profile, and KC courses.
 
-Running this twice does not duplicate students. It does not write courses.
-Kid chat reads tutor_profiles, so this seed does not copy a tutor voice onto
-the student. Age is filled when missing. Reading level, modality, and interests
-are filled when blank.
+Running this twice does not duplicate students. It does not write catalog
+courses. Kid chat reads tutor_profiles, so this seed does not copy a tutor
+voice onto the student. Age is filled when missing. Reading level, modality,
+and interests are filled when blank.
+
+Knowledge-component courses are inserted when their codes are missing. A
+re-seed does not overwrite them and does not delete chats.
 
 Studio tables (studio_*) are not read or written here. A re-seed leaves them in place.
 """
@@ -13,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.engine.defaults import profile_for_age
+from app.kc_fixtures import seed_kc_fixtures
 from app.models import Student
 from app.tutor_profile import ensure_default_profile
 
@@ -67,6 +71,7 @@ def seed(db: Session) -> dict[str, int]:
             created_students += 1
         _fill_student(student, spec)
     ensure_default_profile(db)
+    seed_kc_fixtures(db)
     db.commit()
     return {"students_created": created_students, "courses_created": 0}
 
