@@ -9,6 +9,7 @@ from app.database import SessionLocal
 from app.kc_prompt import build_kc_prompt
 from app.main import app
 from app.models import (
+    KcCreatorMessage,
     KcEdge,
     KcGoal,
     KcMessage,
@@ -40,6 +41,7 @@ def _drop_codes(codes: list[str]) -> None:
         if session_ids:
             db.execute(delete(KcMessage).where(KcMessage.session_id.in_(session_ids)))
             db.execute(delete(KcSession).where(KcSession.id.in_(session_ids)))
+        db.execute(delete(KcCreatorMessage).where(KcCreatorMessage.node_id.in_(node_ids)))
         db.execute(delete(KcEdge).where(or_(KcEdge.from_kc.in_(node_ids), KcEdge.to_kc.in_(node_ids))))
         db.execute(delete(KcState).where(KcState.kc_id.in_(node_ids)))
         for goal in db.scalars(select(KcGoal)):
@@ -71,6 +73,8 @@ def _wipe_zz() -> None:
         if session_ids:
             db.execute(delete(KcMessage).where(KcMessage.session_id.in_(session_ids)))
             db.execute(delete(KcSession).where(KcSession.id.in_(session_ids)))
+        if node_ids:
+            db.execute(delete(KcCreatorMessage).where(KcCreatorMessage.node_id.in_(node_ids)))
         if goal_ids:
             db.execute(delete(KcGoal).where(KcGoal.id.in_(goal_ids)))
         if node_ids:
@@ -691,3 +695,179 @@ def test_fixtures_time_box_synthesis_and_factual_recipe() -> None:
         assert stretch["known"] == 4
     finally:
         _clear_progress(storm.id)
+
+
+def test_creator_thread_revises_one_component_and_complete_clears_on_write() -> None:
+    course = _make("zz-creator", description="The river in this course is blue.")
+    try:
+        pushed = client.post(
+            f"/kc/courses/{course['id']}/push",
+            json={"components": [{"code": "zz-creator-a", "title": "River fact"}, {"code": "zz-creator-b", "title": "Other"}]},
+        ).json()["components"]
+        river = pushed[0]
+        before_messages = _counts()["messages"]
+        opened = client.get(f"/kc/nodes/{river['id']}/thread")
+        assert opened.status_code == 200, opened.text
+        assert opened.json()["messages"] == []
+        assert "River fact" in opened.json()["mirror"]
+        assert _counts()["messages"] == before_messages
+
+        first = client.post(f"/kc/nodes/{river['id']}/thread", json={"message": "Draft this fact."})
+        assert first.status_code == 200, first.text
+        draft = first.json()["draft"]
+        assert draft["kind"] == "component"
+        assert draft["code"] == "zz-creator-a"
+        assert draft["kc_type"] == "factual"
+        assert _counts()["messages"] == before_messages
+        stored = client.get(f"/kc/nodes/{river['id']}").json()
+        assert stored["kc_type"] is None
+
+        revised = client.post(
+            f"/kc/nodes/{river['id']}/thread",
+            json={"message": "Core truth: The river in this course is blue."},
+        )
+        assert revised.status_code == 200, revised.text
+        assert revised.json()["draft"]["core_truth"] == "The river in this course is blue."
+        assert revised.json()["draft"]["kc_type"] == "factual"
+        assert "Nothing is saved until you push it." in revised.json()["messages"][-1]["content"]
+
+        written = client.post(f"/kc/nodes/{river['id']}/push", json=revised.json()["draft"])
+        assert written.status_code == 200, written.text
+        assert written.json()["core_truth"] == "The river in this course is blue."
+        assert written.json()["marked_complete"] is False
+        other = client.get(f"/kc/nodes/{pushed[1]['id']}").json()
+        assert other["kc_type"] is None
+        thread = client.get(f"/kc/nodes/{river['id']}/thread").json()
+        assert thread["draft"] is None
+        assert thread["messages"][-1]["content"] == "The draft was saved."
+        assert "The river in this course is blue." in thread["mirror"]
+
+        client.put(f"/kc/nodes/{pushed[1]['id']}", json=_component("Other"))
+        ready = client.post(f"/kc/courses/{course['id']}/ready")
+        assert ready.status_code == 200, ready.text
+        marked = client.post(f"/kc/nodes/{river['id']}/complete")
+        assert marked.status_code == 200, marked.text
+        assert marked.json()["marked_complete"] is True
+        structure = client.get(f"/kc/courses/{course['id']}/structure").json()
+        row = next(item for group in structure["groups"] for item in group["components"] if item["code"] == "zz-creator-a")
+        assert row["missing"] == []
+        assert row["marked_complete"] is True
+        saved = client.put(f"/kc/nodes/{river['id']}", json=_component("River fact"))
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["marked_complete"] is False
+        assert client.get(f"/kc/courses/{course['id']}").json()["ready"] is False
+
+        bare = client.post(
+            "/kc/courses",
+            json={"code": "zz-creator-gap", "title": "Gap", "description": "A gap.", "audience": "12-14", "kind": "mastery"},
+        ).json()
+        added = client.post(f"/kc/courses/{bare['id']}/components", json={"title": "Empty"}).json()
+        empty = added["components"][0]
+        refused = client.post(f"/kc/nodes/{empty['id']}/complete")
+        assert refused.status_code == 422
+        assert "no type" in refused.text
+    finally:
+        _wipe_zz()
+
+
+def test_tutor_speech_is_separate_from_the_score_and_two_steps_are_choices() -> None:
+    course = _make("zz-speak", description="A claim can be flawed.")
+    storm = _storm()
+    _clear_progress(storm.id)
+    try:
+        pushed = client.post(
+            f"/kc/courses/{course['id']}/push",
+            json={
+                "components": [
+                    {"code": "zz-speak-concept", "title": "Contrast"},
+                    {"code": "zz-speak-cause", "title": "Decision"},
+                ]
+            },
+        ).json()["components"]
+        concept, cause = pushed
+        assert client.put(
+            f"/kc/nodes/{concept['id']}",
+            json=_component(
+                "Contrast",
+                kc_type="conceptual",
+                core_truth="The rule is the contrast.",
+                type_fields={
+                    "case_a": "The closed case",
+                    "case_b": "The open case",
+                    "prediction": "Which case fits?",
+                    "rule": "The rule is the contrast.",
+                },
+            ),
+        ).status_code == 200
+        assert client.put(
+            f"/kc/nodes/{cause['id']}",
+            json=_component(
+                "Decision",
+                kc_type="causal",
+                core_truth="Taxes move prices.",
+                prerequisite_codes=["zz-speak-concept"],
+                type_fields={
+                    "decision_point": "A council sets a tax.",
+                    "flawed_claim": "The tax lowers prices.",
+                    "causal_chain": "Taxes move prices.",
+                },
+            ),
+        ).status_code == 200
+        assert client.post(f"/kc/courses/{course['id']}/ready").status_code == 200
+
+        opened = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": concept["id"]},
+        )
+        assert opened.status_code == 200, opened.text
+        assert opened.json()["messages"] == []
+        assert opened.json()["needs_speech"] is True
+        assert opened.json()["choice"] is None
+        spoken = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/speech",
+            json={"content": "Which case fits?"},
+        )
+        assert spoken.status_code == 200, spoken.text
+        assert spoken.json()["needs_speech"] is False
+        assert spoken.json()["messages"][-1]["content"] == "Which case fits?"
+        assert [item["text"] for item in spoken.json()["choice"]["choices"]] == ["The closed case", "The open case"]
+        assert spoken.json()["choice"]["prompt"] == "Which case fits?"
+        again = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/speech",
+            json={"content": "Asked twice."},
+        )
+        assert again.json()["messages"][-1]["content"] == "Which case fits?"
+        stepped = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/turn",
+            json={"answer": "The closed case"},
+        )
+        assert stepped.status_code == 200, stepped.text
+        assert stepped.json()["passed"] is False
+        assert stepped.json()["step"] == 1
+        assert stepped.json()["needs_speech"] is True
+
+        causal = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": cause["id"]},
+        ).json()
+        client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "The tax is the stake."})
+        client.post(f"/kc/tutor/sessions/{causal['id']}/speech", json={"content": "Mark the claim."})
+        marked = client.get(f"/kc/tutor/sessions/{causal['id']}").json()
+        assert [item["text"] for item in marked["choice"]["choices"]] == ["This claim is flawed", "This claim holds"]
+        held = client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "This claim holds"})
+        assert held.json()["passed"] is False
+        assert held.json()["step"] == 1
+        fresh = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": cause["id"]},
+        )
+        assert fresh.status_code == 200, fresh.text
+        # The in-progress session is reused, so finish it and the flawed mark passes the choice step.
+        done = client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "This claim is flawed"})
+        assert done.status_code == 200, done.text
+        assert done.json()["step"] == 2
+        assert done.json()["needs_speech"] is True
+        assert done.json()["passed"] is False
+    finally:
+        _clear_progress(storm.id)
+        _wipe_zz()

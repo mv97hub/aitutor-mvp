@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-export const metadata = { title: "KC Studio · Documentation · AI Tutor" };
+export const metadata = { title: "KC Course Creator · Documentation · AI Tutor" };
 
 export default function KcStudioDocsPage() {
   return (
@@ -9,31 +9,45 @@ export default function KcStudioDocsPage() {
         <p>
           <Link href="/documentation">Documentation</Link>
         </p>
-        <h1>KC Studio</h1>
+        <h1>KC Course Creator</h1>
         <p>
-          KC Studio, at <Link href="/kc-studio">/kc-studio</Link>, builds the courses KC Tutor can open.
-          The page says: course first, then one component. The chat only drafts.
+          KC Course Creator, at <Link href="/kc-studio">/kc-studio</Link>, is the structure page for a knowledge-component course.
+          KC Creator, at <Link href="/kc-creator">/kc-creator</Link>, is where one component is added and updated.
+          A blue banner with the Kinder Computers mark sits across the top of both screens, and of KC Tutor.
+          The quest course creator does not use that banner.
         </p>
 
         <h2>How it works</h2>
         <p>
-          A course is a list of components, grouped by type. Each component is one thing the child should learn.
-          The structure list shows what is still missing on a component, or Complete. Up and Down change the order. Remove deletes that component.
-          A component can also be added by typing a title.
+          KC Course Creator defines the component list. The left rail lists courses and creates a new one.
+          The open course has a preferences strip: name, what the kid should come away able to do, audience, kind, and optional minutes.
+          Save course writes those fields. Mark ready calls the ready check and still refuses when the course has no components,
+          or any target has no type, no core truth, no rubric check, or a prerequisite or encompasses code that does not exist.
+          Network stays a view-only picture: target nodes in a grid, patches in a column on the right, a solid line for a prerequisite,
+          a dashed line for encompasses, and the edge list under the picture.
         </p>
         <p>
-          The chat asks for a draft. On the course, that draft is a list of component titles, and nothing is stored until Push draft.
-          On one component, the draft replaces that component only, and Push draft is the write.
-          Saving a component by hand also writes it. Editing a component on a course that was ready marks the course not ready again.
+          The structure column lists groups in this order: Factual, Procedural, Conceptual principle, Causal or historical, Synthesis,
+          then No type yet. Each row shows the title, the type, and either the gap strings, Marked complete, or Complete.
+          Marked complete means the component was marked on KC Creator and still has no gaps. Complete means the gaps are empty and it has not been marked.
+          Up and Down reorder the targets. Remove deletes that component. Add a component by title creates a target with no type and no fields.
+          Patches are listed as Not a target. A row, including a patch, opens that component on KC Creator. This page does not edit a component&apos;s fields.
         </p>
         <p>
-          Mark ready checks the target components. It refuses when the course has no components, or a target component has no type,
-          no core truth, no rubric check, or a prerequisite or encompasses code that does not exist. The button then reads Ready.
-          KC Tutor only lists courses that are ready.
+          The chat on this page drafts the component list and nothing else. The reply is &quot;Draft component list. Nothing is saved until you push it.&quot;
+          The draft is titles and codes. Push draft writes that list. It does not draft or write one component&apos;s fields.
+          Counts the draft already understands, from two through ten, plus twelve, stay as they are.
         </p>
         <p>
-          Network is a view of the components and the edges between them. The page says it is view only. Patches sit at the edge.
-          A patch is a component that is not a target. The structure list marks those as Not a target.
+          KC Creator is the editor. Choose a course, then a component. Targets are listed in course order, then patches.
+          The middle pane is the manual editor: title, type, the fields for that type, core truth, one to three rubric checks,
+          misconceptions, prerequisites, and encompasses. Save this component writes that component and clears course ready.
+          The right-hand chat is about that component only. The first view shows the saved text. Each reply talks about the fields and ends with a draft.
+          A later message revises that draft. The middle pane keeps the saved component until Push. Push writes the draft for this component only.
+          Mark complete sits next to Save. It is available only when that component has no gaps. Saving or pushing clears the mark.
+        </p>
+        <p>
+          The section for the editor itself is <Link href="/documentation/kc-creator">KC Creator</Link>.
         </p>
 
         <h2>Settings you can change</h2>
@@ -45,32 +59,18 @@ export default function KcStudioDocsPage() {
           <li>Kind: Mastery, Time boxed, or Curiosity. A new course starts at Mastery.</li>
           <li>Minutes, optional. A blank value is allowed. A number has to be greater than zero. KC Tutor shows this number only for a time-boxed course.</li>
         </ul>
-        <p>Every component has:</p>
-        <ul>
-          <li>Title.</li>
-          <li>Type: Factual, Procedural, Conceptual principle, Causal or historical, or Synthesis.</li>
-          <li>Core truth.</li>
-          <li>Rubric checks, one to three.</li>
-          <li>Misconceptions. Each row is a wrong move and the component code that is actually broken.</li>
-          <li>Prerequisite of this component, chosen from the other component codes.</li>
-          <li>Encompasses, stability bump, chosen from the other component codes.</li>
-        </ul>
-        <p>The type adds its own fields:</p>
-        <ul>
-          <li>Factual: Fact, and Retrieval question.</li>
-          <li>Procedural: Worked steps, one per line; Blanked step, starting at 0; Solo problem; Solo check.</li>
-          <li>Conceptual principle: Case one, Case two, Prediction, and Rule.</li>
-          <li>Causal or historical: Decision point, Flawed claim, and Causal chain.</li>
-          <li>Synthesis: First component it mixes, Second component it mixes, and Rookie&apos;s faulty plan.</li>
-        </ul>
+        <p>
+          Component fields are edited on KC Creator, not here. See that section for the type fields, the chat, Push, and Mark complete.
+        </p>
 
         <h2>What to know when using it</h2>
         <ul>
           <li>Open a course before asking for a draft. With no course selected, the page says to choose a course or create one.</li>
-          <li>A draft in the chat is not stored until Push draft, and a component draft does not write until that button.</li>
+          <li>A title-list draft is not stored until Push draft.</li>
           <li>The course list marks each course Ready or Draft.</li>
           <li>Mark ready is what makes the course appear in KC Tutor.</li>
-          <li>Network does not edit edges. Prerequisites and encompasses are saved on the component.</li>
+          <li>Network does not edit edges. Prerequisites and encompasses are saved on the component in KC Creator.</li>
+          <li>A structure row opens KC Creator for that component. It does not open an editor on this page.</li>
         </ul>
       </article>
     </main>

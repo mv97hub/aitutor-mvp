@@ -6,7 +6,7 @@ There is no login. The kid page is a name picker. Admin is a separate URL.
 
 ## Layout
 
-- `apps/web` — Next.js App Router. `/` is the kid session. `/admin` is the course tree. `/viewchats` reads transcripts. `POST /api/chat` streams the tutor with the Vercel AI SDK. Each turn asks FastAPI for the seven-layer prompt bundle and uses that system prompt, schema, and temperature.
+- `apps/web` — Next.js App Router. `/` is the kid session. `/admin` is the course tree. `/viewchats` reads transcripts. `/create-course` builds a quest course. `/kc-studio` is KC Course Creator, `/kc-creator` is the per-component editor, and `/kc-tutor` is the knowledge-component tutor. Those three screens share a blue banner. `POST /api/chat` streams the tutor with the Vercel AI SDK. Each turn asks FastAPI for the seven-layer prompt bundle and uses that system prompt, schema, and temperature. KC Tutor uses the same missing-key error and asks the model only for the wording of the current step.
 - `apps/api` — FastAPI, SQLAlchemy, Alembic. The only writer to Postgres.
 - `docker-compose.yml` — local Postgres.
 
@@ -87,6 +87,9 @@ npm run dev --workspace web
 - Kid session: http://localhost:3000
 - Lesson desk: http://localhost:3000/admin
 - Transcripts: http://localhost:3000/viewchats
+- KC Course Creator: http://localhost:3000/kc-studio
+- KC Creator: http://localhost:3000/kc-creator
+- KC Tutor: http://localhost:3000/kc-tutor
 - API docs: http://localhost:8000/docs
 
 ## Try a quest
@@ -95,6 +98,7 @@ npm run dev --workspace web
 2. Inside a class, the chat and the composer fill the page. The tutor walks each goal, then the close. An essay close is typed. A single or multi-choice close is a card on the turn that asks the question, and that sentence is the question on the card. The text box locks only while the card is up. An empty close ends the quest. A wrong choice gets one explanation, then another try, or the worked answer when the struggle window ends. A wrong tap stores that choice's misconception before the model replies. The model writes the reply and grades a written explanation. It does not grade the taps. The opening reply states the first goal, what finished work looks like, and a short teaching of that idea. It does not ask the student to pick an answer. One question per turn stays, and it comes last. When the student misses, the reply explains what they tried, what the idea is, and the next step, without saying hint. The correct choice stays out of the prompt until the struggle window opens. After that window, the tutor explains why the worked answer fits the criterion and the step can end.
 3. Open `/viewchats`, filter to Storm, and open the class. The transcript and the goal and close results are the rows FastAPI stored. The prompt button on a turn opens the system prompt and the messages that turn sent to the model. `/admin` is the course tree and does not list transcripts.
 4. On `/admin`, the course page is view only. Preferences sit at the top: description, quest count, goals per quest, quiz minutes, and audience. The tree lists each quest, its goals and criteria, and its close. Changes happen in Create course, then Import course copies that draft into the kid catalog and leaves the original. Remove course takes a catalog course off the list and keeps its kid chat history.
+5. KC Course Creator (`/kc-studio`), KC Creator (`/kc-creator`), and KC Tutor (`/kc-tutor`) use the same shell as the kid session, with one blue banner that holds the Kinder Computers mark and the screen name. KC Course Creator is the structure page: the course list, preferences, the component order, the network, and a chat that drafts titles only. A structure row opens KC Creator, which edits that one component by hand or in a chat, then Push writes the draft and Mark complete records that the gaps are clear. KC Tutor asks the question in the thread. Two steps are single-choice bubbles (predict two cases, and mark a flawed claim). Every other step is typed in the same thread. The model says the step. The score stays on the server.
 
 Add child asks for a name and an age. Reading level, modality, and interests are edited from Settings after the child is selected, and they save on that student. Persona, reading voice, metaphors, sidekick, the instructive slider, the struggle window, and the tutor switches are on `/admin/agent-customizations`. That page saves one profile and every student uses it. The chat route asks FastAPI for the seven-layer prompt on every turn, then asks the model for a turn score: the criterion met, a misconception if any, the hint tier, and the tutor reply. Choice cards are graded by FastAPI first, and only on the close. A goal advances when its criterion is met, or after the struggle window when the tutor states the worked answer and sets advance so the student is not stuck. The close comes after the last goal.
 

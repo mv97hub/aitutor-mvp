@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.kc_prompt import build_kc_prompt, recipe_name, step_labels
 from app.models import (
+    KcCreatorMessage,
     KcEdge,
     KcGoal,
     KcMessage,
@@ -57,6 +58,79 @@ CARD_LABELS = {
     "patch": "Foundation patch",
     "stretch": "Stretch",
 }
+# Balances a later admin page can change. They stay in this module until that page exists.
+OPEN_ANSWER_MIN = 2
+PHRASE_WHOLE_WORD_MAX = 4
+PHRASE_CONTAINED_MIN = 8
+PHRASE_NUMBER_MAX_WORDS = 8
+PHRASE_WORD_FLOOR = 3
+PHRASE_ALL_WORDS_MIN = 3
+PHRASE_SHARE = 0.6
+NEGATION_WORDS = ("not", "never", "no", "isnt", "doesnt", "dont", "cannot", "cant")
+KNOWN_STABILITY = 1.0
+PASS_SCORE = 100
+MISS_SCORE = 0
+CARD_LIMIT = 3
+SYNTHESIS_CONCEPTUAL_MIN = 2
+BLANK_MARKER = "___"
+EMPTY_FACT_QUESTION = "What is the fact?"
+WORKED_LEAD = "Here is the worked example."
+WORKED_ASK = "What did this example do?"
+FADED_ASK = "Fill the blank step."
+EMPTY_SOLO = "Solve it on your own."
+CONTRAST_LEAD = "Look at the contrast."
+CONTRAST_ASK = "What is different?"
+RULE_ASK = "State the rule."
+STAKE_ASK = "What is at stake?"
+CLAIM_LEAD = "Mark this claim:"
+DEFEND_ASK = "Defend the causal chain."
+CAUSAL_PASS_PHRASES = ("wrong", "flawed", "false", "not true", "no")
+CAUSAL_MARK_LABEL = "This claim is flawed"
+CAUSAL_HOLD_LABEL = "This claim holds"
+MIX_JOINER = " and "
+EMPTY_MIX = "two earlier components"
+ROOKIE_LEAD = "A rookie mixes"
+ROOKIE_SAYS = "and says:"
+ROOKIE_ASK = "Correct the plan."
+FACTUAL_PASS = "Yes. {body}"
+SYNTHESIS_PASS = "Yes. The plan that holds is: {body}"
+OTHER_PASS = "That holds. {body}"
+MISS_REPLY = "Not yet. {truth} That explanation is the one retry. Answer this same step again."
+MISCONCEPTION_TAIL = "The next card opens that component."
+SAVED_NOTE = "The draft was saved."
+TYPE_LABELS = {
+    "factual": "Factual",
+    "procedural": "Procedural",
+    "conceptual": "Conceptual principle",
+    "causal": "Causal or historical",
+    "synthesis": "Synthesis",
+}
+FIELD_LABELS = {
+    "fact": "Fact",
+    "retrieval_question": "Retrieval question",
+    "steps": "Worked steps",
+    "blanked_step": "Blanked step",
+    "solo_problem": "Solo problem",
+    "solo_check": "Solo check",
+    "case_a": "Case one",
+    "case_b": "Case two",
+    "prediction": "Prediction",
+    "rule": "Rule",
+    "decision_point": "Decision point",
+    "flawed_claim": "Flawed claim",
+    "causal_chain": "Causal chain",
+    "mixes": "Mixes",
+    "faulty_plan": "Rookie's faulty plan",
+}
+_EXPLICIT_TYPES = {
+    "factual": "factual",
+    "procedural": "procedural",
+    "conceptual": "conceptual",
+    "conceptual principle": "conceptual",
+    "causal": "causal",
+    "causal or historical": "causal",
+    "synthesis": "synthesis",
+}
 
 
 def _now() -> datetime:
@@ -85,7 +159,8 @@ def _norm(text: str) -> str:
 
 
 def _negated(text: str) -> bool:
-    return bool(re.search(r"\b(not|never|no|isnt|doesnt|dont|cannot|cant)\b", text))
+    pattern = "|".join(re.escape(word) for word in NEGATION_WORDS)
+    return bool(re.search(rf"\b({pattern})\b", text))
 
 
 def matches_phrase(answer: str, phrase: str) -> bool:
@@ -93,24 +168,28 @@ def matches_phrase(answer: str, phrase: str) -> bool:
     normalized_phrase = _norm(phrase)
     if not normalized_answer or not normalized_phrase:
         return False
-    if len(normalized_phrase) <= 4:
+    if len(normalized_phrase) <= PHRASE_WHOLE_WORD_MAX:
         return bool(re.search(rf"\b{re.escape(normalized_phrase)}\b", normalized_answer))
     if normalized_phrase in normalized_answer:
         return True
-    if len(normalized_answer) >= 8 and normalized_answer in normalized_phrase:
+    if len(normalized_answer) >= PHRASE_CONTAINED_MIN and normalized_answer in normalized_phrase:
         return True
     phrase_numbers = re.findall(r"\d+", normalized_phrase)
     answer_numbers = re.findall(r"\d+", normalized_answer)
-    if phrase_numbers and set(phrase_numbers) <= set(answer_numbers) and len(normalized_answer.split()) <= 8:
+    if (
+        phrase_numbers
+        and set(phrase_numbers) <= set(answer_numbers)
+        and len(normalized_answer.split()) <= PHRASE_NUMBER_MAX_WORDS
+    ):
         return True
-    answer_words = [word for word in normalized_answer.split() if len(word) > 3]
-    if len(answer_words) >= 3 and all(word in normalized_phrase for word in answer_words):
+    answer_words = [word for word in normalized_answer.split() if len(word) > PHRASE_WORD_FLOOR]
+    if len(answer_words) >= PHRASE_ALL_WORDS_MIN and all(word in normalized_phrase for word in answer_words):
         return True
-    phrase_words = [word for word in normalized_phrase.split() if len(word) > 3]
+    phrase_words = [word for word in normalized_phrase.split() if len(word) > PHRASE_WORD_FLOOR]
     if not phrase_words:
         return False
     hits = sum(1 for word in phrase_words if word in normalized_answer)
-    return hits >= max(1, math.ceil(0.6 * len(phrase_words)))
+    return hits >= max(1, math.ceil(PHRASE_SHARE * len(phrase_words)))
 
 
 def matches_wrong(answer: str, wrong_move: str) -> bool:
@@ -293,7 +372,7 @@ def _summary(node: KcNode, *, target: bool) -> dict:
     }
 
 
-def _detail(node: KcNode, *, target: bool) -> dict:
+def _detail(node: KcNode, *, target: bool, codes: set[str]) -> dict:
     body = _summary(node, target=target)
     body.update(
         {
@@ -303,14 +382,21 @@ def _detail(node: KcNode, *, target: bool) -> dict:
             "prerequisite_codes": list(node.prerequisite_codes or []),
             "encompasses_codes": list(node.encompasses_codes or []),
             "type_fields": dict(node.type_fields or {}),
+            "marked_complete": bool(node.marked_complete),
+            "missing": gaps_for(node, codes),
         }
     )
     return body
 
 
+def node_out(db: Session, node: KcNode, *, target: bool = True) -> dict:
+    return _detail(node, target=target, codes=set(_nodes_by_code(db)))
+
+
 def course_out(db: Session, goal: KcGoal) -> dict:
     targets = load_targets(db, goal)
     patches = load_patches(db, targets)
+    codes = set(_nodes_by_code(db))
     return {
         "id": str(goal.id),
         "code": goal.code,
@@ -321,8 +407,8 @@ def course_out(db: Session, goal: KcGoal) -> dict:
         "minutes": goal.minutes,
         "ready": goal.ready,
         "updated_at": goal.updated_at.isoformat(),
-        "components": [_detail(node, target=True) for node in targets],
-        "patches": [_detail(node, target=False) for node in patches],
+        "components": [_detail(node, target=True, codes=codes) for node in targets],
+        "patches": [_detail(node, target=False, codes=codes) for node in patches],
     }
 
 
@@ -622,6 +708,7 @@ def apply_component(db: Session, node: KcNode, body: dict) -> KcNode:
     node.prerequisite_codes = _clean_codes(body.get("prerequisite_codes") or [])
     node.encompasses_codes = _clean_codes(body.get("encompasses_codes") or [])
     node.type_fields = _clean_type_fields(kc_type, body.get("type_fields") or {})
+    node.marked_complete = False
     node.updated_at = _now()
     _sync_edges(db, node)
     _unready(db, node.id)
@@ -737,6 +824,7 @@ def structure(db: Session, goal: KcGoal) -> dict:
             "kc_type": node.kc_type,
             "position": position,
             "missing": gaps_for(node, codes),
+            "marked_complete": bool(node.marked_complete),
         }
         groups[node.kc_type or "unset"].append(row)
     ordered = []
@@ -856,7 +944,7 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
             return False
         if not prerequisites_known(node):
             return False
-        if node.kc_type == "synthesis" and conceptual_known < 2:
+        if node.kc_type == "synthesis" and conceptual_known < SYNTHESIS_CONCEPTUAL_MIN:
             return False
         return True
 
@@ -922,7 +1010,10 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
     if stretch is not None:
         reason = "A later component whose prerequisites are known."
         if stretch.kc_type == "synthesis":
-            reason = "A synthesis component. It waits until two conceptual components are known."
+            reason = (
+                "A synthesis component. It waits until "
+                f"{SYNTHESIS_CONCEPTUAL_MIN} conceptual components are known."
+            )
         cards.append(
             {
                 "role": "stretch",
@@ -952,7 +1043,7 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
             }
             for node in targets
         ],
-        "cards": cards[:3],
+        "cards": cards[:CARD_LIMIT],
     }
 
 
@@ -969,20 +1060,20 @@ def step_text(node: KcNode, step: int) -> str:
     kind = node.kc_type
     if kind == "factual":
         if step <= 0:
-            return str(fields.get("retrieval_question") or "What is the fact?")
-        return f"Yes. {fields.get('fact') or node.core_truth}"
+            return str(fields.get("retrieval_question") or EMPTY_FACT_QUESTION)
+        return FACTUAL_PASS.format(body=fields.get("fact") or node.core_truth)
     if kind == "procedural":
         steps = [str(item) for item in (fields.get("steps") or [])]
         blank = int(fields.get("blanked_step") or 0)
         if step <= 0:
             lines = " ".join(f"{index + 1}. {text}" for index, text in enumerate(steps))
-            return f"Here is the worked example. {lines} What did this example do?"
+            return f"{WORKED_LEAD} {lines} {WORKED_ASK}"
         if step == 1:
             shown = []
             for index, text in enumerate(steps):
-                shown.append(f"{index + 1}. ___" if index == blank else f"{index + 1}. {text}")
-            return "Fill the blank step. " + " ".join(shown)
-        return str(fields.get("solo_problem") or "Solve it on your own.")
+                shown.append(f"{index + 1}. {BLANK_MARKER}" if index == blank else f"{index + 1}. {text}")
+            return f"{FADED_ASK} " + " ".join(shown)
+        return str(fields.get("solo_problem") or EMPTY_SOLO)
     if kind == "conceptual":
         if step <= 0:
             return (
@@ -992,25 +1083,22 @@ def step_text(node: KcNode, step: int) -> str:
             )
         if step == 1:
             return (
-                f"Look at the contrast. Case one: {fields.get('case_a')} "
-                f"Case two: {fields.get('case_b')} What is different?"
+                f"{CONTRAST_LEAD} Case one: {fields.get('case_a')} "
+                f"Case two: {fields.get('case_b')} {CONTRAST_ASK}"
             )
-        return "State the rule."
+        return RULE_ASK
     if kind == "causal":
         if step <= 0:
-            return f"Decision point: {fields.get('decision_point')} What is at stake?"
+            return f"Decision point: {fields.get('decision_point')} {STAKE_ASK}"
         if step == 1:
-            return f"Mark this claim: {fields.get('flawed_claim')}"
-        return "Defend the causal chain."
+            return f"{CLAIM_LEAD} {fields.get('flawed_claim')}"
+        return DEFEND_ASK
     if kind == "synthesis":
         mixes = fields.get("mixes") or []
-        joined = " and ".join(str(item) for item in mixes) or "two earlier components"
+        joined = MIX_JOINER.join(str(item) for item in mixes) or EMPTY_MIX
         if step <= 0:
-            return (
-                f"A rookie mixes {joined} and says: {fields.get('faulty_plan')} "
-                "Correct the plan."
-            )
-        return f"Yes. The plan that holds is: {node.core_truth}"
+            return f"{ROOKIE_LEAD} {joined} {ROOKIE_SAYS} {fields.get('faulty_plan')} {ROOKIE_ASK}"
+        return SYNTHESIS_PASS.format(body=node.core_truth)
     return node.core_truth or node.title
 
 
@@ -1038,7 +1126,7 @@ def _expects(node: KcNode, step: int) -> list[str] | None:
         if step == 0:
             return None
         if step == 1:
-            return ["wrong", "flawed", "false", "not true", "no"]
+            return list(CAUSAL_PASS_PHRASES)
         return [str(fields.get("causal_chain") or node.core_truth)]
     if kind == "synthesis" and step == 0:
         return [node.core_truth]
@@ -1048,7 +1136,7 @@ def _expects(node: KcNode, step: int) -> list[str] | None:
 def _step_passes(node: KcNode, step: int, answer: str) -> bool:
     expects = _expects(node, step)
     if expects is None:
-        return len(_norm(answer)) >= 2
+        return len(_norm(answer)) >= OPEN_ANSWER_MIN
     return any(matches_phrase(answer, phrase) for phrase in expects)
 
 
@@ -1083,19 +1171,57 @@ def _bump_encompassed(db: Session, student_id: uuid.UUID, node: KcNode) -> None:
 def _pass_reply(node: KcNode) -> str:
     fields = node.type_fields or {}
     if node.kc_type == "factual":
-        return f"Yes. {fields.get('fact') or node.core_truth}"
+        return FACTUAL_PASS.format(body=fields.get("fact") or node.core_truth)
     if node.kc_type == "synthesis":
-        return f"Yes. The plan that holds is: {node.core_truth}"
-    return f"That holds. {node.core_truth}"
+        return SYNTHESIS_PASS.format(body=node.core_truth)
+    return OTHER_PASS.format(body=node.core_truth)
+
+
+def choice_for(node: KcNode, step: int) -> dict | None:
+    """The two closed picks. Every other step is typed."""
+    fields = node.type_fields or {}
+    if node.kc_type == "conceptual" and step == 0:
+        return {
+            "prompt": str(fields.get("prediction") or ""),
+            "choices": [
+                {"id": "case-a", "text": str(fields.get("case_a") or "")},
+                {"id": "case-b", "text": str(fields.get("case_b") or "")},
+            ],
+        }
+    if node.kc_type == "causal" and step == 1:
+        return {
+            "prompt": f"{CLAIM_LEAD} {fields.get('flawed_claim') or ''}".strip(),
+            "choices": [
+                {"id": "mark", "text": CAUSAL_MARK_LABEL},
+                {"id": "holds", "text": CAUSAL_HOLD_LABEL},
+            ],
+        }
+    return None
+
+
+def _session_messages(db: Session, session: KcSession) -> list[KcMessage]:
+    return list(
+        db.scalars(select(KcMessage).where(KcMessage.session_id == session.id).order_by(KcMessage.seq))
+    )
+
+
+def _needs_speech(session: KcSession, messages: list[KcMessage]) -> bool:
+    if session.status != "in_progress":
+        return False
+    if not messages:
+        return True
+    return messages[-1].role == "user"
 
 
 def session_out(db: Session, session: KcSession) -> dict:
     node = db.get(KcNode, session.kc_id)
     labels = step_labels(node.kc_type if node else None)
     index = min(session.step, len(labels) - 1)
-    messages = db.scalars(
-        select(KcMessage).where(KcMessage.session_id == session.id).order_by(KcMessage.seq)
-    )
+    messages = _session_messages(db, session)
+    needs_speech = _needs_speech(session, messages)
+    choice = None
+    if node is not None and session.status == "in_progress" and not needs_speech:
+        choice = choice_for(node, session.step)
     redirect = db.get(KcNode, session.redirect_kc_id) if session.redirect_kc_id else None
     return {
         "id": str(session.id),
@@ -1109,6 +1235,8 @@ def session_out(db: Session, session: KcSession) -> dict:
         "step_label": labels[index],
         "status": session.status,
         "score": session.score,
+        "needs_speech": needs_speech,
+        "choice": choice,
         "redirect": None
         if redirect is None
         else {"id": str(redirect.id), "code": redirect.code, "title": redirect.title},
@@ -1148,7 +1276,6 @@ def open_session(db: Session, student: Student, goal: KcGoal, node: KcNode) -> K
     )
     db.add(session)
     db.flush()
-    _add_message(db, session, "assistant", step_text(node, 0))
     return session
 
 
@@ -1183,12 +1310,14 @@ def turn(db: Session, session: KcSession, answer: str) -> dict:
     _add_message(db, session, "user", cleaned)
     signature = _matched_signature(node, cleaned)
     passed = False
+    speak_next = False
+    reply = ""
     if signature is not None:
         broken = _nodes_by_code(db).get(str(signature.get("broken_kc") or ""))
         state = _get_state(db, session.student_id, node.id)
         state.status = "fragile"
         state.last_practiced = _now()
-        session.score = 0
+        session.score = MISS_SCORE
         session.status = "completed"
         session.redirect_kc_id = broken.id if broken is not None else None
         title = broken.title if broken is not None else str(signature.get("broken_kc") or "the earlier component")
@@ -1196,17 +1325,17 @@ def turn(db: Session, session: KcSession, answer: str) -> dict:
         reply = (
             f"That answer matches this wrong move: {signature.get('wrong_move')}. "
             f"The component that is actually broken is {title}. {truth} "
-            "The next card opens that component."
+            f"{MISCONCEPTION_TAIL}"
         ).strip()
     elif _step_passes(node, session.step, cleaned):
         final = FINAL_STEP.get(node.kc_type or "", 0)
         if session.step >= final:
             state = _get_state(db, session.student_id, node.id)
             state.status = "known"
-            state.stability = round(max(float(state.stability or 0), 1.0), 2)
+            state.stability = round(max(float(state.stability or 0), KNOWN_STABILITY), 2)
             state.last_practiced = _now()
             _bump_encompassed(db, session.student_id, node)
-            session.score = 100
+            session.score = PASS_SCORE
             session.status = "completed"
             labels = step_labels(node.kc_type)
             session.step = min(session.step + 1, len(labels) - 1)
@@ -1214,16 +1343,351 @@ def turn(db: Session, session: KcSession, answer: str) -> dict:
             reply = _pass_reply(node)
         else:
             session.step += 1
-            reply = step_text(node, session.step)
+            reply = ""
+            speak_next = True
     else:
         session.attempts += 1
-        reply = (
-            f"Not yet. {node.core_truth} "
-            "That explanation is the one retry. Answer this same step again."
-        ).strip()
+        reply = MISS_REPLY.format(truth=node.core_truth).strip()
     session.updated_at = _now()
-    _add_message(db, session, "assistant", reply)
+    if not speak_next:
+        _add_message(db, session, "assistant", reply)
     body = session_out(db, session)
     body["reply"] = reply
     body["passed"] = passed
     return body
+
+
+def record_speech(db: Session, session: KcSession, content: str) -> dict:
+    """Store the model's wording of the current step. Scoring stays in turn."""
+    if session.status != "in_progress":
+        raise HTTPException(status_code=422, detail="This component session is already finished.")
+    text = content.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="The tutor did not say this step.")
+    messages = _session_messages(db, session)
+    if not _needs_speech(session, messages):
+        return session_out(db, session)
+    _add_message(db, session, "assistant", text)
+    session.updated_at = _now()
+    return session_out(db, session)
+
+
+def mark_node_complete(db: Session, node: KcNode) -> KcNode:
+    gaps = gaps_for(node, set(_nodes_by_code(db)))
+    if gaps:
+        raise HTTPException(status_code=422, detail=gaps)
+    node.marked_complete = True
+    node.updated_at = _now()
+    db.flush()
+    return node
+
+
+def course_of_node(db: Session, node: KcNode) -> tuple[KcGoal, list[KcNode]]:
+    for candidate in db.scalars(select(KcGoal)):
+        targets = load_targets(db, candidate)
+        if any(item.id == node.id for item in targets) or any(
+            item.id == node.id for item in load_patches(db, targets)
+        ):
+            return candidate, targets
+    raise HTTPException(status_code=422, detail="Draft a component that is on a course.")
+
+
+def describe_component(
+    *,
+    title: str,
+    kc_type: str | None,
+    core_truth: str,
+    rubric: list,
+    misconceptions: list,
+    prerequisite_codes: list,
+    encompasses_codes: list,
+    type_fields: dict,
+) -> str:
+    checks = [str(item) for item in (rubric or []) if str(item).strip()]
+    wrongs = []
+    for item in misconceptions or []:
+        if not isinstance(item, dict):
+            continue
+        wrong = str(item.get("wrong_move") or "").strip()
+        broken = str(item.get("broken_kc") or "").strip()
+        if wrong or broken:
+            wrongs.append(f"{wrong} ({broken})" if broken else wrong)
+    lines = [
+        f"Title: {title}",
+        f"Type: {TYPE_LABELS.get(kc_type or '', 'No type yet')}",
+        f"Core truth: {(core_truth or '').strip() or 'none'}",
+        "Rubric: " + ("; ".join(checks) if checks else "none"),
+        "Wrong moves: " + ("; ".join(wrongs) if wrongs else "none"),
+        "Prerequisites: " + (", ".join(_clean_codes(prerequisite_codes)) or "none"),
+        "Encompasses: " + (", ".join(_clean_codes(encompasses_codes)) or "none"),
+    ]
+    fields = type_fields or {}
+    for key in TYPE_KEYS.get(kc_type or "", ()):
+        label = FIELD_LABELS.get(key, key)
+        value = fields.get(key)
+        if isinstance(value, list):
+            shown = ", ".join(str(item) for item in value if str(item).strip()) or "none"
+        elif value is None or str(value).strip() == "":
+            shown = "none"
+        else:
+            shown = str(value)
+        lines.append(f"{label}: {shown}")
+    return "\n".join(lines)
+
+
+def mirror_text(node: KcNode) -> str:
+    return describe_component(
+        title=node.title,
+        kc_type=node.kc_type,
+        core_truth=node.core_truth or "",
+        rubric=list(node.rubric or []),
+        misconceptions=list(node.misconceptions or []),
+        prerequisite_codes=list(node.prerequisite_codes or []),
+        encompasses_codes=list(node.encompasses_codes or []),
+        type_fields=dict(node.type_fields or {}),
+    )
+
+
+def _draft_reply(draft: dict) -> str:
+    body = describe_component(
+        title=str(draft.get("title") or ""),
+        kc_type=draft.get("kc_type"),
+        core_truth=str(draft.get("core_truth") or ""),
+        rubric=list(draft.get("rubric") or []),
+        misconceptions=list(draft.get("misconceptions") or []),
+        prerequisite_codes=list(draft.get("prerequisite_codes") or []),
+        encompasses_codes=list(draft.get("encompasses_codes") or []),
+        type_fields=dict(draft.get("type_fields") or {}),
+    )
+    title = draft.get("title") or "this component"
+    return (
+        f"Draft for {title} only. Other components stay as they are.\n"
+        f"{body}\n"
+        "Nothing is saved until you push it."
+    )
+
+
+_LABEL_MAP = {
+    "title": ("title", "title"),
+    "type": ("type", "kc_type"),
+    "core truth": ("truth", "core_truth"),
+    "fact": ("field", "fact"),
+    "retrieval question": ("field", "retrieval_question"),
+    "worked steps": ("steps", "steps"),
+    "blanked step": ("int", "blanked_step"),
+    "solo problem": ("field", "solo_problem"),
+    "solo check": ("field", "solo_check"),
+    "case one": ("field", "case_a"),
+    "case two": ("field", "case_b"),
+    "prediction": ("field", "prediction"),
+    "rule": ("field", "rule"),
+    "decision point": ("field", "decision_point"),
+    "flawed claim": ("field", "flawed_claim"),
+    "causal chain": ("field", "causal_chain"),
+    "faulty plan": ("field", "faulty_plan"),
+    "rookie's faulty plan": ("field", "faulty_plan"),
+    "first component it mixes": ("mix", "mix_a"),
+    "second component it mixes": ("mix", "mix_b"),
+    "rubric": ("rubric", "rubric"),
+    "prerequisites": ("codes", "prerequisite_codes"),
+    "prerequisite": ("codes", "prerequisite_codes"),
+    "encompasses": ("codes", "encompasses_codes"),
+    "wrong move": ("wrong", "misconception"),
+}
+
+
+def _explicit_type(text: str) -> str | None:
+    return _EXPLICIT_TYPES.get(text.strip().lower())
+
+
+def _requested_type(message: str) -> str | None:
+    lowered = message.strip().lower()
+    named = _explicit_type(lowered)
+    if named:
+        return named
+    match = re.search(r"\b(?:make it|change (?:the )?type to|switch to)\s+([a-z ]+)$", lowered)
+    if not match:
+        return None
+    return _explicit_type(match.group(1).strip())
+
+
+def _labeled_updates(message: str) -> dict:
+    updates: dict = {"fields": {}}
+    mixes: dict[str, str] = {}
+    for raw in message.splitlines():
+        if ":" not in raw:
+            continue
+        label, value = raw.split(":", 1)
+        spec = _LABEL_MAP.get(label.strip().lower())
+        if spec is None:
+            continue
+        kind, name = spec
+        value = value.strip()
+        if kind == "title":
+            updates["title"] = value
+        elif kind == "truth":
+            updates["core_truth"] = value
+        elif kind == "type":
+            named = _explicit_type(value)
+            if named:
+                updates["kc_type"] = named
+        elif kind == "rubric":
+            updates["rubric"] = [part.strip() for part in re.split(r"[;]", value) if part.strip()]
+        elif kind == "codes":
+            updates[name] = [part.strip() for part in re.split(r"[,;]", value) if part.strip()]
+        elif kind == "wrong":
+            if "->" in value:
+                wrong, broken = value.split("->", 1)
+            elif "(" in value and value.endswith(")"):
+                wrong, broken = value[:-1].rsplit("(", 1)
+            else:
+                continue
+            updates.setdefault("misconception", []).append(
+                {"wrong_move": wrong.strip(), "broken_kc": broken.strip()}
+            )
+        elif kind == "steps":
+            updates["fields"]["steps"] = [part.strip() for part in re.split(r"[;\n]", value) if part.strip()]
+        elif kind == "int":
+            updates["fields"]["blanked_step"] = value
+        elif kind == "mix":
+            mixes[name] = value
+        elif kind == "field":
+            updates["fields"][name] = value
+    if mixes:
+        updates["fields"]["mixes"] = [mixes.get("mix_a", ""), mixes.get("mix_b", "")]
+    return updates
+
+
+def _revise_draft(previous: dict, message: str, goal: KcGoal, node: KcNode) -> dict:
+    draft = {
+        "kind": "component",
+        "id": previous.get("id") or str(node.id),
+        "code": previous.get("code") or node.code,
+        "title": previous.get("title") or node.title,
+        "kc_type": previous.get("kc_type") or "conceptual",
+        "core_truth": previous.get("core_truth") or "",
+        "rubric": list(previous.get("rubric") or []),
+        "misconceptions": [
+            dict(item) for item in (previous.get("misconceptions") or []) if isinstance(item, dict)
+        ],
+        "prerequisite_codes": list(previous.get("prerequisite_codes") or []),
+        "encompasses_codes": list(previous.get("encompasses_codes") or []),
+        "type_fields": dict(previous.get("type_fields") or {}),
+    }
+    labels = _labeled_updates(message)
+    named = labels.get("kc_type") or _requested_type(message)
+    if named and named != draft["kc_type"] and named in KC_TYPES:
+        mixes = list(draft["type_fields"].get("mixes") or draft.get("prerequisite_codes") or [])
+        draft["kc_type"] = named
+        draft["type_fields"] = _fields_for(named, str(draft["title"]), goal.description, [str(item) for item in mixes])
+    if str(labels.get("title") or "").strip():
+        draft["title"] = str(labels["title"]).strip()
+    if "core_truth" in labels:
+        draft["core_truth"] = str(labels["core_truth"]).strip()
+    elif not _label_present(labels) and not named:
+        sentence = _first_sentence(message)
+        if len(_norm(sentence)) >= OPEN_ANSWER_MIN:
+            draft["core_truth"] = sentence
+    if "rubric" in labels:
+        draft["rubric"] = _clean_rubric(labels["rubric"])
+    if "prerequisite_codes" in labels:
+        draft["prerequisite_codes"] = _clean_codes(labels["prerequisite_codes"])
+    if "encompasses_codes" in labels:
+        draft["encompasses_codes"] = _clean_codes(labels["encompasses_codes"])
+    if "misconception" in labels:
+        draft["misconceptions"] = _clean_misconceptions(labels["misconception"])
+    fields = dict(draft["type_fields"])
+    fields.update(labels.get("fields") or {})
+    draft["type_fields"] = _clean_type_fields(str(draft["kc_type"]), fields)
+    return draft
+
+
+def _label_present(labels: dict) -> bool:
+    if labels.get("fields"):
+        return True
+    return any(key in labels for key in ("title", "core_truth", "kc_type", "rubric", "prerequisite_codes", "encompasses_codes", "misconception"))
+
+
+def _creator_rows(db: Session, node_id: uuid.UUID) -> list[KcCreatorMessage]:
+    return list(
+        db.scalars(
+            select(KcCreatorMessage)
+            .where(KcCreatorMessage.node_id == node_id)
+            .order_by(KcCreatorMessage.seq)
+        )
+    )
+
+
+def _latest_draft(messages: list[KcCreatorMessage]) -> dict | None:
+    for message in reversed(messages):
+        if message.role == "assistant" and message.draft and not message.applied:
+            return dict(message.draft)
+    return None
+
+
+def _creator_out(message: KcCreatorMessage) -> dict:
+    return {
+        "id": str(message.id),
+        "role": message.role,
+        "content": message.content,
+        "seq": message.seq,
+        "draft": message.draft,
+        "applied": message.applied,
+    }
+
+
+def creator_thread(db: Session, node: KcNode) -> dict:
+    messages = _creator_rows(db, node.id)
+    return {
+        "node_id": str(node.id),
+        "mirror": mirror_text(node),
+        "messages": [_creator_out(message) for message in messages],
+        "draft": _latest_draft(messages),
+    }
+
+
+def _add_creator_message(
+    db: Session,
+    node: KcNode,
+    role: str,
+    content: str,
+    *,
+    draft: dict | None = None,
+    applied: bool = False,
+) -> KcCreatorMessage:
+    current = db.scalar(
+        select(func.max(KcCreatorMessage.seq)).where(KcCreatorMessage.node_id == node.id)
+    ) or 0
+    message = KcCreatorMessage(
+        node_id=node.id,
+        role=role,
+        content=content,
+        seq=int(current) + 1,
+        draft=draft,
+        applied=applied,
+    )
+    db.add(message)
+    db.flush()
+    return message
+
+
+def post_creator_turn(db: Session, node: KcNode, message: str) -> dict:
+    cleaned = message.strip()
+    if not cleaned:
+        raise HTTPException(status_code=422, detail="Write a message first.")
+    goal, ordered = course_of_node(db, node)
+    previous = _latest_draft(_creator_rows(db, node.id))
+    if previous is None:
+        draft = draft_component(goal, node, ordered, cleaned)["draft"]
+    else:
+        draft = _revise_draft(previous, cleaned, goal, node)
+    _add_creator_message(db, node, "user", cleaned)
+    _add_creator_message(db, node, "assistant", _draft_reply(draft), draft=draft, applied=False)
+    return creator_thread(db, node)
+
+
+def note_component_saved(db: Session, node: KcNode) -> None:
+    for message in _creator_rows(db, node.id):
+        if message.draft and not message.applied:
+            message.applied = True
+    _add_creator_message(db, node, "assistant", SAVED_NOTE, applied=True)

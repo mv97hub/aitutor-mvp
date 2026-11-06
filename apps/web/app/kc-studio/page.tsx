@@ -4,12 +4,12 @@ import type { KcCourse, KcDraft, KcNetwork, KcStructure } from "@/lib/kc";
 
 export const dynamic = "force-dynamic";
 
-export const metadata = { title: "KC Studio · AI Tutor" };
+export const metadata = { title: "KC Course Creator · AI Tutor" };
 
 export default async function KcStudioPage({
   searchParams,
 }: {
-  searchParams: Promise<{ course?: string; component?: string; network?: string; message?: string; error?: string }>;
+  searchParams: Promise<{ course?: string; network?: string; message?: string; error?: string }>;
 }) {
   const params = await searchParams;
   let courses: KcCourse[] = [];
@@ -29,10 +29,7 @@ export default async function KcStudioPage({
       }
       const message = (params.message || "").trim();
       if (message) {
-        const path = params.component
-          ? `/kc/nodes/${params.component}/draft`
-          : `/kc/courses/${params.course}/draft`;
-        const result = await api<{ reply: string; draft: KcDraft }>(path, {
+        const result = await api<{ reply: string; draft: KcDraft }>(`/kc/courses/${params.course}/draft`, {
           method: "POST",
           body: JSON.stringify({ message }),
         });
@@ -48,7 +45,6 @@ export default async function KcStudioPage({
       initialCourses={courses}
       initialCourse={selected}
       initialStructure={structure}
-      initialComponentId={params.component ?? null}
       initialNetwork={network}
       initialDraft={draft}
       initialReply={reply}

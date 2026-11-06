@@ -7,7 +7,8 @@ const sections = [
   { href: "/documentation/admin", label: "Admin" },
   { href: "/documentation/create-course", label: "Create course" },
   { href: "/documentation/view-chats", label: "View chats" },
-  { href: "/documentation/kc-studio", label: "KC Studio" },
+  { href: "/documentation/kc-studio", label: "KC Course Creator" },
+  { href: "/documentation/kc-creator", label: "KC Creator" },
   { href: "/documentation/kc-tutor", label: "KC Tutor" },
 ] as const;
 
