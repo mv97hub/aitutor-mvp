@@ -34,9 +34,14 @@ export default function KcStudioDocsPage() {
           Patches are listed as Not a target. A row, including a patch, opens that component on KC Creator. This page does not edit a component&apos;s fields.
         </p>
         <p>
-          The chat on this page drafts the component list and nothing else. The reply is &quot;Draft component list. Nothing is saved until you push it.&quot;
-          The draft is titles and codes. Push draft writes that list. It does not draft or write one component&apos;s fields.
-          Counts the draft already understands, from two through ten, plus twelve, stay as they are.
+          The chat on this page drafts the component list and nothing else. The draft is titles and codes.
+          Push draft writes that list. It does not draft or write one component&apos;s fields, and it does not split the
+          course description into titles. The list is a syllabus for the subject. Kind sets how full it is.
+          Mastery is the fuller, more rigorous breakdown. Time boxed is sized to the minutes, one component for every
+          five minutes and at least three. Curiosity follows a path through the subject. Asking in the chat to be a
+          master, to fit the minutes, or for a curiosity path uses that kind for the draft. A requested count is honored
+          with distinct components: &quot;minimum of 10&quot; means at least ten, and &quot;10 components&quot; means ten.
+          A pasted list of titles is used as the draft. Nothing is saved until you push it.
         </p>
         <p>
           KC Creator is the editor. Choose a course, then a component. Targets are listed in course order, then patches.
