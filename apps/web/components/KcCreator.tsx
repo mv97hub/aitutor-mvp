@@ -214,7 +214,11 @@ function ComponentEditor({ course, component }: { course: KcCourse; component: K
   const codes = [...course.components, ...course.patches]
     .map((item) => item.code)
     .filter((code) => code !== component.code);
-  const [kcType, setKcType] = useState<KcType>(component.kc_type ?? "factual");
+  // Push updates this same component. Follow the saved type unless the author
+  // picked a different type after that save.
+  const savedType = (component.kc_type ?? "factual") as KcType;
+  const [choice, setChoice] = useState<{ id: string; saved: KcType; type: KcType } | null>(null);
+  const kcType = choice && choice.id === component.id && choice.saved === savedType ? choice.type : savedType;
   const rubric = [...component.rubric, "", "", ""].slice(0, 3);
   const initialMixes = Array.isArray(component.type_fields.mixes) ? (component.type_fields.mixes as string[]) : [];
   const fields: Record<string, unknown> = {
@@ -255,8 +259,10 @@ function ComponentEditor({ course, component }: { course: KcCourse; component: K
           aria-label="Component type"
           name="kc_type"
           title={TIPS.type}
-          defaultValue={kcType}
-          onChange={(event) => setKcType(event.target.value as KcType)}
+          value={kcType}
+          onChange={(event) =>
+            setChoice({ id: component.id, saved: savedType, type: event.target.value as KcType })
+          }
         >
           {(Object.keys(TYPE_LABELS).filter((key) => key !== "unset") as KcType[]).map((type) => (
             <option key={type} value={type}>
