@@ -153,6 +153,32 @@ def _close_parts(close) -> tuple[list, list, str | None]:
     return [], [], None
 
 
+def _one_correct(choices: list[dict]) -> list[dict]:
+    """A multiple-choice question has one right option. The first marked one stays."""
+    chosen = False
+    rows = []
+    for choice in choices:
+        correct = choice["correct"] is True and not chosen
+        if correct:
+            chosen = True
+        rows.append({"text": choice["text"], "correct": correct})
+    if rows and not chosen:
+        rows[0] = {"text": rows[0]["text"], "correct": True}
+    return rows
+
+
+def _canonical_question(text: str, kind: str | None, choices: list[dict]) -> dict:
+    """single is a typed answer. multiple is one pick from the stored options.
+
+    An older essay, or a single with no choices, is typed. An older single or
+    multi that already has choices is multiple choice, and only the first
+    correct option stays correct.
+    """
+    if kind == "essay" or not choices:
+        return {"text": text, "kind": "single", "choices": []}
+    return {"text": text, "kind": "multiple", "choices": _one_correct(choices)}
+
+
 def close_questions(close) -> list[dict]:
     """Each question is text, kind, and its own choices.
 
@@ -164,11 +190,9 @@ def close_questions(close) -> list[dict]:
     if isinstance(stored, dict):
         shared = _clean_choice_rows(stored.get("choices"))
         raw_questions = stored.get("questions") if isinstance(stored.get("questions"), list) else []
-        selection = stored.get("selection") if stored.get("selection") in {"single", "multi"} else None
     elif isinstance(stored, list):
         shared = _clean_choice_rows(stored)
         raw_questions = []
-        selection = None
     else:
         return []
     built = []
@@ -180,24 +204,14 @@ def close_questions(close) -> list[dict]:
         elif isinstance(item, dict):
             text = str(item.get("text") or "").strip()
             choices = _clean_choice_rows(item.get("choices"))
-            kind = item.get("kind") if item.get("kind") in {"essay", "single", "multi"} else None
+            kind = item.get("kind") if item.get("kind") in {"essay", "single", "multi", "multiple"} else None
         else:
             continue
         if not text:
             continue
-        if kind is None:
-            if choices:
-                corrects = sum(1 for choice in choices if choice["correct"])
-                kind = "multi" if selection == "multi" or corrects > 1 else "single"
-            else:
-                kind = "essay"
-        if kind == "essay":
-            choices = []
-        built.append({"text": text, "kind": kind, "choices": choices})
+        built.append(_canonical_question(text, kind, choices))
     if len(built) == 1 and not built[0]["choices"] and shared:
-        corrects = sum(1 for choice in shared if choice["correct"])
-        kind = "multi" if selection == "multi" or corrects > 1 else "single"
-        built[0] = {"text": built[0]["text"], "kind": kind, "choices": shared}
+        built[0] = _canonical_question(built[0]["text"], "multiple", shared)
     return built
 
 
@@ -207,22 +221,15 @@ def close_question_texts(close) -> list[str]:
 
 def close_api_parts(close) -> tuple[list, list, str | None]:
     """Items stay empty once each question carries its own choices."""
-    items, _raw_questions, selection = _close_parts(close)
+    items, _raw_questions, _selection = _close_parts(close)
     rich = close_questions(close)
     if not rich:
-        return _clean_choice_rows(items), [], selection
-    choice_kinds = {question["kind"] for question in rich if question["kind"] in {"single", "multi"}}
-    if choice_kinds == {"single"}:
-        selection = "single"
-    elif choice_kinds == {"multi"}:
-        selection = "multi"
-    elif not choice_kinds:
-        selection = None
+        return _clean_choice_rows(items), [], None
     if any(question["choices"] for question in rich) or len(rich) > 1:
         items = []
     else:
         items = _clean_choice_rows(items)
-    return items, rich, selection
+    return items, rich, None
 
 
 def close_question_index_of(tutor_session: TutorSession) -> int:
@@ -280,13 +287,11 @@ def active_close_question(close, tutor_session: TutorSession) -> dict | None:
         return questions[index]
     if index != 0:
         return None
-    choices, _questions, selection = _close_parts(close)
+    choices, _questions, _selection = _close_parts(close)
     shared = _clean_choice_rows(choices)
     if len(shared) < 2:
         return None
-    corrects = sum(1 for choice in shared if choice["correct"])
-    kind = "multi" if selection == "multi" or corrects > 1 else "single"
-    return {"text": "Choose the best answer.", "kind": kind, "choices": shared}
+    return {"text": "Choose the best answer.", "kind": "multiple", "choices": _one_correct(shared)}
 
 
 def close_is_empty(quest: Quest) -> bool:
@@ -309,9 +314,7 @@ def close_choice_widget(quest: Quest, tutor_session: TutorSession) -> dict | Non
     if close is None:
         return None
     question = active_close_question(close, tutor_session)
-    if question is None or question["kind"] == "essay":
-        return None
-    if question["kind"] not in {"single", "multi"}:
+    if question is None or question["kind"] != "multiple":
         return None
     built = []
     answers = []
@@ -334,12 +337,11 @@ def close_choice_widget(quest: Quest, tutor_session: TutorSession) -> dict | Non
         return None
     if not answers:
         answers = [built[0]["id"]]
-    kind = "multi" if question["kind"] == "multi" else "single"
     return {
-        "type": kind,
+        "type": "single",
         "prompt": question["text"] or "Choose the best answer.",
         "choices": built,
-        "answer": answers if kind == "multi" else answers[0],
+        "answer": answers[0],
         "explain": False,
         "misconception": "Stay on the question this quest asked.",
     }

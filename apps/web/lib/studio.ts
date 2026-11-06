@@ -3,7 +3,7 @@ export type StudioClose = {
   answer_style: "multiple_choice" | "essay" | "mixed";
   choice_mode: "predefined" | "dynamic" | null;
   items: { text: string; correct?: boolean }[];
-  questions: { text: string; kind?: "essay" | "single" | "multi"; choices?: { text: string; correct?: boolean }[] }[];
+  questions: { text: string; kind?: "single" | "multiple"; choices?: { text: string; correct?: boolean }[] }[];
   intent: string;
   selection?: "single" | "multi" | null;
 };
@@ -138,17 +138,10 @@ export function describeOperation(op: StudioOperation): string {
 
 export function closeSummary(close: StudioClose): string {
   const count = close.questions?.length ?? 0;
-  const question = count === 0 ? "No questions" : close.close_style === "one" ? "One question" : "Several questions";
-  const answer =
-    close.answer_style === "multiple_choice"
-      ? "Multiple choice"
-      : close.answer_style === "essay"
-        ? "Essay"
-        : "Mixed";
-  if (close.answer_style === "essay" && count === 0) return "No questions";
-  if (close.answer_style === "essay") return `${question} · ${answer}`;
-  if (close.selection === "multi") return `${question} · Multi-choice`;
-  if (close.answer_style === "multiple_choice") return `${question} · Single choice`;
-  const mode = close.choice_mode === "predefined" ? "Predefined choices" : "Dynamic choices";
-  return `${question} · ${answer} · ${mode}`;
+  const question = count === 0 ? "No questions" : count === 1 ? "One question" : "Several questions";
+  if (count === 0) return "No questions";
+  const kinds = new Set((close.questions ?? []).map((item) => (item.kind === "multiple" ? "multiple" : "single")));
+  if (kinds.size > 1) return `${question} · Mixed`;
+  if (kinds.has("multiple")) return `${question} · Multiple choice`;
+  return `${question} · Single choice`;
 }

@@ -27,7 +27,7 @@ type GoalPopup = {
   learningGoal: string;
   success: string;
 };
-type CloseMode = "essay" | "single" | "multi" | "none";
+type CloseMode = "single" | "multiple" | "none";
 type ClosePopup = {
   kind: "close";
   code: string;
@@ -131,22 +131,25 @@ function closeFrom(prefs: Prefs): StudioClose {
   };
 }
 
+function fourOptions(source: { text: string; correct?: boolean }[]) {
+  const rows = source.slice(0, 4).map((choice) => ({ text: choice.text, correct: Boolean(choice.correct) }));
+  while (rows.length < 4) rows.push({ text: "", correct: false });
+  const correctAt = rows.findIndex((row) => row.correct);
+  const chosen = correctAt < 0 ? 0 : correctAt;
+  return rows.map((row, index) => ({ ...row, correct: index === chosen }));
+}
+
 function closePopupFrom(code: string, close: StudioClose | null, index: number): ClosePopup {
   const item = close?.questions[index];
   const own = item?.choices ?? [];
   const legacy = !own.length && index === 0 ? close?.items ?? [] : [];
   const source = own.length ? own : legacy;
-  const options = source.length
-    ? source.map((choice) => ({ text: choice.text, correct: Boolean(choice.correct) }))
-    : [
-        { text: "", correct: true },
-        { text: "", correct: false },
-      ];
-  let mode: CloseMode = item?.kind ?? "essay";
+  const hasChoices = source.length > 0;
+  let mode: CloseMode = "single";
   if (!item) {
-    if (index === 0 && close?.selection === "multi") mode = "multi";
-    else if (index === 0 && close?.answer_style === "multiple_choice") mode = "single";
-    else if (!close || (close.questions.length === 0 && close.items.length === 0)) mode = "none";
+    if (!close || (close.questions.length === 0 && close.items.length === 0)) mode = "none";
+  } else if (item.kind === "multiple" || (item.kind === "single" && hasChoices) || (hasChoices && item.kind !== "single")) {
+    mode = "multiple";
   }
   return {
     kind: "close",
@@ -154,7 +157,7 @@ function closePopupFrom(code: string, close: StudioClose | null, index: number):
     index,
     mode,
     question: item?.text ?? "",
-    options,
+    options: fourOptions(source),
   };
 }
 
@@ -180,7 +183,7 @@ function popupBody(popup: Popup): Record<string, unknown> {
     };
   }
   const text = popup.question.trim();
-  if (popup.mode === "essay") {
+  if (popup.mode === "single") {
     return {
       action: "set_close",
       code: popup.code,
@@ -189,8 +192,9 @@ function popupBody(popup: Popup): Record<string, unknown> {
         close_style: "one",
         answer_style: "essay",
         choice_mode: null,
+        selection: null,
         items: [],
-        questions: text ? [{ text, kind: "essay", choices: [] }] : [],
+        questions: text ? [{ text, kind: "single", choices: [] }] : [],
         intent: "",
       },
     };
@@ -203,12 +207,12 @@ function popupBody(popup: Popup): Record<string, unknown> {
       close_style: "one",
       answer_style: "multiple_choice",
       choice_mode: "predefined",
-      selection: popup.mode === "multi" ? "multi" : "single",
+      selection: null,
       items: [],
       questions: [
         {
           text: text || "Choose the best answer.",
-          kind: popup.mode,
+          kind: "multiple",
           choices: popup.options
             .filter((option) => option.text.trim())
             .map((option) => ({ text: option.text.trim(), correct: option.correct })),
@@ -838,8 +842,11 @@ export function CreateCourse() {
                       <p className="studio-fact"><span>Close</span>{quest.close ? closeSummary(quest.close) : "No close yet"}</p>
                       {(quest.close?.questions ?? []).map((item, index) => (
                         <div key={`${quest.code}-question-${index}`} className="studio-goal-row">
-                          <p className="studio-fact"><span>Question {index + 1}</span>{item.text}</p>
-                          {item.choices?.length ? (
+                          <p className="studio-fact">
+                            <span>{item.kind === "multiple" ? "Multiple choice" : "Single choice"} {index + 1}</span>
+                            {item.text}
+                          </p>
+                          {item.kind === "multiple" && item.choices?.length ? (
                             <ul className="studio-choices">
                               {item.choices.map((choice) => (
                                 <li key={choice.text}>{choice.correct ? `${choice.text} (correct)` : choice.text}</li>
@@ -1006,21 +1013,29 @@ export function CreateCourse() {
                     Close
                     <select
                       value={popup.mode}
-                      onChange={(event) => setPopup({ ...popup, mode: event.target.value as CloseMode })}
+                      onChange={(event) => {
+                        const mode = event.target.value as CloseMode;
+                        setPopup({
+                          ...popup,
+                          mode,
+                          options: mode === "multiple" ? fourOptions(popup.options) : popup.options,
+                        });
+                      }}
                     >
-                      <option value="essay">Essay / Free response</option>
                       <option value="single">Single choice</option>
-                      <option value="multi">Multi-choice</option>
+                      <option value="multiple">Multiple choice</option>
                       <option value="none">No questions</option>
                     </select>
                   </label>
+                  {popup.mode === "single" ? <p>The kid types the answer.</p> : null}
+                  {popup.mode === "multiple" ? <p>Four options. The kid picks one.</p> : null}
                   {popup.mode !== "none" ? (
                     <label>
                       Question
                       <textarea rows={3} value={popup.question} onChange={(event) => setPopup({ ...popup, question: event.target.value })} />
                     </label>
                   ) : null}
-                  {popup.mode === "single" || popup.mode === "multi" ? (
+                  {popup.mode === "multiple" ? (
                     <fieldset className="studio-options">
                       <legend>Options</legend>
                       {popup.options.map((option, index) => (
@@ -1035,15 +1050,11 @@ export function CreateCourse() {
                           />
                           <label>
                             <input
-                              type={popup.mode === "single" ? "radio" : "checkbox"}
+                              type="radio"
                               name="correct-option"
                               checked={option.correct}
                               onChange={() => {
-                                const options = popup.options.map((item, itemIndex) => {
-                                  if (popup.mode === "single") return { ...item, correct: itemIndex === index };
-                                  if (itemIndex === index) return { ...item, correct: !item.correct };
-                                  return item;
-                                });
+                                const options = popup.options.map((item, itemIndex) => ({ ...item, correct: itemIndex === index }));
                                 setPopup({ ...popup, options });
                               }}
                             />
@@ -1051,13 +1062,6 @@ export function CreateCourse() {
                           </label>
                         </div>
                       ))}
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => setPopup({ ...popup, options: [...popup.options, { text: "", correct: false }] })}
-                      >
-                        Add option
-                      </button>
                     </fieldset>
                   ) : null}
                 </>
@@ -1191,7 +1195,7 @@ export function CreateCourse() {
                   }
                 >
                   <option value="multiple_choice">Multiple choice</option>
-                  <option value="essay">Essay</option>
+                  <option value="essay">Single choice</option>
                   <option value="mixed">Mixed</option>
                 </select>
               </label>

@@ -505,7 +505,7 @@ class StudioChoiceOut(BaseModel):
 
 class StudioQuestionOut(BaseModel):
     text: str
-    kind: Literal["essay", "single", "multi"] = "essay"
+    kind: Literal["single", "multiple"] = "single"
     choices: list[StudioChoiceOut] = Field(default_factory=list)
 
 

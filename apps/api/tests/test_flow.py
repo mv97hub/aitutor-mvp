@@ -684,11 +684,11 @@ def test_import_copies_each_close_question() -> None:
             "Why do the angles add to 180?",
             "Which of these are polygons?",
         ]
-        assert [question["kind"] for question in questions] == ["single", "single", "essay", "multi"]
+        assert [question["kind"] for question in questions] == ["multiple", "multiple", "single", "multiple"]
         assert questions[0]["choices"][0] == {"text": "180 degrees", "correct": True}
         assert questions[1]["choices"][1]["text"] == "A square"
         assert questions[2]["choices"] == []
-        assert [choice["correct"] for choice in questions[3]["choices"]] == [True, False, True]
+        assert [choice["correct"] for choice in questions[3]["choices"]] == [True, False, False]
     finally:
         _drop_course("ZZQIMP")
         db = SessionLocal()
@@ -724,21 +724,26 @@ def test_tutor_asks_close_questions_one_at_a_time() -> None:
         close_line = first_prompt.split("Close:", 1)[1]
         assert "What do the angles add to?" in close_line
         assert "Which shape has three sides?" not in close_line
+        assert "Pick one answer on the card" in first_prompt
+        assert "Your reply is exactly this question" not in first_prompt
         wrong = client.post(
             f"/sessions/{session_id}/grade-widget",
             json={"choice": "c2", "explanation": "I picked the right angle."},
         )
         assert wrong.json()["correct"] is False
         assert wrong.json()["score"] == 0
-        assert "You tried 90 degrees" in wrong.json()["feedback"]
-        assert "What do the angles add to?" in wrong.json()["feedback"]
+        assert wrong.json()["feedback"] == "They picked 90 degrees. It does not answer the question."
+        missed_prompt = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "They picked 90 degrees" in missed_prompt
+        assert "Do not repeat the question" in missed_prompt
+        assert "Your reply is exactly this question" not in missed_prompt
         right = client.post(
             f"/sessions/{session_id}/grade-widget",
             json={"choice": "c1", "explanation": "They add to a straight line."},
         )
         assert right.json()["correct"] is True
         assert right.json()["score"] == 1
-        assert right.json()["feedback"] == "That choice is right."
+        assert right.json()["feedback"] == "They picked 180 degrees. It answers the question."
         moved = client.post(
             f"/sessions/{session_id}/turn-score",
             json={"rubric_met": ["criterion"], "misconception": None, "advance": True},
@@ -796,6 +801,11 @@ def test_tutor_asks_close_questions_one_at_a_time() -> None:
         board = client.get(f"/sessions/{typed_id}/board").json()
         assert board["current_block"]["quiz"] is None
         assert board["current_block"]["objective"] == "Explain the angle sum."
+        typed_prompt = client.get(f"/sessions/{typed_id}/prompt").json()["system_prompt"]
+        assert "Explain the angle sum." in typed_prompt
+        assert "States that the angles add to 180." in typed_prompt
+        assert "Pick one answer on the card" not in typed_prompt
+        assert "Do not offer choices" in typed_prompt
         client.post(
             f"/sessions/{typed_id}/messages",
             json={"role": "user", "content": "The angles make a straight line."},
@@ -901,7 +911,8 @@ def test_import_copies_a_draft_and_remove_keeps_the_chat() -> None:
             "Name an exterior angle.",
         ]
         assert quest_body["close"]["answer_style"] == "multiple_choice"
-        assert quest_body["close"]["selection"] == "single"
+        assert quest_body["close"]["selection"] is None
+        assert quest_body["close"]["questions"][0]["kind"] == "multiple"
         assert quest_body["close"]["questions"][0]["text"] == "What do the angles add to?"
         kept = client.get(f"/studio/courses/{studio_id}")
         assert kept.status_code == 200
@@ -921,7 +932,8 @@ def test_import_copies_a_draft_and_remove_keeps_the_chat() -> None:
         )
         prompt = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
         assert "Walk these goals in order" in prompt
-        assert "Close: Choice." in prompt
+        assert "Close: Multiple choice." in prompt
+        assert "What do the angles add to?" not in prompt.split("Close:", 1)[1]
         removed = client.post(f"/courses/{body['id']}/remove")
         assert removed.status_code == 204
         detail = client.get(f"/sessions/{session_id}")

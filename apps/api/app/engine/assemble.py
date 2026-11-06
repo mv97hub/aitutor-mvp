@@ -354,6 +354,24 @@ def _criterion_line(beat: Layer1Beat) -> str:
     )
 
 
+def _picked_text(widget: WidgetTask) -> str:
+    if widget.grade is None:
+        return "that option"
+    wanted = set(widget.grade.choice_ids)
+    labels = [choice.text for choice in widget.choices if choice.id in wanted and choice.text]
+    return ", ".join(labels) or "that option"
+
+
+def _goal_text(beat: Layer1Beat) -> str:
+    parts = []
+    for point in beat.goals:
+        if point.learning_goal.strip():
+            parts.append(point.learning_goal.strip())
+        if point.success_criterion.strip():
+            parts.append(point.success_criterion.strip())
+    return " ".join(parts) or "the idea this quest taught"
+
+
 def _answer_text(widget: WidgetTask) -> str:
     answer = widget.answer
     if isinstance(answer, tuple):
@@ -393,7 +411,8 @@ def _widget_lines(widget: WidgetTask, *, reveal: bool) -> list[str]:
     lines.append(f"Choice ids: {', '.join(grade.choice_ids) or 'none'}.")
     lines.append(f"Their explanation: {grade.explanation.strip() or 'none'}.")
     lines.append(
-        f"Stored misconception: {grade.misconception or 'none'}. Keep it. Do not invent a different one for the taps."
+        f"Stored misconception: {grade.misconception or 'none'}. "
+        "Use it as the fact of the pick. Explain that fact in your own words. Do not copy it as the whole reply."
     )
     return lines
 
@@ -478,9 +497,14 @@ def _layer1(
             "This goal teaches, then asks. A few sentences the student could retell: the fact, a concrete picture from their interests, and why it matters for this goal. The one question comes last. No choice box. Do not preview the close."
         )
     elif beat.beat_role == "close":
-        lines.append(
-            "This is the close. Ask the closing question. A choice card is the only place a student taps an answer."
-        )
+        if beat.widget is not None and not hold_widget:
+            lines.append(
+                "This is the close. The choice card is the question. Do not repeat the question. Do not ask for a typed answer."
+            )
+        else:
+            lines.append(
+                "This is the close. Ask the closing question once. The kid types the answer. Do not offer choices."
+            )
     if beat.widget is not None and beat.beat_role in {"try", "show", "close"} and not hold_widget:
         lines.extend(_widget_lines(beat.widget, reveal=reveal))
     if beat.goals or beat.empty_close or beat.close_line.strip():
@@ -507,7 +531,7 @@ def _move_task(beat: Layer1Beat, *, hold_widget: bool) -> str:
     if beat.beat_role == "close":
         if hold_widget:
             return "Teach the close in words. Do not ask them to pick an answer until the card is on screen."
-        return f"Ask the closing question. {beat.prompt}"
+        return beat.prompt
     if beat.beat_role == "engage":
         return (
             "Expand this idea in words a student could retell. Do not turn it into a quiz stem. "
@@ -743,7 +767,9 @@ def _rules(
             "- Stay on the active move. If they wander off, answer in one sentence and come back.",
             "- Do not dump the whole quest or teach a later move.",
         ]
-    if classic:
+    if classic and beat.beat_role == "close" and beat.widget is not None:
+        lines.append("- Do not ask a question. The choice card is the question. Do not ask for a typed answer.")
+    elif classic:
         lines.append("- Teach, then ask. One question per turn, and it comes last. Do not ask a second question.")
     else:
         lines.append(f"- {_opening_sentence(discourse)}")
@@ -753,7 +779,7 @@ def _rules(
             "- Do not say hint to the student.",
             "- Do not grade taps. A choice widget is already scored before you speak.",
             "- rubric_met lists the rubric row ids their written words earned. On Try or Show, include success-criterion ids they earned. Use [] when there is no writing to grade or the writing missed.",
-            "- misconception is null when the writing is fine. On a wrong tap, the stored misconception is already set. You may repeat it in the reply. Do not clear it.",
+            "- misconception is null when the writing is fine. On a wrong tap, the stored misconception is the fact of the pick. Explain that fact in your own words. Do not copy it as the whole reply.",
             f"- hint_tier must be {tier}. The student never sees this field.",
         ]
     )
@@ -791,8 +817,8 @@ def _rules(
         lines.extend(
             [
                 "- advance is true only when this move should end. On a failed tap or a typed answer below the pass score, advance is false, unless this move is Name.",
-                "- On a wrong choice, explain what they tried and what the idea is. Do not state the correct choice. Do not say hint.",
-                "- On a correct choice, you may confirm it. Do not teach the next move.",
+                "- On a wrong choice, explain what they tried and what the idea is. Do not state the correct choice. Do not repeat the question. Do not say hint.",
+                "- On a correct choice, confirm why that pick fits. Do not ask the question again. Do not teach the next move.",
             ]
         )
     lines.extend(
@@ -909,6 +935,44 @@ def assemble(
                 ]
             )
         )
+    elif widget_offer == "correct" and beat.beat_role == "close" and not beat.finished:
+        picked = _picked_text(beat.widget) if beat.widget is not None else "that option"
+        lines.append(
+            "\n".join(
+                [
+                    f"They picked {picked}, and it is correct.",
+                    f"Quest goals: {_goal_text(beat)}.",
+                    "Explain in one or two sentences why that pick answers the question.",
+                    "Do not ask the question again. Do not list the options. Set advance to true.",
+                ]
+            )
+        )
+    elif widget_offer == "ask" and beat.beat_role == "close" and not beat.finished:
+        missed_card = beat.widget is not None and beat.widget.grade is not None and not beat.widget.grade.passed
+        if missed_card:
+            picked = _picked_text(beat.widget) if beat.widget is not None else "that option"
+            lines.append(
+                "\n".join(
+                    [
+                        f"They picked {picked}. It does not answer the question.",
+                        f"Quest goals: {_goal_text(beat)}.",
+                        "Explain that pick in one or two sentences, in words that fit this question.",
+                        "Do not repeat the question. Do not ask them to type an answer.",
+                        "Do not name the correct choice. The card stays up for another pick. Set advance to false.",
+                    ]
+                )
+            )
+        else:
+            lines.append(
+                "\n".join(
+                    [
+                        "The choice card is the question.",
+                        "Your reply is exactly: Pick one answer on the card.",
+                        "Do not repeat the question. Do not ask an open question.",
+                        "Do not name the correct choice. Set advance to false.",
+                    ]
+                )
+            )
     elif widget_offer == "ask" and not beat.finished:
         question = (beat.widget.prompt if beat.widget is not None else "").strip() or "Choose the best answer."
         missed_card = beat.widget is not None and beat.widget.grade is not None and not beat.widget.grade.passed
