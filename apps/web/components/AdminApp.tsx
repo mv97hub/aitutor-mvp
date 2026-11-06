@@ -12,10 +12,10 @@ function messageOf(error: unknown) {
 }
 
 function closeLabel(close: CourseClose | null) {
-  if (!close || close.kind === "none") return "No questions";
-  if (close.kind === "essay") return "Essay";
-  if (close.kind === "multi") return "Multi-choice";
-  return "Single choice";
+  if (!close || close.questions.length === 0) return "No questions";
+  if (close.answer_style === "multiple_choice" && close.selection === "multi") return "Multi-choice";
+  if (close.answer_style === "multiple_choice") return "Single choice";
+  return "Essay";
 }
 
 export function AdminApp({
@@ -148,7 +148,7 @@ export function AdminApp({
                   >
                     <strong>{course.title}</strong>
                     <small>
-                      {course.code} · ages {course.age_band} · {course.quest_count} quests
+                      {course.code} · {course.audience || "any age"} · {course.quest_count} quests
                     </small>
                   </button>
                 </li>
@@ -264,9 +264,11 @@ function QuestBranch({
             <span>Close</span>
             {closeLabel(quest.close)}
           </p>
-          {quest.close && quest.close.question ? (
+          {quest.close && quest.close.questions.length > 0 ? (
             <ul className="studio-choices">
-              <li>{quest.close.question}</li>
+              {quest.close.questions.map((item) => (
+                <li key={item.text}>{item.text}</li>
+              ))}
             </ul>
           ) : null}
           {quest.close?.items.length ? (

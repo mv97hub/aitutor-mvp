@@ -124,16 +124,21 @@ class StudioImportIn(BaseModel):
 class CourseCreate(BaseModel):
     title: str = Field(min_length=1, max_length=240)
     code: str | None = None
-    age_band: AgeBand = "9-11"
-    standards_alignment: str = ""
+    description: str = ""
+    audience: AgeBand = "9-11"
+    quest_count: int = 1
+    goals_per_quest: int = 1
+    quiz_minutes: int = 5
 
 
 class CoursePatch(BaseModel):
     title: str = Field(min_length=1, max_length=240)
     code: str = Field(min_length=1, max_length=40)
-    age_band: AgeBand
-    standards_alignment: str = ""
-    competency_dictionary: list[Competency] = Field(default_factory=list)
+    description: str = ""
+    audience: AgeBand
+    quest_count: int = 1
+    goals_per_quest: int = 1
+    quiz_minutes: int = 5
 
 
 class UnitCreate(BaseModel):
@@ -218,8 +223,6 @@ class CourseSummary(BaseModel):
     id: UUID
     code: str
     title: str
-    age_band: str
-    standards_alignment: str
     description: str = ""
     audience: str = ""
     quest_count: int
@@ -231,10 +234,6 @@ class QuestNode(BaseModel):
     id: UUID
     code: str
     title: str
-    quest_type: str
-    prerequisite_codes: list[str]
-    competency_tags: list[str]
-    dinner_prompt: str
     position: int
 
 
@@ -245,9 +244,13 @@ class GoalOut(BaseModel):
 
 
 class CloseOut(BaseModel):
-    kind: Literal["essay", "single", "multi", "none"]
-    question: str = ""
+    close_style: str
+    answer_style: str
+    choice_mode: str | None = None
     items: list[dict] = Field(default_factory=list)
+    questions: list[dict] = Field(default_factory=list)
+    intent: str = ""
+    selection: str | None = None
 
 
 class CatalogQuest(BaseModel):
@@ -263,14 +266,11 @@ class CourseTree(BaseModel):
     id: UUID
     code: str
     title: str
-    age_band: str
-    standards_alignment: str
     description: str = ""
     audience: str = ""
     quest_count: int = 1
     goals_per_quest: int = 1
     quiz_minutes: int = 5
-    competency_dictionary: list[dict]
     quests: list[CatalogQuest]
 
 
@@ -278,11 +278,6 @@ class QuestListItem(BaseModel):
     id: UUID
     code: str
     title: str
-    quest_type: str
-    prerequisite_codes: list[str]
-    competency_tags: list[str]
-    unit_number: int
-    unit_title: str
     position: int
 
 
@@ -301,10 +296,6 @@ class BeatOut(BaseModel):
 
 class QuestDetail(QuestNode):
     course_id: UUID
-    learning_goal: str = ""
-    success_criterion: list[dict] = Field(default_factory=list)
-    requires_teach_back: bool = False
-    beats: list[BeatOut]
     goals: list[GoalOut] = Field(default_factory=list)
     close: CloseOut | None = None
 
@@ -383,8 +374,8 @@ class BoardOut(BaseModel):
     quest_code: str
     quest_title: str
     enduring_understanding: str
-    current_beat_id: UUID | None
-    beats: list[BoardBeat]
+    current_goal_id: UUID | None
+    close_started: bool = False
     messages: list[MessageOut]
     steps: list[BlockStep]
     current_block: CurrentBlock | None = None
@@ -392,10 +383,12 @@ class BoardOut(BaseModel):
 
 class ResultOut(BaseModel):
     id: UUID
-    beat_id: UUID
-    beat_role: str
-    beat_position: int
+    goal_id: UUID | None = None
+    role: str
+    position: int
     quest_title: str
+    criterion: str = ""
+    answer: str = ""
     score: int
     passed: bool
     feedback: str
@@ -451,8 +444,8 @@ class SessionAdminOut(BaseModel):
     updated_at: datetime
     student: StudentOut
     quest: SessionQuest
-    current_beat_id: UUID | None
-    beats: list[SessionBeat]
+    current_goal_id: UUID | None
+    close_started: bool = False
     messages: list[MessageOut]
     results: list[ResultOut]
     prompts: list[ModelPromptOut] = Field(default_factory=list)

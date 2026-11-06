@@ -52,8 +52,6 @@ export type CourseSummary = {
   id: string;
   code: string;
   title: string;
-  age_band: string;
-  standards_alignment: string;
   description: string;
   audience: string;
   quest_count: number;
@@ -65,11 +63,6 @@ export type QuestListItem = {
   id: string;
   code: string;
   title: string;
-  quest_type: string;
-  prerequisite_codes: string[];
-  competency_tags: string[];
-  unit_number: number;
-  unit_title: string;
   position: number;
 };
 
@@ -82,10 +75,6 @@ export type QuestNode = {
   id: string;
   code: string;
   title: string;
-  quest_type: string;
-  prerequisite_codes: string[];
-  competency_tags: string[];
-  dinner_prompt: string;
   position: number;
 };
 
@@ -96,9 +85,13 @@ export type CourseGoal = {
 };
 
 export type CourseClose = {
-  kind: "essay" | "single" | "multi" | "none";
-  question: string;
+  close_style: string;
+  answer_style: string;
+  choice_mode: string | null;
   items: { text: string; correct?: boolean }[];
+  questions: { text: string }[];
+  intent: string;
+  selection: string | null;
 };
 
 export type CatalogQuest = {
@@ -114,14 +107,11 @@ export type CourseTree = {
   id: string;
   code: string;
   title: string;
-  age_band: string;
-  standards_alignment: string;
   description: string;
   audience: string;
   quest_count: number;
   goals_per_quest: number;
   quiz_minutes: number;
-  competency_dictionary: Competency[];
   quests: CatalogQuest[];
 };
 
@@ -173,10 +163,6 @@ export type BeatOut = {
 
 export type QuestDetail = QuestNode & {
   course_id: string;
-  learning_goal: string;
-  success_criterion: RubricRowInput[];
-  requires_teach_back: boolean;
-  beats: BeatOut[];
   goals: CourseGoal[];
   close: CourseClose | null;
 };
@@ -272,8 +258,8 @@ export type Board = {
   quest_code: string;
   quest_title: string;
   enduring_understanding: string;
-  current_beat_id: string | null;
-  beats: BoardBeat[];
+  current_goal_id: string | null;
+  close_started: boolean;
   messages: StoredMessage[];
   steps: BlockStep[];
   current_block: CurrentBlock | null;
@@ -281,10 +267,12 @@ export type Board = {
 
 export type ResultRow = {
   id: string;
-  beat_id: string;
-  beat_role: string;
-  beat_position: number;
+  goal_id: string | null;
+  role: string;
+  position: number;
   quest_title: string;
+  criterion: string;
+  answer: string;
   score: number;
   passed: boolean;
   feedback: string;
@@ -340,8 +328,8 @@ export type SessionDetail = {
   updated_at: string;
   student: Student;
   quest: SessionQuest;
-  current_beat_id: string | null;
-  beats: SessionBeat[];
+  current_goal_id: string | null;
+  close_started: boolean;
   messages: StoredMessage[];
   results: ResultRow[];
   prompts: ModelPrompt[];

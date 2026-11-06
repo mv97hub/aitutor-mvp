@@ -1,10 +1,9 @@
-"""Idempotent seed: four students and three courses.
+"""Idempotent seed: four learners and the default tutor profile.
 
-Running this twice does not duplicate students. Rome, Geometry, and AP Macro are
-updated in place. Sessions and messages stay. Any other course code is left as edited.
-Students keep a tutor persona that was already saved. Blank tutor fields are filled
-from the age band. The default tutor profile is inserted when it is missing and
-is not overwritten.
+Running this twice does not duplicate students. It does not write courses.
+Kid chat reads tutor_profiles, so this seed does not copy a tutor voice onto
+the student. Age is filled when missing. Reading level, modality, and interests
+are filled when blank.
 
 Studio tables (studio_*) are not read or written here. A re-seed leaves them in place.
 """
@@ -12,11 +11,9 @@ Studio tables (studio_*) are not read or written here. A re-seed leaves them in 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.course_io import replace_course, update_course_in_place
-from app.curriculum import COURSES
 from app.database import SessionLocal
 from app.engine.defaults import profile_for_age
-from app.models import Course, Student
+from app.models import Student
 from app.tutor_profile import ensure_default_profile
 
 STUDENTS = [
@@ -50,20 +47,13 @@ STUDENTS = [
 def _fill_student(student: Student, spec: dict) -> None:
     if student.age is None:
         student.age = spec["age"]
-    if student.tutor_persona:
-        return
     profile = profile_for_age(student.age)
-    student.reading_level = profile.reading_level
-    student.modality = profile.modality
-    student.interests = list(spec["interests"])
-    student.tutor_persona = profile.persona
-    student.tutor_lexicon = profile.lexicon
-    student.tutor_metaphors = profile.metaphors
-    student.tutor_sidekick = profile.sidekick
-    student.tutor_socratic_strictness = profile.socratic_strictness
-    student.tutor_struggle_window = profile.struggle_window
-    student.tutor_anti_spoiler = profile.anti_spoiler
-    student.tutor_pacing = profile.pacing
+    if not (student.reading_level or "").strip():
+        student.reading_level = profile.reading_level
+    if not (student.modality or "").strip():
+        student.modality = profile.modality
+    if not student.interests:
+        student.interests = list(spec["interests"])
 
 
 def seed(db: Session) -> dict[str, int]:
@@ -76,19 +66,9 @@ def seed(db: Session) -> dict[str, int]:
             db.flush()
             created_students += 1
         _fill_student(student, spec)
-    db.flush()
-
-    created_courses = 0
-    for payload in COURSES:
-        exists = db.scalar(select(Course.id).where(Course.code == payload["code"]))
-        if exists is None:
-            replace_course(db, payload)
-            created_courses += 1
-        else:
-            update_course_in_place(db, payload)
     ensure_default_profile(db)
     db.commit()
-    return {"students_created": created_students, "courses_created": created_courses}
+    return {"students_created": created_students, "courses_created": 0}
 
 
 def main() -> None:

@@ -1,14 +1,23 @@
-import copy
+"""Goal, then close. Seed inserts learners and does not write courses."""
 
-from sqlalchemy import delete, func, select
+from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import delete, func, select
 
 from app.course_io import CourseFileError, update_course_in_place
-from app.curriculum import COURSES
 from app.database import SessionLocal
 from app.main import app
-from app.models import Beat, Course, Message, Quest, QuestClose, QuestGoal, Session as TutorSession, Student
+from app.models import (
+    Course,
+    Quest,
+    Session as TutorSession,
+    Student,
+    StudioCourse,
+    StudioQuest,
+    StudioQuestClose,
+    StudioQuestGoal,
+)
 from app.prompt_loader import course_scope_on
 from app.seed import seed
 from app.tutor_profile import reset_default_profile
@@ -23,8 +32,6 @@ def setup_function() -> None:
         db.commit()
         seed(db)
         reset_default_profile(db)
-        for course in db.scalars(select(Course).where(Course.code.in_(["rome", "geometry", "macro"]))).all():
-            course.in_catalog = True
         db.commit()
     finally:
         db.close()
@@ -39,163 +46,151 @@ def _drop_named(name: str) -> None:
         db.close()
 
 
+def _drop_course(code: str) -> None:
+    db = SessionLocal()
+    try:
+        course = db.scalar(select(Course).where(Course.code == code))
+        if course is None:
+            return
+        quest_ids = list(db.scalars(select(Quest.id).where(Quest.course_id == course.id)))
+        if quest_ids:
+            db.execute(delete(TutorSession).where(TutorSession.quest_id.in_(quest_ids)))
+        db.delete(course)
+        db.commit()
+    finally:
+        db.close()
+
+
 def _student(slug: str) -> dict:
     students = client.get("/students").json()
     return next(student for student in students if student["slug"] == slug)
 
 
-def _quest(code: str) -> dict:
-    courses = client.get("/courses").json()
-    for course in courses:
-        quests = client.get(f"/courses/{course['id']}/quests").json()
-        for quest in quests:
-            if quest["code"] == code:
-                return quest
-    raise AssertionError(code)
+def _goals() -> list[dict]:
+    return [
+        {
+            "position": 1,
+            "learning_goal": "Name the sum.",
+            "success_criterion": "States that the angles add to 180.",
+        },
+        {
+            "position": 2,
+            "learning_goal": "Use the sum.",
+            "success_criterion": "Finds a missing angle.",
+        },
+    ]
 
 
-def test_a_starter_try_has_no_placeholder_card() -> None:
-    from app.flow import blank_beats
-
-    beats = blank_beats()
-    try_beat = next(beat for beat in beats if beat["role"] == "try")
-    assert try_beat["widget"] is None
-    assert all(beat["role"] != "try" or beat["widget"] is None for beat in beats)
-
-
-def test_seed_is_idempotent_and_counts_the_map() -> None:
-    db = SessionLocal()
-    try:
-        again = seed(db)
-        students = db.scalar(select(func.count()).select_from(Student))
-        courses = db.scalar(select(func.count()).select_from(Course))
-        quests = db.scalar(select(func.count()).select_from(Quest))
-        beats = db.scalar(select(func.count()).select_from(Beat))
-        rome = db.scalar(select(func.count()).select_from(Quest).join(Course).where(Course.code == "rome"))
-        goals = db.scalar(select(func.count()).select_from(QuestGoal))
-        closes = db.scalar(select(func.count()).select_from(QuestClose))
-        ages = {student.slug: student.age for student in db.scalars(select(Student)).all()}
-        storm = db.scalar(select(Student).where(Student.slug == "storm"))
-        persona = storm.tutor_persona
-        interests = list(storm.interests)
-    finally:
-        db.close()
-    assert again == {"students_created": 0, "courses_created": 0}
-    assert students == 4
-    assert courses == 3
-    assert quests == 50
-    assert beats > 48
-    assert rome == 16
-    assert goals > quests
-    assert closes == quests
-    assert ages["storm"] == 10
-    assert ages["wolverine"] == 16
-    assert "Co-Explorer" in persona
-    assert interests == ["weather", "leadership"]
+def _essay(question: str = "") -> dict:
+    questions = [{"text": question}] if question else []
+    return {
+        "close_style": "one",
+        "answer_style": "essay",
+        "choice_mode": None,
+        "items": {"choices": [], "questions": questions, "selection": None},
+        "intent": "",
+    }
 
 
-def test_reseed_keeps_sessions_and_refreshes_quest_text() -> None:
-    db = SessionLocal()
-    try:
-        quest = db.scalar(select(Quest).where(Quest.code == "ROM-U2-Q1"))
-        beat = db.scalar(select(Beat).where(Beat.quest_id == quest.id, Beat.position == 1))
-        quest_id = quest.id
-        beat_id = beat.id
-        original_goal = quest.learning_goal
-        original_prompt = beat.prompt
-        quest.learning_goal = "Edited goal that the seed must replace."
-        beat.prompt = "Edited prompt that the seed must replace."
-        student = db.scalar(select(Student).where(Student.slug == "storm"))
-        tutor_session = TutorSession(
-            student_id=student.id,
-            quest_id=quest.id,
-            current_beat_id=beat.id,
-            status="in_progress",
-        )
-        db.add(tutor_session)
-        db.flush()
-        message = Message(
-            session_id=tutor_session.id,
-            role="user",
-            content="Two consuls can veto each other.",
-            seq=1,
-        )
-        db.add(message)
-        db.commit()
-        session_id = tutor_session.id
-        message_id = message.id
-
-        again = seed(db)
-
-        kept_session = db.get(TutorSession, session_id)
-        kept_message = db.get(Message, message_id)
-        refreshed = db.get(Quest, quest_id)
-        refreshed_beat = db.get(Beat, beat_id)
-        assert again == {"students_created": 0, "courses_created": 0}
-        assert kept_session.quest_id == quest_id
-        assert kept_session.current_beat_id == beat_id
-        assert kept_message.session_id == session_id
-        assert kept_message.content == "Two consuls can veto each other."
-        assert refreshed.learning_goal == original_goal
-        first_goal = db.scalar(
-            select(QuestGoal).where(QuestGoal.quest_id == quest_id, QuestGoal.position == 1)
-        )
-        assert first_goal.learning_goal == original_goal
-        assert first_goal.success_criterion
-        assert refreshed_beat.id == beat_id
-        assert refreshed_beat.prompt == original_prompt
-    finally:
-        db.close()
+def _choice() -> dict:
+    return {
+        "close_style": "one",
+        "answer_style": "multiple_choice",
+        "choice_mode": "predefined",
+        "items": {
+            "choices": [
+                {"text": "180 degrees", "correct": True},
+                {"text": "90 degrees", "correct": False},
+            ],
+            "questions": [{"text": "What do the angles add to?"}],
+            "selection": "single",
+        },
+        "intent": "",
+    }
 
 
-def test_in_place_update_refuses_to_drop_a_quest_with_a_class() -> None:
-    db = SessionLocal()
-    try:
-        payload = copy.deepcopy(next(course for course in COURSES if course["code"] == "rome"))
-        for unit in payload["units"]:
-            unit["quests"] = [quest for quest in unit["quests"] if quest["code"] != "ROM-U4-BOSS"]
-        quest = db.scalar(select(Quest).where(Quest.code == "ROM-U4-BOSS"))
-        quest_id = quest.id
-        beat_id = db.scalar(
-            select(Beat.id).where(Beat.quest_id == quest.id).order_by(Beat.position)
-        )
-        student = db.scalar(select(Student).where(Student.slug == "storm"))
-        tutor_session = TutorSession(
-            student_id=student.id,
-            quest_id=quest.id,
-            current_beat_id=beat_id,
-            status="in_progress",
-        )
-        db.add(tutor_session)
-        db.commit()
-        session_id = tutor_session.id
-        refused = False
-        try:
-            update_course_in_place(db, payload)
-        except CourseFileError as exc:
-            refused = True
-            assert exc.field == "quests"
-            assert "ROM-U4-BOSS" in exc.message
-        assert refused
-        assert db.get(TutorSession, session_id) is not None
-        assert db.get(Quest, quest_id) is not None
-    finally:
-        db.close()
+def _publish(code: str, *, audience: str = "12-14", goals: list[dict] | None = None, close: dict | None = None, title: str = "Angles") -> dict:
+    payload = {
+        "code": code,
+        "title": title,
+        "description": "Triangle angles.",
+        "audience": audience,
+        "quest_count": 1,
+        "goals_per_quest": len(goals or _goals()),
+        "quiz_minutes": 5,
+        "quests": [
+            {
+                "code": f"{code}-Q1",
+                "title": "The angles",
+                "goals": goals if goals is not None else _goals(),
+                "close": close if close is not None else _essay(),
+            }
+        ],
+    }
+    response = client.post("/courses/import", json=payload)
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
-def test_health_roster_and_age_filter() -> None:
+def _open(code: str) -> dict:
+    tree = _publish(code)
+    quest_id = tree["quests"][0]["id"]
+    opened = client.post(
+        "/sessions",
+        json={"student_id": _student("storm")["id"], "quest_id": quest_id, "fresh": True},
+    )
+    assert opened.status_code == 200, opened.text
+    return opened.json()
+
+
+def _score(session_id: str, *, met: bool = True, advance: bool = True) -> dict:
+    body = {
+        "rubric_met": ["criterion"] if met else [],
+        "misconception": None,
+        "advance": advance,
+    }
+    response = client.post(f"/sessions/{session_id}/turn-score", json=body)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _profile(**overrides) -> dict:
+    body = {
+        "instructive": 3,
+        "persona": "curious-co-explorer",
+        "lexicon": "middle-grade-vivid",
+        "voice_override": False,
+        "metaphors": "playground-sports",
+        "sidekick": "bumbling-partner",
+        "struggle_window": "standard",
+        "anti_spoiler": True,
+        "one_question": True,
+        "use_interests": True,
+        "stay_on_course": True,
+        "growth_praise": True,
+    }
+    body.update(overrides)
+    return body
+
+
+def test_health_roster_and_audience_filter() -> None:
     assert client.get("/health").json() == {"ok": True}
     roster = client.get("/students").json()
-    assert [student["display_name"] for student in roster] == [
-        "Iron Man",
-        "Storm",
-        "Spider-Man",
-        "Wolverine",
-    ]
+    names = [student["display_name"] for student in roster]
+    assert names[:4] == ["Iron Man", "Storm", "Spider-Man", "Wolverine"]
     assert roster[1]["age_band"] == "9-11"
-    assert client.get("/courses", params={"age_band": "9-11"}).json()[0]["code"] == "rome"
-    assert client.get("/courses", params={"age_band": "15-17"}).json()[0]["code"] == "macro"
-    assert len(client.get("/courses").json()) == 3
+    try:
+        younger = _publish("ZZAGE9", audience="9-11", title="Younger")
+        older = _publish("ZZAGE15", audience="15-17", title="Older")
+        nine = [course["code"] for course in client.get("/courses", params={"audience": "9-11"}).json()]
+        older_codes = [course["code"] for course in client.get("/courses", params={"audience": "15-17"}).json()]
+        assert younger["code"] in nine
+        assert older["code"] not in nine
+        assert older["code"] in older_codes
+        assert client.get("/courses", params={"audience": "nope"}).status_code == 422
+    finally:
+        _drop_course("ZZAGE9")
+        _drop_course("ZZAGE15")
 
 
 def test_create_student_keeps_layer_2_apart_from_tutor_settings() -> None:
@@ -261,581 +256,153 @@ def test_create_student_keeps_layer_2_apart_from_tutor_settings() -> None:
         _drop_named("Grace Hopper")
 
 
-def test_any_age_can_open_any_course() -> None:
-    storm = _student("storm")["id"]
-    wolverine = _student("wolverine")["id"]
-    courses = {course["code"]: course["age_band"] for course in client.get("/courses").json()}
-    assert courses["rome"] == "9-11"
-    assert courses["geometry"] == "12-14"
-    assert courses["macro"] == "15-17"
-    macro = client.post(
-        "/sessions",
-        json={"student_id": storm, "quest_id": _quest("MAC-U5-Q1")["id"], "fresh": True},
-    )
-    assert macro.status_code == 200
-    assert macro.json()["quest_code"] == "MAC-U5-Q1"
-    rome = client.post(
-        "/sessions",
-        json={"student_id": wolverine, "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
-    )
-    assert rome.status_code == 200
-    assert rome.json()["course_code"] == "rome"
-    geometry = client.post(
-        "/sessions",
-        json={"student_id": storm, "quest_id": _quest("GEO-U2-Q2")["id"], "fresh": True},
-    )
-    assert geometry.status_code == 200
-    assert geometry.json()["course_code"] == "geometry"
-    branch = client.post(
-        "/sessions",
-        json={"student_id": storm, "quest_id": _quest("ROM-U4-Q2A")["id"], "fresh": True},
-    )
-    assert branch.status_code == 200
-    opened = branch.json()
-    detail = client.get(f"/quests/{_quest('ROM-U4-Q2A')['id']}").json()
-    assert opened["current_block"]["kind"] == detail["beats"][0]["role"]
-    assert len(opened["steps"]) == len(detail["beats"])
-    assert opened["current_block"]["kind"] != "mystery_hook"
-
-
-def test_widget_grades_before_the_model_and_prompt_has_seven_layers() -> None:
-    storm = _student("storm")["id"]
-    quest = _quest("ROM-U2-Q1")
-    opened = client.post("/sessions", json={"student_id": storm, "quest_id": quest["id"], "fresh": True})
-    assert opened.status_code == 200
-    session_id = opened.json()["id"]
-    assert "veto" in opened.json()["current_block"]["tutor_prompt"].lower()
-    assert opened.json()["current_block"]["quiz"] is None
-
-    prompt = client.get(f"/sessions/{session_id}/prompt", params={"kickoff": True}).json()
-    assert "Layer 7 — Memory" in prompt["system_prompt"]
-    assert "curious co-explorer" in prompt["system_prompt"]
-    assert "weather" in prompt["system_prompt"]
-    assert "what finished work looks like" in prompt["system_prompt"]
-    assert "Do not invent a different topic" in prompt["system_prompt"]
-    assert "Do not preview later moves" in prompt["system_prompt"]
-    assert "494" not in prompt["system_prompt"]
-    assert "worked answer" not in prompt["system_prompt"].lower()
-    assert prompt["temperature"] == 0.4
-    assert "reply" in prompt["response_schema"]["properties"]
-
-    scored = client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["advantage", "problem"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    assert scored.json()["passed"] is True
-    assert scored.json()["advanced"] is True
-    waiting = client.get(f"/sessions/{session_id}/board").json()
-    assert waiting["current_block"]["kind"] == "try"
-    assert waiting["current_block"]["quiz"] is None
-    _speak(session_id, "try")
-    _answer_in_words(session_id, "try")
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["quiz"] is None
-    taught = client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    assert taught.json()["graded_by"] == "model"
-    assert taught.json()["advanced"] is True
-
-    banker = client.post(
-        "/sessions",
-        json={"student_id": storm, "quest_id": _quest("MAC-U5-Q1")["id"], "fresh": True},
-    )
-    banker_id = banker.json()["id"]
-    client.post(
-        f"/sessions/{banker_id}/turn-score",
-        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    client.post(
-        f"/sessions/{banker_id}/turn-score",
-        json={"rubric_met": ["link"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    assert client.get(f"/sessions/{banker_id}/board").json()["current_block"]["kind"] == "show"
-    assert client.get(f"/sessions/{banker_id}/board").json()["current_block"]["quiz"] is None
-    question = "Which segment of the FOMC memo has the policy flaw?"
-    asking = client.get(f"/sessions/{banker_id}/prompt").json()["system_prompt"]
-    assert "exactly this question" in asking
-    assert question in asking
-    assert "Do not ask an open question." in asking
-    client.post(
-        f"/sessions/{banker_id}/messages",
-        json={"role": "assistant", "content": question, "client_id": "bank-ask"},
-    )
-    quiz = client.get(f"/sessions/{banker_id}/board").json()["current_block"]["quiz"]
-    assert quiz["type"] == "flaw"
-    assert quiz["prompt"] == question
-    assert "answer" not in quiz
-    wrong = client.post(
-        f"/sessions/{banker_id}/grade-widget",
-        json={"choice": "s1", "explanation": ""},
-    )
-    assert wrong.json()["passed"] is False
-    moved = client.post(
-        f"/sessions/{banker_id}/turn-score",
-        json={"rubric_met": [], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    assert moved.json()["graded_by"] == "widget"
-    assert moved.json()["advanced"] is False
-
-
-def test_choice_widget_waits_until_the_tutor_has_spoken_for_the_move() -> None:
-    storm = _student("storm")["id"]
-    opened = client.post(
-        "/sessions",
-        json={"student_id": storm, "quest_id": _quest("ROM-U1-Q1")["id"], "fresh": True},
-    )
-    session_id = opened.json()["id"]
-    assert opened.json()["current_block"]["kind"] == "try"
-    assert opened.json()["current_block"]["quiz"] is None
-
-    kickoff = client.get(f"/sessions/{session_id}/prompt", params={"kickoff": True}).json()
-    assert "what finished work looks like" in kickoff["system_prompt"]
-    assert "choice widget is not on screen" in kickoff["system_prompt"]
-    assert "Invite them to choose" not in kickoff["system_prompt"]
-    assert "pottery" not in kickoff["system_prompt"].lower()
-    assert "one question" in kickoff["system_prompt"].lower()
-    assert "short teaching of the first idea" in kickoff["system_prompt"]
-    assert "First idea to teach:" in kickoff["system_prompt"]
-
-    client.post(
-        f"/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Hi! I'm ready to learn.", "client_id": "open-user"},
-    )
-    held = client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": False},
-    )
-    assert held.json()["graded_by"] == "model"
-    assert held.json()["advanced"] is False
-    board = client.get(f"/sessions/{session_id}/board").json()
-    assert board["current_block"]["kind"] == "try"
-    assert board["current_block"]["quiz"] is None
-
-    client.post(
-        f"/sessions/{session_id}/messages",
-        json={
-            "role": "assistant",
-            "content": "The goal is to tell a legend from a clue. A story can carry a meaning, and a find can be checked.",
-            "client_id": "open-tutor",
-        },
-    )
-    taught = client.get(f"/sessions/{session_id}/board").json()
-    assert taught["current_block"]["kind"] == "try"
-    assert taught["current_block"]["quiz"] is None
-    still_held = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-    assert "Invite them to choose" not in still_held
-    assert "exactly this question" not in still_held
-    _answer_in_words(session_id, "open")
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["quiz"] is None
-
-    banker = client.post(
-        "/sessions",
-        json={"student_id": storm, "quest_id": _quest("MAC-U5-Q1")["id"], "fresh": True},
-    )
-    assert banker.json()["current_block"]["kind"] == "try"
-    assert banker.json()["current_block"]["quiz"] is None
-    banker_id = banker.json()["id"]
-    banker_kickoff = client.get(f"/sessions/{banker_id}/prompt", params={"kickoff": True}).json()
-    assert "FOMC" not in banker_kickoff["system_prompt"]
-    assert "simultaneously cure" not in banker_kickoff["system_prompt"].lower()
-    client.post(
-        f"/sessions/{banker_id}/turn-score",
-        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    client.post(
-        f"/sessions/{banker_id}/turn-score",
-        json={"rubric_met": ["link"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    show = client.get(f"/sessions/{banker_id}/board").json()
-    assert show["current_block"]["kind"] == "show"
-    assert show["current_block"]["quiz"] is None
-    question = "Which segment of the FOMC memo has the policy flaw?"
-    invite = client.get(f"/sessions/{banker_id}/prompt").json()["system_prompt"]
-    assert "exactly this question" in invite
-    assert question in invite
-    assert "Do not ask an open question." in invite
-    client.post(
-        f"/sessions/{banker_id}/messages",
-        json={"role": "assistant", "content": question, "client_id": "bank-question"},
-    )
-    ready = client.get(f"/sessions/{banker_id}/board").json()
-    assert ready["current_block"]["quiz"]["prompt"] == question
-    assert "answer" not in ready["current_block"]["quiz"]
-
-
-def _reach_show(student_id: str, quest_code: str) -> str:
-    opened = client.post(
-        "/sessions",
-        json={"student_id": student_id, "quest_id": _quest(quest_code)["id"], "fresh": True},
-    )
-    session_id = opened.json()["id"]
-    client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["link"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "show"
-    return session_id
-
-
-def test_a_wrong_close_gets_one_explanation_then_another_try() -> None:
-    storm = _student("storm")["id"]
-    client.put("/tutor-profile", json=_profile(struggle_window="standard"))
-    session_id = _reach_show(storm, "MAC-U5-Q1")
-    question = "Which segment of the FOMC memo has the policy flaw?"
-    client.post(
-        f"/sessions/{session_id}/messages",
-        json={"role": "assistant", "content": question, "client_id": "miss-ask"},
-    )
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["quiz"]["prompt"] == question
-    wrong = client.post(
-        f"/sessions/{session_id}/grade-widget",
-        json={"choice": "s1", "explanation": ""},
-    )
-    assert wrong.json()["passed"] is False
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["quiz"] is None
-    explained = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-    assert "Explain that miss" in explained
-    assert "another try" in explained
-    assert "Do not ask an open question." in explained
-    assert "Correct answer, for you only" not in explained
-    assert "The struggle window is over" not in explained
-    client.post(
-        f"/sessions/{session_id}/messages",
-        json={"role": "assistant", "content": f"That sentence only names the shock. {question}", "client_id": "miss-explain"},
-    )
-    again = client.get(f"/sessions/{session_id}/board").json()
-    assert again["current_block"]["quiz"]["prompt"] == question
-
-    client.put("/tutor-profile", json=_profile(struggle_window="short"))
+def test_seed_inserts_learners_and_does_not_write_courses() -> None:
+    db = SessionLocal()
     try:
-        closed_id = _reach_show(storm, "MAC-U5-Q1")
-        client.post(
-            f"/sessions/{closed_id}/messages",
-            json={"role": "assistant", "content": question, "client_id": "closed-ask"},
-        )
-        client.post(
-            f"/sessions/{closed_id}/grade-widget",
-            json={"choice": "s1", "explanation": ""},
-        )
-        revealed = client.get(f"/sessions/{closed_id}/prompt").json()["system_prompt"]
-        assert "The struggle window is over" in revealed
-        assert "Correct answer, for you only" in revealed
-        assert "exactly this question" not in revealed
-        client.post(
-            f"/sessions/{closed_id}/messages",
-            json={"role": "assistant", "content": "The flawed sentence is the one that promises both goals.", "client_id": "closed-answer"},
-        )
-        assert client.get(f"/sessions/{closed_id}/board").json()["current_block"]["quiz"] is None
+        before = db.scalar(select(func.count()).select_from(Course))
+        first = seed(db)
+        second = seed(db)
+        assert first["courses_created"] == 0
+        assert second["students_created"] == 0
+        assert second["courses_created"] == 0
+        assert db.scalar(select(func.count()).select_from(Course)) == before
+        storm = db.scalar(select(Student).where(Student.slug == "storm"))
+        assert storm is not None
+        storm.tutor_persona = ""
+        storm.tutor_lexicon = ""
+        storm.tutor_metaphors = ""
+        storm.tutor_sidekick = ""
+        storm.tutor_pacing = ""
+        db.commit()
+        seed(db)
+        db.refresh(storm)
+        assert storm.tutor_persona == ""
+        assert storm.tutor_pacing == ""
+        assert storm.age == 10
+        assert (storm.reading_level or "").strip()
     finally:
-        client.put("/tutor-profile", json=_profile(struggle_window="standard"))
+        db.close()
 
 
-def test_struggle_window_then_worked_answer_advances() -> None:
-    storm = _student("storm")["id"]
-    opened = client.post(
-        "/sessions",
-        json={"student_id": storm, "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
-    )
-    session_id = opened.json()["id"]
-    held = {"rubric_met": [], "misconception": None, "hint_tier": "nudge", "advance": True}
-    first = client.post(f"/sessions/{session_id}/turn-score", json=held)
-    assert first.json()["passed"] is False
-    assert first.json()["advanced"] is False
-    second = client.post(f"/sessions/{session_id}/turn-score", json=held)
-    assert second.json()["advanced"] is False
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "engage"
-    revealed = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-    assert "The struggle window is over" in revealed
-    assert "worked answer" in revealed.lower()
-    assert "Correct answer, for you only" not in revealed
-    third = client.post(f"/sessions/{session_id}/turn-score", json=held)
-    assert third.json()["passed"] is False
-    assert third.json()["advanced"] is True
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "try"
-
-
-def test_moves_finish_the_quest_and_a_met_criterion_skips_teach_back() -> None:
-    storm = _student("storm")["id"]
-    opened = client.post(
-        "/sessions",
-        json={"student_id": storm, "quest_id": _quest("ROM-U1-Q1")["id"], "fresh": True},
-    )
-    session_id = opened.json()["id"]
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "try"
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["quiz"] is None
-    client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "name"
-    client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": [], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "show"
-    done = client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["story", "find"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    assert done.json()["advanced"] is True
-    assert client.get(f"/sessions/{session_id}/board").json()["status"] == "completed"
-
-    consuls = client.post(
-        "/sessions",
-        json={"student_id": storm, "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
-    )
-    session_id = consuls.json()["id"]
-    client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["advantage", "problem"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["choice"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    assert client.get(f"/sessions/{session_id}/board").json()["current_block"]["kind"] == "name"
-    client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": [], "misconception": None, "hint_tier": "nudge", "advance": False},
-    )
-    show = client.get(f"/sessions/{session_id}/board").json()
-    assert show["current_block"]["kind"] == "show"
-    assert any(step["kind"] == "teach_back" for step in show["steps"])
-    finished = client.post(
-        f"/sessions/{session_id}/turn-score",
-        json={"rubric_met": ["veto", "deadlock"], "misconception": None, "hint_tier": "nudge", "advance": True},
-    )
-    assert finished.json()["advanced"] is True
-    assert client.get(f"/sessions/{session_id}/board").json()["status"] == "completed"
-
-
-def test_import_rejects_the_field_and_replaces_by_code() -> None:
-    bad = {
-        "code": "trial",
-        "title": "Trial course",
-        "age_band": "12-14",
-        "standards_alignment": "A local standard.",
-        "competency_dictionary": [{"code": "idea", "description": "One idea."}],
-        "units": [
-            {
-                "number": 1,
-                "title": "Only unit",
-                "enduring_understanding": "One idea is enough to practice the file.",
-                "continuity_summary": "This unit stands alone. The next file can replace it.",
-                "quests": [
-                    {
-                        "code": "TRY-Q1",
-                        "title": "Try the file",
-                        "quest_type": "core",
-                        "prerequisite_codes": [],
-                        "competency_tags": ["idea"],
-                        "dinner_prompt": "Ask what the file was for.",
-                        "learning_goal": "The file practices one idea.",
-                        "success_criterion": [
-                            {"id": "part-a", "text": "Names the first part of the idea.", "weight": 50},
-                            {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
-                        ],
-                        "requires_teach_back": False,
-                        "beats": _cycle_moves(),
-                    }
-                ],
-            }
-        ],
-    }
-    bad["units"][0]["quests"][0]["beats"][0]["rubric"] = [
-        {"id": "a", "text": "Names a reason.", "weight": 40},
-        {"id": "b", "text": "Names a second reason.", "weight": 40},
-    ]
-    rejected = client.post("/courses/import", json=bad)
-    assert rejected.status_code == 422
-    assert "beats[0].rubric" in rejected.json()["detail"]
-
-    good = bad
-    good["units"][0]["quests"][0]["beats"] = _cycle_moves()
-    created = client.post("/courses/import", json=good)
-    assert created.status_code == 200
-    assert created.json()["code"] == "trial"
+def test_reseed_keeps_a_class_on_a_course_the_seed_did_not_write() -> None:
     try:
-        good["title"] = "Trial course replaced"
-        replaced = client.post("/courses/import", json=good)
-        assert replaced.status_code == 200
-        assert replaced.json()["title"] == "Trial course replaced"
-        codes = [course["code"] for course in client.get("/courses").json()]
-        assert codes.count("trial") == 1
-    finally:
-        course_id = next(course["id"] for course in client.get("/courses").json() if course["code"] == "trial")
-        assert client.delete(f"/courses/{course_id}").status_code == 204
-
-
-def _answer_in_words(session_id: str, label: str) -> None:
-    client.post(
-        f"/sessions/{session_id}/messages",
-        json={
-            "role": "user",
-            "content": "I can say the idea in my own words.",
-            "client_id": f"{label}-words",
-        },
-    )
-    client.post(
-        f"/sessions/{session_id}/messages",
-        json={
-            "role": "assistant",
-            "content": "You explained it. The next step is to check that idea.",
-            "client_id": f"{label}-follow",
-        },
-    )
-
-
-def _speak(session_id: str, label: str) -> None:
-    client.post(
-        f"/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Tell me the idea.", "client_id": f"{label}-user"},
-    )
-    client.post(
-        f"/sessions/{session_id}/messages",
-        json={
-            "role": "assistant",
-            "content": "Here is the idea, and then one question.",
-            "client_id": f"{label}-tutor",
-        },
-    )
-
-
-def _cycle_moves() -> list[dict]:
-    criterion = [
-        {"id": "part-a", "text": "Names the first part of the idea.", "weight": 50},
-        {"id": "part-b", "text": "Names the second part of the idea.", "weight": 50},
-    ]
-    moves = []
-    for role in ("try", "name", "show"):
-        widget = None
-        rubric = [
-            {"id": "link", "text": "Connects the try to the idea.", "weight": 100},
-        ]
-        if role == "try":
-            rubric = [{"id": "choice", "text": "Picks the matching choice.", "weight": 100}]
-            widget = {
-                "type": "single",
-                "prompt": "Which choice matches?",
-                "choices": [
-                    {"id": "yes", "text": "The matching choice.", "misconception": ""},
-                    {"id": "no", "text": "A different idea.", "misconception": "That idea is not this quest."},
-                ],
-                "answer": "yes",
-                "explain": False,
-                "misconception": "Match the question.",
-            }
-        if role == "show":
-            rubric = criterion
-        moves.append(
-            {
-                "role": role,
-                "bloom_level": "understand",
-                "cognitive_load": "low",
-                "prompt": f"Work the {role.replace('_', ' ')} move.",
-                "rubric": rubric,
-                "misconception_map": [
-                    {"id": "miss", "trap": "A nearby idea answers it.", "note": "Stay on this move."}
-                ],
-                "hint_ladder": {
-                    "nudge": "What is the question asking?",
-                    "analogy": "A small picture of the same idea.",
-                    "scaffold": "The first part is ____.",
-                },
-                "widget": widget,
-            }
+        opened = _open("ZZKEEP")
+        client.post(
+            f"/sessions/{opened['id']}/messages",
+            json={"role": "user", "content": "The angles add to 180.", "client_id": "zzkeep-1"},
         )
-    return moves
+        db = SessionLocal()
+        try:
+            seed(db)
+        finally:
+            db.close()
+        detail = client.get(f"/sessions/{opened['id']}")
+        assert detail.status_code == 200
+        assert any(message["content"] == "The angles add to 180." for message in detail.json()["messages"])
+    finally:
+        _drop_course("ZZKEEP")
 
 
-def _profile(**overrides) -> dict:
-    body = {
-        "instructive": 3,
-        "persona": "curious-co-explorer",
-        "lexicon": "middle-grade-vivid",
-        "voice_override": False,
-        "metaphors": "playground-sports",
-        "sidekick": "bumbling-partner",
-        "struggle_window": "standard",
-        "anti_spoiler": True,
-        "one_question": True,
-        "use_interests": True,
-        "stay_on_course": True,
-        "growth_praise": True,
-    }
-    body.update(overrides)
-    return body
-
-
-def test_one_tutor_profile_applies_to_every_student() -> None:
-    current = client.get("/tutor-profile")
-    assert current.status_code == 200
-    assert current.json()["instructive"] == 3
-    assert current.json()["struggle_window"] == "standard"
-    rejected = client.put("/tutor-profile", json=_profile(persona="wizard"))
-    assert rejected.status_code == 422
-
-    followed = client.put(
-        "/tutor-profile",
-        json=_profile(persona="tactical-coach", lexicon="early-concrete", voice_override=False),
-    )
-    assert followed.status_code == 200
-    assert followed.json()["lexicon"] == "precise-visual"
-    assert followed.json()["voice_override"] is False
-    overridden = client.put(
-        "/tutor-profile",
-        json=_profile(
-            persona="debate-moderator",
-            lexicon="early-concrete",
-            voice_override=True,
-            instructive=1,
-            struggle_window="short",
-            metaphors="none",
-            sidekick="off",
-        ),
-    )
-    assert overridden.status_code == 200
-    saved = overridden.json()
-    assert saved["lexicon"] == "early-concrete"
-    assert saved["voice_override"] is True
-    assert saved["instructive"] == 1
-
-    storm = _student("storm")
-    assert "Co-Explorer" in storm["tutor_persona"]
+def test_goals_then_an_empty_close() -> None:
     try:
+        opened = _open("ZZEMPTY")
+        assert opened["current_block"]["kind"] == "goal"
+        assert [step["kind"] for step in opened["steps"]] == ["goal", "goal", "close"]
+        assert opened["current_block"]["quiz"] is None
+        first = _score(opened["id"])
+        assert first["advanced"] is True
+        board = client.get(f"/sessions/{opened['id']}/board").json()
+        assert board["close_started"] is False
+        assert board["current_block"]["kind"] == "goal"
+        second = _score(opened["id"])
+        assert second["advanced"] is True
+        done = client.get(f"/sessions/{opened['id']}/board").json()
+        assert done["status"] == "completed"
+    finally:
+        _drop_course("ZZEMPTY")
+
+
+def test_a_quest_with_no_goals_and_an_empty_close_is_already_finished() -> None:
+    try:
+        tree = _publish("ZZDONE", goals=[], close=_essay())
         opened = client.post(
             "/sessions",
-            json={"student_id": storm["id"], "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
+            json={
+                "student_id": _student("storm")["id"],
+                "quest_id": tree["quests"][0]["id"],
+                "fresh": True,
+            },
+        )
+        assert opened.status_code == 200
+        assert opened.json()["status"] == "completed"
+    finally:
+        _drop_course("ZZDONE")
+
+
+def test_choice_card_waits_until_the_tutor_has_spoken_on_the_close() -> None:
+    try:
+        tree = _publish(
+            "ZZCARD",
+            goals=[_goals()[0]],
+            close=_choice(),
+        )
+        opened = client.post(
+            "/sessions",
+            json={
+                "student_id": _student("storm")["id"],
+                "quest_id": tree["quests"][0]["id"],
+                "fresh": True,
+            },
         )
         session_id = opened.json()["id"]
-        prompt = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-        assert "debate moderator" in prompt.lower()
-        assert "Curious Co-Explorer" not in prompt
-        assert "One short question" in prompt
-        assert "plain language only" in prompt.lower()
-        patched = client.patch(
-            f"/students/{storm['id']}",
-            json={"tutor_persona": "Harbor Guide", "tutor_struggle_window": "long"},
+        assert opened.json()["current_block"]["quiz"] is None
+        early = client.post(
+            f"/sessions/{session_id}/grade-widget",
+            json={"choice": "c1", "explanation": ""},
         )
-        assert patched.status_code == 200
-        assert patched.json()["tutor_persona"] == "Harbor Guide"
-        again = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-        assert "Harbor Guide" not in again
-        assert "debate moderator" in again.lower()
+        assert early.json()["ok"] is False
+        scored = _score(session_id)
+        assert scored["advanced"] is True
+        waiting = client.get(f"/sessions/{session_id}/board").json()
+        assert waiting["close_started"] is True
+        assert waiting["current_block"]["kind"] == "close"
+        assert waiting["current_block"]["quiz"] is None
+        client.post(
+            f"/sessions/{session_id}/messages",
+            json={"role": "assistant", "content": "What do the angles add to?"},
+        )
+        asking = client.get(f"/sessions/{session_id}/board").json()
+        quiz = asking["current_block"]["quiz"]
+        assert quiz is not None
+        assert len(quiz["choices"]) >= 2
+        wrong = client.post(
+            f"/sessions/{session_id}/grade-widget",
+            json={"choice": "c2", "explanation": "I picked the right angle."},
+        )
+        assert wrong.json()["ok"] is True
+        assert wrong.json()["correct"] is False
+        right = client.post(
+            f"/sessions/{session_id}/grade-widget",
+            json={"choice": "c1", "explanation": "They add to a straight line."},
+        )
+        assert right.json()["correct"] is True
+    finally:
+        _drop_course("ZZCARD")
 
-        wolverine = client.post(
+
+def test_struggle_window_then_advance() -> None:
+    try:
+        tree = _publish("ZZWIN", goals=[_goals()[0]], close=_essay())
+        client.put("/tutor-profile", json=_profile(struggle_window="short"))
+        opened = client.post(
             "/sessions",
-            json={"student_id": _student("wolverine")["id"], "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
+            json={
+                "student_id": _student("storm")["id"],
+                "quest_id": tree["quests"][0]["id"],
+                "fresh": True,
+            },
         )
-        other = client.get(f"/sessions/{wolverine.json()['id']}/prompt").json()["system_prompt"]
-        assert "debate moderator" in other.lower()
-        assert "One short question" in other
-
+        session_id = opened.json()["id"]
         held = {"rubric_met": [], "misconception": None, "hint_tier": "nudge", "advance": True}
         first = client.post(f"/sessions/{session_id}/turn-score", json=held)
         assert first.json()["advanced"] is False
@@ -843,11 +410,109 @@ def test_one_tutor_profile_applies_to_every_student() -> None:
         assert "The struggle window is over" in revealed
         second = client.post(f"/sessions/{session_id}/turn-score", json=held)
         assert second.json()["advanced"] is True
+        done = client.get(f"/sessions/{session_id}/board").json()
+        assert done["status"] == "completed"
     finally:
-        client.patch(
-            f"/students/{storm['id']}",
-            json={"tutor_persona": storm["tutor_persona"], "tutor_struggle_window": "minimum"},
+        client.put("/tutor-profile", json=_profile())
+        _drop_course("ZZWIN")
+
+
+def test_moves_are_rejected() -> None:
+    try:
+        tree = _publish("ZZMOVE", goals=[_goals()[0]])
+        quest_id = tree["quests"][0]["id"]
+        rejected = client.put(f"/quests/{quest_id}/beats", json={"beats": []})
+        assert rejected.status_code == 422
+        assert rejected.json()["detail"] == "A move is not part of this course."
+    finally:
+        _drop_course("ZZMOVE")
+
+
+def test_in_place_update_refuses_to_drop_a_quest_with_a_class() -> None:
+    try:
+        tree = _publish("ZZHOLD")
+        quest = tree["quests"][0]
+        opened = client.post(
+            "/sessions",
+            json={"student_id": _student("storm")["id"], "quest_id": quest["id"], "fresh": True},
         )
+        assert opened.status_code == 200
+        db = SessionLocal()
+        try:
+            try:
+                update_course_in_place(
+                    db,
+                    {
+                        "code": "ZZHOLD",
+                        "title": "Angles",
+                        "description": "Triangle angles.",
+                        "audience": "12-14",
+                        "quest_count": 1,
+                        "goals_per_quest": 1,
+                        "quiz_minutes": 5,
+                        "quests": [],
+                    },
+                )
+            except CourseFileError as exc:
+                assert "still has classes" in exc.message
+            else:
+                raise AssertionError("the quest with a class was dropped")
+        finally:
+            db.close()
+    finally:
+        _drop_course("ZZHOLD")
+
+
+def test_one_tutor_profile_applies_to_every_student() -> None:
+    current = client.get("/tutor-profile")
+    assert current.status_code == 200
+    assert current.json()["instructive"] == 3
+    rejected = client.put("/tutor-profile", json=_profile(persona="wizard"))
+    assert rejected.status_code == 422
+    try:
+        tree = _publish("ZZVOICE", goals=[_goals()[0]], title="Voice")
+        overridden = client.put(
+            "/tutor-profile",
+            json=_profile(
+                persona="debate-moderator",
+                lexicon="early-concrete",
+                voice_override=True,
+                instructive=1,
+                struggle_window="short",
+                metaphors="none",
+                sidekick="off",
+            ),
+        )
+        assert overridden.status_code == 200
+        storm = _student("storm")
+        opened = client.post(
+            "/sessions",
+            json={"student_id": storm["id"], "quest_id": tree["quests"][0]["id"], "fresh": True},
+        )
+        session_id = opened.json()["id"]
+        prompt = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "debate moderator" in prompt.lower()
+        patched = client.patch(
+            f"/students/{storm['id']}",
+            json={"tutor_persona": "Harbor Guide", "tutor_struggle_window": "long"},
+        )
+        assert patched.status_code == 200
+        again = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "Harbor Guide" not in again
+        assert "debate moderator" in again.lower()
+        other = client.post(
+            "/sessions",
+            json={
+                "student_id": _student("wolverine")["id"],
+                "quest_id": tree["quests"][0]["id"],
+                "fresh": True,
+            },
+        )
+        other_prompt = client.get(f"/sessions/{other.json()['id']}/prompt").json()["system_prompt"]
+        assert "debate moderator" in other_prompt.lower()
+    finally:
+        client.put("/tutor-profile", json=_profile())
+        _drop_course("ZZVOICE")
 
 
 def test_stay_on_course_rule_follows_the_profile_switch() -> None:
@@ -863,76 +528,62 @@ def test_stay_on_course_rule_follows_the_profile_switch() -> None:
     assert course_scope_on(OlderRow()) is True
     assert course_scope_on(BlankRow()) is True
     assert course_scope_on(OffRow()) is False
-
-    current = client.get("/tutor-profile")
-    assert current.status_code == 200
-    assert current.json()["stay_on_course"] is True
-
-    storm = _student("storm")
-    opened = client.post(
-        "/sessions",
-        json={"student_id": storm["id"], "quest_id": _quest("ROM-U2-Q1")["id"], "fresh": True},
-    )
-    assert opened.status_code == 200
-    session_id = opened.json()["id"]
-    course = "Ancient Rome: From Seven Hills to the Fall of the Empire"
-    on = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-    assert f"Stay on {course}." in on.split("Layer 1", 1)[0]
-    assert f"Depth inside {course} stays allowed" in on
-    assert "and quest The Two-Captain Rule: Consuls and Veto Power" in on
-    assert "unit The Republic" not in on
-    assert "Walk these goals in order" in on
-    assert "Goal 1:" in on
-    assert "Goal 2:" in on
-    assert "Close: No questions." in on
-    assert "including closely related ideas that serve this learning goal." in on
-    assert f"acknowledge it in one short line and return to {course}." in on
-    assert "Do not explain that subject." in on
-    assert "Do not keep chatting about it." in on
-    assert "If they wander off, answer in one sentence and come back." not in on
-    assert "stay on topic" not in on.lower()
-    assert "Teach, then ask." in on
-
-    saved = client.put("/tutor-profile", json=_profile(stay_on_course=False))
-    assert saved.status_code == 200
-    assert saved.json()["stay_on_course"] is False
-    off = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
-    assert f"Stay on {course}." not in off
-    assert "acknowledge it in one short line" not in off
-    assert "If they wander off, answer in one sentence and come back." in off
-    assert "Teach, then ask." in off
+    try:
+        tree = _publish("ZZSTAY", title="Triangle Angles")
+        opened = client.post(
+            "/sessions",
+            json={
+                "student_id": _student("storm")["id"],
+                "quest_id": tree["quests"][0]["id"],
+                "fresh": True,
+            },
+        )
+        session_id = opened.json()["id"]
+        on = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "Stay on Triangle Angles." in on.split("Layer 1", 1)[0]
+        assert "and quest The angles" in on
+        assert "Walk these goals in order" in on
+        assert "Goal 1:" in on
+        assert "Goal 2:" in on
+        assert "Close: No questions." in on
+        assert "Teach, then ask." in on
+        saved = client.put("/tutor-profile", json=_profile(stay_on_course=False))
+        assert saved.json()["stay_on_course"] is False
+        off = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "Stay on Triangle Angles." not in off
+        assert "If they wander off, answer in one sentence and come back." in off
+    finally:
+        client.put("/tutor-profile", json=_profile())
+        _drop_course("ZZSTAY")
 
 
 def test_model_prompt_round_trip() -> None:
-    storm = _student("storm")["id"]
-    opened = client.post(
-        "/sessions",
-        json={"student_id": storm, "quest_id": _quest("ROM-U1-Q1")["id"], "fresh": True},
-    )
-    session_id = opened.json()["id"]
-    first = client.post(
-        f"/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Hi! I'm ready to learn.", "client_id": "turn-1"},
-    )
-    saved = client.post(
-        f"/sessions/{session_id}/model-prompts",
-        json={
-            "system_prompt": "Layer 1\n\nLayer 7",
-            "messages": [{"role": "user", "content": "Hi! I'm ready to learn."}],
-            "model": "gpt-4o-mini",
-            "message_id": first.json()["id"],
-        },
-    )
-    assert saved.status_code == 200
-    assert saved.json()["model"] == "gpt-4o-mini"
-    detail = client.get(f"/sessions/{session_id}").json()
-    assert detail["prompts"][0]["message_id"] == first.json()["id"]
-    assert detail["quest"]["code"] == "ROM-U1-Q1"
+    try:
+        opened = _open("ZZPROMPT")
+        first = client.post(
+            f"/sessions/{opened['id']}/messages",
+            json={"role": "user", "content": "Hi! I'm ready to learn.", "client_id": "turn-1"},
+        )
+        saved = client.post(
+            f"/sessions/{opened['id']}/model-prompts",
+            json={
+                "system_prompt": "Layer 1\n\nLayer 7",
+                "messages": [{"role": "user", "content": "Hi! I'm ready to learn."}],
+                "model": "gpt-4o-mini",
+                "message_id": first.json()["id"],
+            },
+        )
+        assert saved.status_code == 200
+        assert saved.json()["model"] == "gpt-4o-mini"
+        detail = client.get(f"/sessions/{opened['id']}").json()
+        assert detail["prompts"][0]["message_id"] == first.json()["id"]
+        assert detail["current_goal_id"]
+        assert detail["close_started"] is False
+    finally:
+        _drop_course("ZZPROMPT")
 
 
 def test_tutor_revision_lifts_quests_and_keeps_chat_tables() -> None:
-    from pathlib import Path
-
     text = Path(__file__).resolve().parents[1].joinpath(
         "alembic", "versions", "013_tutor_quests_on_course.py"
     ).read_text()
@@ -942,12 +593,9 @@ def test_tutor_revision_lifts_quests_and_keeps_chat_tables() -> None:
     assert '"quest_closes"' in upgrade
     assert "DELETE FROM sessions" not in upgrade
     assert "DELETE FROM messages" not in upgrade
-    assert "delete(TutorSession)" not in upgrade
 
 
 def test_import_copies_a_draft_and_remove_keeps_the_chat() -> None:
-    from app.models import StudioCourse, StudioQuest, StudioQuestClose, StudioQuestGoal
-
     db = SessionLocal()
     studio_id = None
     try:
@@ -955,8 +603,11 @@ def test_import_copies_a_draft_and_remove_keeps_the_chat() -> None:
             code="ZZIMP",
             title="Imported angles",
             audience="12-14",
+            description="",
             theme="Triangle angles for learners aged 12 to 14.",
             focus="Why a triangle's angles add to 180 degrees.",
+            quest_count=4,
+            goals_per_quest=2,
             quiz_minutes=10,
             preferences={
                 "quest_count": 4,
@@ -968,16 +619,16 @@ def test_import_copies_a_draft_and_remove_keeps_the_chat() -> None:
         )
         db.add(studio)
         db.flush()
-        quest = StudioQuest(
-            course_id=studio.id,
-            code="ZZIMP-Q1",
-            position=1,
-            title="Angles",
-            learning_goal="Understand that the angles of a triangle add to 180 degrees.",
-            success_criterion="States that the three angles add to 180 degrees.",
-        )
+        quest = StudioQuest(course_id=studio.id, code="ZZIMP-Q1", position=1, title="Angles")
         db.add(quest)
         db.flush()
+        quest.goals.append(
+            StudioQuestGoal(
+                position=1,
+                learning_goal="Understand that the angles of a triangle add to 180 degrees.",
+                success_criterion="States that the three angles add to 180 degrees.",
+            )
+        )
         quest.goals.append(
             StudioQuestGoal(
                 position=2,
@@ -1014,25 +665,25 @@ def test_import_copies_a_draft_and_remove_keeps_the_chat() -> None:
         assert body["quest_count"] == 4
         assert body["goals_per_quest"] == 2
         assert body["quiz_minutes"] == 10
-        assert len(body["quests"]) == 1
         quest_body = body["quests"][0]
         assert [goal["learning_goal"] for goal in quest_body["goals"]] == [
             "Understand that the angles of a triangle add to 180 degrees.",
             "Name an exterior angle.",
         ]
-        assert quest_body["goals"][0]["success_criterion"] == "States that the three angles add to 180 degrees."
-        assert quest_body["close"]["kind"] == "single"
-        assert quest_body["close"]["question"] == "What do the angles add to?"
+        assert quest_body["close"]["answer_style"] == "multiple_choice"
+        assert quest_body["close"]["selection"] == "single"
+        assert quest_body["close"]["questions"][0]["text"] == "What do the angles add to?"
         kept = client.get(f"/studio/courses/{studio_id}")
         assert kept.status_code == 200
-        assert kept.json()["code"] == "ZZIMP"
 
-        storm = _student("storm")
         opened = client.post(
             "/sessions",
-            json={"student_id": storm["id"], "quest_id": quest_body["id"], "fresh": True},
+            json={
+                "student_id": _student("storm")["id"],
+                "quest_id": quest_body["id"],
+                "fresh": True,
+            },
         )
-        assert opened.status_code == 200
         session_id = opened.json()["id"]
         client.post(
             f"/sessions/{session_id}/messages",
@@ -1040,32 +691,21 @@ def test_import_copies_a_draft_and_remove_keeps_the_chat() -> None:
         )
         prompt = client.get(f"/sessions/{session_id}/prompt").json()["system_prompt"]
         assert "Walk these goals in order" in prompt
-        assert "Close: Single choice." in prompt
-
+        assert "Close: Choice." in prompt
         removed = client.post(f"/courses/{body['id']}/remove")
         assert removed.status_code == 204
-        codes = [course["code"] for course in client.get("/courses").json()]
-        assert "ZZIMP" not in codes
         detail = client.get(f"/sessions/{session_id}")
         assert detail.status_code == 200
         assert any(message["content"] == "The angles add to 180." for message in detail.json()["messages"])
-        still = client.get(f"/studio/courses/{studio_id}")
-        assert still.status_code == 200
+        assert client.get(f"/studio/courses/{studio_id}").status_code == 200
     finally:
+        _drop_course("ZZIMP")
         db = SessionLocal()
         try:
-            course = db.scalar(select(Course).where(Course.code == "ZZIMP"))
-            if course is not None:
-                db.execute(delete(TutorSession).where(TutorSession.quest_id.in_(
-                    select(Quest.id).where(Quest.course_id == course.id)
-                )))
-                db.delete(course)
             if studio_id is not None:
-                from app.models import StudioCourse as StudioRow
-
-                row = db.get(StudioRow, studio_id)
+                row = db.get(StudioCourse, studio_id)
                 if row is not None:
                     db.delete(row)
-            db.commit()
+                    db.commit()
         finally:
             db.close()

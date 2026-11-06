@@ -944,9 +944,6 @@ export function KidSession({
                 ))}
               </select>
             </label>
-            {selectedQuest && selectedQuest.prerequisite_codes.length > 0 ? (
-              <p>Comes after {selectedQuest.prerequisite_codes.join(", ")}. You can still start here.</p>
-            ) : null}
             <div className="rail-actions">
               <button className="button" type="submit" disabled={opening || !questId}>Start class</button>
               <button type="button" className="ds-text" onClick={() => setMaking(false)}>Cancel</button>

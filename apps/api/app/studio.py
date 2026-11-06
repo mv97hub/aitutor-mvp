@@ -21,7 +21,6 @@ from sqlalchemy.orm import Session, object_session, selectinload
 from app.models import (
     StudioCourse,
     StudioMessage,
-    StudioMove,
     StudioQuest,
     StudioQuestClose,
     StudioQuestGoal,
@@ -32,7 +31,6 @@ from app.schemas import (
     StudioCourseOut,
     StudioCourseSummary,
     StudioMessageOut,
-    StudioMoveOut,
     StudioPhaseOut,
     StudioGoalOut,
     StudioQuestOut,
@@ -57,9 +55,9 @@ DELETE_PASSWORD = "BulmerGardens"
 
 COURSE_CODE = re.compile(r"^[A-Z][A-Z0-9]{1,15}$")
 NODE_CODE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+){1,6}$")
-KINDS = ("course", "quest", "move")
+KINDS = ("course", "quest")
 OPS = ("add", "update", "remove")
-PARENT_KIND = {"move": "quest"}
+PARENT_KIND = {}
 DEFAULT_QUEST_COUNT = 10
 DEFAULT_GOALS_PER_QUEST = 3
 TEXT_LIMITS = {
@@ -103,6 +101,7 @@ def _close_schema() -> dict:
                 },
             },
             "questions": {
+                "description": "Every question for this quest. Do not stop after the first.",
                 "type": "array",
                 "items": {
                     "type": "object",
@@ -730,8 +729,6 @@ def _nodes_for(course: StudioCourse) -> dict[str, _Node]:
     nodes = {course.code: _Node("course", course.code, None, 0)}
     for quest in course.quests:
         nodes[quest.code] = _Node("quest", quest.code, course.code, quest.position)
-        for move in quest.moves:
-            nodes[move.code] = _Node("move", move.code, quest.code, move.position)
     return nodes
 
 
@@ -818,8 +815,14 @@ def split_patch(course: StudioCourse, patch) -> tuple[list[dict], list[str], lis
                     "a unit is not part of this course",
                     plain="A unit is not part of this course.",
                 )
+            if kind == "move":
+                raise StudioError(
+                    "kind",
+                    "a move is not part of this course",
+                    plain="A move is not part of this course.",
+                )
             if kind not in KINDS:
-                raise StudioError("kind", "must be course, quest, or move")
+                raise StudioError("kind", "must be course or quest")
             blocked = _outside_phase(course, op_name, kind, raw.get("code"))
             if blocked:
                 raise StudioError("phase", blocked, plain=blocked)
@@ -1054,27 +1057,22 @@ def _unpack_items(stored) -> tuple[list, list]:
 
 
 def goal_rows(quest: StudioQuest) -> list[dict]:
-    """Goal 1 is the quest columns. Later rows are studio_quest_goals."""
-    extras = sorted(quest.goals, key=lambda row: row.position)
-    has_first = bool(str(quest.learning_goal or "").strip() or str(quest.success_criterion or "").strip())
-    if not has_first and not extras:
-        return []
-    rows = [
+    """Every goal is a row, including the first."""
+    return [
         {
-            "position": 1,
-            "learning_goal": quest.learning_goal or "",
-            "success_criterion": quest.success_criterion or "",
+            "position": row.position,
+            "learning_goal": row.learning_goal or "",
+            "success_criterion": row.success_criterion or "",
         }
+        for row in sorted(quest.goals, key=lambda item: item.position)
     ]
-    for extra in extras:
-        rows.append(
-            {
-                "position": extra.position,
-                "learning_goal": extra.learning_goal or "",
-                "success_criterion": extra.success_criterion or "",
-            }
-        )
-    return rows
+
+
+def _first_goal(quest: StudioQuest) -> tuple[str, str]:
+    rows = goal_rows(quest)
+    if not rows:
+        return "", ""
+    return rows[0]["learning_goal"], rows[0]["success_criterion"]
 
 
 def _goals_incomplete(quest: StudioQuest) -> bool:
@@ -1088,21 +1086,15 @@ def _goals_incomplete(quest: StudioQuest) -> bool:
 
 
 def _replace_goals(quest: StudioQuest, goals: list[dict]) -> None:
-    """Write the goal list. Flush removed extras before the new rows, so positions do not collide."""
+    """Write every goal as its own row, including the first. Flush first so positions do not collide."""
     session = object_session(quest)
-    if not goals:
-        quest.learning_goal = ""
-        quest.success_criterion = ""
-    else:
-        quest.learning_goal = goals[0]["learning_goal"]
-        quest.success_criterion = goals[0]["success_criterion"]
     for extra in list(quest.goals):
         if session is not None:
             session.delete(extra)
     quest.goals.clear()
     if session is not None:
         session.flush()
-    for row in goals[1:]:
+    for row in goals:
         quest.goals.append(
             StudioQuestGoal(
                 position=row["position"],
@@ -1110,6 +1102,34 @@ def _replace_goals(quest: StudioQuest, goals: list[dict]) -> None:
                 success_criterion=row["success_criterion"],
             )
         )
+
+
+def _set_first_goal(quest: StudioQuest, step: dict) -> None:
+    """Update goal 1 and keep the later rows."""
+    rows = goal_rows(quest)
+    goal, criterion = ("", "")
+    rest: list[dict] = []
+    if rows:
+        goal = rows[0]["learning_goal"]
+        criterion = rows[0]["success_criterion"]
+        rest = rows[1:]
+    if "learning_goal" in step:
+        goal = step["learning_goal"]
+    if "success_criterion" in step:
+        criterion = step["success_criterion"]
+    if not str(goal or "").strip() and not str(criterion or "").strip() and not rest:
+        _replace_goals(quest, [])
+        return
+    written = [{"position": 1, "learning_goal": goal, "success_criterion": criterion}]
+    for index, row in enumerate(rest, start=2):
+        written.append(
+            {
+                "position": index,
+                "learning_goal": row["learning_goal"],
+                "success_criterion": row["success_criterion"],
+            }
+        )
+    _replace_goals(quest, written)
 
 
 def _fill_close(quest: StudioQuest, close: dict) -> None:
@@ -1146,33 +1166,26 @@ def _apply(course: StudioCourse, planned: list[dict]) -> None:
 
 def _apply_add(course: StudioCourse, step: dict) -> None:
     kind = step["kind"]
-    if kind == "quest":
-        row = StudioQuest(
-            course_id=course.id,
-            code=step["code"],
-            position=step["position"],
-            title=step["title"],
-            learning_goal=step["learning_goal"],
-            success_criterion=step["success_criterion"],
-        )
-        course.quests.append(row)
-        _slot(list(course.quests), row, step["position"])
-        if step.get("goals") is not None:
-            _replace_goals(row, step["goals"])
-        if step.get("close") is not None:
-            _fill_close(row, step["close"])
-        return
-    quest = _quest(course, step["parent"])
-    row = StudioMove(
+    if kind != "quest":
+        raise StudioError("kind", "a move is not part of this course", plain="A move is not part of this course.")
+    row = StudioQuest(
         course_id=course.id,
         code=step["code"],
         position=step["position"],
         title=step["title"],
-        learning_goal=step["learning_goal"],
-        success_criterion=step["success_criterion"],
     )
-    quest.moves.append(row)
-    _slot(list(quest.moves), row, step["position"])
+    course.quests.append(row)
+    _slot(list(course.quests), row, step["position"])
+    goals = step.get("goals")
+    if goals is None:
+        goal = step.get("learning_goal") or ""
+        criterion = step.get("success_criterion") or ""
+        if str(goal).strip() or str(criterion).strip():
+            goals = [{"position": 1, "learning_goal": goal, "success_criterion": criterion}]
+    if goals is not None:
+        _replace_goals(row, goals)
+    if step.get("close") is not None:
+        _fill_close(row, step["close"])
 
 
 def _apply_update(course: StudioCourse, step: dict) -> None:
@@ -1185,52 +1198,37 @@ def _apply_update(course: StudioCourse, step: dict) -> None:
             prefs["close_default"] = step["close_default"]
             course.preferences = prefs
         return
-    if step["kind"] == "quest":
-        row = _quest(course, step["code"])
-        _assign_node(row, step)
-        if "position" in step:
-            _slot(list(course.quests), row, step["position"])
-        if "goals" in step:
-            _replace_goals(row, step["goals"])
-        if "close" in step:
-            _fill_close(row, step["close"])
-        return
-    row = _move(course, step["code"])
+    if step["kind"] != "quest":
+        raise StudioError("kind", "a move is not part of this course", plain="A move is not part of this course.")
+    row = _quest(course, step["code"])
     _assign_node(row, step)
     if "position" in step:
-        _slot(list(row.quest.moves), row, step["position"])
+        _slot(list(course.quests), row, step["position"])
+    if "goals" in step:
+        _replace_goals(row, step["goals"])
+    elif "learning_goal" in step or "success_criterion" in step:
+        _set_first_goal(row, step)
+    if "close" in step:
+        _fill_close(row, step["close"])
 
 
 def _assign_node(row, step: dict) -> None:
-    for key in ("title", "learning_goal", "success_criterion"):
-        if key in step:
-            setattr(row, key, step[key])
+    if "title" in step:
+        row.title = step["title"]
 
 
 def _apply_remove(course: StudioCourse, step: dict) -> None:
-    if step["kind"] == "quest":
-        row = _quest(course, step["code"])
-        course.quests.remove(row)
-        _compact(list(course.quests))
-        return
-    row = _move(course, step["code"])
-    quest = row.quest
-    quest.moves.remove(row)
-    _compact(list(quest.moves))
+    if step["kind"] != "quest":
+        raise StudioError("kind", "a move is not part of this course", plain="A move is not part of this course.")
+    row = _quest(course, step["code"])
+    course.quests.remove(row)
+    _compact(list(course.quests))
 
 
 def _quest(course: StudioCourse, code: str) -> StudioQuest:
     for quest in course.quests:
         if quest.code == code:
             return quest
-    raise StudioError("code", f"{code} is not in this course")
-
-
-def _move(course: StudioCourse, code: str) -> StudioMove:
-    for quest in course.quests:
-        for move in quest.moves:
-            if move.code == code:
-                return move
     raise StudioError("code", f"{code} is not in this course")
 
 
@@ -1250,7 +1248,10 @@ def create_course(db: Session, *, code: str, title: str) -> StudioCourse:
     course = StudioCourse(
         code=normalized,
         title=label,
+        description="",
         audience="",
+        quest_count=DEFAULT_QUEST_COUNT,
+        goals_per_quest=DEFAULT_GOALS_PER_QUEST,
         focus="",
         theme="",
         depth="standard",
@@ -1274,12 +1275,7 @@ def delete_studio_course(db: Session, course: StudioCourse, password: str) -> No
 
 
 def _node_codes(course: StudioCourse) -> list[str]:
-    codes: list[str] = []
-    for quest in course.quests:
-        codes.append(quest.code)
-        for move in quest.moves:
-            codes.append(move.code)
-    return codes
+    return [quest.code for quest in course.quests]
 
 
 def _retarget_code(code: str, old: str, new: str) -> str:
@@ -1328,7 +1324,10 @@ def copy_studio_course(db: Session, source: StudioCourse, title: str) -> StudioC
     course = StudioCourse(
         code=code,
         title=label,
+        description=source.description or source.theme or "",
         audience=source.audience,
+        quest_count=source.quest_count or quest_count_of(source),
+        goals_per_quest=source.goals_per_quest or goals_per_quest_of(source),
         focus=source.focus,
         theme=source.theme,
         depth=source.depth,
@@ -1346,8 +1345,6 @@ def copy_studio_course(db: Session, source: StudioCourse, title: str) -> StudioC
             code=_retarget_code(quest.code, source.code, code),
             position=quest.position,
             title=quest.title,
-            learning_goal=quest.learning_goal,
-            success_criterion=quest.success_criterion,
         )
         course.quests.append(new_quest)
         db.flush()
@@ -1361,17 +1358,6 @@ def copy_studio_course(db: Session, source: StudioCourse, title: str) -> StudioC
             )
         if quest.close is not None:
             _copy_close(new_quest, quest.close)
-        for move in sorted(quest.moves, key=lambda row: (row.position, row.code)):
-            new_quest.moves.append(
-                StudioMove(
-                    course_id=course.id,
-                    code=_retarget_code(move.code, source.code, code),
-                    position=move.position,
-                    title=move.title,
-                    learning_goal=move.learning_goal,
-                    success_criterion=move.success_criterion,
-                )
-            )
     db.flush()
     return course
 
@@ -1389,6 +1375,7 @@ def update_preferences(course: StudioCourse, body: dict) -> None:
     if theme.lower() in {"none", "no theme"}:
         theme = ""
     course.theme = theme
+    course.description = theme
     course.depth = normalize_depth(body.get("depth"))
     course.quiz_minutes = normalize_quiz_minutes(body.get("quiz_minutes", course.quiz_minutes))
     course.sources = normalize_sources(body.get("sources", ""))
@@ -1414,6 +1401,8 @@ def update_preferences(course: StudioCourse, body: dict) -> None:
     prefs["sources"] = course.sources
     prefs["quest_count"] = quest_count
     prefs["goals_per_quest"] = goals_per_quest
+    course.quest_count = quest_count
+    course.goals_per_quest = goals_per_quest
     course.preferences = prefs
     course.schema_version = SCHEMA_VERSION
     course.updated_at = _now()
@@ -1424,7 +1413,6 @@ def load_course(db: Session, course_id) -> StudioCourse | None:
         select(StudioCourse)
         .where(StudioCourse.id == course_id)
         .options(
-            selectinload(StudioCourse.quests).selectinload(StudioQuest.moves),
             selectinload(StudioCourse.quests).selectinload(StudioQuest.close),
             selectinload(StudioCourse.quests).selectinload(StudioQuest.goals),
         )
@@ -1619,6 +1607,238 @@ def _expand_goals_operations(course: StudioCourse, operations: list, text: str) 
     return operations
 
 
+_QUESTION_LINE = re.compile(
+    r"^(?:closing\s+)?(?:questions?|q)\s*\d*\s*[:.\-–—]\s*(.+)$",
+    re.IGNORECASE,
+)
+
+
+def _question_text(line: str) -> str | None:
+    match = _QUESTION_LINE.match(line)
+    if match:
+        text = match.group(1).strip()
+        return text or None
+    if line.endswith("?") and not _GOAL_LINE.match(line) and not _CRITERION_LINE.match(line):
+        return line
+    return None
+
+
+def _named_quest_code(line: str, codes: set[str]) -> str | None:
+    upper = line.upper()
+    for code in sorted(codes, key=len, reverse=True):
+        if re.search(rf"(?<![A-Z0-9]){re.escape(code)}(?![A-Z0-9])", upper):
+            return code
+    return None
+
+
+def _strip_code_mention(text: str, code: str) -> str:
+    cleaned = re.sub(rf"\s*[\(\[]\s*{re.escape(code)}\s*[\)\]]\s*", " ", text, flags=re.IGNORECASE)
+    cleaned = re.sub(rf"^\s*{re.escape(code)}\s*[:.\-–—]\s*", "", cleaned, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _remember_question(found: dict[str, list[str]], code: str, text: str) -> None:
+    text = text.strip()
+    if not text:
+        return
+    rows = found.setdefault(code, [])
+    if any(item.casefold() == text.casefold() for item in rows):
+        return
+    rows.append(text)
+
+
+def _parse_close_blocks(text: str, codes: set[str]) -> dict[str, list[str]]:
+    """Questions in a reply, keyed by quest code. A block starts with the code.
+
+    Every Question line under that code is kept. A later quest code starts a new block.
+    """
+    found: dict[str, list[str]] = {}
+    current: str | None = None
+    for raw_line in (text or "").splitlines():
+        line = _clean_goal_line(raw_line)
+        if not line:
+            continue
+        header = _header_code(line, codes)
+        if header:
+            current, remainder = header
+            found.setdefault(current, [])
+            if remainder:
+                question = _question_text(remainder)
+                if question:
+                    _remember_question(found, current, _strip_code_mention(question, current))
+            continue
+        named = _named_quest_code(line, codes)
+        question = _question_text(line)
+        if named and question:
+            current = named
+            _remember_question(found, named, _strip_code_mention(question, named))
+            continue
+        if current is None or not question:
+            continue
+        _remember_question(found, current, question)
+    return {code: rows for code, rows in found.items() if rows}
+
+
+def _close_question_texts(close) -> list[str]:
+    if not isinstance(close, dict):
+        return []
+    questions = close.get("questions")
+    if not isinstance(questions, list):
+        return []
+    texts: list[str] = []
+    for item in questions:
+        if isinstance(item, str) and item.strip():
+            texts.append(item.strip())
+        elif isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            if text:
+                texts.append(text)
+    return texts
+
+
+def _merge_question_texts(existing: list[str], parsed: list[str]) -> list[str]:
+    seen: set[str] = set()
+    merged: list[str] = []
+    for text in list(existing) + list(parsed):
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(text)
+    return merged
+
+
+def _close_with_questions(close: dict, questions: list[str]) -> dict:
+    updated = dict(close)
+    updated["questions"] = [{"text": text} for text in questions]
+    if len(questions) > 1 and updated.get("close_style") in (None, "", "one"):
+        updated["close_style"] = "several"
+    if not updated.get("answer_style"):
+        updated["answer_style"] = "essay"
+    if "items" not in updated or updated.get("items") is None:
+        updated["items"] = []
+    if not updated.get("intent"):
+        updated["intent"] = ""
+    if "choice_mode" not in updated:
+        updated["choice_mode"] = None
+    if "selection" not in updated:
+        updated["selection"] = None
+    return updated
+
+
+def _essay_close(questions: list[str]) -> dict:
+    return {
+        "close_style": "several" if len(questions) > 1 else "one",
+        "answer_style": "essay",
+        "choice_mode": None,
+        "items": [],
+        "questions": [{"text": text} for text in questions],
+        "intent": "",
+        "selection": None,
+    }
+
+
+def _split_close_questions_by_quest_code(operations: list, codes: set[str]) -> list:
+    """A questions array that names later quests is one update per quest."""
+    expanded: list = []
+    for op in operations:
+        if not isinstance(op, dict):
+            expanded.append(op)
+            continue
+        close = op.get("close")
+        questions = close.get("questions") if isinstance(close, dict) else None
+        if not isinstance(questions, list):
+            expanded.append(op)
+            continue
+        buckets: dict[str, list] = {}
+        plain: list = []
+        for item in questions:
+            if not isinstance(item, dict):
+                plain.append(item)
+                continue
+            named = str(item.get("code") or "").strip().upper()
+            if named in codes:
+                buckets.setdefault(named, []).append(item)
+            else:
+                plain.append(item)
+        if not buckets:
+            expanded.append(op)
+            continue
+        own = str(op.get("code") or "").strip().upper()
+
+        def _close_for(rows: list, source: dict = close) -> dict:
+            copied = dict(source)
+            copied["questions"] = [
+                {"text": str(row.get("text") or "").strip()}
+                for row in rows
+                if isinstance(row, dict) and str(row.get("text") or "").strip()
+            ]
+            if len(copied["questions"]) > 1 and copied.get("close_style") in (None, "", "one"):
+                copied["close_style"] = "several"
+            return copied
+
+        if plain:
+            copied_op = dict(op)
+            copied_op["close"] = _close_for(plain)
+            expanded.append(copied_op)
+        elif own and own not in buckets:
+            copied_op = dict(op)
+            copied_op.pop("close", None)
+            expanded.append(copied_op)
+        for code, rows in buckets.items():
+            expanded.append(
+                {
+                    "op": "update",
+                    "kind": "quest",
+                    "code": code,
+                    "parent": None,
+                    "close": _close_for(rows),
+                }
+            )
+    return expanded
+
+
+def _expand_close_operations(course: StudioCourse, operations: list, text: str) -> list:
+    """Keep every question and every quest the reply or the patch names.
+
+    A patch that stops after the first question, or the first quest, is filled
+    from the reply before it is saved or pushed.
+    """
+    codes = {quest.code for quest in course.quests}
+    operations = _split_close_questions_by_quest_code([dict(op) if isinstance(op, dict) else op for op in operations], codes)
+    parsed = _parse_close_blocks(text, codes)
+    covered: set[str] = set()
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        code = str(op.get("code") or "").strip().upper()
+        close = op.get("close")
+        if code not in codes or not isinstance(close, dict):
+            continue
+        covered.add(code)
+        extra = parsed.get(code) or []
+        if not extra:
+            continue
+        merged = _merge_question_texts(_close_question_texts(close), extra)
+        if merged != _close_question_texts(close):
+            op["close"] = _close_with_questions(close, merged)
+    for quest in sorted(course.quests, key=lambda row: (row.position, row.code)):
+        questions = parsed.get(quest.code)
+        if not questions or quest.code in covered:
+            continue
+        operations.append(
+            {
+                "op": "update",
+                "kind": "quest",
+                "code": quest.code,
+                "parent": None,
+                "close": _essay_close(questions),
+            }
+        )
+        covered.add(quest.code)
+    return operations
+
+
 def _skipped_goals_sentence(codes: list[str]) -> str:
     if len(codes) == 1:
         return f"Skipped {codes[0]}, which still needs a goal and a success criterion."
@@ -1660,6 +1880,9 @@ def add_message(
             if phase_hint == "goals" and isinstance(ops, list):
                 proposal = dict(proposal)
                 proposal["operations"] = _expand_goals_operations(course, ops, text)
+            elif phase_hint == "close" and isinstance(ops, list):
+                proposal = dict(proposal)
+                proposal["operations"] = _expand_close_operations(course, ops, text)
         _planned, skipped, kept = split_patch(course, proposal)
         if not kept:
             plain = " ".join(skipped) if skipped else "That change had nothing to save."
@@ -2208,6 +2431,8 @@ def push_draft(db: Session, course: StudioCourse) -> StudioCourse:
     ops = _proposal_ops(message)
     if stage == "goals":
         ops = _expand_goals_operations(course, ops, message.content)
+    elif stage == "close":
+        ops = _expand_close_operations(course, ops, message.content)
     _remember_undo(course, message)
     previous = _checker_view(course, stage)
     try:
@@ -2339,8 +2564,6 @@ def edit_tree(
             code=_next_quest_code(course),
             position=len(course.quests) + 1,
             title=label,
-            learning_goal="",
-            success_criterion="",
         )
         course.quests.append(row)
     elif action == "update_quest":
@@ -2470,20 +2693,11 @@ def _course_snapshot(course: StudioCourse) -> dict:
                 "code": quest.code,
                 "position": quest.position,
                 "title": quest.title,
-                "learning_goal": quest.learning_goal,
-                "success_criterion": quest.success_criterion,
+                "learning_goal": _first_goal(quest)[0],
+                "success_criterion": _first_goal(quest)[1],
                 "goals": goal_rows(quest),
                 "close": _close_snapshot(quest),
-                "moves": [
-                    {
-                        "code": move.code,
-                        "position": move.position,
-                        "title": move.title,
-                        "learning_goal": move.learning_goal,
-                        "success_criterion": move.success_criterion,
-                    }
-                    for move in sorted(quest.moves, key=lambda row: (row.position, row.code))
-                ],
+                "moves": [],
             }
         )
     return {
@@ -2568,12 +2782,15 @@ def _restore_course(db: Session, course: StudioCourse, snap: dict) -> None:
             code=quest_data["code"],
             position=quest_data["position"],
             title=quest_data["title"],
-            learning_goal=quest_data.get("learning_goal") or "",
-            success_criterion=quest_data.get("success_criterion") or "",
         )
         course.quests.append(quest)
         db.flush()
         goals = quest_data.get("goals")
+        if not isinstance(goals, list) or not goals:
+            goal = quest_data.get("learning_goal") or ""
+            criterion = quest_data.get("success_criterion") or ""
+            if str(goal).strip() or str(criterion).strip():
+                goals = [{"position": 1, "learning_goal": goal, "success_criterion": criterion}]
         if isinstance(goals, list) and goals:
             _replace_goals(
                 quest,
@@ -2590,17 +2807,6 @@ def _restore_course(db: Session, course: StudioCourse, snap: dict) -> None:
         close = quest_data.get("close")
         if isinstance(close, dict):
             _fill_close(quest, close)
-        for move_data in quest_data.get("moves") or []:
-            quest.moves.append(
-                StudioMove(
-                    course_id=course.id,
-                    code=move_data["code"],
-                    position=move_data["position"],
-                    title=move_data["title"],
-                    learning_goal=move_data.get("learning_goal") or "",
-                    success_criterion=move_data.get("success_criterion") or "",
-                )
-            )
     db.flush()
 
 
@@ -2656,8 +2862,10 @@ def edit_item(
 ) -> None:
     if kind == "unit":
         raise StudioError("kind", "a unit is not part of this course", plain="A unit is not part of this course.")
-    if kind not in ("quest", "move"):
-        raise StudioError("kind", "must be a quest or move", plain="Edit a quest or a move.")
+    if kind == "move":
+        raise StudioError("kind", "a move is not part of this course", plain="A move is not part of this course.")
+    if kind != "quest":
+        raise StudioError("kind", "must be a quest", plain="Edit a quest.")
     raw: dict = {"op": "update", "kind": kind, "code": code}
     if title is not None:
         raw["title"] = title
@@ -2885,6 +3093,11 @@ def _tracked_phase_instructions(course: StudioCourse) -> str:
         focus = (
             "Talk only about closing questions. "
             "Offer a close for each quest, all in one go or one quest at a time. "
+            "When a draft covers more than one quest, write one block per quest that starts with that quest's code, "
+            "then a Question line for every closing question. "
+            "The patch has one update for every one of those codes, and every question is in that quest's questions list. "
+            "Do not stop after the first question or the first quest. "
+            "Do not attach a later quest's questions to the first quest. "
             "A close can be an essay, a single choice, a multi-choice, or no questions. "
             "A choice question needs at least two options. "
             "Set selection to single or multi, and mark correct on the right options. "
@@ -2959,6 +3172,10 @@ def phase_instructions(course: StudioCourse) -> str:
     elif phase["name"] == "close":
         focus = (
             "Offer one close per quest, normally at least one question. "
+            "When a draft covers more than one question or more than one quest, write one block per quest "
+            "that starts with that quest's code, then a Question line for every closing question. "
+            "Do not stop after the first question or the first quest. One update per quest code. "
+            "Every question goes in that quest's questions list. "
             "An empty question list is saved when asked. "
             "An update names that code and sets parent to null."
         )
@@ -2986,8 +3203,6 @@ def course_gaps(course: StudioCourse) -> list[str]:
         style = quest.close.close_style if quest.close is not None else ""
         if not str(style or "").strip():
             gaps.append(f"{quest.code}: no close style")
-        for move in sorted(quest.moves, key=lambda row: (row.position, row.code)):
-            _goal_gap(gaps, move.code, move.learning_goal)
     return gaps
 
 
@@ -3043,28 +3258,18 @@ def _row_close(row: StudioQuestClose | None) -> StudioCloseOut | None:
 def course_out(course: StudioCourse) -> StudioCourseOut:
     quests = []
     for quest in sorted(course.quests, key=lambda row: (row.position, row.code)):
-        moves = [
-            StudioMoveOut(
-                id=move.id,
-                code=move.code,
-                position=move.position,
-                title=move.title,
-                learning_goal=move.learning_goal,
-                success_criterion=move.success_criterion,
-            )
-            for move in sorted(quest.moves, key=lambda row: (row.position, row.code))
-        ]
+        goal, criterion = _first_goal(quest)
         quests.append(
             StudioQuestOut(
                 id=quest.id,
                 code=quest.code,
                 position=quest.position,
                 title=quest.title,
-                learning_goal=quest.learning_goal,
-                success_criterion=quest.success_criterion,
+                learning_goal=goal,
+                success_criterion=criterion,
                 goals=[StudioGoalOut(**row) for row in goal_rows(quest)],
                 close=_row_close(quest.close),
-                moves=moves,
+                moves=[],
             )
         )
     default = close_default_of(course)
@@ -3218,6 +3423,10 @@ def _phase_operation_schema(phase: str) -> dict:
     }
     if phase == "goals":
         schema["description"] = "One update per quest code. Do not stop after the first quest."
+    elif phase == "close":
+        schema["description"] = (
+            "One update per quest code. Do not stop after the first question or the first quest."
+        )
     return schema
 
 
@@ -3241,7 +3450,13 @@ def response_schema(course: StudioCourse) -> dict:
                     "Null when nothing should change. Otherwise one update per quest code, "
                     "and do not stop after the first quest. Each operation's goals belong only to that quest."
                     if phase == "goals"
-                    else "Null when nothing should change. Otherwise operations allowed in this phase."
+                    else (
+                        "Null when nothing should change. Otherwise one update per quest code, "
+                        "and do not stop after the first question or the first quest. "
+                        "Every question for a quest goes in that quest's questions list."
+                        if phase == "close"
+                        else "Null when nothing should change. Otherwise operations allowed in this phase."
+                    )
                 ),
                 "anyOf": [
                     {"type": "null"},

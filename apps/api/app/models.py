@@ -20,20 +20,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 AGE_BANDS = ("6-8", "9-11", "12-14", "15-17")
-QUEST_TYPES = ("core", "branch", "capstone")
-BEAT_ROLES = (
-    "engage",
-    "try",
-    "name",
-    "show",
-    "teach_back",
-)
 
 
 class Student(Base):
-    """Layer 2 lives here. The tutor_* columns are the old per-student copy of
-    layers 3 and 4. The live settings are the single tutor_profiles row.
-    These columns stay so that move is not a destructive migration.
+    """Layer 2 lives here. Older tutor_* columns are not what kid chat reads.
+
+    Kid chat reads the single tutor_profiles row. These columns stay so a
+    saved student row is not rewritten by a migration.
     """
 
     __tablename__ = "students"
@@ -97,12 +90,10 @@ class TutorProfile(Base):
 
 
 class Course(Base):
+    """A published course. Columns match the studio draft that import copies."""
+
     __tablename__ = "courses"
     __table_args__ = (
-        CheckConstraint(
-            "age_band IN ('6-8', '9-11', '12-14', '15-17')",
-            name="ck_courses_age_band",
-        ),
         CheckConstraint(
             "audience IN ('6-8', '9-11', '12-14', '15-17')",
             name="ck_courses_audience",
@@ -116,9 +107,6 @@ class Course(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(240), nullable=False)
-    age_band: Mapped[str] = mapped_column(String(8), nullable=False)
-    standards_alignment: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    competency_dictionary: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     audience: Mapped[str] = mapped_column(String(8), nullable=False, default="9-11")
     quest_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -143,10 +131,6 @@ class Quest(Base):
     __tablename__ = "quests"
     __table_args__ = (
         UniqueConstraint("course_id", "position", name="uq_quests_course_position"),
-        CheckConstraint(
-            "quest_type IN ('core', 'branch', 'capstone')",
-            name="ck_quests_type",
-        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -155,13 +139,6 @@ class Quest(Base):
     )
     code: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(240), nullable=False)
-    quest_type: Mapped[str] = mapped_column(String(16), nullable=False, default="core")
-    prerequisite_codes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    competency_tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    dinner_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    learning_goal: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    success_criterion: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    requires_teach_back: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
 
     course: Mapped[Course] = relationship(back_populates="quests")
@@ -174,11 +151,6 @@ class Quest(Base):
         back_populates="quest",
         cascade="all, delete-orphan",
         uselist=False,
-    )
-    beats: Mapped[list[Beat]] = relationship(
-        back_populates="quest",
-        cascade="all, delete-orphan",
-        order_by="Beat.position",
     )
     sessions: Mapped[list[Session]] = relationship(back_populates="quest")
 
@@ -204,13 +176,21 @@ class QuestGoal(Base):
 
 
 class QuestClose(Base):
-    """How a quest ends: an essay, a single choice, a multi-choice, or no questions."""
+    """How a quest ends. Same columns as the studio close."""
 
     __tablename__ = "quest_closes"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('essay', 'single', 'multi', 'none')",
-            name="ck_quest_closes_kind",
+            "close_style IN ('one', 'several')",
+            name="ck_quest_closes_style",
+        ),
+        CheckConstraint(
+            "answer_style IN ('multiple_choice', 'essay', 'mixed')",
+            name="ck_quest_closes_answer",
+        ),
+        CheckConstraint(
+            "choice_mode IS NULL OR choice_mode IN ('predefined', 'dynamic')",
+            name="ck_quest_closes_choice",
         ),
     )
 
@@ -218,40 +198,13 @@ class QuestClose(Base):
     quest_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("quests.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)
-    question: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    close_style: Mapped[str] = mapped_column(String(16), nullable=False)
+    answer_style: Mapped[str] = mapped_column(String(32), nullable=False)
+    choice_mode: Mapped[str | None] = mapped_column(String(16))
     items: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    intent: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     quest: Mapped[Quest] = relationship(back_populates="close")
-
-
-class Beat(Base):
-    __tablename__ = "beats"
-    __table_args__ = (
-        UniqueConstraint("quest_id", "position", name="uq_beats_quest_position"),
-        CheckConstraint(
-            "role IN ('engage', 'try', 'name', 'show', 'teach_back')",
-            name="ck_beats_role",
-        ),
-        CheckConstraint("position >= 1", name="ck_beats_position"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    quest_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("quests.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    position: Mapped[int] = mapped_column(Integer, nullable=False)
-    role: Mapped[str] = mapped_column(String(32), nullable=False)
-    bloom_level: Mapped[str] = mapped_column(String(32), nullable=False, default="understand")
-    cognitive_load: Mapped[str] = mapped_column(String(16), nullable=False, default="medium")
-    prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    rubric: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    misconception_map: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    hint_ladder: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    widget: Mapped[dict | None] = mapped_column(JSON)
-
-    quest: Mapped[Quest] = relationship(back_populates="beats")
-    results: Mapped[list[BeatResult]] = relationship(back_populates="beat")
 
 
 class Session(Base):
@@ -269,9 +222,10 @@ class Session(Base):
     quest_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("quests.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    current_beat_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("beats.id", ondelete="RESTRICT")
+    current_goal_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("quest_goals.id", ondelete="SET NULL")
     )
+    close_started: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -282,15 +236,16 @@ class Session(Base):
 
     student: Mapped[Student] = relationship(back_populates="sessions")
     quest: Mapped[Quest] = relationship(back_populates="sessions")
+    current_goal: Mapped[QuestGoal | None] = relationship()
     messages: Mapped[list[Message]] = relationship(
         back_populates="session",
         cascade="all, delete-orphan",
         order_by="Message.seq",
     )
-    results: Mapped[list[BeatResult]] = relationship(
+    results: Mapped[list[GoalResult]] = relationship(
         back_populates="session",
         cascade="all, delete-orphan",
-        order_by="BeatResult.seq",
+        order_by="GoalResult.seq",
     )
     prompts: Mapped[list[ModelPrompt]] = relationship(
         back_populates="session",
@@ -321,25 +276,28 @@ class Message(Base):
     session: Mapped[Session] = relationship(back_populates="messages")
 
 
-class BeatResult(Base):
-    __tablename__ = "beat_results"
+class GoalResult(Base):
+    """A goal's criterion, or the close answer, for one turn."""
+
+    __tablename__ = "goal_results"
     __table_args__ = (
-        UniqueConstraint("session_id", "seq", name="uq_beat_results_session_seq"),
-        CheckConstraint("score >= 0 AND score <= 100", name="ck_beat_results_score"),
+        UniqueConstraint("session_id", "seq", name="uq_goal_results_session_seq"),
+        CheckConstraint("score >= 0 AND score <= 100", name="ck_goal_results_score"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    beat_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("beats.id", ondelete="RESTRICT"), nullable=False
+    goal_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("quest_goals.id", ondelete="SET NULL")
     )
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     score: Mapped[int] = mapped_column(Integer, nullable=False)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
     feedback: Mapped[str] = mapped_column(Text, nullable=False)
-    rubric_met: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    criterion: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    answer: Mapped[str] = mapped_column(Text, nullable=False, default="")
     misconception: Mapped[str | None] = mapped_column(Text)
     hint_tier: Mapped[str | None] = mapped_column(String(16))
     choice: Mapped[dict | None] = mapped_column(JSON)
@@ -348,7 +306,7 @@ class BeatResult(Base):
     )
 
     session: Mapped[Session] = relationship(back_populates="results")
-    beat: Mapped[Beat] = relationship(back_populates="results")
+    goal: Mapped[QuestGoal | None] = relationship()
 
 
 class ModelPrompt(Base):
@@ -400,7 +358,10 @@ class StudioCourse(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(240), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     audience: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    quest_count: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    goals_per_quest: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     focus: Mapped[str] = mapped_column(Text, nullable=False, default="")
     theme: Mapped[str] = mapped_column(String(240), nullable=False, default="")
     depth: Mapped[str] = mapped_column(String(16), nullable=False, default="standard")
@@ -429,7 +390,7 @@ class StudioCourse(Base):
 
 
 class StudioQuest(Base):
-    """A quest on the course. There is no unit tier."""
+    """A quest on the course. Every goal, including the first, is its own row."""
 
     __tablename__ = "studio_quests"
     __table_args__ = (
@@ -444,8 +405,6 @@ class StudioQuest(Base):
     code: Mapped[str] = mapped_column(String(40), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(240), nullable=False)
-    learning_goal: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    success_criterion: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     course: Mapped[StudioCourse] = relationship(back_populates="quests")
     close: Mapped["StudioQuestClose | None"] = relationship(
@@ -458,20 +417,15 @@ class StudioQuest(Base):
         cascade="all, delete-orphan",
         order_by="StudioQuestGoal.position",
     )
-    moves: Mapped[list["StudioMove"]] = relationship(
-        back_populates="quest",
-        cascade="all, delete-orphan",
-        order_by="StudioMove.position",
-    )
 
 
 class StudioQuestGoal(Base):
-    """A goal after the first. The quest columns remain goal 1."""
+    """One goal on a quest, including the first."""
 
     __tablename__ = "studio_quest_goals"
     __table_args__ = (
         UniqueConstraint("quest_id", "position", name="uq_studio_quest_goals_position"),
-        CheckConstraint("position >= 2", name="ck_studio_quest_goals_position"),
+        CheckConstraint("position >= 1", name="ck_studio_quest_goals_position"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -483,29 +437,6 @@ class StudioQuestGoal(Base):
     success_criterion: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     quest: Mapped[StudioQuest] = relationship(back_populates="goals")
-
-
-class StudioMove(Base):
-    __tablename__ = "studio_moves"
-    __table_args__ = (
-        UniqueConstraint("course_id", "code", name="uq_studio_moves_course_code"),
-        CheckConstraint("position >= 1", name="ck_studio_moves_position"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    course_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("studio_courses.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    quest_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("studio_quests.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    code: Mapped[str] = mapped_column(String(40), nullable=False)
-    position: Mapped[int] = mapped_column(Integer, nullable=False)
-    title: Mapped[str] = mapped_column(String(240), nullable=False)
-    learning_goal: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    success_criterion: Mapped[str] = mapped_column(Text, nullable=False, default="")
-
-    quest: Mapped[StudioQuest] = relationship(back_populates="moves")
 
 
 class StudioQuestClose(Base):
