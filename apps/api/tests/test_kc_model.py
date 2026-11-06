@@ -155,8 +155,11 @@ def test_creator_prompt_goes_deep_before_the_fields() -> None:
         model="gpt-4.1",
     )
     prompt = bundle["system_prompt"]
-    assert "You are an expert on this knowledge component" in prompt
+    assert "You are an expert curriculum maker for this knowledge component and the course kind." in prompt
+    assert "Recommend every field that can be entered" in prompt
+    assert "description, title, type" in prompt
     assert "Mastery is the fuller rigorous breakdown" in prompt
+    assert "description" in bundle["schema"]["required"]
     assert "Outline: The interior angles." in prompt
     assert "Go into the topic before you fill the type" in prompt
     assert "Do not change how an answer is scored" in prompt

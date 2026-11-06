@@ -2611,6 +2611,28 @@ a.ds-row { text-decoration: none; }
   gap: 4px;
 }
 
+.kc-course-pick {
+  display: grid;
+  gap: 4px;
+  margin: 8px 12px 4px;
+  color: rgb(97, 102, 107);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.kc-course-pick select {
+  width: 100%;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px 10px;
+  color: rgb(15, 17, 21);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
 .kc-screen .ds-side .button { margin: 8px; }
 
 .kc-component-list {

@@ -9,7 +9,12 @@ export function EnterSubmitTextarea(props: TextareaHTMLAttributes<HTMLTextAreaEl
       onKeyDown={(event) => {
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
-          event.currentTarget.form?.requestSubmit();
+          const field = event.currentTarget;
+          const form = field.form;
+          const send = form?.querySelector("button.ds-send");
+          if (form && !field.disabled && !(send instanceof HTMLButtonElement && send.disabled)) {
+            form.requestSubmit();
+          }
         }
         props.onKeyDown?.(event);
       }}

@@ -34,8 +34,11 @@ COURSE_RULES = (
 )
 
 CREATOR_RULES = (
-    "You are an expert on this knowledge component. "
+    "You are an expert curriculum maker for this knowledge component and the course kind. "
     "The description is the brief: the outline, the key topics, and the key goals. "
+    "Use that brief. Recommend every field that can be entered: "
+    "description, title, type, the fields for that type, core truth, rubric checks, "
+    "misconceptions, prerequisites, and encompasses. "
     "Use the course kind. Mastery is the fuller rigorous breakdown. "
     "Time boxed fits the minutes. Curiosity is a path through the subject. "
     "Go into the topic before you fill the type, the core truth, the rubric, and the checks. "
@@ -82,6 +85,7 @@ CREATOR_SCHEMA = {
     "properties": {
         "discussion": {"type": "string"},
         "title": {"type": "string"},
+        "description": {"type": "string"},
         "kc_type": {
             "type": "string",
             "enum": ["factual", "procedural", "conceptual", "causal", "synthesis"],
@@ -111,6 +115,7 @@ CREATOR_SCHEMA = {
     "required": [
         "discussion",
         "title",
+        "description",
         "kc_type",
         "core_truth",
         "rubric",
@@ -414,9 +419,14 @@ def creator_bundle(
             f"Other component codes: {codes}",
             previous_line,
             "The discussion comes first and goes into the topic. "
-            "Then fill one type, the core truth, one to three rubric checks, and the fields for that type. "
+            "Then recommend every enterable field from the brief. "
+            "Write description as three lines: Outline, Topics, and Goals. "
+            "Fill title, one type, the fields for that type, the core truth, "
+            "one to three rubric checks, misconceptions, prerequisites, and encompasses. "
             "Leave the fields of the other types empty. "
-            "Prerequisite and encompasses codes have to be chosen from the other component codes.",
+            "Prerequisite codes, encompasses codes, misconception codes, and synthesis mixes "
+            "have to be chosen from the other component codes. "
+            "Use an empty list when none of those links fit.",
         ]
     )
     return {

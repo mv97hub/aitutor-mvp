@@ -670,6 +670,38 @@ def delete_node(db: Session, node: KcNode) -> None:
     db.flush()
 
 
+def _check_delete_password(password: str) -> None:
+    """The same password the quest-course delete page already uses."""
+    import hmac
+
+    from app.studio import DELETE_PASSWORD
+
+    if not isinstance(password, str) or not hmac.compare_digest(password, DELETE_PASSWORD):
+        raise HTTPException(status_code=422, detail="The password is wrong.")
+
+
+def _ids_on_other_courses(db: Session, goal_id: uuid.UUID) -> set[uuid.UUID]:
+    found: set[uuid.UUID] = set()
+    for other in db.scalars(select(KcGoal).where(KcGoal.id != goal_id)):
+        other_targets = load_targets(db, other)
+        for node in other_targets + load_patches(db, other_targets):
+            found.add(node.id)
+    return found
+
+
+def delete_kc_course(db: Session, goal: KcGoal, password: str) -> None:
+    """Delete one KC course and the components that belong only to it."""
+    _check_delete_password(password)
+    targets = load_targets(db, goal)
+    patches = load_patches(db, targets)
+    keep = _ids_on_other_courses(db, goal.id)
+    for node in [*targets, *patches]:
+        if node.id not in keep:
+            delete_node(db, node)
+    db.delete(goal)
+    db.flush()
+
+
 def _sync_edges(db: Session, node: KcNode) -> None:
     db.execute(
         delete(KcEdge).where(
@@ -703,6 +735,8 @@ def apply_component(db: Session, node: KcNode, body: dict) -> KcNode:
         raise HTTPException(status_code=422, detail="Type is factual, procedural, conceptual, causal, or synthesis.")
     if "title" in body and str(body.get("title") or "").strip():
         node.title = str(body["title"]).strip()
+    if "description" in body and body.get("description") is not None:
+        node.description = str(body.get("description") or "").strip()
     node.kc_type = kc_type
     node.core_truth = str(body.get("core_truth") or "").strip()
     node.rubric = _clean_rubric(body.get("rubric") or [])
@@ -800,6 +834,7 @@ def draft_component(goal: KcGoal, node: KcNode, ordered: list[KcNode], message: 
         "id": str(node.id),
         "code": node.code,
         "title": node.title,
+        "description": _recommended_description(goal, node),
         "kc_type": kc_type,
         "core_truth": _first_sentence(goal.description) or f"The core idea of {node.title}.",
         "rubric": [f"States the idea of {node.title}"],
@@ -1451,6 +1486,20 @@ def mirror_text(node: KcNode) -> str:
     )
 
 
+def _recommended_description(goal: KcGoal, node: KcNode) -> str:
+    """The brief already on the component, or a short outline, topics, and goals."""
+    from app.kc_model import format_description
+
+    current = (node.description or "").strip()
+    if current:
+        return current
+    return format_description(
+        f"How {node.title} fits {goal.title}.",
+        [node.title],
+        [f"Use {node.title}."],
+    )
+
+
 def _draft_reply(draft: dict) -> str:
     body = describe_component(
         title=str(draft.get("title") or ""),
@@ -1463,8 +1512,11 @@ def _draft_reply(draft: dict) -> str:
         type_fields=dict(draft.get("type_fields") or {}),
     )
     title = draft.get("title") or "this component"
+    description = str(draft.get("description") or "").strip()
+    brief = f"Description: {description}\n" if description else ""
     return (
         f"Draft for {title} only. Other components stay as they are.\n"
+        f"{brief}"
         f"{body}\n"
         "Nothing is saved until you push it."
     )
@@ -1472,6 +1524,7 @@ def _draft_reply(draft: dict) -> str:
 
 _LABEL_MAP = {
     "title": ("title", "title"),
+    "description": ("description", "description"),
     "type": ("type", "kc_type"),
     "core truth": ("truth", "core_truth"),
     "fact": ("field", "fact"),
@@ -1528,6 +1581,8 @@ def _labeled_updates(message: str) -> dict:
         value = value.strip()
         if kind == "title":
             updates["title"] = value
+        elif kind == "description":
+            updates["description"] = value
         elif kind == "truth":
             updates["core_truth"] = value
         elif kind == "type":
@@ -1567,6 +1622,7 @@ def _revise_draft(previous: dict, message: str, goal: KcGoal, node: KcNode) -> d
         "id": previous.get("id") or str(node.id),
         "code": previous.get("code") or node.code,
         "title": previous.get("title") or node.title,
+        "description": str(previous.get("description") or node.description or ""),
         "kc_type": previous.get("kc_type") or "conceptual",
         "core_truth": previous.get("core_truth") or "",
         "rubric": list(previous.get("rubric") or []),
@@ -1585,6 +1641,8 @@ def _revise_draft(previous: dict, message: str, goal: KcGoal, node: KcNode) -> d
         draft["type_fields"] = _fields_for(named, str(draft["title"]), goal.description, [str(item) for item in mixes])
     if str(labels.get("title") or "").strip():
         draft["title"] = str(labels["title"]).strip()
+    if "description" in labels:
+        draft["description"] = str(labels["description"]).strip()
     if "core_truth" in labels:
         draft["core_truth"] = str(labels["core_truth"]).strip()
     elif not _label_present(labels) and not named:
@@ -1608,7 +1666,19 @@ def _revise_draft(previous: dict, message: str, goal: KcGoal, node: KcNode) -> d
 def _label_present(labels: dict) -> bool:
     if labels.get("fields"):
         return True
-    return any(key in labels for key in ("title", "core_truth", "kc_type", "rubric", "prerequisite_codes", "encompasses_codes", "misconception"))
+    return any(
+        key in labels
+        for key in (
+            "title",
+            "description",
+            "core_truth",
+            "kc_type",
+            "rubric",
+            "prerequisite_codes",
+            "encompasses_codes",
+            "misconception",
+        )
+    )
 
 
 def _creator_rows(db: Session, node_id: uuid.UUID) -> list[KcCreatorMessage]:
@@ -1714,7 +1784,7 @@ def creator_prompt_for(db: Session, node: KcNode, message: str, model: str) -> d
     from app.kc_model import creator_bundle
 
     goal, ordered = course_of_node(db, node)
-    others = [item.code for item in ordered if item.id != node.id]
+    others = _other_codes(db, node, ordered)
     previous = _latest_draft(_creator_rows(db, node.id))
     try:
         return creator_bundle(
@@ -1735,7 +1805,12 @@ def creator_prompt_for(db: Session, node: KcNode, message: str, model: str) -> d
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def clean_model_component(node: KcNode, raw: dict) -> dict:
+def _other_codes(db: Session, node: KcNode, ordered: list[KcNode]) -> list[str]:
+    patches = load_patches(db, ordered)
+    return [item.code for item in [*ordered, *patches] if item.id != node.id]
+
+
+def clean_model_component(node: KcNode, raw: dict, other_codes: list[str] | None = None) -> dict:
     if not isinstance(raw, dict):
         raise HTTPException(status_code=422, detail="The model reply could not be read.")
     kc_type = str(raw.get("kc_type") or "").strip()
@@ -1744,6 +1819,9 @@ def clean_model_component(node: KcNode, raw: dict) -> dict:
             status_code=422,
             detail="Type is factual, procedural, conceptual, causal, or synthesis.",
         )
+    title = str(raw.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Recommend a title.")
     if kc_type == "synthesis":
         fields = {
             "mixes": [raw.get("mix_a") or "", raw.get("mix_b") or ""],
@@ -1751,12 +1829,12 @@ def clean_model_component(node: KcNode, raw: dict) -> dict:
         }
     else:
         fields = {key: raw.get(key) for key in TYPE_KEYS[kc_type]}
-    title = str(raw.get("title") or node.title).strip() or node.title
-    return {
+    shaped = {
         "kind": "component",
         "id": str(node.id),
         "code": node.code,
         "title": title,
+        "description": str(raw.get("description") or "").strip(),
         "kc_type": kc_type,
         "core_truth": str(raw.get("core_truth") or "").strip(),
         "rubric": _clean_rubric(raw.get("rubric") or []),
@@ -1765,6 +1843,91 @@ def clean_model_component(node: KcNode, raw: dict) -> dict:
         "encompasses_codes": _clean_codes(raw.get("encompasses_codes") or []),
         "type_fields": _clean_type_fields(kc_type, fields),
     }
+    _require_recommendation(shaped, list(other_codes or []))
+    return shaped
+
+
+def _require_recommendation(draft: dict, other_codes: list[str]) -> None:
+    """A model draft names every field the editor can enter."""
+    description = str(draft.get("description") or "")
+    lowered = description.lower()
+    if not all(label in lowered for label in ("outline:", "topics:", "goals:")):
+        raise HTTPException(
+            status_code=422,
+            detail="Recommend a description with Outline, Topics, and Goals.",
+        )
+    if not str(draft.get("core_truth") or "").strip():
+        raise HTTPException(status_code=422, detail="Recommend a core truth.")
+    if not draft.get("rubric"):
+        raise HTTPException(status_code=422, detail="Recommend one to three rubric checks.")
+    allowed = set(other_codes)
+    linked = list(draft["prerequisite_codes"]) + list(draft["encompasses_codes"])
+    if any(code not in allowed for code in linked):
+        raise HTTPException(
+            status_code=422,
+            detail="Prerequisite and encompasses codes have to be other components on this course.",
+        )
+    misconceptions = list(draft["misconceptions"])
+    if any(item["broken_kc"] not in allowed for item in misconceptions):
+        raise HTTPException(
+            status_code=422,
+            detail="A misconception names another component on this course.",
+        )
+    if allowed and not misconceptions:
+        raise HTTPException(
+            status_code=422,
+            detail="Recommend a misconception: a wrong move and the component that is broken.",
+        )
+    _require_type_fields(str(draft["kc_type"]), dict(draft["type_fields"]), allowed)
+
+
+def _require_type_fields(kc_type: str, fields: dict, allowed: set[str]) -> None:
+    def text(key: str) -> str:
+        return str(fields.get(key) or "").strip()
+
+    if kc_type == "factual":
+        if not text("fact") or not text("retrieval_question"):
+            raise HTTPException(status_code=422, detail="Recommend the fact and the retrieval question.")
+        return
+    if kc_type == "procedural":
+        steps = [str(item).strip() for item in (fields.get("steps") or []) if str(item).strip()]
+        blank = fields.get("blanked_step")
+        if not steps or blank is None or not text("solo_problem") or not text("solo_check"):
+            raise HTTPException(
+                status_code=422,
+                detail="Recommend the worked steps, the blanked step, the solo problem, and the solo check.",
+            )
+        if not isinstance(blank, int) or blank < 0 or blank >= len(steps):
+            raise HTTPException(
+                status_code=422,
+                detail="The blanked step has to point at one of the worked steps, starting at 0.",
+            )
+        return
+    if kc_type == "conceptual":
+        if not all(text(key) for key in ("case_a", "case_b", "prediction", "rule")):
+            raise HTTPException(
+                status_code=422,
+                detail="Recommend both cases, the prediction, and the rule.",
+            )
+        return
+    if kc_type == "causal":
+        if not all(text(key) for key in ("decision_point", "flawed_claim", "causal_chain")):
+            raise HTTPException(
+                status_code=422,
+                detail="Recommend the decision point, the flawed claim, and the causal chain.",
+            )
+        return
+    mixes = [str(item).strip() for item in (fields.get("mixes") or []) if str(item).strip()]
+    if any(code not in allowed for code in mixes) or not text("faulty_plan"):
+        raise HTTPException(
+            status_code=422,
+            detail="Recommend two other components and the rookie's faulty plan.",
+        )
+    if len(allowed) >= 2 and len(set(mixes)) < 2:
+        raise HTTPException(
+            status_code=422,
+            detail="Recommend two different components for the mix.",
+        )
 
 
 def accept_model_turn(db: Session, node: KcNode, message: str, discussion: str, draft: dict) -> dict:
@@ -1778,7 +1941,8 @@ def accept_model_turn(db: Session, node: KcNode, message: str, discussion: str, 
         depth = checked_discussion(discussion, node.title)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    shaped = clean_model_component(node, draft)
+    _goal, ordered = course_of_node(db, node)
+    shaped = clean_model_component(node, draft, _other_codes(db, node, ordered))
     _add_creator_message(db, node, "user", cleaned)
     _add_creator_message(
         db,

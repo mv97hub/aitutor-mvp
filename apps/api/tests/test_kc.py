@@ -1,5 +1,6 @@
 """Knowledge-component studio and tutor. Catalog chats stay put."""
 
+import uuid
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -876,4 +877,175 @@ def test_tutor_speech_is_separate_from_the_score_and_two_steps_are_choices() -> 
         assert done.json()["passed"] is False
     finally:
         _clear_progress(storm.id)
+        _wipe_zz()
+
+
+def _model_fields(**overrides: object) -> dict:
+    body: dict = {
+        "discussion": (
+            "River fact is the claim that this river is blue, which is why a kid has to recall the color "
+            "before any later step in the course."
+        ),
+        "description": "Outline: The river is blue.\nTopics: color\nGoals: Recall the color",
+        "title": "River fact",
+        "kc_type": "factual",
+        "core_truth": "The river in this course is blue.",
+        "rubric": ["States that the river is blue"],
+        "misconceptions": [{"wrong_move": "The river is red", "broken_kc": "zz-fields-b"}],
+        "prerequisite_codes": ["zz-fields-b"],
+        "encompasses_codes": [],
+        "fact": "The river is blue.",
+        "retrieval_question": "What color is the river?",
+        "steps": [],
+        "blanked_step": 0,
+        "solo_problem": "",
+        "solo_check": "",
+        "case_a": "",
+        "case_b": "",
+        "prediction": "",
+        "rule": "",
+        "decision_point": "",
+        "flawed_claim": "",
+        "causal_chain": "",
+        "mix_a": "",
+        "mix_b": "",
+        "faulty_plan": "",
+    }
+    body.update(overrides)
+    return body
+
+
+def test_model_draft_recommends_every_field_and_push_keeps_the_description() -> None:
+    course = _make("zz-fields", description="The river in this course is blue.")
+    try:
+        pushed = client.post(
+            f"/kc/courses/{course['id']}/push",
+            json={
+                "components": [
+                    {
+                        "code": "zz-fields-a",
+                        "title": "River fact",
+                        "description": "Outline: The river is blue.\nTopics: color\nGoals: Recall the color",
+                    },
+                    {"code": "zz-fields-b", "title": "Other"},
+                ]
+            },
+        ).json()["components"]
+        river = pushed[0]
+        saved = client.put(
+            f"/kc/nodes/{river['id']}",
+            json=_component("River fact", description="Outline: Edited by hand.\nTopics: color\nGoals: Recall it"),
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["description"].startswith("Outline: Edited by hand.")
+
+        thin = client.post(
+            f"/kc/nodes/{river['id']}/model-turn",
+            json={
+                "message": "Draft this.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(description=""),
+            },
+        )
+        assert thin.status_code == 422
+        assert "Outline" in thin.json()["detail"]
+
+        full = client.post(
+            f"/kc/nodes/{river['id']}/model-turn",
+            json={"message": "Draft this component.", "discussion": _model_fields()["discussion"], "draft": _model_fields()},
+        )
+        assert full.status_code == 200, full.text
+        draft = full.json()["draft"]
+        assert draft["description"].startswith("Outline:")
+        assert draft["kc_type"] == "factual"
+        assert draft["type_fields"]["fact"] == "The river is blue."
+        assert draft["type_fields"]["retrieval_question"] == "What color is the river?"
+        assert draft["misconceptions"][0]["broken_kc"] == "zz-fields-b"
+        assert draft["prerequisite_codes"] == ["zz-fields-b"]
+        assert "Recommend" not in full.json()["messages"][-1]["content"]
+        assert "Description:" in full.json()["messages"][-1]["content"]
+
+        written = client.post(f"/kc/nodes/{river['id']}/push", json=draft)
+        assert written.status_code == 200, written.text
+        assert written.json()["description"].startswith("Outline:")
+        assert written.json()["core_truth"] == "The river in this course is blue."
+        assert written.json()["type_fields"]["fact"] == "The river is blue."
+        assert written.json()["prerequisite_codes"] == ["zz-fields-b"]
+        other = client.get(f"/kc/nodes/{pushed[1]['id']}").json()
+        assert other["title"] == "Other"
+        assert other["kc_type"] is None
+    finally:
+        _wipe_zz()
+
+
+def test_wrong_password_keeps_a_kc_course_and_the_right_password_deletes_it() -> None:
+    _wipe_zz()
+    before = _counts()
+    first = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-del",
+            "title": "Delete me",
+            "description": "A course to remove.",
+            "audience": "12-14",
+            "kind": "mastery",
+        },
+    )
+    assert first.status_code == 200, first.text
+    course = first.json()
+    kept = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-keep",
+            "title": "Keep me",
+            "description": "A course to keep.",
+            "audience": "12-14",
+            "kind": "mastery",
+        },
+    ).json()
+    try:
+        pushed = client.post(
+            f"/kc/courses/{course['id']}/push",
+            json={"components": [{"code": "zz-del-a", "title": "Gone"}]},
+        ).json()["components"]
+        node_id = pushed[0]["id"]
+        opened = client.post(f"/kc/nodes/{node_id}/thread", json={"message": "Draft this fact."})
+        assert opened.status_code == 200, opened.text
+        assert opened.json()["messages"]
+
+        wrong = client.post(f"/kc/courses/{course['id']}/delete", json={"password": "not-the-password"})
+        assert wrong.status_code == 422
+        assert wrong.json()["detail"] == "The password is wrong."
+        assert "BulmerGardens" not in wrong.text
+        assert client.get(f"/kc/courses/{course['id']}").status_code == 200
+        assert client.get(f"/kc/nodes/{node_id}").status_code == 200
+        assert client.get(f"/kc/courses/{kept['id']}").status_code == 200
+
+        deleted = client.post(f"/kc/courses/{course['id']}/delete", json={"password": "BulmerGardens"})
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json()["deleted"] is True
+        assert client.get(f"/kc/courses/{course['id']}").status_code == 404
+        assert client.get(f"/kc/nodes/{node_id}").status_code == 404
+        assert client.get(f"/kc/courses/{kept['id']}").status_code == 200
+        codes = [row["code"] for row in client.get("/kc/courses").json()]
+        assert "zz-del" not in codes
+        assert "zz-keep" in codes
+        db = SessionLocal()
+        try:
+            goal_id = uuid.UUID(course["id"])
+            component_id = uuid.UUID(node_id)
+            assert db.get(KcGoal, goal_id) is None
+            assert db.get(KcNode, component_id) is None
+            assert (
+                db.scalar(
+                    select(func.count()).select_from(KcCreatorMessage).where(KcCreatorMessage.node_id == component_id)
+                )
+                == 0
+            )
+        finally:
+            db.close()
+        after = _counts()
+        assert after["chats"] == before["chats"]
+        assert after["classes"] == before["classes"]
+    finally:
         _wipe_zz()

@@ -56,6 +56,7 @@ export type KcComponentDraft = {
   kind: "component";
   code: string;
   title: string;
+  description?: string;
   kc_type: KcType;
   core_truth: string;
   rubric: string[];
