@@ -36,6 +36,7 @@ from app.queries import (
     close_is_empty,
     close_question_index_of,
     close_questions,
+    latest_close_result,
     latest_result,
     locate_goal,
     ordered_goals,
@@ -194,32 +195,89 @@ def _quest_walk(quest, *, reveal_close: bool, active: dict | None = None) -> tup
     if close_is_empty(quest):
         return points, True, "Close: No questions."
     questions = close_questions(close)
-    if questions and all(question["kind"] == "essay" for question in questions):
-        label = "Essay"
-    elif questions and all(question["kind"] == "multi" for question in questions):
-        label = "Multi-choice"
+    if questions and all(question["kind"] == "single" for question in questions):
+        label = "Single choice"
+    elif questions and all(question["kind"] == "multiple" for question in questions):
+        label = "Multiple choice"
+    elif questions:
+        label = "Mixed"
     elif close is not None and close.answer_style == "essay":
-        label = "Essay"
-    elif _selection(close) == "multi":
-        label = "Multi-choice"
+        label = "Single choice"
     else:
-        label = "Choice"
+        label = "Multiple choice"
     if not reveal_close:
         return points, False, f"Close: {label}."
     target = active or (questions[0] if questions else None)
     if target is None:
         return points, False, f"Close: {label}."
-    if target["kind"] == "essay":
-        return points, False, f"Close: Essay. Question: {target['text']}"
-    shown = "Multi-choice" if target["kind"] == "multi" else "Choice"
-    choices = [choice["text"] for choice in target["choices"] if choice.get("text")]
-    choice_line = f" Choices: {'; '.join(choices)}." if choices else ""
-    return points, False, f"Close: {shown}. Question: {target['text']}{choice_line}"
+    if target["kind"] == "single":
+        return points, False, f"Close: Single choice. Question: {target['text']}. The kid types the answer."
+    return points, False, f"Close: Multiple choice. Card question: {target['text']}. Do not read this question aloud."
 
 
-def _selection(close) -> str | None:
-    stored = close.items if isinstance(close.items, dict) else {}
-    return stored.get("selection") if stored.get("selection") in {"single", "multi"} else None
+def _goal_standard(goals) -> str:
+    parts = []
+    for goal in goals:
+        if str(goal.learning_goal or "").strip():
+            parts.append(str(goal.learning_goal).strip())
+        if str(goal.success_criterion or "").strip():
+            parts.append(str(goal.success_criterion).strip())
+    return " ".join(parts) or "the idea this quest taught"
+
+
+def _picked_label(question: dict, result) -> str:
+    choice = result.choice if result is not None and isinstance(result.choice, dict) else {}
+    ids = {str(item) for item in choice.get("ids") or []}
+    labels = [
+        str(item.get("text") or "")
+        for index, item in enumerate(question.get("choices") or [], start=1)
+        if f"c{index}" in ids and str(item.get("text") or "").strip()
+    ]
+    return ", ".join(labels) or "that option"
+
+
+def _close_task(question: dict | None, goals, latest, *, card: bool) -> str:
+    """One question, asked in one place, judged against the quest goals."""
+    standard = _goal_standard(goals)
+    if question is None:
+        return "The close has no question."
+    if question["kind"] == "multiple" and card:
+        if latest is not None and latest.passed:
+            picked = _picked_label(question, latest)
+            return (
+                f"They picked {picked}, and it is correct. "
+                f"Explain in one or two sentences why that pick answers the question, using these goals: {standard}. "
+                "Do not ask the question again. Do not list the options. Set advance to true."
+            )
+        if latest is not None and not latest.passed:
+            picked = _picked_label(question, latest)
+            return (
+                f"They picked {picked}. It does not answer the question. "
+                f"The question was: {question['text']}. The goals are: {standard}. "
+                "Explain that pick in one or two sentences. "
+                "Do not repeat the question. Do not ask them to type an answer. "
+                "Do not name the correct option. The card stays up for another pick. Set advance to false."
+            )
+        return (
+            "The choice card is the question. "
+            "Your reply is exactly: Pick one answer on the card. "
+            "Do not repeat the question. Do not ask for a typed answer. Set advance to false."
+        )
+    if question["kind"] == "multiple":
+        return (
+            f"The struggle window is over for this multiple-choice question: {question['text']}. "
+            f"Explain the answer using these goals: {standard}. "
+            "Do not ask the question again. Set advance to true."
+        )
+    return (
+        f"Ask this question once: {question['text']}. "
+        "The kid types the answer. Do not offer choices. "
+        f"A good answer fits these goals: {standard}. "
+        "When they have answered, reply to the words they wrote and say what was right or missing. "
+        'If it fits, set rubric_met to ["criterion"] and advance to true. '
+        "If it does not, set rubric_met to [] and advance to false. "
+        "Do not ask the same question as a choice card."
+    )
 
 
 def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> PromptBundle:
@@ -240,7 +298,11 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
     submitted = choice_submitted(tutor_session) if on_close else False
     answering_tap = awaiting_tap_reply(tutor_session) if on_close else False
     close_card = close_choice_widget(quest, tutor_session) if on_close else None
-    include_widget = close_card is not None and (offer == "ask" or answering_tap)
+    latest_close = latest_close_result(tutor_session) if on_close else None
+    spoken = offer
+    if spoken is None and close_card is not None and latest_close is not None and latest_close.passed:
+        spoken = "correct"
+    include_widget = close_card is not None
     reveal_close = finished or on_close
     close_question = active_close_question(quest.close, tutor_session) if reveal_close else None
     studio_goals, empty_close, close_line = _quest_walk(quest, reveal_close=reveal_close, active=close_question)
@@ -248,10 +310,21 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
     grade_writing = False
     withhold_answer = offer == "ask"
     if on_close:
-        prompt = close_line or "Ask the closing question."
+        prompt = _close_task(close_question, goals, latest_close, card=close_card is not None and offer == "ask")
+        if close_question and close_question["kind"] == "multiple" and latest_close is not None and latest_close.passed:
+            prompt = _close_task(close_question, goals, latest_close, card=True)
         role = "close"
         position = len(goals) + 1
-        rubric = ()
+        if close_question and close_question["kind"] == "single":
+            rubric = (
+                RubricCriterion(
+                    id="criterion",
+                    text=f"The typed answer fits: {_goal_standard(goals)}",
+                    weight=100,
+                ),
+            )
+        else:
+            rubric = ()
     elif active is not None:
         prompt = (
             f"Teach this goal, then ask one question. Goal: {active.learning_goal}. "
@@ -345,6 +418,6 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
         kickoff=kickoff,
         hold_widget=held,
         grade_writing=grade_writing,
-        widget_offer=offer,
+        widget_offer=spoken,
         withhold_answer=withhold_answer,
     )

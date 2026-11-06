@@ -349,12 +349,11 @@ def grade_widget(
         for item in quiz.get("choices") or []
         if isinstance(item, dict) and item.get("id") in ids
     ) or "that choice"
-    idea = str(quiz.get("prompt") or "this question")
     if graded["correct"]:
-        feedback = "That choice is right."
+        feedback = f"They picked {tried}. It answers the question."
         graded["misconception"] = None
     else:
-        feedback = f"You tried {tried}. The idea is {idea}. That choice does not answer it."
+        feedback = f"They picked {tried}. It does not answer the question."
         graded["misconception"] = feedback
     recorded = record_result(
         db,

@@ -13,9 +13,11 @@ function messageOf(error: unknown) {
 
 function closeLabel(close: CourseClose | null) {
   if (!close || close.questions.length === 0) return "No questions";
-  if (close.answer_style === "multiple_choice" && close.selection === "multi") return "Multi-choice";
-  if (close.answer_style === "multiple_choice") return "Single choice";
-  return "Essay";
+  const multiple = close.questions.some((item) => item.kind === "multiple");
+  const typed = close.questions.some((item) => item.kind !== "multiple");
+  if (multiple && typed) return "Mixed";
+  if (multiple) return "Multiple choice";
+  return "Single choice";
 }
 
 export function AdminApp({
@@ -267,10 +269,10 @@ function QuestBranch({
           {(quest.close?.questions ?? []).map((item, index) => (
             <div key={`${quest.code}-question-${index}`} className="studio-goal-row">
               <p className="studio-fact">
-                <span>Question {index + 1}</span>
+                <span>{item.kind === "multiple" ? "Multiple choice" : "Single choice"} {index + 1}</span>
                 {item.text}
               </p>
-              {item.choices?.length ? (
+              {item.kind === "multiple" && item.choices?.length ? (
                 <ul className="studio-choices">
                   {item.choices.map((choice) => (
                     <li key={choice.text}>{choice.correct ? `${choice.text} (correct)` : choice.text}</li>

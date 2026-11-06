@@ -645,18 +645,9 @@ def _stored_close_items(close: dict):
     if questions and (
         any(question["choices"] for question in questions)
         or len(questions) > 1
-        or all(question["kind"] == "essay" for question in questions)
+        or all(question["kind"] == "single" for question in questions)
     ):
-        kinds = {question["kind"] for question in questions if question["kind"] in {"single", "multi"}}
-        selection = None
-        if kinds == {"single"}:
-            selection = "single"
-        elif kinds == {"multi"}:
-            selection = "multi"
-        packed = {"choices": [], "questions": questions}
-        if selection:
-            packed["selection"] = selection
-        return packed
+        return {"choices": [], "questions": questions}
     raw = close.get("items") if isinstance(close, dict) else None
     return copy.deepcopy(raw) if raw else []
 

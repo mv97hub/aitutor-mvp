@@ -98,7 +98,7 @@ export function ChoiceWidget({
         submit();
       }}
     >
-      <p className="eyebrow">{quiz.type === "flaw" ? "Spot the flaw" : quiz.type === "order" ? "Put in order" : quiz.type === "multi" ? "Select all that fit" : "Choose one"}</p>
+      <p className="eyebrow">{quiz.type === "flaw" ? "Spot the flaw" : quiz.type === "order" ? "Put in order" : quiz.type === "multi" ? "Select all that fit" : "Multiple choice"}</p>
       <p className="widget-prompt">{quiz.prompt}</p>
       {quiz.type === "order" ? (
         <ol className="order-list">

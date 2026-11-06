@@ -289,9 +289,10 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
                                 "answer_style": "multiple_choice",
                                 "choice_mode": "predefined",
                                 "items": [
-                                    {"text": "90 degrees"},
-                                    {"text": "180 degrees"},
-                                    {"text": "360 degrees"},
+                                    {"text": "90 degrees", "correct": False},
+                                    {"text": "180 degrees", "correct": True},
+                                    {"text": "360 degrees", "correct": False},
+                                    {"text": "45 degrees", "correct": False},
                                 ],
                                 "intent": "",
                             },
@@ -353,6 +354,7 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
             "90 degrees",
             "180 degrees",
             "360 degrees",
+            "45 degrees",
         ]
         assert quests["ZZGEO-U1-Q1"]["moves"] == []
         assert accepted.json()["message"]["applied"] is True
@@ -1341,7 +1343,12 @@ def test_preference_save_writes_the_choices_and_cancel_does_not() -> None:
                     "close_style": "several",
                     "answer_style": "mixed",
                     "choice_mode": "predefined",
-                    "items": [{"text": "90 degrees"}, {"text": "180 degrees"}],
+                    "items": [
+                        {"text": "90 degrees", "correct": False},
+                        {"text": "180 degrees", "correct": True},
+                        {"text": "360 degrees", "correct": False},
+                        {"text": "45 degrees", "correct": False},
+                    ],
                     "intent": "",
                 },
             },
@@ -1848,7 +1855,8 @@ def test_stage_advances_only_from_mark_complete_and_push_writes_the_tree() -> No
         assert to_close.status_code == 200, to_close.text
         assert to_close.json()["stage"]["name"] == "close"
         close_text = client.get(f"/studio/courses/{course_id}/messages").json()[-1]["content"]
-        assert "essay" in close_text
+        assert "single choice" in close_text
+        assert "multiple choice" in close_text
         assert "one quest at a time" in close_text
 
         close_draft = client.post(f"/studio/courses/{course_id}/fallback", json={"content": "draft the closes"})
@@ -1882,15 +1890,21 @@ def test_stage_advances_only_from_mark_complete_and_push_writes_the_tree() -> No
                     "close_style": "one",
                     "answer_style": "multiple_choice",
                     "choice_mode": "predefined",
-                    "selection": "single",
-                    "items": [{"text": "1907", "correct": True}, {"text": "1807", "correct": False}],
+                    "selection": None,
+                    "items": [
+                        {"text": "1907", "correct": True},
+                        {"text": "1807", "correct": False},
+                        {"text": "1707", "correct": False},
+                        {"text": "1607", "correct": False},
+                    ],
                     "questions": [{"text": "When was it founded?"}],
                     "intent": "",
                 },
             },
         )
         assert single.status_code == 200, single.text
-        assert single.json()["quests"][1]["close"]["selection"] == "single"
+        assert single.json()["quests"][1]["close"]["selection"] is None
+        assert single.json()["quests"][1]["close"]["questions"][0]["kind"] == "multiple"
         multi = client.post(
             f"/studio/courses/{course_id}/tree",
             json={
@@ -1900,11 +1914,12 @@ def test_stage_advances_only_from_mark_complete_and_push_writes_the_tree() -> No
                     "close_style": "one",
                     "answer_style": "multiple_choice",
                     "choice_mode": "predefined",
-                    "selection": "multi",
+                    "selection": None,
                     "items": [
                         {"text": "Science", "correct": True},
-                        {"text": "Medicine", "correct": True},
+                        {"text": "Medicine", "correct": False},
                         {"text": "Farming", "correct": False},
+                        {"text": "Law", "correct": False},
                     ],
                     "questions": [{"text": "Which fields shaped the college?"}],
                     "intent": "",
@@ -1912,7 +1927,9 @@ def test_stage_advances_only_from_mark_complete_and_push_writes_the_tree() -> No
             },
         )
         assert multi.status_code == 200, multi.text
-        assert multi.json()["quests"][2]["close"]["selection"] == "multi"
+        assert multi.json()["quests"][2]["close"]["selection"] is None
+        assert multi.json()["quests"][2]["close"]["questions"][0]["kind"] == "multiple"
+        assert [item["correct"] for item in multi.json()["quests"][2]["close"]["questions"][0]["choices"]] == [True, False, False, False]
 
         thin = client.post(
             f"/studio/courses/{course_id}/tree",
@@ -2302,11 +2319,12 @@ def test_a_close_draft_patches_only_the_quests_it_names() -> None:
             "close_style": "one",
             "answer_style": "multiple_choice",
             "choice_mode": "predefined",
-            "selection": "multi",
+            "selection": None,
             "items": [
                 {"text": "Science", "correct": True},
-                {"text": "Medicine", "correct": True},
+                {"text": "Medicine", "correct": False},
                 {"text": "Farming", "correct": False},
+                {"text": "Law", "correct": False},
             ],
             "questions": [{"text": "Which fields?"}],
             "intent": "",
@@ -2330,13 +2348,13 @@ def test_a_close_draft_patches_only_the_quests_it_names() -> None:
         assert quests["ZZPART-Q3"]["close"]["questions"][0]["text"] == "Essay three"
         close = quests["ZZPART-Q2"]["close"]
         assert close["answer_style"] == "multiple_choice"
-        assert close["selection"] == "multi"
+        assert close["selection"] is None
         assert close["items"] == []
         question = close["questions"][0]
         assert question["text"] == "Which fields?"
-        assert question["kind"] == "multi"
-        assert [item["text"] for item in question["choices"]] == ["Science", "Medicine", "Farming"]
-        assert [item.get("correct", False) for item in question["choices"]] == [True, True, False]
+        assert question["kind"] == "multiple"
+        assert [item["text"] for item in question["choices"]] == ["Science", "Medicine", "Farming", "Law"]
+        assert [item.get("correct", False) for item in question["choices"]] == [True, False, False, False]
     finally:
         _wipe("ZZPART")
 
@@ -2861,14 +2879,19 @@ def test_a_four_question_close_keeps_each_choice_list() -> None:
                 "Question: What do the angles add to?",
                 "- 180 degrees (correct)",
                 "- 90 degrees",
+                "- 45 degrees",
+                "- 360 degrees",
                 "Question: Which of these are triangles?",
                 "- Equilateral (correct)",
                 "- Square",
-                "- Isosceles (correct)",
+                "- Circle",
+                "- Line",
                 "Question: Why do the angles add to 180?",
                 "Question: What is the longest side of a right triangle called?",
                 "- Hypotenuse (correct)",
                 "- Radius",
+                "- Diameter",
+                "- Chord",
             ]
         )
         drafted = _proposal(
@@ -2913,20 +2936,25 @@ def test_a_four_question_close_keeps_each_choice_list() -> None:
             "Why do the angles add to 180?",
             "What is the longest side of a right triangle called?",
         ]
-        assert [question["kind"] for question in saved["questions"]] == ["single", "multi", "essay", "single"]
+        assert [question["kind"] for question in saved["questions"]] == ["multiple", "multiple", "single", "multiple"]
         assert saved["questions"][0]["choices"] == [
             {"text": "180 degrees", "correct": True},
             {"text": "90 degrees", "correct": False},
+            {"text": "45 degrees", "correct": False},
+            {"text": "360 degrees", "correct": False},
         ]
         assert saved["questions"][1]["choices"] == [
             {"text": "Equilateral", "correct": True},
             {"text": "Square", "correct": False},
-            {"text": "Isosceles", "correct": True},
+            {"text": "Circle", "correct": False},
+            {"text": "Line", "correct": False},
         ]
         assert saved["questions"][2]["choices"] == []
         assert saved["questions"][3]["choices"] == [
             {"text": "Hypotenuse", "correct": True},
             {"text": "Radius", "correct": False},
+            {"text": "Diameter", "correct": False},
+            {"text": "Chord", "correct": False},
         ]
         pushed = client.post(f"/studio/courses/{course_id}/push-draft")
         assert pushed.status_code == 200, pushed.text
@@ -2934,7 +2962,7 @@ def test_a_four_question_close_keeps_each_choice_list() -> None:
         assert [question["text"] for question in quest["close"]["questions"]] == [
             question["text"] for question in saved["questions"]
         ]
-        assert quest["close"]["questions"][1]["choices"][2]["correct"] is True
+        assert quest["close"]["questions"][1]["choices"][0]["correct"] is True
         edited = client.post(
             f"/studio/courses/{course_id}/tree",
             json={
@@ -2945,17 +2973,18 @@ def test_a_four_question_close_keeps_each_choice_list() -> None:
                     "close_style": "one",
                     "answer_style": "multiple_choice",
                     "choice_mode": "predefined",
-                    "selection": "multi",
+                    "selection": None,
                     "items": [],
                     "intent": "",
                     "questions": [
                         {
                             "text": "Which of these have three sides?",
-                            "kind": "multi",
+                            "kind": "multiple",
                             "choices": [
                                 {"text": "Equilateral", "correct": True},
                                 {"text": "Square", "correct": False},
-                                {"text": "Isosceles", "correct": True},
+                                {"text": "Circle", "correct": False},
+                                {"text": "Line", "correct": False},
                             ],
                         }
                     ],
@@ -2973,6 +3002,34 @@ def test_a_four_question_close_keeps_each_choice_list() -> None:
         ]
         assert changed[0]["choices"][0] == {"text": "180 degrees", "correct": True}
         assert changed[3]["choices"][0]["text"] == "Hypotenuse"
-        assert changed[2]["kind"] == "essay"
+        assert changed[2]["kind"] == "single"
+        short = client.post(
+            f"/studio/courses/{course_id}/tree",
+            json={
+                "action": "set_close",
+                "code": "ZZFOUR-Q1",
+                "question_index": 0,
+                "close": {
+                    "close_style": "one",
+                    "answer_style": "multiple_choice",
+                    "choice_mode": "predefined",
+                    "selection": None,
+                    "items": [],
+                    "intent": "",
+                    "questions": [
+                        {
+                            "text": "Too few options",
+                            "kind": "multiple",
+                            "choices": [
+                                {"text": "Only", "correct": True},
+                                {"text": "Two", "correct": False},
+                                {"text": "Three", "correct": False},
+                            ],
+                        }
+                    ],
+                },
+            },
+        )
+        assert short.status_code == 422
     finally:
         _wipe("ZZFOUR")
