@@ -264,14 +264,22 @@ function QuestBranch({
             <span>Close</span>
             {closeLabel(quest.close)}
           </p>
-          {quest.close && quest.close.questions.length > 0 ? (
-            <ul className="studio-choices">
-              {quest.close.questions.map((item) => (
-                <li key={item.text}>{item.text}</li>
-              ))}
-            </ul>
-          ) : null}
-          {quest.close?.items.length ? (
+          {(quest.close?.questions ?? []).map((item, index) => (
+            <div key={`${quest.code}-question-${index}`} className="studio-goal-row">
+              <p className="studio-fact">
+                <span>Question {index + 1}</span>
+                {item.text}
+              </p>
+              {item.choices?.length ? (
+                <ul className="studio-choices">
+                  {item.choices.map((choice) => (
+                    <li key={choice.text}>{choice.correct ? `${choice.text} (correct)` : choice.text}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ))}
+          {quest.close?.items.length && !(quest.close.questions ?? []).some((item) => item.choices?.length) ? (
             <ul className="studio-choices">
               {quest.close.items.map((item) => (
                 <li key={item.text}>{item.correct ? `${item.text} (correct)` : item.text}</li>

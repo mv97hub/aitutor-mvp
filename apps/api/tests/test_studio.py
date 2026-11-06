@@ -2331,8 +2331,12 @@ def test_a_close_draft_patches_only_the_quests_it_names() -> None:
         close = quests["ZZPART-Q2"]["close"]
         assert close["answer_style"] == "multiple_choice"
         assert close["selection"] == "multi"
-        assert [item["text"] for item in close["items"]] == ["Science", "Medicine", "Farming"]
-        assert [item.get("correct", False) for item in close["items"]] == [True, True, False]
+        assert close["items"] == []
+        question = close["questions"][0]
+        assert question["text"] == "Which fields?"
+        assert question["kind"] == "multi"
+        assert [item["text"] for item in question["choices"]] == ["Science", "Medicine", "Farming"]
+        assert [item.get("correct", False) for item in question["choices"]] == [True, True, False]
     finally:
         _wipe("ZZPART")
 
@@ -2846,3 +2850,129 @@ def test_a_goals_draft_writes_every_quest_it_names() -> None:
         assert "ZZSKIPG-Q2" in blocked.json()["detail"]
     finally:
         _wipe("ZZSKIPG")
+
+
+def test_a_four_question_close_keeps_each_choice_list() -> None:
+    course_id = _close_stage("ZZFOUR")
+    try:
+        reply = "\n".join(
+            [
+                "ZZFOUR-Q1",
+                "Question: What do the angles add to?",
+                "- 180 degrees (correct)",
+                "- 90 degrees",
+                "Question: Which of these are triangles?",
+                "- Equilateral (correct)",
+                "- Square",
+                "- Isosceles (correct)",
+                "Question: Why do the angles add to 180?",
+                "Question: What is the longest side of a right triangle called?",
+                "- Hypotenuse (correct)",
+                "- Radius",
+            ]
+        )
+        drafted = _proposal(
+            course_id,
+            reply,
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZFOUR-Q1",
+                    close={
+                        "close_style": "one",
+                        "answer_style": "multiple_choice",
+                        "choice_mode": "predefined",
+                        "selection": "single",
+                        "items": [
+                            {"text": "180 degrees", "correct": True},
+                            {"text": "90 degrees", "correct": False},
+                            {"text": "Equilateral", "correct": True},
+                            {"text": "Square", "correct": False},
+                            {"text": "Isosceles", "correct": True},
+                            {"text": "Hypotenuse", "correct": True},
+                            {"text": "Radius", "correct": False},
+                        ],
+                        "questions": [
+                            {"text": "What do the angles add to?"},
+                            {"text": "Which of these are triangles?"},
+                            {"text": "Why do the angles add to 180?"},
+                            {"text": "What is the longest side of a right triangle called?"},
+                        ],
+                        "intent": "",
+                    },
+                )
+            ],
+        )
+        assert drafted.status_code == 200, drafted.text
+        saved = drafted.json()["proposal"]["operations"][0]["close"]
+        assert saved["items"] == []
+        assert [question["text"] for question in saved["questions"]] == [
+            "What do the angles add to?",
+            "Which of these are triangles?",
+            "Why do the angles add to 180?",
+            "What is the longest side of a right triangle called?",
+        ]
+        assert [question["kind"] for question in saved["questions"]] == ["single", "multi", "essay", "single"]
+        assert saved["questions"][0]["choices"] == [
+            {"text": "180 degrees", "correct": True},
+            {"text": "90 degrees", "correct": False},
+        ]
+        assert saved["questions"][1]["choices"] == [
+            {"text": "Equilateral", "correct": True},
+            {"text": "Square", "correct": False},
+            {"text": "Isosceles", "correct": True},
+        ]
+        assert saved["questions"][2]["choices"] == []
+        assert saved["questions"][3]["choices"] == [
+            {"text": "Hypotenuse", "correct": True},
+            {"text": "Radius", "correct": False},
+        ]
+        pushed = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert pushed.status_code == 200, pushed.text
+        quest = next(row for row in pushed.json()["quests"] if row["code"] == "ZZFOUR-Q1")
+        assert [question["text"] for question in quest["close"]["questions"]] == [
+            question["text"] for question in saved["questions"]
+        ]
+        assert quest["close"]["questions"][1]["choices"][2]["correct"] is True
+        edited = client.post(
+            f"/studio/courses/{course_id}/tree",
+            json={
+                "action": "set_close",
+                "code": "ZZFOUR-Q1",
+                "question_index": 1,
+                "close": {
+                    "close_style": "one",
+                    "answer_style": "multiple_choice",
+                    "choice_mode": "predefined",
+                    "selection": "multi",
+                    "items": [],
+                    "intent": "",
+                    "questions": [
+                        {
+                            "text": "Which of these have three sides?",
+                            "kind": "multi",
+                            "choices": [
+                                {"text": "Equilateral", "correct": True},
+                                {"text": "Square", "correct": False},
+                                {"text": "Isosceles", "correct": True},
+                            ],
+                        }
+                    ],
+                },
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        changed = next(row for row in edited.json()["quests"] if row["code"] == "ZZFOUR-Q1")["close"]["questions"]
+        assert changed[1]["text"] == "Which of these have three sides?"
+        assert [question["text"] for question in changed] == [
+            "What do the angles add to?",
+            "Which of these have three sides?",
+            "Why do the angles add to 180?",
+            "What is the longest side of a right triangle called?",
+        ]
+        assert changed[0]["choices"][0] == {"text": "180 degrees", "correct": True}
+        assert changed[3]["choices"][0]["text"] == "Hypotenuse"
+        assert changed[2]["kind"] == "essay"
+    finally:
+        _wipe("ZZFOUR")

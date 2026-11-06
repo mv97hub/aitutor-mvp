@@ -637,6 +637,30 @@ def _apply_course_fields(course: Course, payload: dict) -> None:
     course.updated_at = datetime.now(timezone.utc)
 
 
+def _stored_close_items(close: dict):
+    """Store each question with its own choices. A shared list stays only when there is no question."""
+    from app.queries import close_questions
+
+    questions = close_questions(close) if isinstance(close, dict) else []
+    if questions and (
+        any(question["choices"] for question in questions)
+        or len(questions) > 1
+        or all(question["kind"] == "essay" for question in questions)
+    ):
+        kinds = {question["kind"] for question in questions if question["kind"] in {"single", "multi"}}
+        selection = None
+        if kinds == {"single"}:
+            selection = "single"
+        elif kinds == {"multi"}:
+            selection = "multi"
+        packed = {"choices": [], "questions": questions}
+        if selection:
+            packed["selection"] = selection
+        return packed
+    raw = close.get("items") if isinstance(close, dict) else None
+    return copy.deepcopy(raw) if raw else []
+
+
 def _append_quest(course: Course, body: dict, position: int) -> Quest:
     quest = Quest(
         code=body["code"],
@@ -657,7 +681,7 @@ def _append_quest(course: Course, body: dict, position: int) -> Quest:
         close_style=close.get("close_style") or "one",
         answer_style=close.get("answer_style") or "essay",
         choice_mode=close.get("choice_mode"),
-        items=close.get("items") or [],
+        items=_stored_close_items(close),
         intent=close.get("intent") or "",
     )
     return quest
@@ -814,14 +838,14 @@ def _sync_close(quest: Quest, close: dict) -> None:
             close_style=close.get("close_style") or "one",
             answer_style=close.get("answer_style") or "essay",
             choice_mode=close.get("choice_mode"),
-            items=close.get("items") or [],
+            items=_stored_close_items(close),
             intent=close.get("intent") or "",
         )
         return
     row.close_style = close.get("close_style") or "one"
     row.answer_style = close.get("answer_style") or "essay"
     row.choice_mode = close.get("choice_mode")
-    row.items = close.get("items") or []
+    row.items = _stored_close_items(close)
     row.intent = close.get("intent") or ""
 
 
@@ -888,6 +912,7 @@ def update_course_in_place(db: Session, payload: dict) -> Course:
                     continue
                 tutor_session.current_goal_id = first[0].id if first else None
                 tutor_session.close_started = not first
+                tutor_session.close_question_index = 0
     db.flush()
     return course
 
@@ -1009,13 +1034,15 @@ def _copy_close(row) -> dict:
             "items": [],
             "intent": "",
         }
-    return {
+    close = {
         "close_style": row.close_style,
         "answer_style": row.answer_style,
         "choice_mode": row.choice_mode,
         "items": copy.deepcopy(row.items or []),
         "intent": row.intent or "",
     }
+    close["items"] = _stored_close_items(close)
+    return close
 
 
 def catalog_from_studio(studio) -> dict:

@@ -88,6 +88,8 @@ def _message_text(message: Message) -> str:
 
 
 def _failed_attempts(tutor_session: TutorSession, goal_id: uuid.UUID | None) -> int:
+    if goal_id is None:
+        return close_failed_attempts(tutor_session)
     return sum(
         1
         for result in tutor_session.results
@@ -95,8 +97,52 @@ def _failed_attempts(tutor_session: TutorSession, goal_id: uuid.UUID | None) -> 
     )
 
 
+def _stored_close(close):
+    """The JSON a close row or a close dict keeps its questions in."""
+    if close is None:
+        return None
+    if isinstance(close, dict):
+        items = close.get("items")
+        questions = close.get("questions") if isinstance(close.get("questions"), list) else []
+        selection = close.get("selection") if close.get("selection") in {"single", "multi"} else None
+        if isinstance(items, dict):
+            stored = dict(items)
+            if questions and not stored.get("questions"):
+                stored["questions"] = questions
+            if selection and stored.get("selection") not in {"single", "multi"}:
+                stored["selection"] = selection
+            return stored
+        if questions or selection:
+            packed = {"choices": list(items) if isinstance(items, list) else [], "questions": questions}
+            if selection:
+                packed["selection"] = selection
+            return packed
+        if isinstance(items, list):
+            return items
+        return {"choices": [], "questions": []}
+    return getattr(close, "items", None)
+
+
+def _clean_choice_rows(raw) -> list[dict]:
+    rows = []
+    if not isinstance(raw, list):
+        return rows
+    for item in raw:
+        if isinstance(item, str):
+            text = item.strip()
+            correct = False
+        elif isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            correct = item.get("correct") is True
+        else:
+            continue
+        if text:
+            rows.append({"text": text, "correct": correct})
+    return rows
+
+
 def _close_parts(close) -> tuple[list, list, str | None]:
-    stored = close.items if close is not None else None
+    stored = _stored_close(close)
     if isinstance(stored, dict):
         choices = stored.get("choices") if isinstance(stored.get("choices"), list) else []
         questions = stored.get("questions") if isinstance(stored.get("questions"), list) else []
@@ -107,15 +153,140 @@ def _close_parts(close) -> tuple[list, list, str | None]:
     return [], [], None
 
 
+def close_questions(close) -> list[dict]:
+    """Each question is text, kind, and its own choices.
+
+    An older close kept one shared choice list and questions that were only
+    text. One question keeps that list. Several questions stay separate and
+    do not inherit each other's answers.
+    """
+    stored = _stored_close(close)
+    if isinstance(stored, dict):
+        shared = _clean_choice_rows(stored.get("choices"))
+        raw_questions = stored.get("questions") if isinstance(stored.get("questions"), list) else []
+        selection = stored.get("selection") if stored.get("selection") in {"single", "multi"} else None
+    elif isinstance(stored, list):
+        shared = _clean_choice_rows(stored)
+        raw_questions = []
+        selection = None
+    else:
+        return []
+    built = []
+    for item in raw_questions:
+        if isinstance(item, str):
+            text = item.strip()
+            choices: list[dict] = []
+            kind = None
+        elif isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            choices = _clean_choice_rows(item.get("choices"))
+            kind = item.get("kind") if item.get("kind") in {"essay", "single", "multi"} else None
+        else:
+            continue
+        if not text:
+            continue
+        if kind is None:
+            if choices:
+                corrects = sum(1 for choice in choices if choice["correct"])
+                kind = "multi" if selection == "multi" or corrects > 1 else "single"
+            else:
+                kind = "essay"
+        if kind == "essay":
+            choices = []
+        built.append({"text": text, "kind": kind, "choices": choices})
+    if len(built) == 1 and not built[0]["choices"] and shared:
+        corrects = sum(1 for choice in shared if choice["correct"])
+        kind = "multi" if selection == "multi" or corrects > 1 else "single"
+        built[0] = {"text": built[0]["text"], "kind": kind, "choices": shared}
+    return built
+
+
 def close_question_texts(close) -> list[str]:
-    _choices, questions, _selection = _close_parts(close)
-    texts = []
-    for item in questions:
-        if isinstance(item, str) and item.strip():
-            texts.append(item.strip())
-        elif isinstance(item, dict) and str(item.get("text") or "").strip():
-            texts.append(str(item["text"]).strip())
-    return texts
+    return [question["text"] for question in close_questions(close)]
+
+
+def close_api_parts(close) -> tuple[list, list, str | None]:
+    """Items stay empty once each question carries its own choices."""
+    items, _raw_questions, selection = _close_parts(close)
+    rich = close_questions(close)
+    if not rich:
+        return _clean_choice_rows(items), [], selection
+    choice_kinds = {question["kind"] for question in rich if question["kind"] in {"single", "multi"}}
+    if choice_kinds == {"single"}:
+        selection = "single"
+    elif choice_kinds == {"multi"}:
+        selection = "multi"
+    elif not choice_kinds:
+        selection = None
+    if any(question["choices"] for question in rich) or len(rich) > 1:
+        items = []
+    else:
+        items = _clean_choice_rows(items)
+    return items, rich, selection
+
+
+def close_question_index_of(tutor_session: TutorSession) -> int:
+    return int(getattr(tutor_session, "close_question_index", 0) or 0)
+
+
+def result_question_index(result) -> int | None:
+    choice = result.choice if result is not None else None
+    index = choice.get("question_index") if isinstance(choice, dict) else None
+    if isinstance(index, bool) or not isinstance(index, int):
+        return None
+    return index
+
+
+def latest_close_result(tutor_session: TutorSession):
+    """The latest result for the question on screen, not an earlier one."""
+    index = close_question_index_of(tutor_session)
+    found = None
+    for result in tutor_session.results:
+        if result.goal_id is not None or result_question_index(result) != index:
+            continue
+        found = result
+    return found
+
+
+def close_failed_attempts(tutor_session: TutorSession) -> int:
+    index = close_question_index_of(tutor_session)
+    return sum(
+        1
+        for result in tutor_session.results
+        if result.goal_id is None and not result.passed and result_question_index(result) == index
+    )
+
+
+def close_running_score(tutor_session: TutorSession, *, index: int, passed: bool) -> int:
+    """How many close questions have been answered correctly so far."""
+    seen: set[int] = set()
+    for result in tutor_session.results:
+        if result.goal_id is not None or not result.passed:
+            continue
+        found = result_question_index(result)
+        if found is not None:
+            seen.add(found)
+    if passed:
+        seen.add(index)
+    return len(seen)
+
+
+def active_close_question(close, tutor_session: TutorSession) -> dict | None:
+    questions = close_questions(close)
+    index = close_question_index_of(tutor_session)
+    if questions:
+        if index < 0 or index >= len(questions):
+            return None
+        return questions[index]
+    if index != 0:
+        return None
+    choices, _questions, selection = _close_parts(close)
+    shared = _clean_choice_rows(choices)
+    if len(shared) < 2:
+        return None
+    corrects = sum(1 for choice in shared if choice["correct"])
+    kind = "multi" if selection == "multi" or corrects > 1 else "single"
+    return {"text": "Choose the best answer.", "kind": kind, "choices": shared}
 
 
 def close_is_empty(quest: Quest) -> bool:
@@ -123,32 +294,32 @@ def close_is_empty(quest: Quest) -> bool:
     close = quest.close
     if close is None:
         return True
-    if close.answer_style == "essay" and not close_question_texts(close):
+    if close_questions(close):
+        return False
+    if close.answer_style == "essay":
         return True
     return False
 
 
 def close_choice_widget(quest: Quest, tutor_session: TutorSession) -> dict | None:
-    """A predefined choice card, and only after the close has started."""
+    """The card for the active question, and only after the close has started."""
     if not tutor_session.close_started:
         return None
     close = quest.close
-    if close is None or close.answer_style == "essay" or close.choice_mode != "predefined":
+    if close is None:
         return None
-    choices, questions, selection = _close_parts(close)
+    question = active_close_question(close, tutor_session)
+    if question is None or question["kind"] == "essay":
+        return None
+    if question["kind"] not in {"single", "multi"}:
+        return None
     built = []
     answers = []
-    for index, item in enumerate(choices, start=1):
-        if isinstance(item, str):
-            text = item.strip()
-            correct = False
-        elif isinstance(item, dict):
-            text = str(item.get("text") or "").strip()
-            correct = item.get("correct") is True
-        else:
-            continue
+    for index, item in enumerate(question["choices"], start=1):
+        text = str(item.get("text") or "").strip()
         if not text:
             continue
+        correct = item.get("correct") is True
         choice_id = f"c{index}"
         built.append(
             {
@@ -163,11 +334,10 @@ def close_choice_widget(quest: Quest, tutor_session: TutorSession) -> dict | Non
         return None
     if not answers:
         answers = [built[0]["id"]]
-    kind = "multi" if selection == "multi" else "single"
-    prompt = close_question_texts(close)
+    kind = "multi" if question["kind"] == "multi" else "single"
     return {
         "type": kind,
-        "prompt": prompt[0] if prompt else "Choose the best answer.",
+        "prompt": question["text"] or "Choose the best answer.",
         "choices": built,
         "answer": answers if kind == "multi" else answers[0],
         "explain": False,
@@ -191,18 +361,21 @@ def _close_messages(tutor_session: TutorSession) -> list[Message]:
 
 
 def choice_submitted(tutor_session: TutorSession) -> bool:
-    return latest_result(tutor_session, None) is not None
+    return latest_close_result(tutor_session) is not None
 
 
 def _window_closed_on(tutor_session: TutorSession) -> bool:
-    if latest_result(tutor_session, None) is None:
+    if latest_close_result(tutor_session) is None:
         return False
     window = load_profile(object_session(tutor_session)).struggle_window or "standard"
-    return _failed_attempts(tutor_session, None) >= struggle_limit(window)
+    return close_failed_attempts(tutor_session) >= struggle_limit(window)
 
 
 def choice_offer(tutor_session: TutorSession) -> str | None:
     if close_choice_widget(tutor_session.quest, tutor_session) is None:
+        return None
+    latest = latest_close_result(tutor_session)
+    if latest is not None and latest.passed:
         return None
     if _window_closed_on(tutor_session):
         return None
@@ -229,7 +402,7 @@ def choice_widget_visible(tutor_session: TutorSession) -> bool:
 def awaiting_tap_reply(tutor_session: TutorSession) -> bool:
     if not choice_submitted(tutor_session):
         return False
-    latest = latest_result(tutor_session, None)
+    latest = latest_close_result(tutor_session)
     if latest is None or latest.passed:
         return False
     for message in _close_messages(tutor_session):

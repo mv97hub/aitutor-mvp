@@ -5,10 +5,11 @@ from app.engine.defaults import age_band_for
 from app.flow import failed_attempts
 from app.models import Course, GoalResult, Message, ModelPrompt, Quest, Session as TutorSession
 from app.queries import (
+    active_close_question,
     choice_widget_visible,
+    close_api_parts,
     close_choice_widget,
     close_is_empty,
-    close_question_texts,
     latest_result,
     ordered_goals,
 )
@@ -102,22 +103,10 @@ def _goal_out(goal) -> GoalOut:
     )
 
 
-def _close_parts(close) -> tuple[list, list, str | None]:
-    stored = close.items if close is not None else None
-    if isinstance(stored, dict):
-        choices = stored.get("choices") if isinstance(stored.get("choices"), list) else []
-        questions = stored.get("questions") if isinstance(stored.get("questions"), list) else []
-        selection = stored.get("selection") if stored.get("selection") in {"single", "multi"} else None
-        return list(choices), list(questions), selection
-    if isinstance(stored, list):
-        return list(stored), [], None
-    return [], [], None
-
-
 def _close_out(close) -> CloseOut | None:
     if close is None:
         return None
-    items, questions, selection = _close_parts(close)
+    items, questions, selection = close_api_parts(close)
     return CloseOut(
         close_style=close.close_style,
         answer_style=close.answer_style,
@@ -311,13 +300,14 @@ def board(tutor_session: TutorSession) -> BoardOut:
     close_state = _step_state(on_close, seen or bool(goals), close_result, complete)
     if on_close:
         tier = hint_tier_for(failed_attempts(tutor_session, None))
-        questions = close_question_texts(quest.close)
+        question = active_close_question(quest.close, tutor_session)
+        question_text = question["text"] if question else "The close has no question."
         current = CurrentBlock(
             id=close_id,
             kind="close",
             title="Close",
-            objective=questions[0] if questions else "The close has no question.",
-            tutor_prompt=questions[0] if questions else "",
+            objective=question_text,
+            tutor_prompt=question_text if question else "",
             rubric=[],
             hint_tier=tier,  # type: ignore[arg-type]
             hint_text=hint_text(hints, tier),

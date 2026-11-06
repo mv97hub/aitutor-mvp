@@ -28,15 +28,18 @@ from app.engine.types import (
 )
 from app.models import Session as TutorSession
 from app.queries import (
+    active_close_question,
     awaiting_tap_reply,
     choice_offer,
     choice_submitted,
     close_choice_widget,
     close_is_empty,
-    close_question_texts,
+    close_question_index_of,
+    close_questions,
     latest_result,
     locate_goal,
     ordered_goals,
+    result_question_index,
 )
 from app.tutor_profile import load_profile
 
@@ -112,18 +115,20 @@ def _widget(
         shown = str(answer or "")
     grade = None
     if include_grade:
+        index = close_question_index_of(tutor_session)
         matches = [
             result
             for result in tutor_session.results
             if result.goal_id is None
             and isinstance(result.choice, dict)
             and result.choice.get("ids")
+            and result_question_index(result) == index
         ]
         result = max(matches, key=lambda item: item.seq) if matches else None
         if result is not None and isinstance(result.choice, dict):
             ids = tuple(str(item) for item in result.choice.get("ids") or [])
             grade = WidgetGrade(
-                correct=bool(result.passed and result.score == 100),
+                correct=bool(result.passed),
                 score=result.score,
                 passed=result.passed,
                 misconception=result.misconception,
@@ -177,8 +182,8 @@ def _failed(tutor_session: TutorSession, goal_id) -> int:
     )
 
 
-def _quest_walk(quest, *, reveal_close: bool) -> tuple[tuple[GoalPoint, ...], bool, str]:
-    """Goals, then the close. Questions stay hidden until the close is on screen."""
+def _quest_walk(quest, *, reveal_close: bool, active: dict | None = None) -> tuple[tuple[GoalPoint, ...], bool, str]:
+    """Goals, then the close. The prompt names only the question on screen."""
     rows = ordered_goals(quest)
     points = tuple(
         GoalPoint(row.learning_goal or "", row.success_criterion or "")
@@ -188,23 +193,28 @@ def _quest_walk(quest, *, reveal_close: bool) -> tuple[tuple[GoalPoint, ...], bo
     close = quest.close
     if close_is_empty(quest):
         return points, True, "Close: No questions."
-    questions = close_question_texts(close)
-    if close.answer_style == "essay":
-        if not reveal_close:
-            return points, False, "Close: Essay."
-        listed = "; ".join(questions) if questions else "Ask for a short written answer."
-        return points, False, f"Close: Essay. Question: {listed}"
-    label = "Multi-choice" if close.choice_mode == "predefined" and _selection(close) == "multi" else "Choice"
+    questions = close_questions(close)
+    if questions and all(question["kind"] == "essay" for question in questions):
+        label = "Essay"
+    elif questions and all(question["kind"] == "multi" for question in questions):
+        label = "Multi-choice"
+    elif close is not None and close.answer_style == "essay":
+        label = "Essay"
+    elif _selection(close) == "multi":
+        label = "Multi-choice"
+    else:
+        label = "Choice"
     if not reveal_close:
         return points, False, f"Close: {label}."
-    choices = []
-    stored = close.items if isinstance(close.items, dict) else {}
-    for item in stored.get("choices") or []:
-        if isinstance(item, dict) and str(item.get("text") or "").strip():
-            choices.append(str(item["text"]).strip())
+    target = active or (questions[0] if questions else None)
+    if target is None:
+        return points, False, f"Close: {label}."
+    if target["kind"] == "essay":
+        return points, False, f"Close: Essay. Question: {target['text']}"
+    shown = "Multi-choice" if target["kind"] == "multi" else "Choice"
+    choices = [choice["text"] for choice in target["choices"] if choice.get("text")]
     choice_line = f" Choices: {'; '.join(choices)}." if choices else ""
-    question = questions[0] if questions else "Choose the best answer."
-    return points, False, f"Close: {label}. Question: {question}{choice_line}"
+    return points, False, f"Close: {shown}. Question: {target['text']}{choice_line}"
 
 
 def _selection(close) -> str | None:
@@ -232,7 +242,8 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
     close_card = close_choice_widget(quest, tutor_session) if on_close else None
     include_widget = close_card is not None and (offer == "ask" or answering_tap)
     reveal_close = finished or on_close
-    studio_goals, empty_close, close_line = _quest_walk(quest, reveal_close=reveal_close)
+    close_question = active_close_question(quest.close, tutor_session) if reveal_close else None
+    studio_goals, empty_close, close_line = _quest_walk(quest, reveal_close=reveal_close, active=close_question)
     held = False
     grade_writing = False
     withhold_answer = offer == "ask"

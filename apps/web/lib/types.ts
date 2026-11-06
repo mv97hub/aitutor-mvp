@@ -89,7 +89,7 @@ export type CourseClose = {
   answer_style: string;
   choice_mode: string | null;
   items: { text: string; correct?: boolean }[];
-  questions: { text: string }[];
+  questions: { text: string; kind?: "essay" | "single" | "multi"; choices?: { text: string; correct?: boolean }[] }[];
   intent: string;
   selection: string | null;
 };
