@@ -3,7 +3,7 @@ export type StudioClose = {
   answer_style: "multiple_choice" | "essay" | "mixed";
   choice_mode: "predefined" | "dynamic" | null;
   items: { text: string; correct?: boolean }[];
-  questions: { text: string }[];
+  questions: { text: string; kind?: "essay" | "single" | "multi"; choices?: { text: string; correct?: boolean }[] }[];
   intent: string;
   selection?: "single" | "multi" | null;
 };

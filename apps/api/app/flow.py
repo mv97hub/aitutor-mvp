@@ -14,11 +14,17 @@ from app.tutor_profile import load_profile
 from app.models import Course, GoalResult, Message, ModelPrompt, Quest, Session as TutorSession, Student
 from app.prompt_loader import PASS_SCORE
 from app.queries import (
+    active_close_question,
     awaiting_tap_reply,
     choice_offer,
     choice_submitted,
     close_choice_widget,
+    close_failed_attempts,
     close_is_empty,
+    close_question_index_of,
+    close_questions,
+    close_running_score,
+    latest_close_result,
     latest_result,
     locate_goal,
     ordered_goals,
@@ -115,6 +121,7 @@ def open_session(db: Session, student_id: uuid.UUID, quest_id: uuid.UUID, fresh:
         quest_id=quest.id,
         current_goal_id=goals[0].id if goals else None,
         close_started=not goals,
+        close_question_index=0,
         status="completed" if not goals and close_is_empty(quest) else "in_progress",
         updated_at=now(),
     )
@@ -182,6 +189,8 @@ def append_model_prompt(
 
 
 def failed_attempts(tutor_session: TutorSession, goal_id: uuid.UUID | None) -> int:
+    if goal_id is None:
+        return close_failed_attempts(tutor_session)
     return sum(1 for result in tutor_session.results if result.goal_id == goal_id and not result.passed)
 
 
@@ -222,9 +231,15 @@ def record_result(
     if goal is not None:
         criterion = goal.success_criterion or ""
     else:
-        from app.queries import close_question_texts
-
-        answer = " ".join(close_question_texts(tutor_session.quest.close))
+        index = close_question_index_of(tutor_session)
+        active = active_close_question(tutor_session.quest.close, tutor_session)
+        answer = active["text"] if active else ""
+        if not isinstance(choice, dict):
+            choice = {"question_index": index}
+        else:
+            choice = dict(choice)
+            choice["question_index"] = index
+        score = close_running_score(tutor_session, index=index, passed=passed)
     result = GoalResult(
         session_id=tutor_session.id,
         goal_id=goal.id if goal is not None else None,
@@ -271,16 +286,24 @@ def advance(db: Session, tutor_session: TutorSession, *, allow_unpassed: bool = 
         return {"ok": False, "reason": "This goal needs a passing result before moving on."}
     tutor_session.updated_at = now()
     if tutor_session.close_started:
+        questions = close_questions(tutor_session.quest.close)
+        index = close_question_index_of(tutor_session)
+        if index + 1 < len(questions):
+            tutor_session.close_question_index = index + 1
+            db.flush()
+            return {"ok": True, "completed": False}
         return _complete(db, tutor_session)
     goals = ordered_goals(tutor_session.quest)
     index = next(i for i, item in enumerate(goals) if item.id == goal.id)
     if index + 1 < len(goals):
         tutor_session.current_goal_id = goals[index + 1].id
         tutor_session.close_started = False
+        tutor_session.close_question_index = 0
         db.flush()
         return {"ok": True, "completed": False}
     tutor_session.current_goal_id = None
     tutor_session.close_started = True
+    tutor_session.close_question_index = 0
     if close_is_empty(tutor_session.quest):
         return _complete(db, tutor_session)
     db.flush()
@@ -319,11 +342,20 @@ def grade_widget(
     if not ids:
         return {"ok": False, "reason": "Choose an answer before sending."}
     graded = grade_choice(quiz, ids if quiz.get("type") in {"multi", "order"} else ids[0])
-    passed = graded["score"] >= PASS_SCORE
+    passed = graded["correct"] is True
     tier = hint_tier_for(failed_attempts(tutor_session, None))
-    feedback = "That choice is right." if graded["correct"] else "That choice is not right."
-    if graded["misconception"]:
-        feedback = f"{feedback} {graded['misconception']}"
+    tried = ", ".join(
+        str(item.get("text") or "")
+        for item in quiz.get("choices") or []
+        if isinstance(item, dict) and item.get("id") in ids
+    ) or "that choice"
+    idea = str(quiz.get("prompt") or "this question")
+    if graded["correct"]:
+        feedback = "That choice is right."
+        graded["misconception"] = None
+    else:
+        feedback = f"You tried {tried}. The idea is {idea}. That choice does not answer it."
+        graded["misconception"] = feedback
     recorded = record_result(
         db,
         tutor_session,
@@ -361,6 +393,22 @@ def apply_turn_score(
     if not on_close and goal is None:
         return {"ok": False, "reason": "This quest is finished.", "advanced": False}
     goal_id = None if on_close else goal.id
+    quiz = close_choice_widget(tutor_session.quest, tutor_session) if on_close else None
+    if on_close:
+        latest_close = latest_close_result(tutor_session)
+        if latest_close is not None and latest_close.passed:
+            advanced = False
+            if advance_flag:
+                moved = advance(db, tutor_session, allow_unpassed=False)
+                advanced = bool(moved.get("ok"))
+            return {
+                "ok": True,
+                "graded_by": "widget" if quiz is not None else "model",
+                "score": latest_close.score,
+                "passed": True,
+                "advanced": advanced,
+                "feedback": latest_close.feedback,
+            }
     met = [row_id for row_id in rubric_met if row_id == "criterion"]
     passed = "criterion" in met
     score = 100 if passed else 0

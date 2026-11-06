@@ -226,6 +226,7 @@ class Session(Base):
         ForeignKey("quest_goals.id", ondelete="SET NULL")
     )
     close_started: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    close_question_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

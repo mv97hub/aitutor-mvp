@@ -31,6 +31,7 @@ type CloseMode = "essay" | "single" | "multi" | "none";
 type ClosePopup = {
   kind: "close";
   code: string;
+  index: number;
   mode: CloseMode;
   question: string;
   options: { text: string; correct: boolean }[];
@@ -130,22 +131,29 @@ function closeFrom(prefs: Prefs): StudioClose {
   };
 }
 
-function closePopupFrom(code: string, close: StudioClose | null): ClosePopup {
-  const options = close?.items.length
-    ? close.items.map((item) => ({ text: item.text, correct: Boolean(item.correct) }))
+function closePopupFrom(code: string, close: StudioClose | null, index: number): ClosePopup {
+  const item = close?.questions[index];
+  const own = item?.choices ?? [];
+  const legacy = !own.length && index === 0 ? close?.items ?? [] : [];
+  const source = own.length ? own : legacy;
+  const options = source.length
+    ? source.map((choice) => ({ text: choice.text, correct: Boolean(choice.correct) }))
     : [
         { text: "", correct: true },
         { text: "", correct: false },
       ];
-  let mode: CloseMode = "essay";
-  if (close?.selection === "multi") mode = "multi";
-  else if (close?.answer_style === "multiple_choice") mode = "single";
-  else if (close && close.questions.length === 0) mode = "none";
+  let mode: CloseMode = item?.kind ?? "essay";
+  if (!item) {
+    if (index === 0 && close?.selection === "multi") mode = "multi";
+    else if (index === 0 && close?.answer_style === "multiple_choice") mode = "single";
+    else if (!close || (close.questions.length === 0 && close.items.length === 0)) mode = "none";
+  }
   return {
     kind: "close",
     code,
+    index,
     mode,
-    question: close?.questions[0]?.text ?? "",
+    question: item?.text ?? "",
     options,
   };
 }
@@ -167,19 +175,22 @@ function popupBody(popup: Popup): Record<string, unknown> {
     return {
       action: "set_close",
       code: popup.code,
+      question_index: popup.index,
       close: { close_style: "one", answer_style: "essay", choice_mode: null, items: [], questions: [], intent: "" },
     };
   }
+  const text = popup.question.trim();
   if (popup.mode === "essay") {
     return {
       action: "set_close",
       code: popup.code,
+      question_index: popup.index,
       close: {
         close_style: "one",
         answer_style: "essay",
         choice_mode: null,
         items: [],
-        questions: popup.question.trim() ? [{ text: popup.question.trim() }] : [],
+        questions: text ? [{ text, kind: "essay", choices: [] }] : [],
         intent: "",
       },
     };
@@ -187,15 +198,22 @@ function popupBody(popup: Popup): Record<string, unknown> {
   return {
     action: "set_close",
     code: popup.code,
+    question_index: popup.index,
     close: {
       close_style: "one",
       answer_style: "multiple_choice",
       choice_mode: "predefined",
       selection: popup.mode === "multi" ? "multi" : "single",
-      items: popup.options
-        .filter((option) => option.text.trim())
-        .map((option) => ({ text: option.text.trim(), correct: option.correct })),
-      questions: popup.question.trim() ? [{ text: popup.question.trim() }] : [{ text: "Choose the best answer." }],
+      items: [],
+      questions: [
+        {
+          text: text || "Choose the best answer.",
+          kind: popup.mode,
+          choices: popup.options
+            .filter((option) => option.text.trim())
+            .map((option) => ({ text: option.text.trim(), correct: option.correct })),
+        },
+      ],
       intent: "",
     },
   };
@@ -818,14 +836,28 @@ export function CreateCourse() {
                         </button>
                       ) : null}
                       <p className="studio-fact"><span>Close</span>{quest.close ? closeSummary(quest.close) : "No close yet"}</p>
-                      {quest.close && quest.close.questions.length > 0 ? (
-                        <ul className="studio-choices">
-                          {quest.close.questions.map((item) => (
-                            <li key={item.text}>{item.text}</li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      {quest.close?.items.length ? (
+                      {(quest.close?.questions ?? []).map((item, index) => (
+                        <div key={`${quest.code}-question-${index}`} className="studio-goal-row">
+                          <p className="studio-fact"><span>Question {index + 1}</span>{item.text}</p>
+                          {item.choices?.length ? (
+                            <ul className="studio-choices">
+                              {item.choices.map((choice) => (
+                                <li key={choice.text}>{choice.correct ? `${choice.text} (correct)` : choice.text}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          {course.stage_view.name === "close" ? (
+                            <button
+                              type="button"
+                              className="ghost studio-inline"
+                              onClick={() => setPopup(closePopupFrom(quest.code, quest.close, index))}
+                            >
+                              Edit
+                            </button>
+                          ) : null}
+                        </div>
+                      ))}
+                      {quest.close?.items.length && !(quest.close.questions ?? []).some((item) => item.choices?.length) ? (
                         <ul className="studio-choices">
                           {quest.close.items.map((item) => (
                             <li key={item.text}>{item.correct ? `${item.text} (correct)` : item.text}</li>
@@ -836,9 +868,9 @@ export function CreateCourse() {
                         <button
                           type="button"
                           className="ghost studio-inline"
-                          onClick={() => setPopup(closePopupFrom(quest.code, quest.close))}
+                          onClick={() => setPopup(closePopupFrom(quest.code, quest.close, quest.close?.questions.length ?? 0))}
                         >
-                          Edit
+                          Add question
                         </button>
                       ) : null}
                     </Tier>
@@ -944,7 +976,7 @@ export function CreateCourse() {
                 <h2 id="studio-edit-title">
                   {popup.kind === "quest" ? (popup.mode === "add" ? "Add quest" : "Edit quest") : null}
                   {popup.kind === "goal" ? (popup.mode === "add" ? "Add goal" : "Edit goal") : null}
-                  {popup.kind === "close" ? "Edit close" : null}
+                  {popup.kind === "close" ? `Question ${popup.index + 1}` : null}
                 </h2>
               </div>
               <button type="button" className="ghost" onClick={() => setPopup(null)}>Close</button>

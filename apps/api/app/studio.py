@@ -18,6 +18,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, object_session, selectinload
 
+from app.queries import close_api_parts, close_questions
 from app.models import (
     StudioCourse,
     StudioMessage,
@@ -92,6 +93,7 @@ def _close_schema() -> dict:
                 ]
             },
             "items": {
+                "description": "Leave this empty. Each question keeps its own choices.",
                 "type": "array",
                 "items": {
                     "type": "object",
@@ -106,8 +108,20 @@ def _close_schema() -> dict:
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "properties": {"text": {"type": "string"}},
-                    "required": ["text"],
+                    "properties": {
+                        "text": {"type": "string"},
+                        "kind": {"type": "string", "enum": ["essay", "single", "multi"]},
+                        "choices": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {"text": {"type": "string"}, "correct": {"type": "boolean"}},
+                                "required": ["text", "correct"],
+                            },
+                        },
+                    },
+                    "required": ["text", "kind", "choices"],
                 },
             },
             "intent": {"type": "string"},
@@ -423,24 +437,90 @@ def _items(value) -> list[dict]:
     return cleaned
 
 
-def _questions(value) -> list[dict]:
+def _question_kind(choices: list[dict], selection: str | None, explicit: str | None) -> str:
+    if explicit in {"essay", "single", "multi"}:
+        return explicit
+    if not choices:
+        return "essay"
+    corrects = sum(1 for choice in choices if choice.get("correct") is True)
+    if selection == "multi" or corrects > 1:
+        return "multi"
+    return "single"
+
+
+def _normalize_question(item, selection: str | None) -> dict:
+    """One question keeps its own text, kind, and choices."""
+    if isinstance(item, str):
+        text = item.strip()
+        choices: list[dict] = []
+        explicit = None
+    elif isinstance(item, dict) and isinstance(item.get("text"), str):
+        text = item["text"].strip()
+        raw_choices = item.get("choices")
+        choices = _items(raw_choices) if raw_choices else []
+        explicit = item.get("kind") if item.get("kind") in {"essay", "single", "multi"} else None
+    else:
+        raise StudioError("questions", "each question needs text")
+    if not text or len(text) > 500:
+        raise StudioError("questions", "each question needs short text")
+    kind = _question_kind(choices, selection, explicit)
+    if kind == "essay":
+        return {"text": text, "kind": "essay", "choices": []}
+    if len(choices) < 2 or len(choices) > 8:
+        raise StudioError("items", "needs two to eight choices")
+    return {"text": text, "kind": kind, "choices": choices}
+
+
+def _questions(value, selection: str | None = None) -> list[dict]:
     """A close may list no questions. One or more is ordinary, and empty still saves."""
     if value is None:
         return []
     if not isinstance(value, list):
         raise StudioError("questions", "must be a list")
-    cleaned = []
-    for item in value:
-        if isinstance(item, str):
-            text = item.strip()
-        elif isinstance(item, dict) and isinstance(item.get("text"), str):
-            text = item["text"].strip()
+    return [_normalize_question(item, selection) for item in value]
+
+
+def _attach_shared_choices(questions: list[dict], items: list[dict], selection: str | None) -> list[dict]:
+    """One text question can inherit a shared list. Several questions do not share it."""
+    if not items or len(questions) != 1 or questions[0]["choices"]:
+        return questions
+    only = questions[0]
+    return [_normalize_question({"text": only["text"], "kind": None, "choices": items}, selection)]
+
+
+def _close_for_questions(questions: list[dict], *, style: str | None = None, intent: str = "") -> dict:
+    kinds = [question["kind"] for question in questions]
+    if not questions or all(kind == "essay" for kind in kinds):
+        answer = "essay"
+        mode = None
+        selection = None
+    elif all(kind in {"single", "multi"} for kind in kinds):
+        answer = "multiple_choice"
+        mode = "predefined"
+        if all(kind == "multi" for kind in kinds):
+            selection = "multi"
+        elif all(kind == "single" for kind in kinds):
+            selection = "single"
         else:
-            raise StudioError("questions", "each question needs text")
-        if not text or len(text) > 500:
-            raise StudioError("questions", "each question needs short text")
-        cleaned.append({"text": text})
-    return cleaned
+            selection = None
+    else:
+        answer = "mixed"
+        mode = "predefined"
+        selection = None
+    close_style = style if style in CLOSE_STYLES else None
+    if len(questions) > 1 and close_style in (None, "", "one"):
+        close_style = "several"
+    if close_style not in CLOSE_STYLES:
+        close_style = "several" if len(questions) > 1 else "one"
+    return {
+        "close_style": close_style,
+        "answer_style": answer,
+        "choice_mode": mode,
+        "items": [],
+        "questions": questions,
+        "intent": intent if mode == "dynamic" else "",
+        "selection": selection,
+    }
 
 
 def normalize_goals(value) -> list[dict]:
@@ -523,8 +603,33 @@ def normalize_close(value, field: str = "close") -> dict:
     intent = intent.strip()
     if len(intent) > TEXT_LIMITS["intent"]:
         raise StudioError("intent", "is too long")
-    items = _items(value.get("items"))
-    questions = _questions(value.get("questions"))
+    raw_items = value.get("items")
+    if isinstance(raw_items, dict):
+        unpacked, unpacked_questions = _unpack_items(raw_items)
+        items = _items(unpacked)
+        if not value.get("questions"):
+            value = dict(value)
+            value["questions"] = unpacked_questions
+    else:
+        items = _items(raw_items)
+    selection = value.get("selection") if value.get("selection") in ("single", "multi") else None
+    questions = _questions(value.get("questions"), selection)
+    questions = _attach_shared_choices(questions, items, selection)
+    if questions:
+        if answer == "essay" and items:
+            raise StudioError("items", "are stored only for predefined choices")
+        if mode == "dynamic" and items:
+            raise StudioError("items", "dynamic choices store only the intent")
+        if answer == "essay" and any(question["kind"] != "essay" for question in questions):
+            answer = "mixed"
+        stamped = _close_for_questions(questions, style=style, intent=intent if mode == "dynamic" else "")
+        if mode == "dynamic" and all(question["kind"] == "essay" for question in questions):
+            if items:
+                raise StudioError("items", "dynamic choices store only the intent")
+            stamped["choice_mode"] = "dynamic"
+            stamped["answer_style"] = "essay" if answer == "essay" else stamped["answer_style"]
+            stamped["intent"] = intent
+        return stamped
     if answer == "essay":
         if mode is not None:
             raise StudioError("choice_mode", "is only for multiple choice")
@@ -537,7 +642,7 @@ def normalize_close(value, field: str = "close") -> dict:
             "answer_style": answer,
             "choice_mode": None,
             "items": [],
-            "questions": questions,
+            "questions": [],
             "intent": "",
             "selection": None,
         }
@@ -548,7 +653,6 @@ def normalize_close(value, field: str = "close") -> dict:
             raise StudioError("items", "needs two to eight choices")
         if intent:
             raise StudioError("intent", "is stored only for dynamic choices")
-        selection = value.get("selection")
         if selection not in ("single", "multi"):
             selection = "single"
         return {
@@ -556,7 +660,7 @@ def normalize_close(value, field: str = "close") -> dict:
             "answer_style": answer,
             "choice_mode": "predefined",
             "items": items,
-            "questions": questions,
+            "questions": [],
             "intent": "",
             "selection": selection,
         }
@@ -568,7 +672,7 @@ def normalize_close(value, field: str = "close") -> dict:
         "answer_style": answer,
         "choice_mode": "dynamic",
         "items": [],
-        "questions": questions,
+        "questions": [],
         "intent": intent,
         "selection": None,
     }
@@ -1637,105 +1741,154 @@ def _strip_code_mention(text: str, code: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
-def _remember_question(found: dict[str, list[str]], code: str, text: str) -> None:
-    text = text.strip()
-    if not text:
-        return
-    rows = found.setdefault(code, [])
-    if any(item.casefold() == text.casefold() for item in rows):
-        return
-    rows.append(text)
+_KIND_LINE = re.compile(
+    r"^(?:kind|type)\s*[:.\-–—]\s*(essay|single|multi)\b",
+    re.IGNORECASE,
+)
+_KIND_WORD = re.compile(r"^(essay|single choice|multi-choice|multi choice)$", re.IGNORECASE)
+_CORRECT_MARK = re.compile(r"\((?:correct|right)\)|\[(?:correct|right)\]|✓|✔", re.IGNORECASE)
+_CHOICE_PREFIX = re.compile(r"^(?:[-*+•]|\d+[.)]|[A-Za-z][.)])\s+")
 
 
-def _parse_close_blocks(text: str, codes: set[str]) -> dict[str, list[str]]:
+def _marked_correct(raw: str) -> bool:
+    if _CORRECT_MARK.search(raw or ""):
+        return True
+    stripped = (raw or "").strip()
+    return stripped.startswith(("* ", "+ ", "*"))
+
+
+def _choice_body(line: str) -> str:
+    text = _CORRECT_MARK.sub("", line).strip()
+    text = _CHOICE_PREFIX.sub("", text).strip()
+    return re.sub(r"\s+\*$", "", text).strip()
+
+
+def _parse_close_blocks(text: str, codes: set[str]) -> dict[str, list[dict]]:
     """Questions in a reply, keyed by quest code. A block starts with the code.
 
-    Every Question line under that code is kept. A later quest code starts a new block.
+    A new question line starts a new question. The choice lines under it belong
+    to that question, and a marked correct choice stays correct.
     """
-    found: dict[str, list[str]] = {}
+    found: dict[str, list[dict]] = {}
     current: str | None = None
+    question: dict | None = None
+
+    def finish() -> None:
+        nonlocal question
+        if current is None or question is None:
+            question = None
+            return
+        text_value = str(question.get("text") or "").strip()
+        if not text_value:
+            question = None
+            return
+        choices = list(question.get("choices") or [])
+        kind = question.get("kind")
+        if kind not in {"essay", "single", "multi"}:
+            corrects = sum(1 for choice in choices if choice.get("correct") is True)
+            if not choices:
+                kind = "essay"
+            elif corrects > 1:
+                kind = "multi"
+            else:
+                kind = "single"
+        if kind == "essay":
+            choices = []
+        rows = found.setdefault(current, [])
+        if any(item["text"].casefold() == text_value.casefold() for item in rows):
+            question = None
+            return
+        rows.append({"text": text_value, "kind": kind, "choices": choices})
+        question = None
+
+    def start(code: str, text_value: str) -> None:
+        nonlocal current, question
+        finish()
+        current = code
+        found.setdefault(current, [])
+        question = {"text": text_value, "kind": None, "choices": []}
+
     for raw_line in (text or "").splitlines():
+        marked = _marked_correct(raw_line)
         line = _clean_goal_line(raw_line)
         if not line:
             continue
         header = _header_code(line, codes)
         if header:
-            current, remainder = header
-            found.setdefault(current, [])
-            if remainder:
-                question = _question_text(remainder)
-                if question:
-                    _remember_question(found, current, _strip_code_mention(question, current))
+            code, remainder = header
+            found.setdefault(code, [])
+            question_text = _question_text(remainder) if remainder else None
+            if question_text:
+                start(code, _strip_code_mention(question_text, code))
+            else:
+                finish()
+                current = code
+                question = None
+            continue
+        if current is None:
+            continue
+        kind_match = _KIND_LINE.match(line) or _KIND_WORD.match(line)
+        if kind_match and question is not None and not question["choices"]:
+            word = kind_match.group(1).lower()
+            question["kind"] = "multi" if word.startswith("multi") else ("essay" if word.startswith("essay") else "single")
             continue
         named = _named_quest_code(line, codes)
-        question = _question_text(line)
-        if named and question:
-            current = named
-            _remember_question(found, named, _strip_code_mention(question, named))
+        question_text = _question_text(line)
+        if named and question_text:
+            start(named, _strip_code_mention(question_text, named))
             continue
-        if current is None or not question:
+        if question_text and not _CHOICE_PREFIX.match(raw_line.strip()):
+            start(current, question_text)
             continue
-        _remember_question(found, current, question)
+        if question is None:
+            continue
+        choice_text = _choice_body(line)
+        if not choice_text:
+            continue
+        question["choices"].append({"text": choice_text, "correct": marked or _marked_correct(line)})
+    finish()
     return {code: rows for code, rows in found.items() if rows}
 
 
-def _close_question_texts(close) -> list[str]:
-    if not isinstance(close, dict):
-        return []
-    questions = close.get("questions")
-    if not isinstance(questions, list):
-        return []
-    texts: list[str] = []
-    for item in questions:
-        if isinstance(item, str) and item.strip():
-            texts.append(item.strip())
-        elif isinstance(item, dict):
-            text = str(item.get("text") or "").strip()
-            if text:
-                texts.append(text)
-    return texts
-
-
-def _merge_question_texts(existing: list[str], parsed: list[str]) -> list[str]:
-    seen: set[str] = set()
-    merged: list[str] = []
-    for text in list(existing) + list(parsed):
-        key = text.casefold()
-        if key in seen:
+def _merge_questions(existing: list[dict], parsed: list[dict]) -> list[dict]:
+    """Keep each question's text and its own choices. Do not join them."""
+    if len(existing) == 1 and len(parsed) > 1:
+        joined = " ".join(item["text"] for item in parsed)
+        if existing[0]["text"].casefold() == joined.casefold():
+            return list(parsed)
+    by_text = {item["text"].casefold(): item for item in parsed}
+    used: set[str] = set()
+    merged: list[dict] = []
+    for item in existing:
+        key = item["text"].casefold()
+        match = by_text.get(key)
+        if match is None:
+            merged.append(item)
             continue
-        seen.add(key)
-        merged.append(text)
+        used.add(key)
+        merged.append(match if match.get("choices") else item)
+    for item in parsed:
+        if item["text"].casefold() not in used:
+            merged.append(item)
     return merged
 
 
-def _close_with_questions(close: dict, questions: list[str]) -> dict:
-    updated = dict(close)
-    updated["questions"] = [{"text": text} for text in questions]
-    if len(questions) > 1 and updated.get("close_style") in (None, "", "one"):
-        updated["close_style"] = "several"
-    if not updated.get("answer_style"):
-        updated["answer_style"] = "essay"
-    if "items" not in updated or updated.get("items") is None:
-        updated["items"] = []
-    if not updated.get("intent"):
-        updated["intent"] = ""
-    if "choice_mode" not in updated:
-        updated["choice_mode"] = None
-    if "selection" not in updated:
-        updated["selection"] = None
-    return updated
+def _close_with_questions(close: dict, questions: list[dict]) -> dict:
+    return _close_for_questions(
+        questions,
+        style=close.get("close_style") if isinstance(close, dict) else None,
+        intent=str(close.get("intent") or "") if isinstance(close, dict) else "",
+    )
 
 
-def _essay_close(questions: list[str]) -> dict:
-    return {
-        "close_style": "several" if len(questions) > 1 else "one",
-        "answer_style": "essay",
-        "choice_mode": None,
-        "items": [],
-        "questions": [{"text": text} for text in questions],
-        "intent": "",
-        "selection": None,
-    }
+def _essay_close(questions: list) -> dict:
+    rows = []
+    for item in questions:
+        if isinstance(item, str):
+            rows.append({"text": item, "kind": "essay", "choices": []})
+        elif isinstance(item, dict) and str(item.get("text") or "").strip():
+            rows.append(item)
+    return _close_for_questions(rows)
 
 
 def _split_close_questions_by_quest_code(operations: list, codes: set[str]) -> list:
@@ -1767,15 +1920,15 @@ def _split_close_questions_by_quest_code(operations: list, codes: set[str]) -> l
         own = str(op.get("code") or "").strip().upper()
 
         def _close_for(rows: list, source: dict = close) -> dict:
-            copied = dict(source)
-            copied["questions"] = [
-                {"text": str(row.get("text") or "").strip()}
-                for row in rows
-                if isinstance(row, dict) and str(row.get("text") or "").strip()
-            ]
-            if len(copied["questions"]) > 1 and copied.get("close_style") in (None, "", "one"):
-                copied["close_style"] = "several"
-            return copied
+            kept = []
+            for row in rows:
+                if isinstance(row, str) and row.strip():
+                    kept.append({"text": row.strip(), "kind": "essay", "choices": []})
+                elif isinstance(row, dict) and str(row.get("text") or "").strip():
+                    copied_row = dict(row)
+                    copied_row.pop("code", None)
+                    kept.append(copied_row)
+            return _close_with_questions(source, kept)
 
         if plain:
             copied_op = dict(op)
@@ -1816,11 +1969,10 @@ def _expand_close_operations(course: StudioCourse, operations: list, text: str) 
         if code not in codes or not isinstance(close, dict):
             continue
         covered.add(code)
+        existing = close_questions(close)
         extra = parsed.get(code) or []
-        if not extra:
-            continue
-        merged = _merge_question_texts(_close_question_texts(close), extra)
-        if merged != _close_question_texts(close):
+        merged = _merge_questions(existing, extra) if extra else existing
+        if merged:
             op["close"] = _close_with_questions(close, merged)
     for quest in sorted(course.quests, key=lambda row: (row.position, row.code)):
         questions = parsed.get(quest.code)
@@ -2023,7 +2175,11 @@ def stage_gaps_for(course: StudioCourse, stage: str) -> list[str]:
         if quest.close is None:
             gaps.append(f"{quest.code}: no close")
             continue
-        if quest.close.answer_style == "multiple_choice":
+        choice_rows = [question for question in close_questions(quest.close) if question["kind"] in {"single", "multi"}]
+        if choice_rows:
+            if any(len(question["choices"]) < 2 for question in choice_rows):
+                gaps.append(f"{quest.code}: a choice question needs at least 2 options")
+        elif quest.close.answer_style == "multiple_choice":
             items, _questions = _unpack_items(quest.close.items)
             if len(items) < 2:
                 gaps.append(f"{quest.code}: a choice question needs at least 2 options")
@@ -2534,6 +2690,45 @@ def _quest_by_code(course: StudioCourse, code: str) -> StudioQuest:
     raise StudioError("code", f"{wanted} is not in this course", plain=f"{wanted} is not in this course.")
 
 
+def _replace_one_question(quest: StudioQuest, incoming: dict, index: int) -> None:
+    """Replace one question and leave the others."""
+    if isinstance(index, bool) or not isinstance(index, int) or index < 0 or index > 200:
+        raise StudioError("questions", "pick the question to edit", plain="Pick the question to edit.")
+    current = _close_snapshot(quest)
+    existing = close_questions(current) if current else []
+    replacement = list(incoming.get("questions") or [])
+    if not replacement:
+        if index == len(existing):
+            if existing:
+                raise StudioError("questions", "is not in this close", plain="That question is not in this close.")
+        elif index > len(existing):
+            raise StudioError("questions", "is not in this close", plain="That question is not in this close.")
+        else:
+            existing.pop(index)
+    elif index > len(existing):
+        raise StudioError("questions", "is not in this close", plain="That question is not in this close.")
+    elif index == len(existing):
+        existing.append(replacement[0])
+    else:
+        existing[index] = replacement[0]
+    if not existing:
+        _fill_close(
+            quest,
+            {
+                "close_style": "one",
+                "answer_style": "essay",
+                "choice_mode": None,
+                "items": [],
+                "questions": [],
+                "intent": "",
+                "selection": None,
+            },
+        )
+        return
+    style = (current or {}).get("close_style") or incoming.get("close_style")
+    _fill_close(quest, _close_for_questions(existing, style=style))
+
+
 def edit_tree(
     db: Session,
     course: StudioCourse,
@@ -2545,6 +2740,7 @@ def edit_tree(
     learning_goal: str | None = None,
     success_criterion: str | None = None,
     close: dict | None = None,
+    question_index: int | None = None,
 ) -> None:
     """A popup write for the stage on screen. Other stages stay locked."""
     stage = active_stage_name(course)
@@ -2605,7 +2801,11 @@ def edit_tree(
         _replace_goals(quest, normalize_goals(rows) if rows else [])
     elif action == "set_close":
         quest = _quest_by_code(course, code or "")
-        _fill_close(quest, normalize_close(close))
+        incoming = normalize_close(close)
+        if question_index is None:
+            _fill_close(quest, incoming)
+        else:
+            _replace_one_question(quest, incoming, question_index)
     else:
         raise StudioError("action", "is not a tree edit", plain="That edit is not available.")
     course.ready = False
@@ -3095,12 +3295,15 @@ def _tracked_phase_instructions(course: StudioCourse) -> str:
             "Offer a close for each quest, all in one go or one quest at a time. "
             "When a draft covers more than one quest, write one block per quest that starts with that quest's code, "
             "then a Question line for every closing question. "
+            "The choice lines under a question belong to that question. Mark the correct choice with (correct). "
             "The patch has one update for every one of those codes, and every question is in that quest's questions list. "
+            "Each question has text, kind (essay, single, or multi), and its own choices. Leave items empty. "
             "Do not stop after the first question or the first quest. "
             "Do not attach a later quest's questions to the first quest. "
+            "Do not join question text, and do not put one question's choices on another. "
             "A close can be an essay, a single choice, a multi-choice, or no questions. "
             "A choice question needs at least two options. "
-            "Set selection to single or multi, and mark correct on the right options. "
+            "Set kind to single or multi, and mark correct on the right options. "
             "A patch may name only the quests you are changing. Quests you leave out keep their close. "
             "Do not say the closes were added. The tree changes only when they click Push draft to Tree."
         )
@@ -3174,8 +3377,10 @@ def phase_instructions(course: StudioCourse) -> str:
             "Offer one close per quest, normally at least one question. "
             "When a draft covers more than one question or more than one quest, write one block per quest "
             "that starts with that quest's code, then a Question line for every closing question. "
+            "The choice lines under a question belong to that question. Mark the correct choice with (correct). "
             "Do not stop after the first question or the first quest. One update per quest code. "
-            "Every question goes in that quest's questions list. "
+            "Every question goes in that quest's questions list, with its own kind and choices. Leave items empty. "
+            "Do not join question text or answers. "
             "An empty question list is saved when asked. "
             "An update names that code and sets parent to null."
         )
@@ -3229,21 +3434,22 @@ def mark_ready(course: StudioCourse) -> None:
 def _close_out(close: dict | None) -> StudioCloseOut | None:
     if close is None:
         return None
+    items, questions, selection = close_api_parts(close)
     return StudioCloseOut(
         close_style=close["close_style"],
         answer_style=close["answer_style"],
         choice_mode=close["choice_mode"],
-        items=list(close.get("items") or []),
-        questions=list(close.get("questions") or []),
+        items=items,
+        questions=questions,
         intent=close["intent"],
-        selection=close.get("selection") if close.get("selection") in ("single", "multi") else None,
+        selection=selection,
     )
 
 
 def _row_close(row: StudioQuestClose | None) -> StudioCloseOut | None:
     if row is None:
         return None
-    items, questions, selection = _unpack_close(row.items)
+    items, questions, selection = close_api_parts(row)
     return StudioCloseOut(
         close_style=row.close_style,
         answer_style=row.answer_style,

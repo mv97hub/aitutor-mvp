@@ -249,6 +249,7 @@ def post_tree(course_id: UUID, body: StudioTreeEditIn, db: Session = Depends(get
             learning_goal=body.learning_goal,
             success_criterion=body.success_criterion,
             close=body.close,
+            question_index=body.question_index,
         )
     except StudioError as exc:
         raise _fail(exc) from exc

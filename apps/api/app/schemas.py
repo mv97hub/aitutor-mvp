@@ -503,12 +503,18 @@ class StudioChoiceOut(BaseModel):
     correct: bool = False
 
 
+class StudioQuestionOut(BaseModel):
+    text: str
+    kind: Literal["essay", "single", "multi"] = "essay"
+    choices: list[StudioChoiceOut] = Field(default_factory=list)
+
+
 class StudioCloseOut(BaseModel):
     close_style: StudioCloseStyle
     answer_style: StudioAnswerStyle
     choice_mode: StudioChoiceMode | None = None
     items: list[StudioChoiceOut] = Field(default_factory=list)
-    questions: list[StudioChoiceOut] = Field(default_factory=list)
+    questions: list[StudioQuestionOut] = Field(default_factory=list)
     intent: str = ""
     selection: Literal["single", "multi"] | None = None
 
@@ -721,3 +727,4 @@ class StudioTreeEditIn(BaseModel):
     learning_goal: str | None = None
     success_criterion: str | None = None
     close: dict[str, Any] | None = None
+    question_index: int | None = None
