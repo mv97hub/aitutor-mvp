@@ -220,6 +220,7 @@ export async function saveKcComponent(formData: FormData) {
       method: "PUT",
       body: JSON.stringify({
         title: String(formData.get("title") || ""),
+        description: String(formData.get("description") || ""),
         kc_type: kcType,
         core_truth: String(formData.get("core_truth") || ""),
         rubric: formData

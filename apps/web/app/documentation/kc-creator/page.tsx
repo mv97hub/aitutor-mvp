@@ -18,12 +18,14 @@ export default function KcCreatorDocsPage() {
 
         <h2>How it works</h2>
         <p>
-          The left pane lists courses, then the components on the open course. Targets come first, in course order, then patches.
+          The left pane is a course dropdown. The list under it shows only the components of the selected course:
+          targets in course order, then patches. Choosing another course opens that course’s first component.
           The selected row is the component on screen. A patch can be opened here. It is still not a target.
         </p>
         <p>
-          The middle pane is the manual editor. It opens with the component description under the heading Description:
-          the outline, topics, and goals saved from the course draft. Save this component writes the fields and clears the course ready flag.
+          The middle pane is the manual editor. Description sits with the other fields and can be edited:
+          the outline, topics, and goals saved from the course draft. Save this component writes the fields, including that description, and clears the course ready flag.
+          Each enterable field has a short mouse-over tooltip that says what the tutor uses it for.
           Mark complete sits next to Save. It can be used only when the saved component has no gaps: a type, a core truth,
           at least one rubric check, and prerequisite and encompasses codes that exist. There is no extra gap rule.
           Mark complete records that flag. Save and Push clear it, and they clear course ready.
@@ -38,10 +40,13 @@ export default function KcCreatorDocsPage() {
           The first view starts with the description, the brief for this component, and then the saved text: title, type,
           core truth, rubric lines, each wrong move and its component code, prerequisite codes, encompasses codes,
           and the type fields for that type.
-          The chat treats that description as the brief. It is an expert on this component and uses the course kind.
-          It goes into the topic before it fills the type, the core truth, the rubric, and the checks.
+          The chat treats that description as the brief. It is an expert curriculum maker for this component and uses the course kind.
+          It goes into the topic, then recommends every field that can be entered: the description, the title, the type,
+          the fields for that type, the core truth, the rubric checks, the misconceptions, the prerequisites, and the encompasses links.
           A later message revises that draft.
-          The middle pane keeps the saved component until Push. Push writes the draft. Other components stay.
+          Enter and the up arrow both send the message. While the reply is being written, the composer says Writing… and cannot be sent again.
+          A missing OpenAI key still shows the missing-key error.
+          The middle pane keeps the saved component until Push. Push writes the whole draft, including the description. Other components stay.
           Edges are rewritten only for this component. After Push, the middle pane shows the written fields and the thread says the draft was saved.
         </p>
         <p>
@@ -52,6 +57,7 @@ export default function KcCreatorDocsPage() {
         <h2>Settings you can change</h2>
         <p>Every component has:</p>
         <ul>
+          <li>Description. The outline, the key topics, and the key goals. Save and Push keep it.</li>
           <li>Title.</li>
           <li>Type: Factual, Procedural, Conceptual principle, Causal or historical, or Synthesis.</li>
           <li>Core truth.</li>

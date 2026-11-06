@@ -16,6 +16,7 @@ from app.kc import (
     course_out,
     create_course,
     creator_thread,
+    delete_kc_course,
     delete_node,
     accept_model_turn,
     course_prompt_for,
@@ -97,8 +98,13 @@ class RenameIn(BaseModel):
     title: str
 
 
+class DeleteIn(BaseModel):
+    password: str = ""
+
+
 class ComponentIn(BaseModel):
     title: str | None = None
+    description: str | None = None
     kc_type: str
     core_truth: str = ""
     rubric: list[str] = Field(default_factory=list)
@@ -203,6 +209,12 @@ def get_structure(course_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
 @router.get("/kc/courses/{course_id}/network")
 def get_network(course_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return network(db, _course_or_404(db, course_id))
+
+
+@router.post("/kc/courses/{course_id}/delete")
+def post_course_delete(course_id: uuid.UUID, body: DeleteIn, db: Session = Depends(get_db)) -> dict:
+    delete_kc_course(db, _course_or_404(db, course_id), body.password)
+    return {"deleted": True}
 
 
 @router.post("/kc/courses/{course_id}/ready")

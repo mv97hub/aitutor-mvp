@@ -19,7 +19,7 @@ export default function KcStudioDocsPage() {
 
         <h2>How it works</h2>
         <p>
-          KC Course Creator defines the component list. The left rail lists courses and creates a new one.
+          KC Course Creator defines the component list. The left rail lists courses, links to Manage KC courses, and creates a new one.
           The open course has a preferences strip: name, what the kid should come away able to do, audience, kind, and optional minutes.
           Save course writes those fields. Mark ready calls the ready check and still refuses when the course has no components,
           or any target has no type, no core truth, no rubric check, or a prerequisite or encompasses code that does not exist.
@@ -39,6 +39,7 @@ export default function KcStudioDocsPage() {
           gpt-4.1 is the default. gpt-6.1-sol is the strongest model this app&apos;s OpenAI client accepts.
           The chosen model is sent with the draft. It does not change scoring, edges, or the component types.
           If OPENAI_API_KEY is missing, the chat shows the same missing-key error as the rest of the app.
+          Enter and the up arrow both send the message. While the reply is being written, the composer says Writing… and cannot be sent again.
           The draft names the subject from the course name and description, then the major ideas a strong course on that
           subject has to cover, and only then the component list. It does not split the description into titles.
           Kind sets how full the list is. Mastery is the fuller rigorous breakdown. Time boxed fits the minutes.
@@ -49,8 +50,13 @@ export default function KcStudioDocsPage() {
           Nothing is saved until you push it.
         </p>
         <p>
-          KC Creator is the editor. Choose a course, then a component. Targets are listed in course order, then patches.
-          The middle pane is the manual editor: title, type, the fields for that type, core truth, one to three rubric checks,
+          <Link href="/manage-kc-courses">Manage KC courses</Link> lists these courses. Delete asks for the same password as Manage courses
+          and removes the KC course and its components.
+        </p>
+        <p>
+          KC Creator is the editor. Choose a course from the dropdown, then a component. Targets are listed in course order, then patches.
+          Changing the course opens that course’s first component.
+          The middle pane is the manual editor: description, title, type, the fields for that type, core truth, one to three rubric checks,
           misconceptions, prerequisites, and encompasses. Save this component writes that component and clears course ready.
           The right-hand chat is about that component only. It opens with the description, then the saved text, and goes into the topic before the fields. Each reply ends with a draft.
           A later message revises that draft. The middle pane keeps the saved component until Push. Push writes the draft for this component only.

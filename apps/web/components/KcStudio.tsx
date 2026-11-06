@@ -1,7 +1,8 @@
-import { EnterSubmitTextarea } from "@/components/EnterSubmitTextarea";
+import Link from "next/link";
+
 import { KcBanner } from "@/components/KcBanner";
 import { KcCourseList } from "@/components/KcCourseList";
-import { KcModelSelect } from "@/components/KcModelSelect";
+import { KcStudioComposer } from "@/components/KcComposer";
 import {
   addKcComponent,
   createKcCourse,
@@ -51,6 +52,9 @@ export function KcStudio({
     <main className="ds-shell studio-shell kc-screen">
       <KcBanner name="KC Course Creator" />
       <aside className="ds-side">
+        <Link href="/manage-kc-courses" className="studio-manage-link">
+          Manage KC courses
+        </Link>
         <KcCourseList
           courses={initialCourses}
           activeId={course?.id ?? null}
@@ -207,25 +211,11 @@ export function KcStudio({
                     </button>
                   </form>
                 ) : null}
-                <form className="ds-composer-seat" method="get" action="/kc-studio">
-                  <input type="hidden" name="course" value={course.id} />
-                  <div className="ds-card">
-                    <EnterSubmitTextarea
-                      className="ds-draft"
-                      aria-label="Studio chat"
-                      name="message"
-                      rows={1}
-                      required
-                      placeholder="Ask for a component list"
-                    />
-                    <div className="ds-card-row kc-model-row">
-                      <KcModelSelect value={initialModel} />
-                      <button className="ds-send" type="submit" aria-label="Send">
-                        ↑
-                      </button>
-                    </div>
-                  </div>
-                </form>
+                <KcStudioComposer
+                  key={`${initialMessage}\n${initialReply}\n${initialError ?? ""}`}
+                  courseId={course.id}
+                  model={initialModel}
+                />
               </div>
             </div>
           </>

@@ -10,6 +10,7 @@ const pages = [
   { href: "/manage-courses", label: "Manage courses" },
   { href: "/viewchats", label: "View chats" },
   { href: "/kc-studio", label: "KC Course Creator" },
+  { href: "/manage-kc-courses", label: "Manage KC courses" },
   { href: "/kc-creator", label: "KC Creator" },
   { href: "/kc-tutor", label: "KC Tutor" },
   { href: "/documentation", label: "Documentation" },
