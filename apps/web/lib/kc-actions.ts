@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 
 import { api } from "@/lib/api";
 import type { KcCourse } from "@/lib/kc";
+import { draftKcComponent } from "@/lib/kc-draft";
+import { kcModel } from "@/lib/kc-models";
 
 function bounce(path: string, error: unknown): never {
   const message = error instanceof Error ? error.message : "That did not save.";
@@ -94,11 +96,13 @@ export async function pushKcComponent(formData: FormData) {
 export async function postKcCreatorMessage(formData: FormData) {
   const courseId = String(formData.get("course_id") || "");
   const nodeId = String(formData.get("node_id") || "");
-  const back = `/kc-creator?course=${courseId}&kc=${nodeId}`;
+  const model = kcModel(String(formData.get("model") || ""));
+  const back = `/kc-creator?course=${courseId}&kc=${nodeId}&model=${encodeURIComponent(model)}`;
   try {
-    await api(`/kc/nodes/${nodeId}/thread`, {
-      method: "POST",
-      body: JSON.stringify({ message: String(formData.get("message") || "") }),
+    await draftKcComponent({
+      nodeId,
+      message: String(formData.get("message") || ""),
+      model,
     });
   } catch (error) {
     bounce(back, error);

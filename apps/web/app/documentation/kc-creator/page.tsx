@@ -22,7 +22,8 @@ export default function KcCreatorDocsPage() {
           The selected row is the component on screen. A patch can be opened here. It is still not a target.
         </p>
         <p>
-          The middle pane is the manual editor. Save this component writes the fields and clears the course ready flag.
+          The middle pane is the manual editor. It opens with the component description under the heading Description:
+          the outline, topics, and goals saved from the course draft. Save this component writes the fields and clears the course ready flag.
           Mark complete sits next to Save. It can be used only when the saved component has no gaps: a type, a core truth,
           at least one rubric check, and prerequisite and encompasses codes that exist. There is no extra gap rule.
           Mark complete records that flag. Save and Push clear it, and they clear course ready.
@@ -31,17 +32,21 @@ export default function KcCreatorDocsPage() {
         </p>
         <p>
           The right pane is a conversation about this component only. It is stored for the component. It is not a kid-tutor message.
-          The first view shows the saved text: title, type, core truth, rubric lines, each wrong move and its component code,
-          prerequisite codes, encompasses codes, and the type fields for that type.
-          Each reply talks about those fields and ends with a draft of this component. A later message revises that draft.
+          A model menu sits in the composer: gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, and gpt-6.1-sol. gpt-4.1 is the default.
+          The chosen model is sent with each message. It does not change scoring, edges, or which types exist.
+          If OPENAI_API_KEY is missing, the chat shows the same missing-key error as the rest of the app.
+          The first view starts with the description, the brief for this component, and then the saved text: title, type,
+          core truth, rubric lines, each wrong move and its component code, prerequisite codes, encompasses codes,
+          and the type fields for that type.
+          The chat treats that description as the brief. It is an expert on this component and uses the course kind.
+          It goes into the topic before it fills the type, the core truth, the rubric, and the checks.
+          A later message revises that draft.
           The middle pane keeps the saved component until Push. Push writes the draft. Other components stay.
           Edges are rewritten only for this component. After Push, the middle pane shows the written fields and the thread says the draft was saved.
         </p>
         <p>
-          A first message drafts the component from the course. A later message revises the draft already in the thread.
-          A line such as &quot;Core truth: …&quot;, &quot;Type: causal&quot;, or &quot;Fact: …&quot; sets that field.
-          &quot;make it causal&quot; switches the type. A plain sentence, with no labeled field, replaces the core truth.
-          Nothing from the chat is stored on the component until Push.
+          A first message starts from the description and the course kind, goes into the topic, and then drafts the fields.
+          A later message revises that draft. Nothing from the chat is stored on the component until Push.
         </p>
 
         <h2>Settings you can change</h2>

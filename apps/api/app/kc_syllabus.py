@@ -1373,7 +1373,7 @@ def _reply(
     if kind == "curiosity":
         relation = f"It follows a path through {subject}."
     elif kind == "mastery":
-        relation = f"It is the fuller breakdown of {subject}."
+        relation = f"It is the fuller breakdown of {subject}, the rigorous one."
     elif sized_to_minutes:
         relation = f"It follows the structure of {subject} and is sized to the minutes."
     else:
@@ -1387,21 +1387,68 @@ def _reply(
     return f"Draft of {n} components for {scope}. {relation}{asked} Nothing is saved until you push it."
 
 
-def plan_component_titles(
+def _ideas(outline: Outline) -> list[str]:
+    return list(outline.essentials[:6])
+
+
+def _prefix(subject: str, ideas: list[str]) -> str:
+    shown = "; ".join(ideas) if ideas else subject
+    return (
+        f"Subject: {subject}.\n"
+        f"Major ideas a strong course on this subject has to cover: {shown}.\n"
+    )
+
+
+def planned_reply(
+    *,
+    subject: str,
+    ideas: list[str],
+    kind: str,
+    minutes: int | None,
+    titles: list[str],
+    count: tuple[str, int] | None,
+    sized_to_minutes: bool,
+    pasted: bool,
+) -> str:
+    """Subject and major ideas, then the component list."""
+    if pasted:
+        body = (
+            f"Draft of {len(titles)} components from the titles you listed. "
+            "Nothing is saved until you push it."
+        )
+    else:
+        body = _reply(
+            kind=kind,
+            minutes=minutes,
+            subject=subject,
+            titles=titles,
+            count=count,
+            sized_to_minutes=sized_to_minutes,
+        )
+    return _prefix(subject, ideas) + body
+
+
+def component_brief(subject: str, title: str, kind: str) -> str:
+    """Outline, topics, and goals for one component when no model has written them."""
+    if kind == "curiosity":
+        outline = f"{title} is a step on the path through {subject}."
+    elif kind == "time_boxed":
+        outline = f"{title} is a step that fits the time on {subject}."
+    else:
+        outline = f"{title} is part of the rigorous breakdown of {subject}."
+    return f"Outline: {outline}\nTopics: {title}; {subject}\nGoals: Explain {title}; Apply {title} in {subject}"
+
+
+def planning_context(
     *,
     title: str,
     description: str,
     kind: str,
     minutes: int | None,
     message: str,
-) -> tuple[list[str], str]:
-    """Component titles for one draft. This does not write."""
+) -> dict:
+    """Subject, major ideas, and titles. This does not write."""
     pasted = _pasted_titles(message)
-    if pasted:
-        return pasted, (
-            f"Draft of {len(pasted)} components from the titles you listed. "
-            "Nothing is saved until you push it."
-        )
     text = f"{title or ''} {description or ''}".lower()
     outline = _match_outline(text)
     subject = _subject_phrase(title, description)
@@ -1414,13 +1461,48 @@ def plan_component_titles(
     resolved = _resolve_kind(message, kind)
     resolved_minutes = _minutes(message, minutes)
     count = _count_request(message)
-    titles = _choose(outline, resolved, resolved_minutes, count)
+    ideas = _ideas(outline)
+    shown_minutes = resolved_minutes if resolved == "time_boxed" else None
     sized = resolved == "time_boxed" and count is None and resolved_minutes is not None
-    return titles, _reply(
-        kind=resolved,
-        minutes=resolved_minutes if resolved == "time_boxed" else None,
+    titles = pasted if pasted else _choose(outline, resolved, resolved_minutes, count)
+    reply = planned_reply(
         subject=label,
+        ideas=ideas,
+        kind=resolved,
+        minutes=shown_minutes,
         titles=titles,
         count=count,
         sized_to_minutes=sized,
+        pasted=pasted is not None,
     )
+    return {
+        "subject": label,
+        "ideas": ideas,
+        "titles": titles,
+        "reply": reply,
+        "kind": resolved,
+        "minutes": shown_minutes,
+        "count": count,
+        "pasted": pasted is not None,
+        "sized_to_minutes": sized,
+    }
+
+
+def plan_component_titles(
+    *,
+    title: str,
+    description: str,
+    kind: str,
+    minutes: int | None,
+    message: str,
+) -> tuple[list[str], str]:
+    """Component titles for one draft. This does not write."""
+    ctx = planning_context(
+        title=title,
+        description=description,
+        kind=kind,
+        minutes=minutes,
+        message=message,
+    )
+    return list(ctx["titles"]), str(ctx["reply"])
+

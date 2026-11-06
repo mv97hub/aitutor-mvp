@@ -1,6 +1,7 @@
 import { KcCreator } from "@/components/KcCreator";
 import { api } from "@/lib/api";
 import type { KcCourse, KcCreatorThread } from "@/lib/kc";
+import { kcModel } from "@/lib/kc-models";
 
 export const dynamic = "force-dynamic";
 
@@ -9,9 +10,10 @@ export const metadata = { title: "KC Creator · AI Tutor" };
 export default async function KcCreatorPage({
   searchParams,
 }: {
-  searchParams: Promise<{ course?: string; kc?: string; error?: string }>;
+  searchParams: Promise<{ course?: string; kc?: string; model?: string; error?: string }>;
 }) {
   const params = await searchParams;
+  const model = kcModel(params.model);
   let courses: KcCourse[] = [];
   let selected: KcCourse | null = null;
   let thread: KcCreatorThread | null = null;
@@ -39,6 +41,7 @@ export default async function KcCreatorPage({
       course={selected}
       component={component}
       thread={component ? thread : null}
+      model={model}
       error={error}
     />
   );

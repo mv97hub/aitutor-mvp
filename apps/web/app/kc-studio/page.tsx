@@ -1,6 +1,8 @@
 import { KcStudio } from "@/components/KcStudio";
 import { api } from "@/lib/api";
+import { draftKcCourse } from "@/lib/kc-draft";
 import type { KcCourse, KcDraft, KcNetwork, KcStructure } from "@/lib/kc";
+import { kcModel } from "@/lib/kc-models";
 
 export const dynamic = "force-dynamic";
 
@@ -9,9 +11,10 @@ export const metadata = { title: "KC Course Creator · AI Tutor" };
 export default async function KcStudioPage({
   searchParams,
 }: {
-  searchParams: Promise<{ course?: string; network?: string; message?: string; error?: string }>;
+  searchParams: Promise<{ course?: string; network?: string; message?: string; model?: string; error?: string }>;
 }) {
   const params = await searchParams;
+  const model = kcModel(params.model);
   let courses: KcCourse[] = [];
   let selected: KcCourse | null = null;
   let structure: KcStructure | null = null;
@@ -29,12 +32,13 @@ export default async function KcStudioPage({
       }
       const message = (params.message || "").trim();
       if (message) {
-        const result = await api<{ reply: string; draft: KcDraft }>(`/kc/courses/${params.course}/draft`, {
-          method: "POST",
-          body: JSON.stringify({ message }),
-        });
-        draft = result.draft;
-        reply = result.reply;
+        try {
+          const result = await draftKcCourse({ courseId: params.course, message, model });
+          draft = result.draft;
+          reply = result.reply;
+        } catch (err) {
+          error = err instanceof Error ? err.message : "The model did not answer.";
+        }
       }
     }
   } catch (err) {
@@ -49,6 +53,7 @@ export default async function KcStudioPage({
       initialDraft={draft}
       initialReply={reply}
       initialMessage={params.message ?? ""}
+      initialModel={model}
       initialError={error}
     />
   );

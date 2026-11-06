@@ -2739,3 +2739,41 @@ a.ds-row { text-decoration: none; }
     grid-template-rows: auto auto minmax(0, 1fr);
   }
 }
+
+.kc-reply { white-space: pre-wrap; }
+.kc-brief {
+  margin: 0;
+  color: rgb(97, 102, 107);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+  white-space: pre-wrap;
+}
+.kc-draft-list .kc-brief { margin: 2px 0 8px; }
+.kc-brief-block h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.kc-model-row { justify-content: space-between; align-items: center; gap: 8px; }
+.kc-model {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: rgb(97, 102, 107);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+.kc-model select {
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  padding: 4px 8px;
+  color: rgb(15, 17, 21);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+}

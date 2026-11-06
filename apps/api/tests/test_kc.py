@@ -255,6 +255,10 @@ def test_draft_is_not_written_until_push() -> None:
         assert pushed.status_code == 200, pushed.text
         titles = [item["title"] for item in pushed.json()["components"]]
         assert titles == ["Angle sum", "Missing angle", "SAS versus SSA", "Congruence"]
+        assert all(item["description"].startswith("Outline:") for item in pushed.json()["components"])
+        structure = client.get(f"/kc/courses/{course['id']}/structure").json()
+        shown = [row["description"] for group in structure["groups"] for row in group["components"]]
+        assert shown == [item["description"] for item in pushed.json()["components"]]
         assert _counts()["nodes"] == before["nodes"] + 4
         assert _counts()["chats"] == before["chats"]
     finally:
@@ -714,6 +718,8 @@ def test_creator_thread_revises_one_component_and_complete_clears_on_write() -> 
 
         first = client.post(f"/kc/nodes/{river['id']}/thread", json={"message": "Draft this fact."})
         assert first.status_code == 200, first.text
+        opening = first.json()["messages"][-1]["content"]
+        assert opening.index("The topic, before the fields") < opening.index("Core truth:")
         draft = first.json()["draft"]
         assert draft["kind"] == "component"
         assert draft["code"] == "zz-creator-a"
