@@ -12,19 +12,23 @@ from app.database import get_db
 from app.kc import (
     add_component,
     apply_component,
+    course_of_node,
     course_out,
     create_course,
+    creator_thread,
     delete_node,
-    draft_component,
     draft_course,
-    load_patches,
-    load_targets,
+    mark_node_complete,
     mark_ready,
     network,
+    node_out,
+    note_component_saved,
     open_session,
+    post_creator_turn,
     progress,
     prompt_for,
     push_course,
+    record_speech,
     rename_component,
     reorder_course,
     session_out,
@@ -96,6 +100,10 @@ class OpenSessionIn(BaseModel):
 
 class TurnIn(BaseModel):
     answer: str
+
+
+class SpeechIn(BaseModel):
+    content: str
 
 
 @router.get("/kc/courses")
@@ -177,55 +185,51 @@ def post_ready(course_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
 
 @router.get("/kc/nodes/{node_id}")
 def get_node(node_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
-    from app.kc import _detail
-
-    return _detail(_node_or_404(db, node_id), target=True)
+    return node_out(db, _node_or_404(db, node_id))
 
 
 @router.put("/kc/nodes/{node_id}")
 def put_node(node_id: uuid.UUID, body: ComponentIn, db: Session = Depends(get_db)) -> dict:
-    from app.kc import _detail
-
     node = apply_component(db, _node_or_404(db, node_id), body.model_dump())
-    return _detail(node, target=True)
+    return node_out(db, node)
 
 
 @router.patch("/kc/nodes/{node_id}")
 def patch_node(node_id: uuid.UUID, body: RenameIn, db: Session = Depends(get_db)) -> dict:
-    from app.kc import _detail
-
     node = rename_component(db, _node_or_404(db, node_id), body.title)
-    return _detail(node, target=True)
+    return node_out(db, node)
+
+
+@router.post("/kc/nodes/{node_id}/complete")
+def post_node_complete(node_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    node = mark_node_complete(db, _node_or_404(db, node_id))
+    return node_out(db, node)
+
+
+@router.get("/kc/nodes/{node_id}/thread")
+def get_node_thread(node_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    return creator_thread(db, _node_or_404(db, node_id))
+
+
+@router.post("/kc/nodes/{node_id}/thread")
+def post_node_thread(node_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
+    return post_creator_turn(db, _node_or_404(db, node_id), body.message)
 
 
 @router.post("/kc/nodes/{node_id}/draft")
 def post_node_draft(node_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
+    from app.kc import draft_component
+
     node = _node_or_404(db, node_id)
-    from sqlalchemy import select
-
-    from app.models import KcGoal
-
-    goal = None
-    ordered: list = []
-    for candidate in db.scalars(select(KcGoal)):
-        targets = load_targets(db, candidate)
-        if any(item.id == node.id for item in targets) or any(
-            item.id == node.id for item in load_patches(db, targets)
-        ):
-            goal = candidate
-            ordered = targets
-            break
-    if goal is None:
-        raise HTTPException(status_code=422, detail="Draft a component that is on a course.")
+    goal, ordered = course_of_node(db, node)
     return draft_component(goal, node, ordered, body.message)
 
 
 @router.post("/kc/nodes/{node_id}/push")
 def post_node_push(node_id: uuid.UUID, body: ComponentIn, db: Session = Depends(get_db)) -> dict:
-    from app.kc import _detail
-
     node = apply_component(db, _node_or_404(db, node_id), body.model_dump())
-    return _detail(node, target=True)
+    note_component_saved(db, node)
+    return node_out(db, node)
 
 
 @router.delete("/kc/nodes/{node_id}")
@@ -273,6 +277,11 @@ def get_tutor_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> d
 @router.get("/kc/tutor/sessions/{session_id}/prompt")
 def get_tutor_prompt(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return prompt_for(db, _session_or_404(db, session_id))
+
+
+@router.post("/kc/tutor/sessions/{session_id}/speech")
+def post_tutor_speech(session_id: uuid.UUID, body: SpeechIn, db: Session = Depends(get_db)) -> dict:
+    return record_speech(db, _session_or_404(db, session_id), body.content)
 
 
 @router.post("/kc/tutor/sessions/{session_id}/turn")

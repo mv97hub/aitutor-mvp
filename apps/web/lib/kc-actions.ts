@@ -66,23 +66,56 @@ export async function markKcReady(formData: FormData) {
 
 export async function pushKcDraft(formData: FormData) {
   const courseId = String(formData.get("course_id") || "");
-  const kind = String(formData.get("kind") || "course");
   try {
-    if (kind === "component") {
-      const nodeId = String(formData.get("node_id") || "");
-      const payload = JSON.parse(String(formData.get("payload") || "{}")) as Record<string, unknown>;
-      await api(`/kc/nodes/${nodeId}/push`, { method: "POST", body: JSON.stringify(payload) });
-    } else {
-      const components = JSON.parse(String(formData.get("components") || "[]")) as unknown[];
-      await api(`/kc/courses/${courseId}/push`, {
-        method: "POST",
-        body: JSON.stringify({ components }),
-      });
-    }
+    const components = JSON.parse(String(formData.get("components") || "[]")) as unknown[];
+    await api(`/kc/courses/${courseId}/push`, {
+      method: "POST",
+      body: JSON.stringify({ components }),
+    });
   } catch (error) {
     bounce(`/kc-studio?course=${courseId}`, error);
   }
   redirect(`/kc-studio?course=${courseId}`);
+}
+
+export async function pushKcComponent(formData: FormData) {
+  const courseId = String(formData.get("course_id") || "");
+  const nodeId = String(formData.get("node_id") || "");
+  const back = `/kc-creator?course=${courseId}&kc=${nodeId}`;
+  try {
+    const payload = JSON.parse(String(formData.get("payload") || "{}")) as Record<string, unknown>;
+    await api(`/kc/nodes/${nodeId}/push`, { method: "POST", body: JSON.stringify(payload) });
+  } catch (error) {
+    bounce(back, error);
+  }
+  redirect(back);
+}
+
+export async function postKcCreatorMessage(formData: FormData) {
+  const courseId = String(formData.get("course_id") || "");
+  const nodeId = String(formData.get("node_id") || "");
+  const back = `/kc-creator?course=${courseId}&kc=${nodeId}`;
+  try {
+    await api(`/kc/nodes/${nodeId}/thread`, {
+      method: "POST",
+      body: JSON.stringify({ message: String(formData.get("message") || "") }),
+    });
+  } catch (error) {
+    bounce(back, error);
+  }
+  redirect(back);
+}
+
+export async function markKcComplete(formData: FormData) {
+  const courseId = String(formData.get("course_id") || "");
+  const nodeId = String(formData.get("node_id") || "");
+  const back = `/kc-creator?course=${courseId}&kc=${nodeId}`;
+  try {
+    await api(`/kc/nodes/${nodeId}/complete`, { method: "POST" });
+  } catch (error) {
+    bounce(back, error);
+  }
+  redirect(back);
 }
 
 export async function addKcComponent(formData: FormData) {
@@ -196,9 +229,9 @@ export async function saveKcComponent(formData: FormData) {
       }),
     });
   } catch (error) {
-    bounce(`/kc-studio?course=${courseId}&component=${nodeId}`, error);
+    bounce(`/kc-creator?course=${courseId}&kc=${nodeId}`, error);
   }
-  redirect(`/kc-studio?course=${courseId}&component=${nodeId}`);
+  redirect(`/kc-creator?course=${courseId}&kc=${nodeId}`);
 }
 
 export async function answerKcTurn(formData: FormData) {

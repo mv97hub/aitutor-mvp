@@ -67,7 +67,7 @@ export default function KidTutorDocsPage() {
 
         <h2>What to know when using it</h2>
         <ul>
-          <li>The landing links go to Administration, KC Studio, and KC Tutor.</li>
+          <li>The landing links go to Administration, KC Course Creator, KC Creator, and KC Tutor.</li>
           <li>Switch child returns to the picker. The child&apos;s classes stay in the list.</li>
           <li>New class leaves other classes in the list.</li>
           <li>If the catalog is empty, the course menu says &quot;No courses yet.&quot; Import a course on Admin first.</li>

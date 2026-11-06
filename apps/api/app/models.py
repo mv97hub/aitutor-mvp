@@ -535,6 +535,9 @@ class KcNode(Base):
     misconceptions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     prerequisite_codes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     encompasses_codes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    marked_complete: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
@@ -691,3 +694,26 @@ class KcMessage(Base):
     )
 
     session: Mapped[KcSession] = relationship(back_populates="messages")
+
+
+class KcCreatorMessage(Base):
+    """One turn of the KC Creator chat for a component. Not a kid-tutor kc_messages row."""
+
+    __tablename__ = "kc_creator_messages"
+    __table_args__ = (
+        UniqueConstraint("node_id", "seq", name="uq_kc_creator_messages_node_seq"),
+        CheckConstraint("role IN ('user', 'assistant')", name="ck_kc_creator_messages_role"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_nodes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    draft: Mapped[dict | None] = mapped_column(JSON)
+    applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )

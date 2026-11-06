@@ -34,6 +34,14 @@ _EXPLAIN = {
     5: "Give a fuller explanation before the one question.",
 }
 
+# Fixed prompt sentences. A later admin page can change these values. This module keeps them.
+PROMPT_ONE_STEP = "You are the knowledge-component tutor. One step of one component this turn."
+PROMPT_SETTINGS = "Settings do not change the type, the edges, or the score."
+PROMPT_NO_LATER = "Do not ask a later step, and do not ask a second kind of question."
+PROMPT_EDGES = "Edges stay as stored."
+PROMPT_WRONG = "A wrong answer is explained against the matching misconception, once, then retried or stepped down."
+PROMPT_ONE_QUESTION = "One question at the end of the turn when this step asks something."
+
 _RECIPE_LINE = {
     "factual": "Factual components use the short recipe: one retrieval question, then a short confirmation.",
     "procedural": "Procedural components use a worked example, then one faded step, then a solo solve.",
@@ -89,23 +97,23 @@ def build_kc_prompt(
     stay = "yes" if profile.stay_on_course else "no"
     level = min(5, max(1, int(profile.instructive)))
     lines = [
-        "You are the knowledge-component tutor. One step of one component this turn.",
-        "Settings do not change the type, the edges, or the score.",
+        PROMPT_ONE_STEP,
+        PROMPT_SETTINGS,
         f"Course: {goal.title}. {goal.description}".strip(),
         f"Component: {node.title} ({node.code}).",
         f"Type: {node.kc_type or 'unset'}.",
         f"Recipe: {recipe_name(node.kc_type)}.",
         _RECIPE_LINE.get(node.kc_type or "", "This component has no recipe yet."),
         f"This turn is step {index + 1} of {len(labels)}: {label}.",
-        "Do not ask a later step, and do not ask a second kind of question.",
+        PROMPT_NO_LATER,
         f"Say this step: {step_text}",
         f"Core truth: {node.core_truth or 'none yet'}.",
         "Rubric checks: " + ("; ".join(rubric) if rubric else "none yet") + ".",
         "Misconceptions: " + ("; ".join(misconceptions) if misconceptions else "none") + ".",
-        "A wrong answer is explained against the matching misconception, once, then retried or stepped down.",
+        PROMPT_WRONG,
         f"Prerequisites: {_codes(node.prerequisite_codes)}.",
         f"Encompasses: {_codes(node.encompasses_codes)}.",
-        "Edges stay as stored.",
+        PROMPT_EDGES,
         (
             f"Student: {student.display_name}. "
             f"Age: {student.age}. "
@@ -126,7 +134,7 @@ def build_kc_prompt(
             if profile.use_interests
             else "Use the persona, lexicon, metaphors, and sidekick. Do not build the example around interests."
         ),
-        "One question at the end of the turn when this step asks something.",
-        "Settings do not change the type, the edges, or the score.",
+        PROMPT_ONE_QUESTION,
+        PROMPT_SETTINGS,
     ]
     return "\n".join(lines)

@@ -14,6 +14,8 @@ export type KcComponent = {
   prerequisite_codes: string[];
   encompasses_codes: string[];
   type_fields: Record<string, unknown>;
+  marked_complete: boolean;
+  missing: string[];
 };
 
 export type KcCourse = {
@@ -32,7 +34,14 @@ export type KcCourse = {
 export type KcStructure = {
   groups: {
     kc_type: string;
-    components: { id: string; code: string; title: string; kc_type: string | null; missing: string[] }[];
+    components: {
+      id: string;
+      code: string;
+      title: string;
+      kc_type: string | null;
+      missing: string[];
+      marked_complete: boolean;
+    }[];
   }[];
 };
 
@@ -102,6 +111,8 @@ export type KcTutorSession = {
   step_label: string;
   status: string;
   score: number | null;
+  needs_speech: boolean;
+  choice: { prompt: string; choices: { id: string; text: string }[] } | null;
   reply?: string;
   passed?: boolean;
   redirect: { id: string; code: string; title: string } | null;
@@ -114,6 +125,22 @@ export const KINDS = [
   { id: "time_boxed", label: "Time boxed" },
   { id: "curiosity", label: "Curiosity" },
 ] as const;
+export type KcCreatorMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  seq: number;
+  draft: KcComponentDraft | null;
+  applied: boolean;
+};
+
+export type KcCreatorThread = {
+  node_id: string;
+  mirror: string;
+  messages: KcCreatorMessage[];
+  draft: KcComponentDraft | null;
+};
+
 export const TYPE_LABELS: Record<string, string> = {
   factual: "Factual",
   procedural: "Procedural",

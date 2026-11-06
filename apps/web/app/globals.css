@@ -2561,3 +2561,181 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
   .kc-rail, .kc-chat, .kc-picker { border: 0; }
   .kc-course { grid-template-columns: 1fr; }
 }
+
+a.ds-row { text-decoration: none; }
+
+.kc-screen {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.kc-banner {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 52px;
+  padding: 6px 16px;
+  background: rgb(65, 118, 230);
+  color: #fff;
+}
+
+.kc-banner .brand,
+.kc-banner .brand span { color: #fff; }
+
+.kc-banner h1 {
+  margin: 0;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.kc-course-stage,
+.kc-creator-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.kc-course-stage > .studio-columns,
+.kc-creator-stage > .studio-columns,
+.kc-course-stage > .ds-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.kc-screen .ds-side label,
+.kc-screen .studio-new-form label {
+  display: grid;
+  gap: 4px;
+}
+
+.kc-screen .ds-side .button { margin: 8px; }
+
+.kc-component-list {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  min-height: 0;
+  overflow: auto;
+}
+
+.kc-structure { display: grid; gap: 16px; }
+.kc-structure h2,
+.kc-structure h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; line-height: 20px; }
+.kc-structure ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.kc-structure li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+.kc-structure li a {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+.kc-structure li a:hover { background: rgba(38, 49, 72, 0.06); }
+.kc-structure li a span,
+.kc-structure li a em { color: rgb(129, 133, 140); font-style: normal; font-size: 12px; line-height: 18px; }
+.kc-row-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.kc-add { display: flex; gap: 8px; align-items: end; }
+.kc-add label { flex: 1; display: grid; gap: 4px; }
+
+.kc-editor { display: grid; gap: 10px; align-content: start; }
+.kc-editor h2 { margin: 0; font-size: 16px; }
+.kc-editor label,
+.kc-editor fieldset {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  color: rgb(97, 102, 107);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+.kc-editor legend { padding: 0; }
+.kc-editor input,
+.kc-editor textarea,
+.kc-editor select {
+  width: 100%;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px 10px;
+  color: rgb(15, 17, 21);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+.kc-editor .kc-check {
+  display: flex;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 8px;
+  color: rgb(15, 17, 21);
+  font-size: 14px;
+  font-weight: 400;
+}
+.kc-editor .kc-check input { width: auto; }
+.kc-editor .kc-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.kc-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.kc-draft-list { margin: 0; padding-left: 18px; }
+
+.kc-tutor-pick { display: grid; gap: 8px; margin: 8px; }
+.kc-tutor-pick select {
+  width: 100%;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px 10px;
+  font-size: 14px;
+  line-height: 22px;
+}
+.ds-side .kc-cards { display: grid; gap: 8px; margin: 8px; padding: 0; list-style: none; }
+.ds-side .kc-cards a {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  color: inherit;
+  text-decoration: none;
+}
+.ds-side .kc-cards span {
+  color: rgb(65, 118, 230);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 18px;
+  text-transform: uppercase;
+}
+.ds-side .kc-ring { margin: 8px; }
+.ds-side .kc-ring text { fill: rgb(15, 17, 21); }
+.kc-minutes { margin: 0 12px 8px; font-weight: 600; }
+.kc-step { margin: 0; font-weight: 500; }
+.kc-redirect { margin: 0; padding: 8px 20px 0; color: rgb(196, 73, 29); }
+.ds-shell .kc-modal-card { background: #fff; border-radius: 16px; }
+.ds-shell .kc-net circle { fill: rgb(65, 118, 230); }
+.ds-shell .kc-net circle.is-patch { fill: rgb(129, 133, 140); }
+.ds-shell .kc-net text { fill: rgb(15, 17, 21); }
+.ds-shell .kc-net .is-prereq { stroke: rgb(65, 118, 230); stroke-width: 2; }
+.ds-shell .kc-net .is-encompass { stroke: rgb(15, 17, 21); stroke-width: 2; stroke-dasharray: 5 4; }
+.ds-shell .kc-actions a { color: rgb(65, 118, 230); text-decoration: none; }
+
+@media (max-width: 860px) {
+  .ds-shell.kc-screen {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+}
