@@ -168,7 +168,8 @@ export function KcStudio({
                   <div className="ds-column">
                     {!initialMessage ? (
                       <p className="ds-quiet">
-                        The draft is a list of components. Nothing is stored until you push it.
+                        The draft is a syllabus for this subject. Mastery is the fuller breakdown, time boxed
+                        fits the minutes, and curiosity follows a path. Nothing is stored until you push it.
                       </p>
                     ) : null}
                     {initialMessage ? (
@@ -182,13 +183,13 @@ export function KcStudio({
                       </div>
                     ) : null}
                     {courseDraft ? (
-                      <ul className="kc-draft-list" aria-label="Draft component list">
+                      <ol className="kc-draft-list" aria-label="Draft component list">
                         {courseDraft.components.map((item) => (
                           <li key={item.code}>
                             {item.title} <span className="studio-code">{item.code}</span>
                           </li>
                         ))}
-                      </ul>
+                      </ol>
                     ) : null}
                   </div>
                 </div>

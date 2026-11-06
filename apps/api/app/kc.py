@@ -17,6 +17,7 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.kc_prompt import build_kc_prompt, recipe_name, step_labels
+from app.kc_syllabus import plan_component_titles
 from app.models import (
     KcCreatorMessage,
     KcEdge,
@@ -41,18 +42,6 @@ TYPE_KEYS = {
 }
 FINAL_STEP = {"factual": 0, "procedural": 2, "conceptual": 2, "causal": 2, "synthesis": 0}
 ENCOMPASS_WEIGHT = 0.25
-COUNT_WORDS = {
-    "two": 2,
-    "three": 3,
-    "four": 4,
-    "five": 5,
-    "six": 6,
-    "seven": 7,
-    "eight": 8,
-    "nine": 9,
-    "ten": 10,
-    "twelve": 12,
-}
 CARD_LABELS = {
     "fastest": "Fastest path",
     "patch": "Foundation patch",
@@ -513,58 +502,15 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
     return goal
 
 
-def _count_requested(message: str) -> int | None:
-    lowered = message.lower()
-    for word, count in COUNT_WORDS.items():
-        if re.search(rf"\b{word}\b", lowered):
-            return count
-    match = re.search(r"\b(\d{1,2})\b", lowered)
-    if not match:
-        return None
-    count = int(match.group(1))
-    if 2 <= count <= 12:
-        return count
-    return None
-
-
-def _shorten(text: str) -> str:
-    words = text.strip(" .").split()
-    return " ".join(words[:8])[:80].strip()
-
-
-def _titles_from_message(message: str) -> list[str]:
-    titles = []
-    for raw in message.splitlines():
-        line = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", raw).strip()
-        if line and len(line) <= 80:
-            titles.append(line)
-    if len(titles) >= 2:
-        return titles[:12]
-    return []
-
-
-def _titles_from_description(description: str, title: str, count: int | None) -> list[str]:
-    text = (description or "").strip() or (title or "Component")
-    parts = [
-        _shorten(part)
-        for part in re.split(r"[.;]\s+|,\s+|\s+\band\b\s+", text)
-        if len(part.strip()) > 2
-    ]
-    parts = [part for part in parts if part]
-    if not parts:
-        parts = [_shorten(title or "Component")]
-    if count is None:
-        return parts[:6]
-    while len(parts) < count:
-        parts.append(f"{_shorten(title or 'Component')} {len(parts) + 1}")
-    return parts[:count]
-
-
 def draft_course(goal: KcGoal, message: str) -> dict:
     """Return a component list. This does not write."""
-    titles = _titles_from_message(message)
-    if not titles:
-        titles = _titles_from_description(goal.description, goal.title, _count_requested(message))
+    titles, reply = plan_component_titles(
+        title=goal.title,
+        description=goal.description,
+        kind=goal.kind,
+        minutes=goal.minutes,
+        message=message or "",
+    )
     taken: set[str] = set()
     components = []
     for title in titles:
@@ -572,7 +518,7 @@ def draft_course(goal: KcGoal, message: str) -> dict:
         taken.add(code)
         components.append({"code": code, "title": title})
     return {
-        "reply": "Draft component list. Nothing is saved until you push it.",
+        "reply": reply,
         "draft": {"kind": "course", "components": components},
     }
 
