@@ -28,26 +28,31 @@ export default function KcStudioDocsPage() {
         </p>
         <p>
           The structure column lists groups in this order: Factual, Procedural, Conceptual principle, Causal or historical, Synthesis,
-          then No type yet. Each row shows the title, the type, and either the gap strings, Marked complete, or Complete.
+          then No type yet. Each row shows the title, the description under the title, the type, and either the gap strings, Marked complete, or Complete.
+          The description is a short outline, the key topics, and the key goals. It is written with the draft and saved when you push.
           Marked complete means the component was marked on KC Creator and still has no gaps. Complete means the gaps are empty and it has not been marked.
           Up and Down reorder the targets. Remove deletes that component. Add a component by title creates a target with no type and no fields.
           Patches are listed as Not a target. A row, including a patch, opens that component on KC Creator. This page does not edit a component&apos;s fields.
         </p>
         <p>
-          The chat on this page drafts the component list and nothing else. The draft is titles and codes.
-          Push draft writes that list. It does not draft or write one component&apos;s fields, and it does not split the
-          course description into titles. The list is a syllabus for the subject. Kind sets how full it is.
-          Mastery is the fuller, more rigorous breakdown. Time boxed is sized to the minutes, one component for every
-          five minutes and at least three. Curiosity follows a path through the subject. Asking in the chat to be a
-          master, to fit the minutes, or for a curiosity path uses that kind for the draft. A requested count is honored
-          with distinct components: &quot;minimum of 10&quot; means at least ten, and &quot;10 components&quot; means ten.
-          A pasted list of titles is used as the draft. Nothing is saved until you push it.
+          The chat on this page has a model menu in the composer: gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, and gpt-6.1-sol.
+          gpt-4.1 is the default. gpt-6.1-sol is the strongest model this app&apos;s OpenAI client accepts.
+          The chosen model is sent with the draft. It does not change scoring, edges, or the component types.
+          If OPENAI_API_KEY is missing, the chat shows the same missing-key error as the rest of the app.
+          The draft names the subject from the course name and description, then the major ideas a strong course on that
+          subject has to cover, and only then the component list. It does not split the description into titles.
+          Kind sets how full the list is. Mastery is the fuller rigorous breakdown. Time boxed fits the minutes.
+          Curiosity is a path through the subject. A requested count is honored with distinct components:
+          &quot;minimum of 10&quot; means at least ten, and &quot;10 components&quot; means ten.
+          A pasted list of titles is used as written. Each component also gets a description: a short outline, the key topics,
+          and the key goals. Push draft writes the titles and those descriptions. It does not fill one component&apos;s type fields.
+          Nothing is saved until you push it.
         </p>
         <p>
           KC Creator is the editor. Choose a course, then a component. Targets are listed in course order, then patches.
           The middle pane is the manual editor: title, type, the fields for that type, core truth, one to three rubric checks,
           misconceptions, prerequisites, and encompasses. Save this component writes that component and clears course ready.
-          The right-hand chat is about that component only. The first view shows the saved text. Each reply talks about the fields and ends with a draft.
+          The right-hand chat is about that component only. It opens with the description, then the saved text, and goes into the topic before the fields. Each reply ends with a draft.
           A later message revises that draft. The middle pane keeps the saved component until Push. Push writes the draft for this component only.
           Mark complete sits next to Save. It is available only when that component has no gaps. Saving or pushing clears the mark.
         </p>

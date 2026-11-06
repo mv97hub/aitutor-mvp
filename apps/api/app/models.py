@@ -528,6 +528,7 @@ class KcNode(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(240), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     kc_type: Mapped[str | None] = mapped_column(String(32))
     core_truth: Mapped[str] = mapped_column(Text, nullable=False, default="")
     type_fields: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

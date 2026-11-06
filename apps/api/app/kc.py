@@ -17,7 +17,7 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.kc_prompt import build_kc_prompt, recipe_name, step_labels
-from app.kc_syllabus import plan_component_titles
+from app.kc_syllabus import component_brief, planning_context
 from app.models import (
     KcCreatorMessage,
     KcEdge,
@@ -365,6 +365,7 @@ def _detail(node: KcNode, *, target: bool, codes: set[str]) -> dict:
     body = _summary(node, target=target)
     body.update(
         {
+            "description": node.description or "",
             "core_truth": node.core_truth or "",
             "rubric": list(node.rubric or []),
             "misconceptions": list(node.misconceptions or []),
@@ -504,7 +505,7 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
 
 def draft_course(goal: KcGoal, message: str) -> dict:
     """Return a component list. This does not write."""
-    titles, reply = plan_component_titles(
+    ctx = planning_context(
         title=goal.title,
         description=goal.description,
         kind=goal.kind,
@@ -513,14 +514,66 @@ def draft_course(goal: KcGoal, message: str) -> dict:
     )
     taken: set[str] = set()
     components = []
-    for title in titles:
+    for title in ctx["titles"]:
         code = slug_code(title, taken)
         taken.add(code)
-        components.append({"code": code, "title": title})
+        components.append(
+            {
+                "code": code,
+                "title": title,
+                "description": component_brief(str(ctx["subject"]), title, str(ctx["kind"])),
+            }
+        )
     return {
-        "reply": reply,
+        "reply": ctx["reply"],
         "draft": {"kind": "course", "components": components},
     }
+
+
+def finish_model_course(goal: KcGoal, message: str, proposal: dict) -> dict:
+    """Shape a model object into a draft. This does not write."""
+    from app.kc_model import assemble_course
+
+    try:
+        assembled = assemble_course(
+            title=goal.title,
+            description=goal.description or "",
+            kind=goal.kind,
+            minutes=goal.minutes,
+            message=message or "",
+            proposal=proposal,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    taken: set[str] = set()
+    components = []
+    for item in assembled["components"]:
+        code = slug_code(str(item["title"]), taken)
+        taken.add(code)
+        components.append(
+            {"code": code, "title": item["title"], "description": item["description"]}
+        )
+    return {
+        "reply": assembled["reply"],
+        "draft": {"kind": "course", "components": components},
+    }
+
+
+def course_prompt_for(goal: KcGoal, message: str, model: str) -> dict:
+    from app.kc_model import course_bundle
+
+    try:
+        return course_bundle(
+            title=goal.title,
+            description=goal.description or "",
+            audience=goal.audience,
+            kind=goal.kind,
+            minutes=goal.minutes,
+            message=message or "",
+            model=model,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
@@ -541,13 +594,16 @@ def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
         if node is not None and str(node.id) not in on_course and (node.kc_type or (node.core_truth or "").strip()):
             code = slug_code(title, set(by_code))
             node = None
+        description = str(item.get("description") or "").strip()
         if node is None:
-            node = KcNode(code=code, title=title)
+            node = KcNode(code=code, title=title, description=description)
             db.add(node)
             db.flush()
             by_code[code] = node
         else:
             node.title = title
+            if description:
+                node.description = description
             node.updated_at = _now()
         if str(node.id) not in ordered:
             ordered.append(str(node.id))
@@ -767,6 +823,7 @@ def structure(db: Session, goal: KcGoal) -> dict:
             "id": str(node.id),
             "code": node.code,
             "title": node.title,
+            "description": node.description or "",
             "kc_type": node.kc_type,
             "position": position,
             "missing": gaps_for(node, codes),
@@ -1617,6 +1674,20 @@ def _add_creator_message(
     return message
 
 
+def expert_opening(goal: KcGoal, node: KcNode) -> str:
+    """The brief, before any type field."""
+    brief = (node.description or "").strip() or f"{node.title} belongs to {goal.title}."
+    if goal.kind == "time_boxed" and goal.minutes:
+        kind_line = f"Time boxed fits {goal.minutes} minutes."
+    elif goal.kind == "time_boxed":
+        kind_line = "Time boxed fits the minutes."
+    elif goal.kind == "curiosity":
+        kind_line = "Curiosity is a path through the subject."
+    else:
+        kind_line = "Mastery is the fuller rigorous breakdown."
+    return f"Expert on {node.title}. {kind_line}\n{brief}\nThe topic, before the fields:"
+
+
 def post_creator_turn(db: Session, node: KcNode, message: str) -> dict:
     cleaned = message.strip()
     if not cleaned:
@@ -1628,7 +1699,95 @@ def post_creator_turn(db: Session, node: KcNode, message: str) -> dict:
     else:
         draft = _revise_draft(previous, cleaned, goal, node)
     _add_creator_message(db, node, "user", cleaned)
-    _add_creator_message(db, node, "assistant", _draft_reply(draft), draft=draft, applied=False)
+    _add_creator_message(
+        db,
+        node,
+        "assistant",
+        f"{expert_opening(goal, node)}\n\n{_draft_reply(draft)}",
+        draft=draft,
+        applied=False,
+    )
+    return creator_thread(db, node)
+
+
+def creator_prompt_for(db: Session, node: KcNode, message: str, model: str) -> dict:
+    from app.kc_model import creator_bundle
+
+    goal, ordered = course_of_node(db, node)
+    others = [item.code for item in ordered if item.id != node.id]
+    previous = _latest_draft(_creator_rows(db, node.id))
+    try:
+        return creator_bundle(
+            course_title=goal.title,
+            course_description=goal.description or "",
+            audience=goal.audience,
+            kind=goal.kind,
+            minutes=goal.minutes,
+            node_title=node.title,
+            node_code=node.code,
+            node_description=node.description or "",
+            other_codes=others,
+            previous=previous,
+            message=message,
+            model=model,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def clean_model_component(node: KcNode, raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=422, detail="The model reply could not be read.")
+    kc_type = str(raw.get("kc_type") or "").strip()
+    if kc_type not in KC_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail="Type is factual, procedural, conceptual, causal, or synthesis.",
+        )
+    if kc_type == "synthesis":
+        fields = {
+            "mixes": [raw.get("mix_a") or "", raw.get("mix_b") or ""],
+            "faulty_plan": raw.get("faulty_plan") or "",
+        }
+    else:
+        fields = {key: raw.get(key) for key in TYPE_KEYS[kc_type]}
+    title = str(raw.get("title") or node.title).strip() or node.title
+    return {
+        "kind": "component",
+        "id": str(node.id),
+        "code": node.code,
+        "title": title,
+        "kc_type": kc_type,
+        "core_truth": str(raw.get("core_truth") or "").strip(),
+        "rubric": _clean_rubric(raw.get("rubric") or []),
+        "misconceptions": _clean_misconceptions(raw.get("misconceptions") or []),
+        "prerequisite_codes": _clean_codes(raw.get("prerequisite_codes") or []),
+        "encompasses_codes": _clean_codes(raw.get("encompasses_codes") or []),
+        "type_fields": _clean_type_fields(kc_type, fields),
+    }
+
+
+def accept_model_turn(db: Session, node: KcNode, message: str, discussion: str, draft: dict) -> dict:
+    """Store a model draft. This does not write the component until push."""
+    from app.kc_model import checked_discussion
+
+    cleaned = message.strip()
+    if not cleaned:
+        raise HTTPException(status_code=422, detail="Write a message first.")
+    try:
+        depth = checked_discussion(discussion, node.title)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    shaped = clean_model_component(node, draft)
+    _add_creator_message(db, node, "user", cleaned)
+    _add_creator_message(
+        db,
+        node,
+        "assistant",
+        f"{depth}\n\n{_draft_reply(shaped)}",
+        draft=shaped,
+        applied=False,
+    )
     return creator_thread(db, node)
 
 

@@ -6,6 +6,7 @@ export type KcComponent = {
   id: string;
   code: string;
   title: string;
+  description: string;
   kc_type: KcType | null;
   target: boolean;
   core_truth: string;
@@ -38,6 +39,7 @@ export type KcStructure = {
       id: string;
       code: string;
       title: string;
+      description: string;
       kc_type: string | null;
       missing: string[];
       marked_complete: boolean;
@@ -64,7 +66,7 @@ export type KcComponentDraft = {
 };
 
 export type KcDraft =
-  | { kind: "course"; components: { code: string; title: string }[] }
+  | { kind: "course"; components: { code: string; title: string; description?: string }[] }
   | KcComponentDraft;
 
 export type KcCard = {

@@ -68,7 +68,12 @@ def test_pasted_titles_stay_a_list_and_do_not_write_fields() -> None:
         "congruence",
     ]
     for item in drafted["draft"]["components"]:
-        assert set(item) == {"code", "title"}
+        assert set(item) == {"code", "title", "description"}
+        assert item["description"].startswith("Outline:")
+        assert "Topics:" in item["description"]
+        assert "Goals:" in item["description"]
+    assert drafted["reply"].startswith("Subject:")
+    assert "Major ideas a strong course" in drafted["reply"]
     assert "Nothing is saved" in drafted["reply"]
     assert KC_TYPES == ("factual", "procedural", "conceptual", "causal", "synthesis")
 

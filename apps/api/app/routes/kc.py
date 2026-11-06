@@ -17,7 +17,11 @@ from app.kc import (
     create_course,
     creator_thread,
     delete_node,
+    accept_model_turn,
+    course_prompt_for,
+    creator_prompt_for,
     draft_course,
+    finish_model_course,
     mark_node_complete,
     mark_ready,
     network,
@@ -63,6 +67,18 @@ class CoursePatch(BaseModel):
 
 class DraftIn(BaseModel):
     message: str = ""
+    model: str = ""
+
+
+class FinishDraftIn(BaseModel):
+    message: str = ""
+    proposal: dict
+
+
+class ModelTurnIn(BaseModel):
+    message: str
+    discussion: str = ""
+    draft: dict
 
 
 class PushCourseIn(BaseModel):
@@ -148,6 +164,18 @@ def post_course_draft(course_id: uuid.UUID, body: DraftIn, db: Session = Depends
     return draft_course(goal, body.message)
 
 
+@router.post("/kc/courses/{course_id}/draft-prompt")
+def post_course_draft_prompt(course_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
+    goal = _course_or_404(db, course_id)
+    return course_prompt_for(goal, body.message, body.model)
+
+
+@router.post("/kc/courses/{course_id}/draft-finish")
+def post_course_draft_finish(course_id: uuid.UUID, body: FinishDraftIn, db: Session = Depends(get_db)) -> dict:
+    goal = _course_or_404(db, course_id)
+    return finish_model_course(goal, body.message, body.proposal)
+
+
 @router.post("/kc/courses/{course_id}/push")
 def post_course_push(course_id: uuid.UUID, body: PushCourseIn, db: Session = Depends(get_db)) -> dict:
     goal = _course_or_404(db, course_id)
@@ -214,6 +242,16 @@ def get_node_thread(node_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
 @router.post("/kc/nodes/{node_id}/thread")
 def post_node_thread(node_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
     return post_creator_turn(db, _node_or_404(db, node_id), body.message)
+
+
+@router.post("/kc/nodes/{node_id}/creator-prompt")
+def post_creator_prompt(node_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
+    return creator_prompt_for(db, _node_or_404(db, node_id), body.message, body.model)
+
+
+@router.post("/kc/nodes/{node_id}/model-turn")
+def post_model_turn(node_id: uuid.UUID, body: ModelTurnIn, db: Session = Depends(get_db)) -> dict:
+    return accept_model_turn(db, _node_or_404(db, node_id), body.message, body.discussion, body.draft)
 
 
 @router.post("/kc/nodes/{node_id}/draft")

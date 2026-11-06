@@ -5,6 +5,7 @@ import { useState } from "react";
 import { EnterSubmitTextarea } from "@/components/EnterSubmitTextarea";
 import { KcBanner } from "@/components/KcBanner";
 import { KcCourseList } from "@/components/KcCourseList";
+import { KcModelSelect } from "@/components/KcModelSelect";
 import { markKcComplete, postKcCreatorMessage, pushKcComponent, saveKcComponent } from "@/lib/kc-actions";
 import {
   TYPE_LABELS,
@@ -21,12 +22,14 @@ export function KcCreator({
   course,
   component,
   thread,
+  model,
   error,
 }: {
   courses: KcCourse[];
   course: KcCourse | null;
   component: KcComponent | null;
   thread: KcCreatorThread | null;
+  model: string;
   error: string | null;
 }) {
   const rows = course ? [...course.components, ...course.patches] : [];
@@ -46,7 +49,7 @@ export function KcCreator({
               <li key={item.id}>
                 <a
                   className={`ds-row${component?.id === item.id ? " is-on" : ""}`}
-                  href={`/kc-creator?course=${course.id}&kc=${item.id}`}
+                  href={`/kc-creator?course=${course.id}&kc=${item.id}&model=${encodeURIComponent(model)}`}
                 >
                   <strong>{item.title}</strong>
                   <small>{TYPE_LABELS[item.kc_type ?? "unset"]}</small>
@@ -57,7 +60,7 @@ export function KcCreator({
               <li key={item.id}>
                 <a
                   className={`ds-row${component?.id === item.id ? " is-on" : ""}`}
-                  href={`/kc-creator?course=${course.id}&kc=${item.id}`}
+                  href={`/kc-creator?course=${course.id}&kc=${item.id}&model=${encodeURIComponent(model)}`}
                 >
                   <strong>{item.title}</strong>
                   <small>Not a target</small>
@@ -81,7 +84,7 @@ export function KcCreator({
             {course && component ? <ComponentEditor key={component.id} course={course} component={component} /> : null}
           </div>
           <div className="studio-chat">
-            <CreatorChat course={course} component={component} thread={thread} />
+            <CreatorChat course={course} component={component} thread={thread} model={model} />
           </div>
         </div>
       </section>
@@ -93,10 +96,12 @@ function CreatorChat({
   course,
   component,
   thread,
+  model,
 }: {
   course: KcCourse | null;
   component: KcComponent | null;
   thread: KcCreatorThread | null;
+  model: string;
 }) {
   if (!course || !component || !thread) {
     return <p className="ds-quiet">Open a component before asking for a draft.</p>;
@@ -106,12 +111,17 @@ function CreatorChat({
     <>
       <div className="ds-scroll">
         <div className="ds-column">
+          {component.description ? (
+            <div className="bubble assistant">
+              <p className="kc-reply">{component.description}</p>
+            </div>
+          ) : null}
           <div className="bubble assistant">
-            <p>{thread.mirror}</p>
+            <p className="kc-reply">{thread.mirror}</p>
           </div>
           {thread.messages.map((message) => (
             <div key={message.id} className={`bubble ${message.role === "user" ? "user" : "assistant"}`}>
-              <p>{message.content}</p>
+              <p className="kc-reply">{message.content}</p>
             </div>
           ))}
         </div>
@@ -152,7 +162,8 @@ function CreatorChat({
             aria-label="Component chat"
             maxLength={8000}
           />
-          <div className="ds-card-row">
+          <div className="ds-card-row kc-model-row">
+            <KcModelSelect value={model} />
             <button className="ds-send" type="submit" aria-label="Send">
               ↑
             </button>
@@ -187,6 +198,14 @@ function ComponentEditor({ course, component }: { course: KcCourse; component: K
       <input type="hidden" name="course_id" value={course.id} />
       <input type="hidden" name="node_id" value={component.id} />
       <h2>Component</h2>
+      {component.description ? (
+        <div className="kc-brief-block">
+          <h3>Description</h3>
+          <p className="kc-reply">{component.description}</p>
+        </div>
+      ) : (
+        <p className="ds-quiet">This component has no description yet.</p>
+      )}
       <label>
         Title
         <input aria-label="Component title" name="title" defaultValue={component.title} required />

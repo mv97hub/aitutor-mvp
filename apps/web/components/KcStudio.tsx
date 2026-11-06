@@ -1,6 +1,7 @@
 import { EnterSubmitTextarea } from "@/components/EnterSubmitTextarea";
 import { KcBanner } from "@/components/KcBanner";
 import { KcCourseList } from "@/components/KcCourseList";
+import { KcModelSelect } from "@/components/KcModelSelect";
 import {
   addKcComponent,
   createKcCourse,
@@ -29,6 +30,7 @@ export function KcStudio({
   initialDraft,
   initialReply,
   initialMessage,
+  initialModel,
   initialError,
 }: {
   initialCourses: KcCourse[];
@@ -38,6 +40,7 @@ export function KcStudio({
   initialDraft: KcDraft | null;
   initialReply: string;
   initialMessage: string;
+  initialModel: string;
   initialError: string | null;
 }) {
   const course = initialCourse;
@@ -168,8 +171,8 @@ export function KcStudio({
                   <div className="ds-column">
                     {!initialMessage ? (
                       <p className="ds-quiet">
-                        The draft is a syllabus for this subject. Mastery is the fuller breakdown, time boxed
-                        fits the minutes, and curiosity follows a path. Nothing is stored until you push it.
+                        The draft names the subject and its major ideas, then the component list.
+                        Each component gets an outline, topics, and goals. Nothing is stored until you push it.
                       </p>
                     ) : null}
                     {initialMessage ? (
@@ -179,14 +182,15 @@ export function KcStudio({
                     ) : null}
                     {initialReply ? (
                       <div className="bubble assistant">
-                        <p>{initialReply}</p>
+                        <p className="kc-reply">{initialReply}</p>
                       </div>
                     ) : null}
                     {courseDraft ? (
                       <ol className="kc-draft-list" aria-label="Draft component list">
                         {courseDraft.components.map((item) => (
                           <li key={item.code}>
-                            {item.title} <span className="studio-code">{item.code}</span>
+                            <strong>{item.title}</strong> <span className="studio-code">{item.code}</span>
+                            {item.description ? <p className="kc-brief">{item.description}</p> : null}
                           </li>
                         ))}
                       </ol>
@@ -214,7 +218,8 @@ export function KcStudio({
                       required
                       placeholder="Ask for a component list"
                     />
-                    <div className="ds-card-row">
+                    <div className="ds-card-row kc-model-row">
+                      <KcModelSelect value={initialModel} />
                       <button className="ds-send" type="submit" aria-label="Send">
                         ↑
                       </button>
@@ -261,6 +266,7 @@ function StructureView({
               <li key={row.id}>
                 <a href={`/kc-creator?course=${courseId}&kc=${row.id}`}>
                   <strong>{row.title}</strong>
+                  {row.description ? <p className="kc-brief">{row.description}</p> : null}
                   <span>{TYPE_LABELS[row.kc_type ?? "unset"]}</span>
                   <em>{rowStatus(row)}</em>
                 </a>
@@ -308,6 +314,7 @@ function StructureView({
               <li key={patch.id}>
                 <a href={`/kc-creator?course=${courseId}&kc=${patch.id}`}>
                   <strong>{patch.title}</strong>
+                  {patch.description ? <p className="kc-brief">{patch.description}</p> : null}
                   <span>{TYPE_LABELS[patch.kc_type ?? "unset"]}</span>
                   <em>Not a target</em>
                 </a>
