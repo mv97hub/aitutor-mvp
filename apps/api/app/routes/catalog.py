@@ -6,20 +6,17 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.course_io import (
     CourseFileError,
-    check_moves,
     copy_studio_into_catalog,
     export_course,
     normalize_criterion,
     normalize_goal,
     replace_course,
-    validate_move,
 )
 from app.database import get_db
 from app.engine.defaults import profile_for_age
 from app.flow import apply_student_profile, now, unique_course_code, unique_student_slug
 from app.models import (
     AGE_BANDS,
-    Beat,
     Course,
     Quest,
     Session as TutorSession,
@@ -159,17 +156,17 @@ def patch_student(student_id: UUID, body: StudentPatch, db: Session = Depends(ge
 
 
 @router.get("/courses", response_model=list[CourseSummary])
-def list_courses(age_band: str | None = None, db: Session = Depends(get_db)) -> list[CourseSummary]:
-    if age_band is not None and age_band not in AGE_BANDS:
-        raise HTTPException(status_code=422, detail="age_band must be 6-8, 9-11, 12-14, or 15-17")
+def list_courses(audience: str | None = None, db: Session = Depends(get_db)) -> list[CourseSummary]:
+    if audience is not None and audience not in AGE_BANDS:
+        raise HTTPException(status_code=422, detail="audience must be 6-8, 9-11, 12-14, or 15-17")
     stmt = (
         select(Course)
         .where(Course.in_catalog.is_(True))
         .options(selectinload(Course.quests))
         .order_by(Course.title)
     )
-    if age_band is not None:
-        stmt = stmt.where(Course.age_band == age_band)
+    if audience is not None:
+        stmt = stmt.where(Course.audience == audience)
     return [course_summary(course) for course in db.scalars(stmt).all()]
 
 
@@ -181,14 +178,11 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db)) -> CourseTr
     course = Course(
         code=code,
         title=body.title.strip(),
-        age_band=body.age_band,
-        audience=body.age_band,
-        standards_alignment=body.standards_alignment.strip(),
-        description=body.standards_alignment.strip(),
-        competency_dictionary=[],
-        quest_count=1,
-        goals_per_quest=1,
-        quiz_minutes=5,
+        description=(body.description or "").strip(),
+        audience=body.audience,
+        quest_count=body.quest_count,
+        goals_per_quest=body.goals_per_quest,
+        quiz_minutes=body.quiz_minutes,
         updated_at=now(),
     )
     db.add(course)
@@ -255,9 +249,11 @@ def patch_course(course_id: UUID, body: CoursePatch, db: Session = Depends(get_d
         raise HTTPException(status_code=409, detail="That course code is already used.")
     course.code = code
     course.title = body.title.strip()
-    course.age_band = body.age_band
-    course.standards_alignment = body.standards_alignment.strip()
-    course.competency_dictionary = [item.model_dump() for item in body.competency_dictionary]
+    course.description = body.description.strip()
+    course.audience = body.audience
+    course.quest_count = body.quest_count
+    course.goals_per_quest = body.goals_per_quest
+    course.quiz_minutes = body.quiz_minutes
     course.updated_at = now()
     db.flush()
     return course_tree(course)
@@ -298,13 +294,15 @@ def patch_quest(quest_id: UUID, body: QuestPatch, db: Session = Depends(get_db))
         raise HTTPException(status_code=422, detail=f"{exc.field}: {exc.message}") from exc
     quest.code = code
     quest.title = body.title.strip()
-    quest.quest_type = body.quest_type
-    quest.prerequisite_codes = _clean_list(body.prerequisite_codes)
-    quest.competency_tags = tags
-    quest.dinner_prompt = body.dinner_prompt.strip()
-    quest.learning_goal = goal
-    quest.success_criterion = criterion
-    quest.requires_teach_back = body.requires_teach_back
+    if goal or criterion:
+        from app.models import QuestGoal
+
+        if not quest.goals:
+            quest.goals.append(QuestGoal(position=1, learning_goal=goal, success_criterion=criterion or goal))
+        else:
+            first = sorted(quest.goals, key=lambda item: item.position)[0]
+            first.learning_goal = goal or first.learning_goal
+            first.success_criterion = criterion or first.success_criterion
     quest.course.updated_at = now()
     db.flush()
     return quest_detail(quest)
@@ -320,52 +318,4 @@ def delete_quest(quest_id: UUID, db: Session = Depends(get_db)) -> None:
 
 @router.put("/quests/{quest_id}/beats", response_model=QuestDetail)
 def put_beats(quest_id: UUID, body: BeatWrite, db: Session = Depends(get_db)) -> QuestDetail:
-    quest = load_quest(db, quest_id)
-    normalized = []
-    try:
-        for index, beat_body in enumerate(body.beats):
-            normalized.append(validate_move(beat_body.model_dump(), f"beats[{index}]"))
-        check_moves(
-            normalized,
-            teach_back=bool(quest.requires_teach_back),
-            criterion=list(quest.success_criterion or []),
-        )
-    except CourseFileError as exc:
-        raise HTTPException(status_code=422, detail=f"{exc.field}: {exc.message}") from exc
-    existing = sorted(quest.beats, key=lambda item: item.position)
-    if len(existing) != len(normalized):
-        if quest_in_use(db, quest.id):
-            raise HTTPException(
-                status_code=409,
-                detail="This quest has classes, so its moves cannot be added or removed.",
-            )
-        for beat in list(quest.beats):
-            db.delete(beat)
-        db.flush()
-        for position, fields in enumerate(normalized, start=1):
-            quest.beats.append(
-                Beat(
-                    position=position,
-                    role=fields["role"],
-                    bloom_level=fields["bloom_level"],
-                    cognitive_load=fields["cognitive_load"],
-                    prompt=fields["prompt"],
-                    rubric=fields["rubric"],
-                    misconception_map=fields["misconception_map"],
-                    hint_ladder=fields["hint_ladder"],
-                    widget=fields["widget"],
-                )
-            )
-    else:
-        for beat, fields in zip(existing, normalized, strict=True):
-            beat.role = fields["role"]
-            beat.bloom_level = fields["bloom_level"]
-            beat.cognitive_load = fields["cognitive_load"]
-            beat.prompt = fields["prompt"]
-            beat.rubric = fields["rubric"]
-            beat.misconception_map = fields["misconception_map"]
-            beat.hint_ladder = fields["hint_ladder"]
-            beat.widget = fields["widget"]
-    quest.course.updated_at = now()
-    db.flush()
-    return quest_detail(quest)
+    raise HTTPException(status_code=422, detail="A move is not part of this course.")

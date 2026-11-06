@@ -15,7 +15,6 @@ from app.models import (
     Student,
     StudioCourse,
     StudioMessage,
-    StudioMove,
     StudioQuest,
     StudioQuestClose,
     StudioQuestGoal,
@@ -151,7 +150,7 @@ def test_patch_checker_rejects_unknown_parent_bad_close_and_prose() -> None:
             },
         )
         assert unknown.status_code == 422
-        assert "parent" in unknown.json()["detail"]
+        assert unknown.json()["detail"] == "A move is not part of this course."
 
         bad_close = client.post(
             f"/studio/courses/{course_id}/messages",
@@ -328,7 +327,7 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
             },
         )
         assert duplicate.status_code == 200, duplicate.text
-        assert "ZZGEO-Q1 is already a quest." in duplicate.json()["content"]
+        assert "A move is not part of this course." in duplicate.json()["content"]
         assert "code:" not in duplicate.json()["content"]
         assert [op["kind"] for op in duplicate.json()["proposal"]["operations"]] == ["quest"]
         reply = rejection_reply("That code is taken.", "ZZGEO-Q1 is already a quest.")
@@ -355,7 +354,7 @@ def test_accepted_patch_writes_by_code_and_leaves_an_omitted_close_empty() -> No
             "180 degrees",
             "360 degrees",
         ]
-        assert quests["ZZGEO-U1-Q1"]["moves"][0]["code"] == "ZZGEO-U1-Q1-M1"
+        assert quests["ZZGEO-U1-Q1"]["moves"] == []
         assert accepted.json()["message"]["applied"] is True
         fresh = client.get(f"/studio/courses/{course_id}").json()
         fresh_quests = {quest["code"]: quest for quest in fresh["quests"]}
@@ -446,27 +445,24 @@ def test_unknown_model_is_rejected_and_prompt_names_the_framework_rule() -> None
 
 def test_tutor_seed_leaves_every_studio_row() -> None:
     db = SessionLocal()
-    session_id = None
     try:
         seed(db)
-        quest = db.scalar(select(Quest).where(Quest.code == "ROM-U2-Q1"))
-        student = db.scalar(select(Student).where(Student.slug == "storm"))
-        assert quest is not None and student is not None
-        tutor_session = TutorSession(
-            student_id=student.id,
-            quest_id=quest.id,
-            current_beat_id=quest.beats[0].id,
-            status="in_progress",
+        storm = db.scalar(select(Student).where(Student.slug == "storm"))
+        assert storm is not None
+        storm.tutor_persona = ""
+        storm.tutor_lexicon = ""
+        storm.tutor_metaphors = ""
+        storm.tutor_sidekick = ""
+        storm.tutor_pacing = ""
+        seeded_ids = list(
+            db.scalars(select(Course.id).where(Course.code.in_(("rome", "geometry", "macro"))))
         )
-        db.add(tutor_session)
-        db.flush()
-        tutor_message = Message(
-            session_id=tutor_session.id,
-            role="user",
-            content="The senate still met after the kings.",
-            seq=1,
-        )
-        db.add(tutor_message)
+        if seeded_ids:
+            quest_ids = list(db.scalars(select(Quest.id).where(Quest.course_id.in_(seeded_ids))))
+            if quest_ids:
+                db.execute(delete(TutorSession).where(TutorSession.quest_id.in_(quest_ids)))
+            db.execute(delete(Course).where(Course.id.in_(seeded_ids)))
+        db.commit()
         db.execute(delete(StudioCourse).where(StudioCourse.code == "ZZSEED"))
         course = StudioCourse(
             code="ZZSEED",
@@ -491,14 +487,19 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
         db.flush()
         studio_quest = StudioQuest(
             course_id=course.id,
-            code="ZZSEED-U1-Q1",
+            code="ZZSEED-Q1",
             position=1,
             title="Name the vertex",
-            learning_goal="Name the corner.",
-            success_criterion="The learner says vertex.",
         )
         course.quests.append(studio_quest)
         db.flush()
+        studio_quest.goals.append(
+            StudioQuestGoal(
+                position=1,
+                learning_goal="Name the corner.",
+                success_criterion="The learner says vertex.",
+            )
+        )
         studio_quest.close = StudioQuestClose(
             close_style="several",
             answer_style="multiple_choice",
@@ -506,15 +507,6 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
             items=[],
             intent="Ask for a turn the learner can see in the room.",
         )
-        move = StudioMove(
-            course_id=course.id,
-            code="ZZSEED-U1-Q1-M1",
-            position=1,
-            title="Find a corner",
-            learning_goal="Find one corner nearby.",
-            success_criterion="The learner names a corner.",
-        )
-        studio_quest.moves.append(move)
         studio_message = StudioMessage(
             course_id=course.id,
             role="assistant",
@@ -531,23 +523,22 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
         else:
             settings.model = "gpt-4.1-mini"
         db.commit()
-        session_id = tutor_session.id
-        tutor_message_id = tutor_message.id
         ids = {
             "course": course.id,
             "quest": studio_quest.id,
+            "goal": studio_quest.goals[0].id,
             "close": studio_quest.close.id,
-            "move": move.id,
             "message": studio_message.id,
         }
         before = {
             "courses": db.scalar(select(func.count()).select_from(StudioCourse)),
             "quests": db.scalar(select(func.count()).select_from(StudioQuest)),
-            "moves": db.scalar(select(func.count()).select_from(StudioMove)),
+            "goals": db.scalar(select(func.count()).select_from(StudioQuestGoal)),
             "closes": db.scalar(select(func.count()).select_from(StudioQuestClose)),
             "messages": db.scalar(select(func.count()).select_from(StudioMessage)),
             "settings": db.scalar(select(func.count()).select_from(StudioSettings)),
         }
+        catalog_before = db.scalar(select(func.count()).select_from(Course))
 
         seed(db)
         seed(db)
@@ -556,7 +547,7 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
         after = {
             "courses": db.scalar(select(func.count()).select_from(StudioCourse)),
             "quests": db.scalar(select(func.count()).select_from(StudioQuest)),
-            "moves": db.scalar(select(func.count()).select_from(StudioMove)),
+            "goals": db.scalar(select(func.count()).select_from(StudioQuestGoal)),
             "closes": db.scalar(select(func.count()).select_from(StudioQuestClose)),
             "messages": db.scalar(select(func.count()).select_from(StudioMessage)),
             "settings": db.scalar(select(func.count()).select_from(StudioSettings)),
@@ -564,28 +555,28 @@ def test_tutor_seed_leaves_every_studio_row() -> None:
         assert after == before
         kept_course = db.get(StudioCourse, ids["course"])
         kept_quest = db.get(StudioQuest, ids["quest"])
+        kept_goal = db.get(StudioQuestGoal, ids["goal"])
         kept_close = db.get(StudioQuestClose, ids["close"])
-        kept_move = db.get(StudioMove, ids["move"])
         kept_studio_message = db.get(StudioMessage, ids["message"])
         kept_settings = db.get(StudioSettings, "default")
         assert kept_course is not None and kept_course.title == "Seed survivor"
         assert kept_course.focus == "angles"
         assert kept_course.schema_version == 1
-        assert kept_quest is not None and kept_quest.learning_goal == "Name the corner."
+        assert kept_goal is not None and kept_goal.learning_goal == "Name the corner."
+        assert kept_quest is not None
         assert kept_close is not None and kept_close.intent.startswith("Ask for a turn")
         assert kept_close.items == []
-        assert kept_move is not None and kept_move.success_criterion == "The learner names a corner."
         assert kept_studio_message is not None
         assert kept_studio_message.content == "This studio note must survive a tutor seed."
         assert kept_settings is not None and kept_settings.model == "gpt-4.1-mini"
-        assert db.get(TutorSession, session_id) is not None
-        assert db.get(Message, tutor_message_id).content == "The senate still met after the kings."
         assert db.scalar(select(Course.id).where(Course.code == "ZZSEED")) is None
-        assert db.scalar(select(func.count()).select_from(Course)) == 3
+        assert db.scalar(select(Course.id).where(Course.code == "rome")) is None
+        assert db.scalar(select(func.count()).select_from(Course)) == catalog_before
         assert kept_course.ready is False
+        storm = db.scalar(select(Student).where(Student.slug == "storm"))
+        assert storm is not None
+        assert storm.tutor_persona == ""
     finally:
-        if session_id is not None:
-            db.execute(delete(TutorSession).where(TutorSession.id == session_id))
         db.execute(delete(StudioCourse).where(StudioCourse.code == "ZZSEED"))
         row = db.get(StudioSettings, "default")
         if row is not None:
@@ -1164,11 +1155,10 @@ def test_wrong_password_does_nothing_and_the_right_password_deletes_the_studio_c
                 ),
                 _full(
                     "add",
-                    "move",
-                    "ZZDEL-U1-Q1-M1",
-                    parent="ZZDEL-U1-Q1",
-                    title="Draw the bow",
-                    learning_goal="Draw it.",
+                    "quest",
+                    "ZZDEL-U1-Q2",
+                    title="The stern",
+                    learning_goal="Name the stern.",
                 ),
             ],
         )
@@ -1200,7 +1190,6 @@ def test_wrong_password_does_nothing_and_the_right_password_deletes_the_studio_c
         db = SessionLocal()
         try:
             assert db.scalar(select(func.count()).select_from(StudioQuest).where(StudioQuest.course_id == course_id)) == 0
-            assert db.scalar(select(func.count()).select_from(StudioMove).where(StudioMove.course_id == course_id)) == 0
             assert db.scalar(select(func.count()).select_from(StudioMessage).where(StudioMessage.course_id == course_id)) == 0
             assert (
                 db.scalar(select(func.count()).select_from(StudioQuestClose).where(StudioQuestClose.quest_id == quest_id))
@@ -1258,9 +1247,8 @@ def test_copy_writes_a_new_code_and_leaves_the_chat_behind() -> None:
                 ),
                 _full(
                     "add",
-                    "move",
-                    "ZZMAN-U1-Q1-M1",
-                    parent="ZZMAN-U1-Q1",
+                    "quest",
+                    "ZZMAN-U1-Q2",
                     title="Draw it",
                     learning_goal="Draw the shape.",
                 ),
@@ -1289,8 +1277,10 @@ def test_copy_writes_a_new_code_and_leaves_the_chat_behind() -> None:
         assert quest["learning_goal"] == "Name the shape."
         assert quest["close"]["close_style"] == "one"
         assert quest["close"]["answer_style"] == "essay"
-        assert quest["moves"][0]["code"] == "ZZMAN2-U1-Q1-M1"
-        assert quest["moves"][0]["learning_goal"] == "Draw the shape."
+        drawn = body["quests"][1]
+        assert drawn["code"] == "ZZMAN2-U1-Q2"
+        assert drawn["learning_goal"] == "Draw the shape."
+        assert drawn["moves"] == []
         assert client.get(f"/studio/courses/{body['id']}/messages").json() == []
         source = client.get(f"/studio/courses/{course_id}").json()
         assert source["code"] == "ZZMAN"
@@ -2031,8 +2021,8 @@ def test_a_missing_move_parent_is_one_sentence_and_a_quest_in_the_patch_is_not()
         )
         assert missing.status_code == 422, missing.text
         detail = missing.json()["detail"]
-        assert detail == "The parent ZZPAR-Q9 is not in this course yet."
-        assert detail.count("ZZPAR-Q9") == 1
+        assert detail == "A move is not part of this course."
+        assert detail.count("A move is not part of this course.") == 1
         assert "must be a short code" not in detail
         assert client.get(f"/studio/courses/{course_id}").json()["quests"] == []
 
@@ -2045,17 +2035,14 @@ def test_a_missing_move_parent_is_one_sentence_and_a_quest_in_the_patch_is_not()
             ],
         )
         assert ordered.status_code == 200, ordered.text
+        assert "A move is not part of this course." in ordered.json()["content"]
         assert "must be a short code" not in ordered.text
-        assert "is not in this course" not in ordered.text
-        assert [op["code"] for op in ordered.json()["proposal"]["operations"]] == [
-            "ZZPAR-Q1",
-            "ZZPAR-Q1-M1",
-        ]
+        assert [op["code"] for op in ordered.json()["proposal"]["operations"]] == ["ZZPAR-Q1"]
         written = client.post(f"/studio/courses/{course_id}/messages/{ordered.json()['id']}/accept")
         assert written.status_code == 200, written.text
         quest = written.json()["course"]["quests"][0]
         assert quest["code"] == "ZZPAR-Q1"
-        assert [move["code"] for move in quest["moves"]] == ["ZZPAR-Q1-M1"]
+        assert quest["moves"] == []
     finally:
         _wipe("ZZPAR")
 
@@ -2348,6 +2335,136 @@ def test_a_close_draft_patches_only_the_quests_it_names() -> None:
         assert [item.get("correct", False) for item in close["items"]] == [True, True, False]
     finally:
         _wipe("ZZPART")
+
+
+def _close_stage(code: str) -> str:
+    course = _make(code, "Closes")
+    course_id = course["id"]
+    opened = client.post(f"/studio/courses/{course_id}/opening")
+    assert opened.status_code == 200, opened.text
+    for title in ("First", "Second"):
+        added = client.post(
+            f"/studio/courses/{course_id}/tree",
+            json={"action": "add_quest", "title": title},
+        )
+        assert added.status_code == 200, added.text
+    assert client.post(f"/studio/courses/{course_id}/advance-stage").status_code == 200
+    for quest_code in (f"{code}-Q1", f"{code}-Q2"):
+        goal = client.post(
+            f"/studio/courses/{course_id}/tree",
+            json={
+                "action": "add_goal",
+                "code": quest_code,
+                "learning_goal": f"Goal for {quest_code}",
+                "success_criterion": f"States a fact from {quest_code}.",
+            },
+        )
+        assert goal.status_code == 200, goal.text
+    opened_close = client.post(f"/studio/courses/{course_id}/advance-stage")
+    assert opened_close.status_code == 200, opened_close.text
+    assert opened_close.json()["stage"]["name"] == "close"
+    assert opened_close.json()["can_advance"] is False
+    return course_id
+
+
+def _essay_close(questions: list[str], *, style: str | None = None) -> dict:
+    return {
+        "close_style": style or ("several" if len(questions) > 1 else "one"),
+        "answer_style": "essay",
+        "choice_mode": None,
+        "items": [],
+        "questions": [{"text": text} for text in questions],
+        "intent": "",
+    }
+
+
+def test_a_close_draft_writes_every_question_and_every_quest() -> None:
+    try:
+        course_id = _close_stage("ZZCLSQ")
+        prompt = client.get(f"/studio/courses/{course_id}/prompt").json()
+        assert "Do not stop after the first question or the first quest." in prompt["system_prompt"]
+        assert "one block per quest" in prompt["system_prompt"]
+        items = prompt["response_schema"]["properties"]["patch"]["anyOf"][1]["properties"]["operations"]["items"]
+        assert items["description"] == (
+            "One update per quest code. Do not stop after the first question or the first quest."
+        )
+        assert items["properties"]["close"]["anyOf"][1]["properties"]["questions"]["description"] == (
+            "Every question for this quest. Do not stop after the first."
+        )
+
+        reply = "\n".join(
+            [
+                "ZZCLSQ-Q1",
+                "Question: Why does this quest matter?",
+                "Question: What should you remember?",
+                "ZZCLSQ-Q2",
+                "Question: Who returns at the end?",
+            ]
+        )
+        truncated = _proposal(
+            course_id,
+            reply,
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZCLSQ-Q1",
+                    close=_essay_close(["Why does this quest matter?"]),
+                )
+            ],
+        )
+        assert truncated.status_code == 200, truncated.text
+        saved = {op["code"]: op for op in truncated.json()["proposal"]["operations"]}
+        assert list(saved) == ["ZZCLSQ-Q1", "ZZCLSQ-Q2"]
+        assert [item["text"] for item in saved["ZZCLSQ-Q1"]["close"]["questions"]] == [
+            "Why does this quest matter?",
+            "What should you remember?",
+        ]
+        assert saved["ZZCLSQ-Q1"]["close"]["close_style"] == "several"
+        assert [item["text"] for item in saved["ZZCLSQ-Q2"]["close"]["questions"]] == [
+            "Who returns at the end?",
+        ]
+        pushed = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert pushed.status_code == 200, pushed.text
+        by_code = {quest["code"]: quest for quest in pushed.json()["quests"]}
+        assert [item["text"] for item in by_code["ZZCLSQ-Q1"]["close"]["questions"]] == [
+            "Why does this quest matter?",
+            "What should you remember?",
+        ]
+        assert [item["text"] for item in by_code["ZZCLSQ-Q2"]["close"]["questions"]] == [
+            "Who returns at the end?",
+        ]
+        assert pushed.json()["can_advance"] is True
+        advanced = client.post(f"/studio/courses/{course_id}/advance-stage")
+        assert advanced.status_code == 200, advanced.text
+        assert advanced.json()["stage"]["name"] == "ready"
+    finally:
+        _wipe("ZZCLSQ")
+
+    try:
+        course_id = _close_stage("ZZCLSONE")
+        only_first = _proposal(
+            course_id,
+            "A closing question for the first quest only.",
+            [
+                _full(
+                    "update",
+                    "quest",
+                    "ZZCLSONE-Q1",
+                    close=_essay_close(["Why does the first quest matter?"]),
+                )
+            ],
+        )
+        assert only_first.status_code == 200, only_first.text
+        assert [op["code"] for op in only_first.json()["proposal"]["operations"]] == ["ZZCLSONE-Q1"]
+        pushed = client.post(f"/studio/courses/{course_id}/push-draft")
+        assert pushed.status_code == 200, pushed.text
+        by_code = {quest["code"]: quest for quest in pushed.json()["quests"]}
+        assert by_code["ZZCLSONE-Q1"]["close"]["questions"][0]["text"] == "Why does the first quest matter?"
+        assert by_code["ZZCLSONE-Q2"]["close"] is None
+        assert pushed.json()["can_advance"] is False
+    finally:
+        _wipe("ZZCLSONE")
 
 
 def test_a_close_draft_does_not_push_while_the_stage_is_goals() -> None:

@@ -2,9 +2,16 @@ from __future__ import annotations
 
 from app.engine.assemble import hint_tier_for
 from app.engine.defaults import age_band_for
-from app.flow import beat_state, failed_attempts
-from app.models import Beat, BeatResult, Course, Message, ModelPrompt, Quest, Session as TutorSession
-from app.queries import choice_widget_visible, close_choice_widget, latest_result, locate_beat, ordered_beats
+from app.flow import failed_attempts
+from app.models import Course, GoalResult, Message, ModelPrompt, Quest, Session as TutorSession
+from app.queries import (
+    choice_widget_visible,
+    close_choice_widget,
+    close_is_empty,
+    close_question_texts,
+    latest_result,
+    ordered_goals,
+)
 from app.schemas import (
     BeatOut,
     BlockStep,
@@ -95,13 +102,30 @@ def _goal_out(goal) -> GoalOut:
     )
 
 
+def _close_parts(close) -> tuple[list, list, str | None]:
+    stored = close.items if close is not None else None
+    if isinstance(stored, dict):
+        choices = stored.get("choices") if isinstance(stored.get("choices"), list) else []
+        questions = stored.get("questions") if isinstance(stored.get("questions"), list) else []
+        selection = stored.get("selection") if stored.get("selection") in {"single", "multi"} else None
+        return list(choices), list(questions), selection
+    if isinstance(stored, list):
+        return list(stored), [], None
+    return [], [], None
+
+
 def _close_out(close) -> CloseOut | None:
     if close is None:
         return None
+    items, questions, selection = _close_parts(close)
     return CloseOut(
-        kind=close.kind,
-        question=close.question or "",
-        items=list(close.items or []),
+        close_style=close.close_style,
+        answer_style=close.answer_style,
+        choice_mode=close.choice_mode,
+        items=items,
+        questions=questions,
+        intent=close.intent or "",
+        selection=selection,
     )
 
 
@@ -110,11 +134,9 @@ def course_summary(course: Course) -> CourseSummary:
         id=course.id,
         code=course.code,
         title=course.title,
-        age_band=course.age_band,
-        standards_alignment=course.standards_alignment,
         description=course.description or "",
-        audience=course.audience or course.age_band,
-        quest_count=len(course.quests),
+        audience=course.audience or "",
+        quest_count=course.quest_count,
         goals_per_quest=course.goals_per_quest,
         quiz_minutes=course.quiz_minutes,
     )
@@ -125,10 +147,6 @@ def _quest_node(quest: Quest) -> QuestNode:
         id=quest.id,
         code=quest.code,
         title=quest.title,
-        quest_type=quest.quest_type,
-        prerequisite_codes=list(quest.prerequisite_codes or []),
-        competency_tags=list(quest.competency_tags or []),
-        dinner_prompt=quest.dinner_prompt,
         position=quest.position,
     )
 
@@ -149,14 +167,11 @@ def course_tree(course: Course) -> CourseTree:
         id=course.id,
         code=course.code,
         title=course.title,
-        age_band=course.age_band,
-        standards_alignment=course.standards_alignment,
         description=course.description or "",
-        audience=course.audience or course.age_band,
+        audience=course.audience or "",
         quest_count=course.quest_count,
         goals_per_quest=course.goals_per_quest,
         quiz_minutes=course.quiz_minutes,
-        competency_dictionary=list(course.competency_dictionary or []),
         quests=[
             _catalog_quest(quest)
             for quest in sorted(course.quests, key=lambda item: item.position)
@@ -169,11 +184,6 @@ def quest_list_item(quest: Quest) -> QuestListItem:
         id=quest.id,
         code=quest.code,
         title=quest.title,
-        quest_type=quest.quest_type,
-        prerequisite_codes=list(quest.prerequisite_codes or []),
-        competency_tags=list(quest.competency_tags or []),
-        unit_number=0,
-        unit_title="",
         position=quest.position,
     )
 
@@ -197,12 +207,8 @@ def quest_detail(quest: Quest) -> QuestDetail:
     return QuestDetail(
         **_quest_node(quest).model_dump(),
         course_id=quest.course_id,
-        goals=[_goal_out(goal) for goal in sorted(quest.goals, key=lambda item: item.position)],
+        goals=[_goal_out(goal) for goal in ordered_goals(quest)],
         close=_close_out(quest.close),
-        learning_goal=quest.learning_goal or "",
-        success_criterion=list(quest.success_criterion or []),
-        requires_teach_back=bool(quest.requires_teach_back),
-        beats=[beat_out(beat) for beat in ordered_beats(quest)],
     )
 
 
@@ -235,57 +241,96 @@ def _quiz_out(quiz: dict | None) -> QuizOut | None:
     )
 
 
+def _step_state(current: bool, upcoming: bool, result, complete: bool) -> str:
+    if complete:
+        if result is not None and result.passed:
+            return "passed"
+        if result is not None:
+            return "failed"
+        return "done"
+    if current:
+        return "current"
+    if upcoming:
+        return "upcoming"
+    if result is not None and result.passed:
+        return "passed"
+    if result is not None:
+        return "failed"
+    return "done"
+
+
 def board(tutor_session: TutorSession) -> BoardOut:
     quest = tutor_session.quest
-    beats = ordered_beats(quest)
-    complete = tutor_session.current_beat_id is None
-    seen = False
+    goals = ordered_goals(quest)
+    complete = tutor_session.status == "completed"
+    on_close = bool(tutor_session.close_started) and not complete
     steps: list[BlockStep] = []
-    board_beats: list[BoardBeat] = []
     current = None
-    for beat in beats:
-        result = latest_result(tutor_session, beat.id)
-        state = beat_state(beat, tutor_session.current_beat_id, result, seen, complete)
-        if beat.id == tutor_session.current_beat_id:
+    seen = False
+    hints = {
+        "nudge": "What is the question actually asking?",
+        "analogy": "Picture the idea with one concrete object.",
+        "scaffold": "Say the idea in one sentence.",
+    }
+    for goal in goals:
+        result = latest_result(tutor_session, goal.id)
+        is_current = (not on_close) and tutor_session.current_goal_id == goal.id and not complete
+        state = _step_state(is_current, seen, result, complete)
+        if is_current:
             seen = True
-            tier = hint_tier_for(failed_attempts(tutor_session, beat.id))
-            met = set(result.rubric_met or []) if result is not None else set()
+            tier = hint_tier_for(failed_attempts(tutor_session, goal.id))
             current = CurrentBlock(
-                id=beat.id,
-                kind=beat.role,
-                title=ROLE_TITLE.get(beat.role, beat.role),
-                objective=f"{ROLE_TITLE.get(beat.role, beat.role)} · {beat.bloom_level}",
-                tutor_prompt=beat.prompt,
-                rubric=_rubric_rows(beat, met),
+                id=goal.id,
+                kind="goal",
+                title=f"Goal {goal.position}",
+                objective=goal.learning_goal or goal.success_criterion or quest.title,
+                tutor_prompt=goal.learning_goal or "",
+                rubric=[
+                    RubricRowOut(
+                        id="criterion",
+                        text=goal.success_criterion or "",
+                        weight=100,
+                        met=False,
+                    )
+                ],
                 hint_tier=tier,  # type: ignore[arg-type]
-                hint_text=hint_text(beat.hint_ladder, tier),
-                quiz=_quiz_out(
-                    close_choice_widget(quest, beat) if choice_widget_visible(tutor_session, beat) else None
-                ),
+                hint_text=hint_text(hints, tier),
+                quiz=None,
             )
         steps.append(
             BlockStep(
-                id=beat.id,
-                position=beat.position,
-                kind=beat.role,
-                title=ROLE_TITLE.get(beat.role, beat.role),
+                id=goal.id,
+                position=goal.position,
+                kind="goal",
+                title=f"Goal {goal.position}",
                 state=state,
             )
         )
-        board_beats.append(
-            BoardBeat(
-                id=beat.id,
-                position=beat.position,
-                role=beat.role,
-                latest_result=BoardResult(
-                    id=result.id,
-                    score=result.score,
-                    passed=result.passed,
-                    feedback=result.feedback,
-                    created_at=result.created_at,
-                )
-                if result
-                else None,
+    close_id = quest.close.id if quest.close is not None else quest.id
+    close_result = latest_result(tutor_session, None) if on_close or complete else None
+    close_state = _step_state(on_close, seen or bool(goals), close_result, complete)
+    if on_close:
+        tier = hint_tier_for(failed_attempts(tutor_session, None))
+        questions = close_question_texts(quest.close)
+        current = CurrentBlock(
+            id=close_id,
+            kind="close",
+            title="Close",
+            objective=questions[0] if questions else "The close has no question.",
+            tutor_prompt=questions[0] if questions else "",
+            rubric=[],
+            hint_tier=tier,  # type: ignore[arg-type]
+            hint_text=hint_text(hints, tier),
+            quiz=_quiz_out(close_choice_widget(quest, tutor_session) if choice_widget_visible(tutor_session) else None),
+        )
+    if not close_is_empty(quest) or quest.close is not None:
+        steps.append(
+            BlockStep(
+                id=close_id,
+                position=len(goals) + 1,
+                kind="close",
+                title="Close",
+                state=close_state,
             )
         )
     return BoardOut(
@@ -300,22 +345,25 @@ def board(tutor_session: TutorSession) -> BoardOut:
         quest_code=quest.code,
         quest_title=quest.title,
         enduring_understanding=quest.course.description or "",
-        current_beat_id=tutor_session.current_beat_id,
-        beats=board_beats,
+        current_goal_id=None if on_close or complete else tutor_session.current_goal_id,
+        close_started=bool(tutor_session.close_started),
         messages=[message_out(message) for message in tutor_session.messages],
         steps=steps,
         current_block=current,
     )
 
 
-def result_out(result: BeatResult) -> ResultOut:
-    beat = result.beat
+def result_out(result: GoalResult) -> ResultOut:
+    goal = result.goal
+    quest = result.session.quest
     return ResultOut(
         id=result.id,
-        beat_id=beat.id,
-        beat_role=beat.role,
-        beat_position=beat.position,
-        quest_title=beat.quest.title,
+        goal_id=result.goal_id,
+        role="close" if result.goal_id is None else "goal",
+        position=goal.position if goal is not None else len(ordered_goals(quest)) + 1,
+        quest_title=quest.title,
+        criterion=result.criterion or "",
+        answer=result.answer or "",
         score=result.score,
         passed=result.passed,
         feedback=result.feedback,
@@ -358,11 +406,8 @@ def session_admin(tutor_session: TutorSession) -> SessionAdminOut:
             course_code=quest.course.code,
             course_title=quest.course.title,
         ),
-        current_beat_id=tutor_session.current_beat_id,
-        beats=[
-            SessionBeat(id=beat.id, position=beat.position, role=beat.role)
-            for beat in ordered_beats(quest)
-        ],
+        current_goal_id=tutor_session.current_goal_id,
+        close_started=bool(tutor_session.close_started),
         messages=[message_out(message) for message in tutor_session.messages],
         results=[result_out(result) for result in tutor_session.results],
         prompts=[prompt_out(row) for row in tutor_session.prompts],

@@ -26,15 +26,17 @@ from app.engine.types import (
     WidgetGrade,
     WidgetTask,
 )
-from app.models import Beat, Session as TutorSession
+from app.models import Session as TutorSession
 from app.queries import (
     awaiting_tap_reply,
     choice_offer,
     choice_submitted,
     close_choice_widget,
+    close_is_empty,
+    close_question_texts,
     latest_result,
-    locate_beat,
-    ordered_beats,
+    locate_goal,
+    ordered_goals,
 )
 from app.tutor_profile import load_profile
 
@@ -88,13 +90,10 @@ def _ladder(beat: Beat) -> HintLadder:
 
 def _widget(
     tutor_session: TutorSession,
-    beat: Beat,
     *,
     include_grade: bool,
     quiz: dict | None = None,
 ) -> WidgetTask | None:
-    if quiz is None:
-        quiz = beat.widget if isinstance(beat.widget, dict) else None
     if quiz is None:
         return None
     choices = tuple(
@@ -116,7 +115,7 @@ def _widget(
         matches = [
             result
             for result in tutor_session.results
-            if result.beat_id == beat.id
+            if result.goal_id is None
             and isinstance(result.choice, dict)
             and result.choice.get("ids")
         ]
@@ -141,10 +140,10 @@ def _widget(
     )
 
 
-def _zpd(tutor_session: TutorSession, beat: Beat | None) -> str:
-    if beat is None:
+def _zpd(tutor_session: TutorSession, goal_id) -> str:
+    if tutor_session.status == "completed":
         return "on-level"
-    result = latest_result(tutor_session, beat.id)
+    result = latest_result(tutor_session, goal_id)
     if result is None:
         return "on-level"
     if not result.passed:
@@ -154,177 +153,145 @@ def _zpd(tutor_session: TutorSession, beat: Beat | None) -> str:
     return "on-level"
 
 
-def _criterion(quest) -> tuple[RubricCriterion, ...]:
-    rows = []
-    for row in quest.success_criterion or []:
-        if isinstance(row, dict) and row.get("id"):
-            rows.append(
-                RubricCriterion(
-                    id=str(row["id"]),
-                    text=str(row.get("text") or ""),
-                    weight=int(row.get("weight") or 0),
-                )
-            )
-    return tuple(rows)
+def _criterion(goal) -> tuple[RubricCriterion, ...]:
+    if goal is None:
+        return ()
+    text = (goal.success_criterion or "").strip()
+    if not text:
+        return ()
+    return (RubricCriterion(id="criterion", text=text, weight=100),)
 
 
 def _quest_objective(quest) -> str:
-    goal = (quest.learning_goal or "").strip()
-    if goal:
-        return goal
+    goals = ordered_goals(quest)
+    if goals and (goals[0].learning_goal or "").strip():
+        return goals[0].learning_goal.strip()
     return (quest.title or "").strip()
 
 
-def _failed(tutor_session: TutorSession, beat_id) -> int:
+def _failed(tutor_session: TutorSession, goal_id) -> int:
     return sum(
         1
         for result in tutor_session.results
-        if result.beat_id == beat_id and not result.passed
+        if result.goal_id == goal_id and not result.passed
     )
 
 
 def _quest_walk(quest, *, reveal_close: bool) -> tuple[tuple[GoalPoint, ...], bool, str]:
-    """Goals, then the close, from the quest the kid is playing.
-
-    The close kind is always named. The question and choices stay hidden until
-    the show move is on screen, so a later check is not sitting in the kickoff.
-    """
-    rows = sorted(quest.goals or [], key=lambda item: item.position)
+    """Goals, then the close. Questions stay hidden until the close is on screen."""
+    rows = ordered_goals(quest)
     points = tuple(
         GoalPoint(row.learning_goal or "", row.success_criterion or "")
         for row in rows
         if str(row.learning_goal or "").strip() or str(row.success_criterion or "").strip()
     )
     close = quest.close
-    if close is None:
-        return points, False, ""
-    kind = close.kind
-    question = (close.question or "").strip()
-    if kind == "none":
+    if close_is_empty(quest):
         return points, True, "Close: No questions."
-    if kind == "essay":
+    questions = close_question_texts(close)
+    if close.answer_style == "essay":
         if not reveal_close:
             return points, False, "Close: Essay."
-        return points, False, f"Close: Essay. Question: {question or 'Ask for a short written answer.'}"
-    label = "Multi-choice" if kind == "multi" else "Single choice"
+        listed = "; ".join(questions) if questions else "Ask for a short written answer."
+        return points, False, f"Close: Essay. Question: {listed}"
+    label = "Multi-choice" if close.choice_mode == "predefined" and _selection(close) == "multi" else "Choice"
     if not reveal_close:
         return points, False, f"Close: {label}."
     choices = []
-    for item in close.items or []:
+    stored = close.items if isinstance(close.items, dict) else {}
+    for item in stored.get("choices") or []:
         if isinstance(item, dict) and str(item.get("text") or "").strip():
             choices.append(str(item["text"]).strip())
     choice_line = f" Choices: {'; '.join(choices)}." if choices else ""
-    return points, False, f"Close: {label}. Question: {question or 'Choose the best answer.'}{choice_line}"
+    question = questions[0] if questions else "Choose the best answer."
+    return points, False, f"Close: {label}. Question: {question}{choice_line}"
+
+
+def _selection(close) -> str | None:
+    stored = close.items if isinstance(close.items, dict) else {}
+    return stored.get("selection") if stored.get("selection") in {"single", "multi"} else None
 
 
 def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> PromptBundle:
     quest = tutor_session.quest
     course = quest.course
     student = tutor_session.student
-    beats = ordered_beats(quest)
+    goals = ordered_goals(quest)
+    finished = tutor_session.status == "completed"
+    on_close = bool(tutor_session.close_started) and not finished
+    current = None if on_close or finished else locate_goal(quest, tutor_session.current_goal_id)
+    if current is None and not on_close and not finished and goals:
+        current = goals[0]
     quest_objective = _quest_objective(quest)
-    criterion = _criterion(quest)
-    goal = (quest.learning_goal or "").strip()
-    current = locate_beat(quest, tutor_session.current_beat_id)
-    show = next((beat for beat in beats if beat.role == "show"), None)
-    gate_cleared = False
-    if show is not None:
-        show_result = latest_result(tutor_session, show.id)
-        gate_cleared = show_result is not None and show_result.passed
-    source = current
-    finished = current is None
-    if source is None and beats:
-        source = beats[-1]
-    engage = next((item for item in beats if item.role == "engage"), None)
-    opening_idea = (engage.prompt if engage is not None else "").strip()
-    offer = None
-    submitted = False
-    answering_tap = False
-    if source is not None and not finished:
-        offer = choice_offer(tutor_session, source)
-        submitted = choice_submitted(tutor_session, source)
-        answering_tap = awaiting_tap_reply(tutor_session, source)
-    close_card = close_choice_widget(quest, source) if source is not None and not finished else None
-    offer = "ask" if close_card is not None and offer == "ask" else None
+    active = current
+    criterion = _criterion(active if active is not None else None)
+    learning_goal = (active.learning_goal if active is not None else quest_objective).strip()
+    offer = choice_offer(tutor_session) if on_close else None
+    submitted = choice_submitted(tutor_session) if on_close else False
+    answering_tap = awaiting_tap_reply(tutor_session) if on_close else False
+    close_card = close_choice_widget(quest, tutor_session) if on_close else None
     include_widget = close_card is not None and (offer == "ask" or answering_tap)
-    on_show = source is not None and show is not None and source.id == show.id
-    show_card = close_choice_widget(quest, show) if show is not None else None
-    reveal_close = finished or (on_show and (offer == "ask" or answering_tap or show_card is None))
+    reveal_close = finished or on_close
     studio_goals, empty_close, close_line = _quest_walk(quest, reveal_close=reveal_close)
     held = False
     grade_writing = False
     withhold_answer = offer == "ask"
-    if source is None:
-        beat_layer = Layer1Beat(
-            course_title=course.title,
-            unit_title="",
-            continuity="",
-            quest_code=quest.code,
-            quest_title=quest.title,
-            beat_role="",
-            beat_position=0,
-            beat_count=0,
-            bloom_level="",
-            cognitive_load="",
-            prompt="",
-            rubric=(),
-            misconceptions=(),
-            hint_ladder=HintLadder("", "", ""),
-            widget=None,
-            pass_score=PASS_SCORE,
-            gate_cleared=False,
-            finished=True,
-            quest_objective=quest_objective,
-            beat_objectives=(),
-            learning_goal=goal,
-            success_criterion=criterion,
-            requires_teach_back=bool(quest.requires_teach_back),
-            opening_idea=opening_idea,
-            course_code=course.code,
-            goals=studio_goals,
-            empty_close=empty_close,
-            close_line=close_line,
+    if on_close:
+        prompt = close_line or "Ask the closing question."
+        role = "close"
+        position = len(goals) + 1
+        rubric = ()
+    elif active is not None:
+        prompt = (
+            f"Teach this goal, then ask one question. Goal: {active.learning_goal}. "
+            f"Finished work: {active.success_criterion}."
         )
-        attempt_count = 0
+        role = "goal"
+        position = active.position
+        rubric = criterion
     else:
-        beat_layer = Layer1Beat(
-            course_title=course.title,
-            unit_title="",
-            continuity="",
-            quest_code=quest.code,
-            quest_title=quest.title,
-            beat_role=source.role,
-            beat_position=source.position,
-            beat_count=len(beats),
-            bloom_level=source.bloom_level,
-            cognitive_load=source.cognitive_load,
-            prompt=source.prompt,
-            rubric=_rows(source),
-            misconceptions=_traps(source),
-            hint_ladder=_ladder(source),
-            widget=None
-            if finished or not include_widget
-            else _widget(
-                tutor_session,
-                source,
-                include_grade=submitted or answering_tap,
-                quiz=close_card,
-            ),
-            pass_score=PASS_SCORE,
-            gate_cleared=gate_cleared,
-            finished=finished,
-            quest_objective=quest_objective,
-            beat_objectives=(),
-            learning_goal=goal,
-            success_criterion=criterion,
-            requires_teach_back=bool(quest.requires_teach_back),
-            opening_idea=opening_idea,
-            course_code=course.code,
-            goals=studio_goals,
-            empty_close=empty_close,
-            close_line=close_line,
-        )
-        attempt_count = 0 if finished or current is None else _failed(tutor_session, current.id)
+        prompt = ""
+        role = ""
+        position = 0
+        rubric = ()
+    opening_idea = prompt if role == "goal" and position == 1 else ""
+    beat_layer = Layer1Beat(
+        course_title=course.title,
+        unit_title="",
+        continuity="",
+        quest_code=quest.code,
+        quest_title=quest.title,
+        beat_role=role,
+        beat_position=position,
+        beat_count=len(goals) + 1,
+        bloom_level="understand",
+        cognitive_load="medium",
+        prompt=prompt,
+        rubric=rubric,
+        misconceptions=(),
+        hint_ladder=HintLadder(
+            "What is the question actually asking?",
+            "Picture the idea with one concrete object.",
+            "Say the idea in one sentence.",
+        ),
+        widget=None
+        if finished or not include_widget
+        else _widget(tutor_session, include_grade=submitted or answering_tap, quiz=close_card),
+        pass_score=PASS_SCORE,
+        gate_cleared=False,
+        finished=finished,
+        quest_objective=quest_objective,
+        beat_objectives=(),
+        learning_goal=learning_goal,
+        success_criterion=criterion,
+        requires_teach_back=False,
+        opening_idea=opening_idea,
+        course_code=course.code,
+        goals=studio_goals,
+        empty_close=empty_close,
+        close_line=close_line,
+    )
+    attempt_count = 0 if finished else _failed(tutor_session, None if on_close else (active.id if active else None))
     interests = tuple(str(item) for item in (student.interests or []) if str(item).strip())
     student_layer = Layer2Student(
         display_name=student.display_name,
@@ -333,7 +300,7 @@ def load_prompt(tutor_session: TutorSession, *, kickoff: bool = False) -> Prompt
         modality=student.modality,
         interests=interests,
         attempt_count=attempt_count,
-        zpd=_zpd(tutor_session, None if finished else current),
+        zpd=_zpd(tutor_session, None if on_close or finished or active is None else active.id),
     )
     profile = load_profile(object_session(tutor_session))
     level = min(5, max(1, int(profile.instructive or 3)))

@@ -13,10 +13,6 @@ from sqlalchemy.orm import Session, object_session, selectinload
 from app.blocks import normalize_hints, normalize_quiz, normalize_rows
 from app.models import (
     AGE_BANDS,
-    BEAT_ROLES,
-    QUEST_TYPES,
-    Beat,
-    BeatResult,
     Course,
     Quest,
     QuestClose,
@@ -28,7 +24,7 @@ BLOOM_LEVELS = {"remember", "understand", "apply", "analyze", "evaluate", "creat
 LOADS = {"low", "medium", "high"}
 WIDGET_TYPES = {"single", "multi", "flaw", "order"}
 TYPED_ROLES = {"engage", "name", "teach_back"}
-ROLE_ORDER = {role: index for index, role in enumerate(BEAT_ROLES)}
+ROLE_ORDER: dict[str, int] = {}
 CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,39}$")
 
 
@@ -584,16 +580,10 @@ def validate_course(payload) -> dict:
 
 
 def _quest_fields(quest: Quest) -> dict:
+    close = quest.close
     return {
         "code": quest.code,
         "title": quest.title,
-        "quest_type": quest.quest_type,
-        "prerequisite_codes": list(quest.prerequisite_codes or []),
-        "competency_tags": list(quest.competency_tags or []),
-        "dinner_prompt": quest.dinner_prompt,
-        "learning_goal": quest.learning_goal,
-        "success_criterion": copy.deepcopy(quest.success_criterion or []),
-        "requires_teach_back": bool(quest.requires_teach_back),
         "goals": [
             {
                 "position": goal.position,
@@ -603,25 +593,20 @@ def _quest_fields(quest: Quest) -> dict:
             for goal in sorted(quest.goals, key=lambda item: item.position)
         ],
         "close": {
-            "kind": quest.close.kind,
-            "question": quest.close.question,
-            "items": copy.deepcopy(quest.close.items or []),
+            "close_style": close.close_style,
+            "answer_style": close.answer_style,
+            "choice_mode": close.choice_mode,
+            "items": copy.deepcopy(close.items or []),
+            "intent": close.intent or "",
         }
-        if quest.close is not None
-        else {"kind": "none", "question": "", "items": []},
-        "beats": [
-            {
-                "role": beat.role,
-                "bloom_level": beat.bloom_level,
-                "cognitive_load": beat.cognitive_load,
-                "prompt": beat.prompt,
-                "rubric": copy.deepcopy(beat.rubric or []),
-                "misconception_map": copy.deepcopy(beat.misconception_map or []),
-                "hint_ladder": copy.deepcopy(beat.hint_ladder or {}),
-                "widget": copy.deepcopy(beat.widget) if beat.widget else None,
-            }
-            for beat in sorted(quest.beats, key=lambda item: item.position)
-        ],
+        if close is not None
+        else {
+            "close_style": "one",
+            "answer_style": "essay",
+            "choice_mode": None,
+            "items": [],
+            "intent": "",
+        },
     }
 
 
@@ -629,11 +614,8 @@ def export_course(course: Course) -> dict:
     return {
         "code": course.code,
         "title": course.title,
-        "age_band": course.age_band,
-        "standards_alignment": course.standards_alignment,
-        "competency_dictionary": copy.deepcopy(course.competency_dictionary or []),
         "description": course.description or "",
-        "audience": course.audience or course.age_band,
+        "audience": course.audience or "",
         "quest_count": course.quest_count,
         "goals_per_quest": course.goals_per_quest,
         "quiz_minutes": course.quiz_minutes,
@@ -647,11 +629,8 @@ def export_course(course: Course) -> dict:
 def _apply_course_fields(course: Course, payload: dict) -> None:
     course.code = payload["code"]
     course.title = payload["title"]
-    course.age_band = payload["age_band"]
-    course.standards_alignment = payload["standards_alignment"]
-    course.competency_dictionary = payload["competency_dictionary"]
     course.description = payload.get("description") or ""
-    course.audience = payload.get("audience") or payload["age_band"]
+    course.audience = payload.get("audience") or "9-11"
     course.quest_count = int(payload.get("quest_count") or len(payload["quests"]) or 1)
     course.goals_per_quest = int(payload.get("goals_per_quest") or 1)
     course.quiz_minutes = int(payload.get("quiz_minutes") or 5)
@@ -662,31 +641,10 @@ def _append_quest(course: Course, body: dict, position: int) -> Quest:
     quest = Quest(
         code=body["code"],
         title=body["title"],
-        quest_type=body["quest_type"],
-        prerequisite_codes=body["prerequisite_codes"],
-        competency_tags=body["competency_tags"],
-        dinner_prompt=body["dinner_prompt"],
-        learning_goal=body["learning_goal"],
-        success_criterion=body["success_criterion"],
-        requires_teach_back=body["requires_teach_back"],
         position=position,
     )
     course.quests.append(quest)
-    for beat_position, beat_body in enumerate(body["beats"], start=1):
-        quest.beats.append(
-            Beat(
-                position=beat_position,
-                role=beat_body["role"],
-                bloom_level=beat_body["bloom_level"],
-                cognitive_load=beat_body["cognitive_load"],
-                prompt=beat_body["prompt"],
-                rubric=beat_body["rubric"],
-                misconception_map=beat_body["misconception_map"],
-                hint_ladder=beat_body["hint_ladder"],
-                widget=beat_body["widget"],
-            )
-        )
-    for goal in body["goals"]:
+    for goal in body.get("goals") or []:
         quest.goals.append(
             QuestGoal(
                 position=goal["position"],
@@ -694,14 +652,63 @@ def _append_quest(course: Course, body: dict, position: int) -> Quest:
                 success_criterion=goal["success_criterion"],
             )
         )
-    close = body["close"]
-    quest.close = QuestClose(kind=close["kind"], question=close["question"], items=close["items"])
+    close = body.get("close") or {}
+    quest.close = QuestClose(
+        close_style=close.get("close_style") or "one",
+        answer_style=close.get("answer_style") or "essay",
+        choice_mode=close.get("choice_mode"),
+        items=close.get("items") or [],
+        intent=close.get("intent") or "",
+    )
     return quest
+
+
+def _published_payload(payload: dict) -> dict:
+    """The columns a draft and a published course share."""
+    if not isinstance(payload, dict):
+        raise CourseFileError("course", "must be an object")
+    code = str(payload.get("code") or "").strip()
+    title = str(payload.get("title") or "").strip()
+    if not code or not title:
+        raise CourseFileError("course", "needs a code and a title")
+    audience = str(payload.get("audience") or "9-11")
+    if audience not in AGE_BANDS:
+        raise CourseFileError("audience", "must be 6-8, 9-11, 12-14, or 15-17")
+    quests = []
+    for item in payload.get("quests") or []:
+        if not isinstance(item, dict):
+            raise CourseFileError("quests", "each quest needs a code and a title")
+        close = item.get("close") or {
+            "close_style": "one",
+            "answer_style": "essay",
+            "choice_mode": None,
+            "items": [],
+            "intent": "",
+        }
+        quests.append(
+            {
+                "code": str(item.get("code") or "").strip(),
+                "title": str(item.get("title") or "").strip(),
+                "goals": list(item.get("goals") or []),
+                "close": close,
+            }
+        )
+    quiz = payload.get("quiz_minutes") or 5
+    return {
+        "code": code,
+        "title": title,
+        "description": payload.get("description") or "",
+        "audience": audience,
+        "quest_count": int(payload.get("quest_count") or len(quests) or 1),
+        "goals_per_quest": int(payload.get("goals_per_quest") or 1),
+        "quiz_minutes": quiz if quiz in QUIZ_MINUTES else 5,
+        "quests": quests,
+    }
 
 
 def replace_course(db: Session, payload: dict) -> Course:
     """Upload replaces the course with this code. Open classes on it are cleared."""
-    normalized = validate_course(payload)
+    normalized = _published_payload(payload)
     existing = db.scalar(
         select(Course)
         .where(Course.code == normalized["code"])
@@ -716,8 +723,11 @@ def replace_course(db: Session, payload: dict) -> Course:
         course = Course(
             code=normalized["code"],
             title=normalized["title"],
-            age_band=normalized["age_band"],
-            audience=normalized["audience"],
+            description=normalized.get("description") or "",
+            audience=normalized.get("audience") or "9-11",
+            quest_count=int(normalized.get("quest_count") or 1),
+            goals_per_quest=int(normalized.get("goals_per_quest") or 1),
+            quiz_minutes=int(normalized.get("quiz_minutes") or 5),
         )
         db.add(course)
         db.flush()
@@ -779,13 +789,6 @@ def _sync_beats(quest: Quest, beats: list[dict]) -> None:
 
 def _fill_quest(quest: Quest, body: dict) -> None:
     quest.title = body["title"]
-    quest.quest_type = body["quest_type"]
-    quest.prerequisite_codes = body["prerequisite_codes"]
-    quest.competency_tags = body["competency_tags"]
-    quest.dinner_prompt = body["dinner_prompt"]
-    quest.learning_goal = body["learning_goal"]
-    quest.success_criterion = body["success_criterion"]
-    quest.requires_teach_back = body["requires_teach_back"]
 
 
 def _sync_goals(quest: Quest, goals: list[dict]) -> None:
@@ -807,11 +810,19 @@ def _sync_goals(quest: Quest, goals: list[dict]) -> None:
 def _sync_close(quest: Quest, close: dict) -> None:
     row = quest.close
     if row is None:
-        quest.close = QuestClose(kind=close["kind"], question=close["question"], items=close["items"])
+        quest.close = QuestClose(
+            close_style=close.get("close_style") or "one",
+            answer_style=close.get("answer_style") or "essay",
+            choice_mode=close.get("choice_mode"),
+            items=close.get("items") or [],
+            intent=close.get("intent") or "",
+        )
         return
-    row.kind = close["kind"]
-    row.question = close["question"]
-    row.items = list(close["items"])
+    row.close_style = close.get("close_style") or "one"
+    row.answer_style = close.get("answer_style") or "essay"
+    row.choice_mode = close.get("choice_mode")
+    row.items = close.get("items") or []
+    row.intent = close.get("intent") or ""
 
 
 def update_course_in_place(db: Session, payload: dict) -> Course:
@@ -820,14 +831,14 @@ def update_course_in_place(db: Session, payload: dict) -> Course:
     Quests match by code and moves match by position. Columns, goals, and the
     close are updated on those rows. A quest that still has a class is not dropped.
     """
-    normalized = validate_course(payload)
+    normalized = _published_payload(payload)
     course = db.scalar(
         select(Course)
         .where(Course.code == normalized["code"])
         .options(
-            selectinload(Course.quests).selectinload(Quest.beats),
             selectinload(Course.quests).selectinload(Quest.goals),
             selectinload(Course.quests).selectinload(Quest.close),
+            selectinload(Course.quests).selectinload(Quest.sessions),
         )
     )
     if course is None:
@@ -845,18 +856,6 @@ def update_course_in_place(db: Session, payload: dict) -> Course:
         if held_id is not None:
             code = next(quest.code for quest in dropped if quest.id == held_id)
             raise CourseFileError("quests", f"{code} still has classes, so it cannot be removed")
-        dropped_beats = [beat.id for quest in dropped for beat in quest.beats]
-        if _beats_held(db, dropped_beats):
-            raise CourseFileError("beats", "a move still has classes, so it cannot be removed")
-
-    for quest_body in normalized["quests"]:
-        quest = quests_by_code.get(quest_body["code"])
-        if quest is None:
-            continue
-        incoming_positions = set(range(1, len(quest_body["beats"]) + 1))
-        extra_ids = [beat.id for beat in quest.beats if beat.position not in incoming_positions]
-        if _beats_held(db, extra_ids):
-            raise CourseFileError("beats", "a move still has classes, so it cannot be removed")
 
     _apply_course_fields(course, normalized)
     for quest in list(course.quests):
@@ -880,9 +879,15 @@ def update_course_in_place(db: Session, payload: dict) -> Course:
             continue
         quest.position = position
         _fill_quest(quest, quest_body)
-        _sync_beats(quest, quest_body["beats"])
         _sync_goals(quest, quest_body["goals"])
         _sync_close(quest, quest_body["close"])
+        if quest.sessions:
+            first = sorted(quest.goals, key=lambda item: item.position)
+            for tutor_session in quest.sessions:
+                if tutor_session.status != "in_progress":
+                    continue
+                tutor_session.current_goal_id = first[0].id if first else None
+                tutor_session.close_started = not first
     db.flush()
     return course
 
@@ -995,53 +1000,56 @@ def _close_from_studio_row(row) -> dict:
     }
 
 
+def _copy_close(row) -> dict:
+    if row is None:
+        return {
+            "close_style": "one",
+            "answer_style": "essay",
+            "choice_mode": None,
+            "items": [],
+            "intent": "",
+        }
+    return {
+        "close_style": row.close_style,
+        "answer_style": row.answer_style,
+        "choice_mode": row.choice_mode,
+        "items": copy.deepcopy(row.items or []),
+        "intent": row.intent or "",
+    }
+
+
 def catalog_from_studio(studio) -> dict:
-    """Copy a Create course draft into the kid-catalog shape. The draft stays put."""
+    """Copy a Create course draft. The same columns land in the catalog."""
     from app.studio import goal_rows, goals_per_quest_of, quest_count_of
 
     audience = studio.audience if studio.audience in AGE_BANDS else "9-11"
-    description = (studio.theme or studio.focus or "").strip()
-    standards = (studio.focus or description or studio.title or "").strip() or studio.title
+    description = (studio.description or studio.theme or "").strip()
     quests = []
     for source in sorted(studio.quests, key=lambda item: (item.position, item.code)):
         rows = goal_rows(source)
-        if not rows:
-            rows = [{"learning_goal": source.title, "success_criterion": source.title}]
-        goals = []
-        for index, row in enumerate(rows, start=1):
-            learning_goal = str(row.get("learning_goal") or "").strip() or source.title
-            criterion = str(row.get("success_criterion") or "").strip() or learning_goal
-            goals.append(
-                {"position": index, "learning_goal": learning_goal, "success_criterion": criterion}
-            )
-        close = _close_from_studio_row(source.close)
-        rubric = _rubric_from_goals(goals)
+        goals = [
+            {
+                "position": index,
+                "learning_goal": str(row.get("learning_goal") or ""),
+                "success_criterion": str(row.get("success_criterion") or ""),
+            }
+            for index, row in enumerate(rows, start=1)
+        ]
         quests.append(
             {
                 "code": source.code,
                 "title": source.title,
-                "quest_type": "core",
-                "prerequisite_codes": [],
-                "competency_tags": [],
-                "dinner_prompt": source.title,
-                "learning_goal": goals[0]["learning_goal"],
-                "success_criterion": rubric,
-                "requires_teach_back": False,
-                "beats": _beats_for_close(goals, close),
                 "goals": goals,
-                "close": close,
+                "close": _copy_close(source.close),
             }
         )
     return {
         "code": studio.code,
         "title": studio.title,
-        "age_band": audience,
-        "standards_alignment": standards,
-        "competency_dictionary": [],
         "description": description,
         "audience": audience,
-        "quest_count": quest_count_of(studio),
-        "goals_per_quest": goals_per_quest_of(studio),
+        "quest_count": getattr(studio, "quest_count", None) or quest_count_of(studio),
+        "goals_per_quest": getattr(studio, "goals_per_quest", None) or goals_per_quest_of(studio),
         "quiz_minutes": studio.quiz_minutes if studio.quiz_minutes in QUIZ_MINUTES else 5,
         "quests": quests,
     }

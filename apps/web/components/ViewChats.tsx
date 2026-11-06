@@ -248,21 +248,18 @@ function SessionView({ session }: { session: SessionDetail }) {
     setPrompt(null);
     setScoresOpen(false);
   }, [session.id]);
-  const current = session.beats.find((beat) => beat.id === session.current_beat_id);
-  const roleLabel: Record<string, string> = {
-    engage: "engage",
-    try: "try",
-    name: "name",
-    show: "show",
-    teach_back: "teach-back",
-  };
+  const now = session.status === "completed"
+    ? "quest finished"
+    : session.close_started
+      ? "now on the close"
+      : "now on a goal";
   return (
     <article className="transcript-view">
       <p className="eyebrow">{session.student.display_name}</p>
       <h2>{session.quest.title}</h2>
       <p className="meta">
         {session.quest.code} · {session.quest.course_title} · {session.status.replaceAll("_", " ")} · opened {when(session.created_at)}
-        {current ? ` · now on ${roleLabel[current.role] ?? current.role}` : " · quest finished"}
+        {` · ${now}`}
       </p>
       <div className="score-fold">
         <h3>
@@ -282,7 +279,7 @@ function SessionView({ session }: { session: SessionDetail }) {
           </button>
         </h3>
         <div id="session-scores" hidden={!scoresOpen}>
-          {session.results.length === 0 ? <p className="help">No beat scores stored yet.</p> : null}
+          {session.results.length === 0 ? <p className="help">No scores stored yet.</p> : null}
           <ul className="score-list">
             {session.results.map((result) => (
               <li key={result.id}>
@@ -290,7 +287,7 @@ function SessionView({ session }: { session: SessionDetail }) {
                   {result.passed ? "Passed" : "Not yet"} · {result.score}/100
                 </strong>
                 <span className="quiet">
-                  {result.quest_title} · {roleLabel[result.beat_role] ?? result.beat_role} {result.beat_position} · {when(result.created_at)}
+                  {result.quest_title} · {result.role === "close" ? "close" : `goal ${result.position}`} · {when(result.created_at)}
                   {result.hint_tier ? ` · hint ${result.hint_tier}` : ""}
                 </span>
                 <span>{result.feedback}</span>

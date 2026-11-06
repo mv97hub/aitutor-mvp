@@ -408,8 +408,15 @@ def _layer1(
 ) -> list[str]:
     role = _ROLE_LABEL.get(beat.beat_role, beat.beat_role.replace("_", " "))
     goal = beat.learning_goal.strip() or beat.quest_objective.strip() or beat.quest_title
+    heading = "Layer 1 — Current step" if beat.beat_role in {"goal", "close"} else "Layer 1 — Active move"
+    finish = (
+        "Pass score: "
+        f"{beat.pass_score}. The goal is met when its criterion is met. After the struggle window, explain the answer and move on. The quest finishes after the close."
+        if beat.beat_role in {"goal", "close"}
+        else f"Pass score: {beat.pass_score}. The quest finishes when those rows are met. After the struggle window on Show, explain why the answer fits and finish the quest."
+    )
     lines = [
-        "Layer 1 — Active move",
+        heading,
         f"Course: {beat.course_title}.",
     ]
     if beat.unit_title.strip():
@@ -420,7 +427,7 @@ def _layer1(
             f"Quest {beat.quest_code}: {beat.quest_title}.",
             f"Learning goal: {goal}",
             f"Success criterion: {_criterion_line(beat)}",
-            f"Pass score: {beat.pass_score}. The quest finishes when those rows are met. After the struggle window on Show, explain why the answer fits and finish the quest.",
+            finish,
         ]
     )
     if beat.finished:
@@ -466,7 +473,15 @@ def _layer1(
         lines.append(
             "Teach-back: the student corrects the sidekick. You may confirm a correct correction. Do not lecture the whole model."
         )
-    if beat.widget is not None and beat.beat_role in {"try", "show"} and not hold_widget:
+    elif beat.beat_role == "goal":
+        lines.append(
+            "This goal teaches, then asks. A few sentences the student could retell: the fact, a concrete picture from their interests, and why it matters for this goal. The one question comes last. No choice box. Do not preview the close."
+        )
+    elif beat.beat_role == "close":
+        lines.append(
+            "This is the close. Ask the closing question. A choice card is the only place a student taps an answer."
+        )
+    if beat.widget is not None and beat.beat_role in {"try", "show", "close"} and not hold_widget:
         lines.extend(_widget_lines(beat.widget, reveal=reveal))
     if beat.goals or beat.empty_close or beat.close_line.strip():
         if beat.goals:
@@ -478,12 +493,21 @@ def _layer1(
                 lines.append(f"Criterion {index}: {point.success_criterion.strip() or 'None.'}")
         if beat.close_line.strip():
             lines.append(beat.close_line.strip())
-        if beat.empty_close and beat.beat_role == "show":
+        if beat.empty_close and beat.beat_role in {"show", "close"}:
             lines.append("The close has no question. End the quest without asking one. Set advance to true.")
     return lines
 
 
 def _move_task(beat: Layer1Beat, *, hold_widget: bool) -> str:
+    if beat.beat_role == "goal":
+        return (
+            "Teach this goal in words a student could retell, then ask one question about it. "
+            f"Goal: {beat.prompt}"
+        )
+    if beat.beat_role == "close":
+        if hold_widget:
+            return "Teach the close in words. Do not ask them to pick an answer until the card is on screen."
+        return f"Ask the closing question. {beat.prompt}"
     if beat.beat_role == "engage":
         return (
             "Expand this idea in words a student could retell. Do not turn it into a quiz stem. "
