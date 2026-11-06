@@ -725,6 +725,8 @@ export function KidSession({
       <main className="ds-landing">
         <nav className="ds-landing-links" aria-label="Administration">
           <Link href="/admin">Administration</Link>
+          <Link href="/kc-studio">KC Studio</Link>
+          <Link href="/kc-tutor">KC Tutor</Link>
         </nav>
         <section className="ds-landing-card">
           <BrandMark />
