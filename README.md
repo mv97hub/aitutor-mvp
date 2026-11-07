@@ -1,6 +1,6 @@
 # AI Tutor MVP
 
-A quest tutor for one learner at a time. Next.js hosts the kid session, the course desk, and the streaming chat. FastAPI is the system of record for students, courses, sessions, and transcripts. Postgres stores them. A browser refresh is not enough after this change: the API must be migrated. The seed inserts learners and the default tutor profile. It does not write courses.
+A quest tutor for one learner at a time. Next.js hosts the kid session, the course desk, and the streaming chat. FastAPI is the system of record for students, courses, sessions, and transcripts. Postgres stores them. A browser refresh is not enough after this change: the API must be migrated. The seed inserts learners and the default tutor profile. It does not write courses, and it does not insert knowledge-component courses.
 
 There is no login. The kid page is a name picker. Admin is a separate URL.
 
@@ -79,7 +79,7 @@ uvicorn app.main:app --reload --port 8000
 
 `alembic upgrade head` and `python -m app.seed` stay the API pre-deploy. A local refresh of the Next.js page is not enough. Revision `014_one_course_model` removes the three seeded courses (Ancient Rome, Euclidean geometry, and AP Macroeconomics), their quests, goals, closes, and the class transcripts that belonged only to those courses. Sessions and messages for any other course stay, and an in-progress class on a rewritten quest restarts at that quest's first goal. The Render API pre-deploy remains `alembic upgrade head && python -m app.seed`.
 
-The seed inserts Iron Man, Storm, Spider-Man, and Wolverine when they are missing, and inserts the default tutor profile when it is missing. It fills a missing age, and fills reading level, modality, and interests when those are blank. It does not copy a tutor voice onto the student, and it does not write courses. A saved tutor profile is not overwritten.
+The seed inserts Iron Man, Storm, Spider-Man, and Wolverine when they are missing, and inserts the default tutor profile when it is missing. It fills a missing age, and fills reading level, modality, and interests when those are blank. It does not copy a tutor voice onto the student, and it does not write courses or knowledge-component courses. A saved course stays. A saved tutor profile is not overwritten.
 
 Terminal 2, web:
 
@@ -109,4 +109,4 @@ Add child asks for a name and an age. Reading level, modality, and interests are
 
 ## Render
 
-Not deployed from this repo. A later deploy would be three Render resources you create by hand: a web service for `apps/web`, a web service for `apps/api`, and a managed Postgres database. Set `OPENAI_API_KEY`, `API_URL`, and `NEXT_PUBLIC_API_URL` on the Next service. Set `DATABASE_URL` (`postgresql+psycopg://...`) on the API. The API pre-deploy stays `alembic upgrade head && python -m app.seed`. That seed inserts the four learners and the default tutor profile. It does not write courses and it does not overwrite a saved tutor profile. Revision `014_one_course_model` removes the three seeded courses and the class transcripts that belonged only to them.
+Not deployed from this repo. A later deploy would be three Render resources you create by hand: a web service for `apps/web`, a web service for `apps/api`, and a managed Postgres database. Set `OPENAI_API_KEY`, `API_URL`, and `NEXT_PUBLIC_API_URL` on the Next service. Set `DATABASE_URL` (`postgresql+psycopg://...`) on the API. The API pre-deploy stays `alembic upgrade head && python -m app.seed`. That seed inserts the four learners and the default tutor profile. It does not write courses or knowledge-component courses, and it does not overwrite a saved course or a saved tutor profile. Revision `014_one_course_model` removes the three seeded courses and the class transcripts that belonged only to them.

@@ -109,7 +109,15 @@ def _counts() -> dict[str, int]:
         db.close()
 
 
-def _make(code: str, title: str = "ZZ course", description: str = "Tell one idea from another.") -> dict:
+def _make(
+    code: str,
+    title: str = "ZZ course",
+    description: str = "Tell one idea from another.",
+    *,
+    kind: str = "mastery",
+    minutes: int | None = None,
+    audience: str = "12-14",
+) -> dict:
     _wipe_zz()
     created = client.post(
         "/kc/courses",
@@ -117,9 +125,9 @@ def _make(code: str, title: str = "ZZ course", description: str = "Tell one idea
             "code": code,
             "title": title,
             "description": description,
-            "audience": "12-14",
-            "kind": "mastery",
-            "minutes": None,
+            "audience": audience,
+            "kind": kind,
+            "minutes": minutes,
         },
     )
     assert created.status_code == 200, created.text
@@ -142,6 +150,39 @@ def _component(title: str, **overrides) -> dict:
     }
     body.update(overrides)
     return body
+
+
+def _spec(code: str, title: str, **overrides) -> dict:
+    return {"code": code, **_component(title, **overrides)}
+
+
+def _ready(course: dict, components: list[dict], patches: tuple[str, ...] = ()) -> dict:
+    pushed = client.post(
+        f"/kc/courses/{course['id']}/push",
+        json={"components": [{"code": item["code"], "title": item["title"]} for item in components]},
+    )
+    assert pushed.status_code == 200, pushed.text
+    by_code = {item["code"]: item for item in pushed.json()["components"]}
+    for item in components:
+        body = {key: value for key, value in item.items() if key != "code"}
+        saved = client.put(f"/kc/nodes/{by_code[item['code']]['id']}", json=body)
+        assert saved.status_code == 200, saved.text
+    if patches:
+        db = SessionLocal()
+        try:
+            goal = db.get(KcGoal, uuid.UUID(course["id"]))
+            assert goal is not None
+            drop = {
+                str(node_id)
+                for node_id in db.scalars(select(KcNode.id).where(KcNode.code.in_(patches)))
+            }
+            goal.target_kc_ids = [item for item in list(goal.target_kc_ids or []) if str(item) not in drop]
+            db.commit()
+        finally:
+            db.close()
+    ready = client.post(f"/kc/courses/{course['id']}/ready")
+    assert ready.status_code == 200, ready.text
+    return _course_by_code(course["code"])
 
 
 def _storm() -> Student:
@@ -225,6 +266,77 @@ def test_revision_adds_kc_tables_only() -> None:
     assert "engine.assemble" not in prompt
     assert "import assemble" not in prompt
     assert build_kc_prompt.__module__ == "app.kc_prompt"
+
+
+def test_migrations_do_not_insert_default_kc_courses() -> None:
+    api = Path(__file__).resolve().parents[1]
+    assert not (api / "app" / "kc_fixtures.py").exists()
+    seed_text = (api / "app" / "seed.py").read_text()
+    assert "kc_fixtures" not in seed_text
+    assert "seed_kc_fixtures" not in seed_text
+    banned = ("kc-geometry", "kc-macro", "kc-rome", "kc_fixtures", "seed_kc_fixtures")
+    for path in (api / "alembic" / "versions").glob("*.py"):
+        text = path.read_text()
+        for token in banned:
+            assert token not in text, f"{path.name} contains {token}"
+
+
+def test_seed_keeps_a_saved_kc_course_and_inserts_no_defaults() -> None:
+    db = SessionLocal()
+    try:
+        before = {goal.code: goal.id for goal in db.scalars(select(KcGoal))}
+    finally:
+        db.close()
+    owned_id = None
+    if "kc-geometry" not in before:
+        created = client.post(
+            "/kc/courses",
+            json={
+                "code": "kc-geometry",
+                "title": "A saved geometry course",
+                "description": "A person already saved this.",
+                "audience": "12-14",
+                "kind": "mastery",
+            },
+        )
+        assert created.status_code == 200, created.text
+        owned_id = created.json()["id"]
+    saved = _make("zz-saved", title="Saved course", description="A person already saved this.")
+    try:
+        db = SessionLocal()
+        try:
+            present = {goal.code: goal.id for goal in db.scalars(select(KcGoal))}
+            assert "zz-saved" in present
+            assert "kc-geometry" in present
+            seed(db)
+            seed(db)
+            after = {goal.code: goal.id for goal in db.scalars(select(KcGoal))}
+            assert after == present
+            kept = db.get(KcGoal, uuid.UUID(saved["id"]))
+            assert kept is not None
+            assert kept.title == "Saved course"
+            geometry = db.scalar(select(KcGoal).where(KcGoal.code == "kc-geometry"))
+            assert geometry is not None
+            if owned_id is None:
+                assert geometry.id == before["kc-geometry"]
+            else:
+                assert str(geometry.id) == owned_id
+                assert geometry.title == "A saved geometry course"
+            for code in ("kc-macro", "kc-rome"):
+                assert (code in after) == (code in before)
+        finally:
+            db.close()
+    finally:
+        _wipe_zz()
+        if owned_id is not None:
+            db = SessionLocal()
+            try:
+                row = db.get(KcGoal, uuid.UUID(owned_id))
+                if row is not None:
+                    db.delete(row)
+                    db.commit()
+            finally:
+                db.close()
 
 
 def test_draft_is_not_written_until_push() -> None:
@@ -446,8 +558,8 @@ def test_kid_prompt_uses_the_tutor_profile() -> None:
         interests = list(row.interests or [])
     finally:
         db.close()
-    course = _course_by_code("kc-geometry")
-    factual = _node(course, "geo-angle-sum")
+    course = _ready(_make("zz-prompt", title="Prompt course"), [_spec("zz-prompt-fact", "Angle sum")])
+    factual = _node(course, "zz-prompt-fact")
     try:
         opened = client.post(
             "/kc/tutor/sessions",
@@ -521,6 +633,7 @@ def test_kid_prompt_uses_the_tutor_profile() -> None:
         finally:
             db.close()
         _clear_progress(storm.id)
+        _wipe_zz()
 
 
 def test_pass_bumps_an_encompassed_component() -> None:
@@ -594,8 +707,55 @@ def test_pass_bumps_an_encompassed_component() -> None:
 def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() -> None:
     storm = _storm()
     _clear_progress(storm.id)
-    course = _course_by_code("kc-geometry")
-    sas = _node(course, "geo-sas-ssa")
+    rule = "SAS proves two triangles congruent. SSA does not."
+    course = _ready(
+        _make("zz-mis", title="Misconception course"),
+        [
+            _spec(
+                "zz-mis-base",
+                "What congruence means",
+                kc_type="conceptual",
+                core_truth="Congruence means the same size and the same shape.",
+                rubric=["Says same size and same shape"],
+                type_fields={
+                    "case_a": "Same size and same shape.",
+                    "case_b": "Same shape and longer sides.",
+                    "prediction": "Which pair can be placed exactly on top of each other?",
+                    "rule": "Congruent triangles have the same size and the same shape.",
+                },
+            ),
+            _spec(
+                "zz-mis-patch",
+                "The included angle",
+                kc_type="conceptual",
+                core_truth="The included angle lies between the two sides.",
+                rubric=["Points to the angle between the two sides"],
+                type_fields={
+                    "case_a": "The angle between the two sides.",
+                    "case_b": "The angle at the opposite vertex.",
+                    "prediction": "Which angle is included?",
+                    "rule": "The included angle is the angle formed between the two given sides.",
+                },
+            ),
+            _spec(
+                "zz-mis-claim",
+                "SAS versus SSA",
+                kc_type="conceptual",
+                core_truth="SAS fixes a triangle and SSA does not.",
+                rubric=["Names SAS as the proving case"],
+                prerequisite_codes=["zz-mis-base", "zz-mis-patch"],
+                misconceptions=[{"wrong_move": "SSA proves congruence", "broken_kc": "zz-mis-patch"}],
+                type_fields={
+                    "case_a": "Two sides with the angle between them fixed.",
+                    "case_b": "Two sides with an angle that is not between them.",
+                    "prediction": "Which description locks one triangle?",
+                    "rule": rule,
+                },
+            ),
+        ],
+        patches=("zz-mis-patch",),
+    )
+    sas = _node(course, "zz-mis-claim")
     try:
         opened = client.post(
             "/kc/tutor/sessions",
@@ -624,22 +784,22 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
         )
         assert failed.status_code == 200, failed.text
         assert failed.json()["passed"] is False
-        assert failed.json()["redirect"]["code"] == "geo-included-angle"
+        assert failed.json()["redirect"]["code"] == "zz-mis-patch"
         board = client.get(
             f"/kc/tutor/courses/{course['id']}",
             params={"student_id": str(storm.id)},
         ).json()
-        assert any(card["code"] == "geo-included-angle" and card["role"] == "patch" for card in board["cards"])
-        sas_state = _state(storm.id, "geo-sas-ssa")
+        assert any(card["code"] == "zz-mis-patch" and card["role"] == "patch" for card in board["cards"])
+        sas_state = _state(storm.id, "zz-mis-claim")
         assert sas_state is not None and sas_state.status != "known"
-        included = _state(storm.id, "geo-included-angle")
+        included = _state(storm.id, "zz-mis-patch")
         assert included is None or included.status != "known"
-        congruence = _state(storm.id, "geo-congruence")
+        congruence = _state(storm.id, "zz-mis-base")
         assert congruence is None or congruence.status != "known"
 
         _clear_progress(storm.id)
-        fresh = _course_by_code("kc-geometry")
-        sas = _node(fresh, "geo-sas-ssa")
+        fresh = _course_by_code("zz-mis")
+        sas = _node(fresh, "zz-mis-claim")
         rule = sas["type_fields"]["rule"]
         again = client.post(
             "/kc/tutor/sessions",
@@ -664,57 +824,130 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
         assert step is not None
         assert step.json()["passed"] is True
         assert step.json()["score"] == 100
-        assert _state(storm.id, "geo-sas-ssa").status == "known"
-        included = _state(storm.id, "geo-included-angle")
-        congruence = _state(storm.id, "geo-congruence")
+        assert _state(storm.id, "zz-mis-claim").status == "known"
+        included = _state(storm.id, "zz-mis-patch")
+        congruence = _state(storm.id, "zz-mis-base")
         assert included is None or included.status != "known"
         assert congruence is None or congruence.status != "known"
     finally:
         _clear_progress(storm.id)
+        _wipe_zz()
 
 
-def test_fixtures_time_box_synthesis_and_factual_recipe() -> None:
+def test_time_box_synthesis_and_factual_recipe() -> None:
     storm = _storm()
     _clear_progress(storm.id)
+    concept = {
+        "case_a": "One case.",
+        "case_b": "The other case.",
+        "prediction": "Which one holds?",
+        "rule": "The rule for this course.",
+    }
+    course = _ready(
+        _make("zz-box", title="Timed course", kind="time_boxed", minutes=30),
+        [
+            _spec(
+                "zz-box-fact",
+                "Triangle angle sum",
+                core_truth="The interior angles of a triangle sum to 180 degrees.",
+                type_fields={
+                    "fact": "The interior angles of a triangle add up to 180 degrees.",
+                    "retrieval_question": "What do the three interior angles of a triangle add up to?",
+                },
+            ),
+            _spec(
+                "zz-box-steps",
+                "Find the missing angle",
+                kc_type="procedural",
+                core_truth="The missing angle is 180 minus the other two angles.",
+                prerequisite_codes=["zz-box-fact"],
+                encompasses_codes=["zz-box-fact"],
+                type_fields={
+                    "steps": ["Add the two known angles.", "Subtract that sum from 180."],
+                    "blanked_step": 1,
+                    "solo_problem": "A triangle has angles of 40 and 60. What is the third?",
+                    "solo_check": "80",
+                },
+            ),
+            _spec(
+                "zz-box-idea",
+                "What congruence means",
+                kc_type="conceptual",
+                core_truth="Congruence means the same size and the same shape.",
+                type_fields=concept,
+            ),
+            _spec(
+                "zz-box-patch",
+                "The included angle",
+                kc_type="conceptual",
+                core_truth="The included angle lies between the two sides.",
+                type_fields=concept,
+            ),
+            _spec(
+                "zz-box-claim",
+                "SAS versus SSA",
+                kc_type="conceptual",
+                core_truth="SAS fixes a triangle and SSA does not.",
+                prerequisite_codes=["zz-box-idea", "zz-box-patch"],
+                misconceptions=[{"wrong_move": "SSA proves congruence", "broken_kc": "zz-box-patch"}],
+                type_fields=concept,
+            ),
+            _spec(
+                "zz-box-cause",
+                "Why SSA fails",
+                kc_type="causal",
+                core_truth="SSA fails because the given angle is not included.",
+                prerequisite_codes=["zz-box-claim"],
+                type_fields={
+                    "decision_point": "Two sides and an angle that is not between them.",
+                    "flawed_claim": "The angle can sit anywhere and the triangle is still fixed.",
+                    "causal_chain": "The angle is not between the two sides, so the third side can meet them in two places.",
+                },
+            ),
+            _spec(
+                "zz-box-plan",
+                "Fix the congruence plan",
+                kc_type="synthesis",
+                core_truth="Same size and same shape, together with SAS, show congruence.",
+                prerequisite_codes=["zz-box-idea", "zz-box-claim"],
+                type_fields={
+                    "mixes": ["zz-box-idea", "zz-box-claim"],
+                    "faulty_plan": "The triangles look the same and SSA locks them.",
+                },
+            ),
+        ],
+        patches=("zz-box-patch",),
+    )
     try:
-        codes = {item["code"]: item for item in client.get("/kc/tutor/courses").json()}
-        assert set(codes) >= {"kc-geometry", "kc-macro", "kc-rome"}
-        geometry = _course_by_code("kc-geometry")
-        assert geometry["kind"] == "time_boxed"
-        assert geometry["minutes"] == 30
-        assert len(geometry["components"]) == 6
-        assert geometry["ready"] is True
-        sas = _node(geometry, "geo-sas-ssa")
-        assert sas["misconceptions"][0]["broken_kc"] == "geo-included-angle"
-        assert _node(geometry, "geo-included-angle")["target"] is False
-        diagram = client.get(f"/kc/courses/{geometry['id']}/network").json()
-        assert any(node["code"] == "geo-included-angle" and node["patch"] for node in diagram["nodes"])
+        listed = {item["code"] for item in client.get("/kc/tutor/courses").json()}
+        assert "zz-box" in listed
+        assert course["kind"] == "time_boxed"
+        assert course["minutes"] == 30
+        assert len(course["components"]) == 6
+        assert course["ready"] is True
+        claim = _node(course, "zz-box-claim")
+        assert claim["misconceptions"][0]["broken_kc"] == "zz-box-patch"
+        assert _node(course, "zz-box-patch")["target"] is False
+        diagram = client.get(f"/kc/courses/{course['id']}/network").json()
+        assert any(node["code"] == "zz-box-patch" and node["patch"] for node in diagram["nodes"])
         assert any(
             edge["kind"] == "prerequisite_of"
-            and edge["from_code"] == "geo-included-angle"
-            and edge["to_code"] == "geo-sas-ssa"
+            and edge["from_code"] == "zz-box-patch"
+            and edge["to_code"] == "zz-box-claim"
             for edge in diagram["edges"]
         )
-        macro = _course_by_code("kc-macro")
-        rome = _course_by_code("kc-rome")
-        assert {item["kc_type"] for item in macro["components"]} >= {
+        assert {item["kc_type"] for item in course["components"]} >= {
             "factual",
             "procedural",
             "conceptual",
             "causal",
             "synthesis",
         }
-        assert {item["kc_type"] for item in rome["components"]} >= {
-            "factual",
-            "conceptual",
-            "causal",
-            "synthesis",
-        }
 
-        factual = _node(geometry, "geo-angle-sum")
+        factual = _node(course, "zz-box-fact")
         opened = client.post(
             "/kc/tutor/sessions",
-            json={"student_id": str(storm.id), "course_id": geometry["id"], "kc_id": factual["id"]},
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": factual["id"]},
         )
         assert opened.json()["recipe"] == "retrieval"
         assert opened.json()["step_label"] == "Retrieve"
@@ -736,27 +969,28 @@ def test_fixtures_time_box_synthesis_and_factual_recipe() -> None:
         assert "180" in answered.json()["reply"]
 
         _clear_progress(storm.id)
-        _set_known(storm.id, "geo-angle-sum")
-        _set_known(storm.id, "geo-missing-angle")
+        _set_known(storm.id, "zz-box-fact")
+        _set_known(storm.id, "zz-box-steps")
         skipped = client.get(
-            f"/kc/tutor/courses/{geometry['id']}",
+            f"/kc/tutor/courses/{course['id']}",
             params={"student_id": str(storm.id)},
         ).json()
         assert skipped["minutes"] == 30
         assert skipped["count_label"] == "2 of 6"
-        assert all(card["code"] not in {"geo-angle-sum", "geo-missing-angle"} for card in skipped["cards"])
-        assert all(card["code"] != "geo-congruence-plan" for card in skipped["cards"])
+        assert all(card["code"] not in {"zz-box-fact", "zz-box-steps"} for card in skipped["cards"])
+        assert all(card["code"] != "zz-box-plan" for card in skipped["cards"])
 
-        _set_known(storm.id, "geo-congruence")
-        _set_known(storm.id, "geo-sas-ssa")
+        _set_known(storm.id, "zz-box-idea")
+        _set_known(storm.id, "zz-box-claim")
         stretch = client.get(
-            f"/kc/tutor/courses/{geometry['id']}",
+            f"/kc/tutor/courses/{course['id']}",
             params={"student_id": str(storm.id)},
         ).json()
-        assert any(card["code"] == "geo-congruence-plan" for card in stretch["cards"])
+        assert any(card["code"] == "zz-box-plan" for card in stretch["cards"])
         assert stretch["known"] == 4
     finally:
         _clear_progress(storm.id)
+        _wipe_zz()
 
 
 def test_creator_thread_revises_one_component_and_complete_clears_on_write() -> None:
