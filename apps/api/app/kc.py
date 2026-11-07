@@ -1139,6 +1139,42 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
     }
 
 
+def restart_course(db: Session, goal: KcGoal, student: Student) -> dict:
+    """Clear this child's progress on the course so it can begin from the first component."""
+    if not goal.ready:
+        raise HTTPException(status_code=422, detail="This course is not ready.")
+    targets = load_targets(db, goal)
+    component_ids = [node.id for node in targets]
+    if component_ids:
+        db.execute(
+            delete(KcState).where(
+                KcState.student_id == student.id,
+                KcState.kc_id.in_(component_ids),
+            )
+        )
+    sessions = list(
+        db.scalars(
+            select(KcSession).where(
+                KcSession.student_id == student.id,
+                KcSession.goal_id == goal.id,
+            )
+        )
+    )
+    # An in-progress session would resume mid-component. Drop those, and drop leftover
+    # redirects, so the next open starts at the first step of the first component.
+    drop_ids = [row.id for row in sessions if row.status == "in_progress"]
+    for row in sessions:
+        if row.status != "in_progress" and row.redirect_kc_id is not None:
+            row.redirect_kc_id = None
+    if drop_ids:
+        db.execute(delete(KcModelPrompt).where(KcModelPrompt.session_id.in_(drop_ids)))
+        db.execute(delete(KcMessage).where(KcMessage.session_id.in_(drop_ids)))
+        db.execute(delete(KcSession).where(KcSession.id.in_(drop_ids)))
+    db.flush()
+    db.expire_all()
+    return progress(db, goal, student)
+
+
 def _add_message(db: Session, session: KcSession, role: str, content: str) -> KcMessage:
     current = db.scalar(select(func.max(KcMessage.seq)).where(KcMessage.session_id == session.id)) or 0
     message = KcMessage(session_id=session.id, role=role, content=content, seq=int(current) + 1)

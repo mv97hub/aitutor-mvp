@@ -35,6 +35,12 @@ export default function KcTutorDocsPage() {
           The caption says how many are known, and adds &quot;some fragile&quot; when any segment is fragile.
           A time-boxed course also shows its minutes. Mastery and curiosity do not.
         </p>
+        <p>
+          Start Course Over is on the left. It clears the selected child&apos;s progress on the open course&apos;s
+          components and starts that course again from the first component.
+          TEST KC Selection is at the bottom left. It lists the components of the current course.
+          Choosing one opens that component without waiting for the card order.
+        </p>
         <p>Up to three cards offer the next work:</p>
         <ul>
           <li>Fastest path is the next target component whose prerequisites are known.</li>
@@ -76,7 +82,7 @@ export default function KcTutorDocsPage() {
 
         <h2>Settings you can change</h2>
         <p>
-          This page does not edit the course. The choices on the page are which child, which ready course, which card to open, and Settings.
+          This page does not edit the course. The choices on the page are which child, which ready course, Start Course Over, which card to open, TEST KC Selection, and Settings.
           Settings sits in the side column. It is not part of the lesson chat.
           The model list is gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and ~deepseek/deepseek-flash-latest.
           gpt-4.1 is the default. Saving a model keeps it on this page. The next spoken step uses it.
@@ -90,6 +96,8 @@ export default function KcTutorDocsPage() {
         <h2>What to know when using it</h2>
         <ul>
           <li>Add New Child is the first option in the child menu. Save selects the new child.</li>
+          <li>Start Course Over clears this child&apos;s progress on the open course and begins that course again.</li>
+          <li>TEST KC Selection jumps to any component of the current course.</li>
           <li>A course that is still a draft does not appear here.</li>
           <li>With no card open, the page says a card opens one component.</li>
           <li>When every target component is known, the page says so and offers no cards.</li>

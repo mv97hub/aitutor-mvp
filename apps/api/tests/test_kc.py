@@ -1757,3 +1757,139 @@ def test_decision_overrides_and_course_outro() -> None:
     finally:
         _clear_progress(storm.id)
         _wipe_zz()
+
+
+def test_restart_clears_this_childs_course_and_a_later_component_still_opens() -> None:
+    storm = _storm()
+    db = SessionLocal()
+    try:
+        other = db.scalar(select(Student).where(Student.slug == "iron-man"))
+        assert other is not None
+        other_id = other.id
+    finally:
+        db.close()
+    _clear_progress(storm.id)
+    _clear_progress(other_id)
+    draft = _make("zz-restart", title="Restart course")
+    try:
+        not_ready = client.post(
+            f"/kc/tutor/courses/{draft['id']}/restart",
+            json={"student_id": str(storm.id)},
+        )
+        assert not_ready.status_code == 422
+
+        course = _ready(
+            draft,
+            [
+                _spec("zz-restart-a", "First fact"),
+                _spec("zz-restart-b", "Second fact", prerequisite_codes=["zz-restart-a"]),
+                _spec("zz-restart-patch", "Foundation fact"),
+            ],
+            patches=("zz-restart-patch",),
+        )
+        kept = client.post(
+            "/kc/courses",
+            json={
+                "code": "zz-keep",
+                "title": "Keep course",
+                "description": "Leave this progress alone.",
+                "audience": "12-14",
+                "kind": "mastery",
+            },
+        )
+        assert kept.status_code == 200, kept.text
+        kept_course = _ready(kept.json(), [_spec("zz-keep-a", "Kept fact")])
+
+        _set_known(storm.id, "zz-restart-a")
+        _set_known(storm.id, "zz-restart-b")
+        _set_known(storm.id, "zz-restart-patch")
+        _set_known(storm.id, "zz-keep-a")
+        _set_known(other_id, "zz-restart-a")
+
+        finished = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": _node(course, "zz-restart-a")["id"]},
+        )
+        assert finished.status_code == 200, finished.text
+        resumed = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": _node(course, "zz-restart-b")["id"]},
+        )
+        assert resumed.status_code == 200, resumed.text
+        db = SessionLocal()
+        try:
+            row = db.get(KcSession, uuid.UUID(finished.json()["id"]))
+            patch = db.scalar(select(KcNode).where(KcNode.code == "zz-restart-patch"))
+            assert row is not None and patch is not None
+            row.status = "completed"
+            row.score = 0
+            row.redirect_kc_id = patch.id
+            db.commit()
+        finally:
+            db.close()
+
+        missing = client.post(
+            f"/kc/tutor/courses/{course['id']}/restart",
+            json={"student_id": str(uuid.uuid4())},
+        )
+        assert missing.status_code == 404
+
+        restarted = client.post(
+            f"/kc/tutor/courses/{course['id']}/restart",
+            json={"student_id": str(storm.id)},
+        )
+        assert restarted.status_code == 200, restarted.text
+        body = restarted.json()
+        assert body["known"] == 0
+        assert body["count_label"] == "0 of 2"
+        assert [item["code"] for item in body["ring"]] == ["zz-restart-a", "zz-restart-b"]
+        assert all(item["status"] == "not_started" for item in body["ring"])
+        assert body["cards"][0]["code"] == "zz-restart-a"
+        assert all(card["code"] != "zz-restart-patch" for card in body["cards"])
+        assert _state(storm.id, "zz-restart-a") is None
+        assert _state(storm.id, "zz-restart-b") is None
+        assert _state(storm.id, "zz-restart-patch").status == "known"
+        assert _state(storm.id, "zz-keep-a").status == "known"
+        assert _state(other_id, "zz-restart-a").status == "known"
+
+        db = SessionLocal()
+        try:
+            rows = list(
+                db.scalars(
+                    select(KcSession).where(
+                        KcSession.student_id == storm.id,
+                        KcSession.goal_id == uuid.UUID(course["id"]),
+                    )
+                )
+            )
+        finally:
+            db.close()
+        assert len(rows) == 1
+        assert str(rows[0].id) == finished.json()["id"]
+        assert rows[0].status == "completed"
+        assert rows[0].redirect_kc_id is None
+        assert client.get(f"/kc/tutor/sessions/{resumed.json()['id']}").status_code == 404
+
+        kept_board = client.get(
+            f"/kc/tutor/courses/{kept_course['id']}",
+            params={"student_id": str(storm.id)},
+        ).json()
+        assert kept_board["count_label"] == "1 of 1"
+
+        jumped = client.post(
+            "/kc/tutor/sessions",
+            json={
+                "student_id": str(storm.id),
+                "course_id": course["id"],
+                "kc_id": _node(course, "zz-restart-b")["id"],
+            },
+        )
+        assert jumped.status_code == 200, jumped.text
+        assert jumped.json()["code"] == "zz-restart-b"
+        assert jumped.json()["step"] == 0
+        assert jumped.json()["status"] == "in_progress"
+        assert _state(storm.id, "zz-restart-a") is None
+    finally:
+        _clear_progress(storm.id)
+        _clear_progress(other_id)
+        _wipe_zz()

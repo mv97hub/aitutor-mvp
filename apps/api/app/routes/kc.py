@@ -38,6 +38,7 @@ from app.kc import (
     post_creator_turn,
     progress,
     prompt_for,
+    restart_course,
     push_course,
     tutor_variables,
     record_speech,
@@ -134,6 +135,10 @@ class OpenSessionIn(BaseModel):
     student_id: uuid.UUID
     course_id: uuid.UUID
     kc_id: uuid.UUID
+
+
+class RestartCourseIn(BaseModel):
+    student_id: uuid.UUID
 
 
 class TurnIn(BaseModel):
@@ -341,6 +346,15 @@ def get_tutor_course(
     db: Session = Depends(get_db),
 ) -> dict:
     return progress(db, _course_or_404(db, course_id), _student_or_404(db, student_id))
+
+
+@router.post("/kc/tutor/courses/{course_id}/restart")
+def post_tutor_restart(
+    course_id: uuid.UUID,
+    body: RestartCourseIn,
+    db: Session = Depends(get_db),
+) -> dict:
+    return restart_course(db, _course_or_404(db, course_id), _student_or_404(db, body.student_id))
 
 
 @router.post("/kc/tutor/sessions")
