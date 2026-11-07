@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState, useTransition, type FormEvent } from "react";
 
 import { KcBanner } from "@/components/KcBanner";
+import { KcDebugPanel } from "@/components/KcDebugPanel";
 import { ChoiceWidget } from "@/components/LessonBlocks";
 import { api } from "@/lib/api";
 import { answerKcTurn } from "@/lib/kc-actions";
-import type { KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
+import type { KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
+import type { KcDebugTurn } from "@/lib/kc-debug";
 import { KC_MODELS, kcModel, type KcModel } from "@/lib/kc-models";
 import type { KidQuiz, Student } from "@/lib/types";
 import { useRouter } from "next/navigation";
@@ -65,6 +67,8 @@ export function KcTutor({
   progress,
   session,
   error,
+  variables,
+  turns,
 }: {
   students: Student[];
   courses: KcTutorCourse[];
@@ -75,7 +79,10 @@ export function KcTutor({
   progress: KcProgress | null;
   session: KcTutorSession | null;
   error: string | null;
+  variables: KcDebugVariable[];
+  turns: KcDebugTurn[];
 }) {
+  const [debugOpen, setDebugOpen] = useState(false);
   const course = courses.find((item) => item.id === courseId) ?? null;
   const learner = students.find((item) => item.id === studentId) ?? null;
   const router = useRouter();
@@ -134,8 +141,21 @@ export function KcTutor({
   }
 
   return (
-    <main className="ds-shell kc-screen">
-      <KcBanner name="KC Tutor" />
+    <main className={`ds-shell kc-screen${debugOpen ? " is-debug" : ""}`}>
+      <KcBanner name="KC Tutor">
+        <div className="kc-fast">
+          <button
+            type="button"
+            className="button"
+            aria-pressed={debugOpen}
+            aria-expanded={debugOpen}
+            aria-controls="kc-debug-panel"
+            onClick={() => setDebugOpen((open) => !open)}
+          >
+            Debug
+          </button>
+        </div>
+      </KcBanner>
       <aside className="ds-side kc-tutor-side">
         {error && !session ? (
           <div className="banner" role="alert">
@@ -235,6 +255,7 @@ export function KcTutor({
           />
         ) : null}
       </section>
+      {debugOpen ? <KcDebugPanel variables={variables} turns={turns} /> : null}
     </main>
   );
 }

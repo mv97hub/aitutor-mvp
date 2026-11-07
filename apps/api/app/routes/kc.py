@@ -37,6 +37,7 @@ from app.kc import (
     progress,
     prompt_for,
     push_course,
+    tutor_variables,
     record_speech,
     rename_component,
     reorder_course,
@@ -327,6 +328,20 @@ def _session_or_404(db: Session, session_id: uuid.UUID):
 @router.get("/kc/tutor/sessions/{session_id}")
 def get_tutor_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return session_out(db, _session_or_404(db, session_id))
+
+
+@router.get("/kc/tutor/variables")
+def get_tutor_variables(
+    student_id: uuid.UUID | None = None,
+    course_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    return {
+        "variables": tutor_variables(
+            db, student_id=student_id, course_id=course_id, session_id=session_id
+        )
+    }
 
 
 @router.get("/kc/tutor/sessions/{session_id}/prompt")

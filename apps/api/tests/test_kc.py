@@ -1148,3 +1148,136 @@ def test_kc_chat_admin_lists_the_session_and_the_stored_prompt() -> None:
     finally:
         _clear_progress(storm.id)
         _wipe_zz()
+
+
+def _variable_map(response) -> dict[str, str]:
+    assert response.status_code == 200, response.text
+    rows = response.json()["variables"]
+    names = [row["name"] for row in rows]
+    assert len(names) == len(set(names))
+    return {row["name"]: row["value"] for row in rows}
+
+
+def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
+    storm = _storm()
+    _clear_progress(storm.id)
+    course = _make("zz-vars", title="ZZ variables", description="One idea, said plainly.")
+    try:
+        blank = _variable_map(client.get("/kc/tutor/variables"))
+        for name in (
+            "Course name",
+            "Course description",
+            "Audience",
+            "Kind",
+            "Minutes",
+            "Component title",
+            "Component code",
+            "Component type",
+            "Component description",
+            "Core truth",
+            "Type fields",
+            "Rubric",
+            "Misconceptions",
+            "Edges: prerequisites",
+            "Edges: encompasses",
+            "Child name",
+            "Age",
+            "Reading level",
+            "Modality",
+            "Interests",
+            "Recipe",
+            "Step",
+            "Step label",
+            "Step text",
+            "Score",
+            "Status",
+            "Redirect",
+        ):
+            assert blank[name] == ""
+        assert blank["Persona"]
+        assert blank["Lexicon"]
+        assert blank["Instructive"]
+        assert blank["Stay on course"] in {"yes", "no"}
+        assert blank["Use interests"] in {"yes", "no"}
+        for unused in ("Voice override", "Anti spoiler", "One question", "Growth praise", "Tutor persona"):
+            assert unused not in blank
+
+        picked = _variable_map(
+            client.get("/kc/tutor/variables", params={"student_id": str(storm.id), "course_id": course["id"]})
+        )
+        assert picked["Course name"] == "ZZ variables"
+        assert picked["Course description"] == "One idea, said plainly."
+        assert picked["Audience"] == "12-14"
+        assert picked["Kind"] == "mastery"
+        assert picked["Minutes"] == ""
+        assert picked["Child name"] == "Storm"
+        assert picked["Age"] == "10"
+        assert picked["Component title"] == ""
+        assert picked["Type fields"] == ""
+        assert picked["Step"] == ""
+        assert picked["Redirect"] == ""
+
+        pushed = client.post(
+            f"/kc/courses/{course['id']}/push",
+            json={
+                "components": [
+                    {"code": "zz-vars-other", "title": "Other fact"},
+                    {"code": "zz-vars-fact", "title": "River fact"},
+                ]
+            },
+        ).json()["components"]
+        other, node = pushed
+        assert client.put(f"/kc/nodes/{other['id']}", json=_component("Other fact")).status_code == 200
+        assert client.put(
+            f"/kc/nodes/{node['id']}",
+            json=_component(
+                "River fact",
+                description="A short brief.",
+                misconceptions=[{"wrong_move": "The river is red.", "broken_kc": "zz-vars-other"}],
+                prerequisite_codes=["zz-vars-other"],
+            ),
+        ).status_code == 200
+        assert client.post(f"/kc/courses/{course['id']}/ready").status_code == 200
+        opened = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": node["id"]},
+        )
+        assert opened.status_code == 200, opened.text
+        session_id = opened.json()["id"]
+        live = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
+        assert live["Component title"] == "River fact"
+        assert live["Component code"] == "zz-vars-fact"
+        assert live["Component type"] == "factual (Factual)"
+        assert live["Component description"] == "A short brief."
+        assert live["Core truth"] == "Truth for River fact."
+        assert live["Type field: Fact"] == "Truth for River fact."
+        assert live["Type field: Retrieval question"] == "What is true of River fact?"
+        assert "Type fields" not in live
+        assert live["Rubric"] == "Check for River fact."
+        assert live["Misconceptions"] == "The river is red. -> zz-vars-other"
+        assert live["Edges: prerequisites"] == "zz-vars-other"
+        assert live["Edges: encompasses"] == ""
+        assert live["Recipe"] == "retrieval"
+        assert live["Step"] == "1 of 2"
+        assert live["Step label"] == "Retrieval question"
+        assert live["Step text"] == "What is true of River fact?"
+        assert live["Score"] == ""
+        assert live["Status"] == "in_progress"
+        assert live["Redirect"] == ""
+        assert "weather" in live["Interests"]
+
+        done = client.post(
+            f"/kc/tutor/sessions/{session_id}/turn",
+            json={"answer": "Truth for River fact."},
+        )
+        assert done.status_code == 200, done.text
+        after = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
+        assert after["Step"] == "2 of 2"
+        assert after["Step label"] == "Short confirmation"
+        assert after["Score"] == "100"
+        assert after["Status"] == "completed"
+        assert after["Redirect"] == ""
+        assert client.get("/kc/tutor/variables", params={"session_id": str(uuid.uuid4())}).status_code == 404
+    finally:
+        _clear_progress(storm.id)
+        _wipe_zz()
