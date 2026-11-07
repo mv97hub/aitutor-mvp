@@ -21,6 +21,12 @@ export default function KcTutorDocsPage() {
           misconception policy, enrichment, and self-explanation stay on Agent customizations.
           The field catalog is <Link href="/documentation/kc-prompt-layers">KC prompt layers</Link>.
         </p>
+        <p>
+          The child menu lists Add New Child first. Choosing it opens a dialog for a name, an age, a reading level,
+          a modality, and interests. Save creates the child, closes the dialog, and selects that child. A blank
+          reading level or modality keeps the default for that age. Persona and the other tutor settings stay on
+          Agent customizations.
+        </p>
 
         <h2>How it works</h2>
         <p>
@@ -83,6 +89,7 @@ export default function KcTutorDocsPage() {
 
         <h2>What to know when using it</h2>
         <ul>
+          <li>Add New Child is the first option in the child menu. Save selects the new child.</li>
           <li>A course that is still a draft does not appear here.</li>
           <li>With no card open, the page says a card opens one component.</li>
           <li>When every target component is known, the page says so and offers no cards.</li>
