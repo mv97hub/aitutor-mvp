@@ -13,7 +13,15 @@ from app.kc_syllabus import planning_context, planned_reply
 
 # The original CreateCourse menu, then a capable default, then the strongest
 # chat model id the app's OpenAI client accepts (openai(), @ai-sdk/openai 4.0.106).
-KC_CHAT_MODELS = ("gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1", "gpt-6.1-sol")
+# DeepSeek Flash is last. The web app calls it through OpenRouter.
+KC_CHAT_MODELS = (
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-6.1-sol",
+    "deepseek/deepseek-flash-latest",
+)
 DEFAULT_KC_CHAT_MODEL = "gpt-4.1"
 MAX_COMPONENTS = 16
 

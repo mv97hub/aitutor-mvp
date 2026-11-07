@@ -39,7 +39,9 @@ def _row(title: str) -> dict:
 def test_menu_keeps_the_original_models_and_names_a_stronger_default() -> None:
     assert KC_CHAT_MODELS[:3] == ("gpt-4o-mini", "gpt-4o", "gpt-4.1-mini")
     assert DEFAULT_KC_CHAT_MODEL == "gpt-4.1"
-    assert KC_CHAT_MODELS[-1] == "gpt-6.1-sol"
+    assert "gpt-6.1-sol" in KC_CHAT_MODELS
+    assert KC_CHAT_MODELS[-1] == "deepseek/deepseek-flash-latest"
+    assert checked_model("deepseek/deepseek-flash-latest") == "deepseek/deepseek-flash-latest"
     assert checked_model("") == "gpt-4.1"
     with pytest.raises(ValueError, match="not allowed"):
         checked_model("gpt-3.5-turbo")

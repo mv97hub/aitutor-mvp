@@ -505,7 +505,7 @@ class StudioSettings(Base):
     __table_args__ = (
         CheckConstraint("id = 'default'", name="ck_studio_settings_singleton"),
         CheckConstraint(
-            "model IN ('gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini')",
+            "model IN ('gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'deepseek/deepseek-flash-latest')",
             name="ck_studio_settings_model",
         ),
     )

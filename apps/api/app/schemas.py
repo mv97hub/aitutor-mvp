@@ -50,6 +50,7 @@ class StudentCreate(BaseModel):
 
 
 class StudentPatch(BaseModel):
+    age: int | None = Field(default=None, ge=4, le=18)
     reading_level: str | None = None
     modality: str | None = None
     interests: list[str] | None = None

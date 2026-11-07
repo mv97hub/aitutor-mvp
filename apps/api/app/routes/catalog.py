@@ -129,6 +129,8 @@ def patch_student(student_id: UUID, body: StudentPatch, db: Session = Depends(ge
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
     provided = _provided(body)
+    if "age" in provided and body.age is not None:
+        student.age = body.age
     if "reading_level" in provided and body.reading_level is not None:
         student.reading_level = body.reading_level.strip()
     if "modality" in provided and body.modality is not None:

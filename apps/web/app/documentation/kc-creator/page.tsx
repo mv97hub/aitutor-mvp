@@ -34,9 +34,10 @@ export default function KcCreatorDocsPage() {
         </p>
         <p>
           The right pane is a conversation about this component only. It is stored for the component. It is not a kid-tutor message.
-          A model menu sits in the composer: gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, and gpt-6.1-sol. gpt-4.1 is the default.
+          A model menu sits in the composer: gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and deepseek/deepseek-flash-latest. gpt-4.1 is the default.
           The chosen model is sent with each message. It does not change scoring, edges, or which types exist.
-          If OPENAI_API_KEY is missing, the chat shows the same missing-key error as the rest of the app.
+          OpenAI models use OPENAI_API_KEY. deepseek/deepseek-flash-latest uses OPENROUTER_API_KEY.
+          If the key for the chosen model is missing, the chat shows that missing-key error. The other key is not required for that call.
           The first view starts with the description, the brief for this component, and then the saved text: title, type,
           core truth, rubric lines, each wrong move and its component code, prerequisite codes, encompasses codes,
           and the type fields for that type.
@@ -45,7 +46,7 @@ export default function KcCreatorDocsPage() {
           the fields for that type, the core truth, the rubric checks, the misconceptions, the prerequisites, and the encompasses links.
           A later message revises that draft.
           Enter and the up arrow both send the message. While the reply is being written, the composer says Writing… and cannot be sent again.
-          A missing OpenAI key still shows the missing-key error.
+          A missing key for the chosen model still shows that model&apos;s missing-key error.
           The middle pane keeps the saved component until Push. Push writes the whole draft, including the description. Other components stay.
           Edges are rewritten only for this component. After Push, the middle pane shows the written fields and the thread says the draft was saved.
         </p>

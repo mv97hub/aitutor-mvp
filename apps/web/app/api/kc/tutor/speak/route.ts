@@ -1,16 +1,13 @@
-import { openai } from "@ai-sdk/openai";
 import { generateText, wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 
 import { api } from "@/lib/api";
 import type { KcTutorSession } from "@/lib/kc";
-import { openaiModelName } from "@/lib/model";
+import { languageModel } from "@/lib/language-model";
+import { DEFAULT_KC_MODEL, isKcModel, missingKeyMessage } from "@/lib/kc-models";
 import { requestForCall, type ModelCall } from "@/lib/stored-prompt";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-
-const MISSING_KEY =
-  "OPENAI_API_KEY is not set. Copy .env.example to apps/web/.env.local, set OPENAI_API_KEY to your real key, and restart the Next.js server.";
 
 const SPEAK_PROMPT =
   "Say this step to the student now. Follow the system instructions. Do not set the type, the edges, or the score.";
@@ -29,17 +26,23 @@ type StoredCall = {
 };
 
 export async function POST(req: Request) {
-  let body: { sessionId?: string };
+  let body: { sessionId?: string; model?: string };
   try {
-    body = (await req.json()) as { sessionId?: string };
+    body = (await req.json()) as { sessionId?: string; model?: string };
   } catch {
     return new Response("Expected JSON with sessionId.", { status: 400 });
   }
   const sessionId = body.sessionId;
   if (!sessionId) return new Response("sessionId is required.", { status: 400 });
 
-  if (!process.env.OPENAI_API_KEY?.trim()) {
-    return new Response(MISSING_KEY, {
+  const requested = typeof body.model === "string" ? body.model.trim() : "";
+  if (requested && !isKcModel(requested)) {
+    return new Response("That model is not allowed.", { status: 422 });
+  }
+  const modelName = requested && isKcModel(requested) ? requested : DEFAULT_KC_MODEL;
+  const missingKey = missingKeyMessage(modelName);
+  if (missingKey) {
+    return new Response(missingKey, {
       status: 503,
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
@@ -62,7 +65,6 @@ export async function POST(req: Request) {
   }
 
   let captured: StoredCall | null = null;
-  const modelName = openaiModelName();
   const captureRequest: LanguageModelMiddleware = {
     specificationVersion: "v4",
     wrapGenerate: async ({ doGenerate, params, model }) => {
@@ -79,7 +81,7 @@ export async function POST(req: Request) {
   let spoken = "";
   try {
     const result = await generateText({
-      model: wrapLanguageModel({ model: openai(modelName), middleware: captureRequest }),
+      model: wrapLanguageModel({ model: languageModel(modelName), middleware: captureRequest }),
       instructions: bundle.system_prompt,
       prompt: SPEAK_PROMPT,
     });
