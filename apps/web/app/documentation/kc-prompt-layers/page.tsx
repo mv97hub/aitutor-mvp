@@ -64,6 +64,57 @@ export default function KcPromptLayersPage() {
             ))}
           </section>
         ))}
+
+        <h2>How the prompt is written</h2>
+        <p>
+          The debug Variables panel still groups the stored settings under the seven layers above. The text
+          sent to the model does not. That text is seven instruction sections. A setting is written once, as
+          the behavior it asks for, in the section where that behavior changes the reply. A stored struggle
+          window or enrichment that this turn replaces is not sent. Prerequisite codes and encompass codes
+          stay in the panel and stay out of the prompt.
+        </p>
+        <h3>This turn</h3>
+        <p>
+          Who is speaking, which move this is, and the one job of the reply. The opening, the unit close, and
+          the course outro are here because they change that job.
+        </p>
+        <h3>What to teach</h3>
+        <p>
+          The course and the component, in prose. The core truth is what to grade against, and it is said only
+          when a reveal or a passed close allows it. The rubric is the points that count. Each misconception
+          is a wrong move to listen for. Course position and prerequisite status become what the child already
+          knows, not a list of codes.
+        </p>
+        <h3>Who you are talking to</h3>
+        <p>
+          One short profile: name, age, reading level, modality, and interests, each with its effect. An early
+          reading level means shorter sentences. A visual modality means a described picture only on a move
+          that already has cases or steps. Interests are an example only when that switch is on.
+        </p>
+        <h3>How to teach</h3>
+        <p>
+          Instructive level, struggle window, enrichment, stay on course, the response to a wrong move,
+          support band, and course kind, as the behavior for this turn. Time boxed and curiosity appear as
+          the limits they impose. Anti-spoiler, one question, and growth-mindset praise are not printed as
+          yes or no. Anti-spoiler is the sentence that says when the core truth may be spoken. When one
+          question or growth-mindset praise still changes the reply, that effect is one line here.
+        </p>
+        <h3>How to sound</h3>
+        <p>
+          Persona, lexicon, metaphors, and sidekick collapse into one voice paragraph. That voice does not
+          change the move, the expected answer, or the score.
+        </p>
+        <h3>What just happened</h3>
+        <p>
+          Attempts, the last answer, the hint already given, affect, whether help was requested, the
+          off-course count, and the last few messages. This is state. The model is told not to treat it as a
+          new rule.
+        </p>
+        <h3>What to return</h3>
+        <p>
+          The decision fields and what each value means, kept short and last. The response schema and the
+          temperature stay as they are.
+        </p>
       </article>
     </main>
   );
