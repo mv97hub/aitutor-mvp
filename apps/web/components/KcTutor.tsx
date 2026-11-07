@@ -133,6 +133,8 @@ export function KcTutor({
   const [addKey, setAddKey] = useState(0);
   const [savingChild, setSavingChild] = useState(false);
   const [addNotice, setAddNotice] = useState<string | null>(null);
+  const [restarting, setRestarting] = useState(false);
+  const [restartNotice, setRestartNotice] = useState<string | null>(null);
   const roster = students.concat(
     createdStudents.filter((student) => !students.some((row) => row.id === student.id)),
   );
@@ -191,6 +193,37 @@ export function KcTutor({
     }
   }
 
+  async function startCourseOver() {
+    if (!studentId || !courseId || restarting) return;
+    setRestarting(true);
+    setRestartNotice(null);
+    try {
+      const restarted = await api<KcProgress>(`/kc/tutor/courses/${courseId}/restart`, {
+        method: "POST",
+        body: JSON.stringify({ student_id: studentId }),
+      });
+      router.push(
+        tutorPath({
+          student: studentId,
+          course: courseId,
+          kc: restarted.ring[0]?.id,
+          model,
+        }),
+      );
+      router.refresh();
+    } catch (err) {
+      setRestartNotice(err instanceof Error ? err.message : "Could not start this course over.");
+    } finally {
+      setRestarting(false);
+    }
+  }
+
+  function jumpToComponent(kc: string) {
+    if (!kc || !studentId || !courseId) return;
+    router.push(tutorPath({ student: studentId, course: courseId, kc, model }));
+    router.refresh();
+  }
+
   async function saveSettings(event: FormEvent) {
     event.preventDefault();
     setSavingSettings(true);
@@ -233,6 +266,10 @@ export function KcTutor({
       setSavingSettings(false);
     }
   }
+
+  const components = progress?.ring ?? [];
+  const openKc = session?.kc_id || kcId;
+  const jumpValue = components.some((item) => item.id === openKc) ? openKc : "";
 
   return (
     <main className={`ds-shell kc-screen${debugOpen ? " is-debug" : ""}`}>
@@ -308,6 +345,21 @@ export function KcTutor({
             Open
           </button>
         </form>
+        <div className="kc-tutor-pick">
+          <button
+            className="button"
+            type="button"
+            onClick={() => void startCourseOver()}
+            disabled={!studentId || !courseId || restarting}
+          >
+            Start Course Over
+          </button>
+        </div>
+        {restartNotice ? (
+          <div className="banner" role="alert">
+            <p>{restartNotice}</p>
+          </div>
+        ) : null}
         {progress ? (
           <>
             <Ring progress={progress} />
@@ -339,6 +391,24 @@ export function KcTutor({
             <GearIcon />
             Settings
           </button>
+          <div className="kc-tutor-pick">
+            <label>
+              TEST KC Selection
+              <select
+                aria-label="TEST KC Selection"
+                value={jumpValue}
+                disabled={!studentId || !courseId || components.length === 0}
+                onChange={(event) => jumpToComponent(event.target.value)}
+              >
+                <option value="">Choose a component</option>
+                {components.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
         {settingsOpen ? (
           <TutorSettingsDialog
