@@ -237,17 +237,32 @@ def _state(student_id, code: str) -> KcState | None:
 
 
 def _set_known(student_id, code: str) -> None:
+    _set_status(student_id, code, "known")
+
+
+def _set_status(student_id, code: str, status: str) -> None:
     db = SessionLocal()
     try:
         node = db.scalar(select(KcNode).where(KcNode.code == code))
         assert node is not None
         row = db.scalar(select(KcState).where(KcState.student_id == student_id, KcState.kc_id == node.id))
         if row is None:
-            row = KcState(student_id=student_id, kc_id=node.id, status="known", stability=1)
+            row = KcState(student_id=student_id, kc_id=node.id, status=status, stability=1 if status == "known" else 0)
             db.add(row)
         else:
-            row.status = "known"
-            row.stability = 1
+            row.status = status
+            row.stability = 1 if status == "known" else 0
+        db.commit()
+    finally:
+        db.close()
+
+
+def _finish_session(session_id: str) -> None:
+    db = SessionLocal()
+    try:
+        row = db.get(KcSession, uuid.UUID(session_id))
+        assert row is not None
+        row.status = "completed"
         db.commit()
     finally:
         db.close()
@@ -1892,4 +1907,96 @@ def test_restart_clears_this_childs_course_and_a_later_component_still_opens() -
     finally:
         _clear_progress(storm.id)
         _clear_progress(other_id)
+        _wipe_zz()
+
+
+def test_course_progress_reports_percent_and_unit_status() -> None:
+    storm = _storm()
+    _clear_progress(storm.id)
+    course = _ready(
+        _make("zz-progress", title="Progress course"),
+        [
+            _spec("zz-prog-known", "Known fact", prerequisite_codes=["zz-prog-patch"]),
+            _spec("zz-prog-fragile", "Fragile fact"),
+            _spec("zz-prog-open", "Open fact"),
+            _spec("zz-prog-closed", "Closed fact"),
+            _spec("zz-prog-known-open", "Known and open"),
+            _spec("zz-prog-patch", "Patch fact"),
+        ],
+        patches=("zz-prog-patch",),
+    )
+    try:
+        _set_known(storm.id, "zz-prog-known")
+        _set_status(storm.id, "zz-prog-fragile", "fragile")
+        _set_known(storm.id, "zz-prog-known-open")
+        before = _counts()["sessions"]
+        opened = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": _node(course, "zz-prog-open")["id"]},
+        )
+        assert opened.status_code == 200, opened.text
+        known_open = client.post(
+            "/kc/tutor/sessions",
+            json={
+                "student_id": str(storm.id),
+                "course_id": course["id"],
+                "kc_id": _node(course, "zz-prog-known-open")["id"],
+            },
+        )
+        assert known_open.status_code == 200, known_open.text
+        closed = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": _node(course, "zz-prog-closed")["id"]},
+        )
+        assert closed.status_code == 200, closed.text
+        _finish_session(closed.json()["id"])
+        sessions_after_open = _counts()["sessions"]
+        assert sessions_after_open == before + 3
+
+        board = client.get(
+            f"/kc/tutor/courses/{course['id']}",
+            params={"student_id": str(storm.id)},
+        )
+        assert board.status_code == 200, board.text
+        body = board.json()
+        assert _counts()["sessions"] == sessions_after_open
+        assert body["known"] == 2
+        assert body["total"] == 5
+        assert body["percent"] == 40
+        assert body["count_label"] == "2 of 5"
+        assert [item["code"] for item in body["units"]] == [
+            "zz-prog-known",
+            "zz-prog-fragile",
+            "zz-prog-open",
+            "zz-prog-closed",
+            "zz-prog-known-open",
+            "zz-prog-patch",
+        ]
+        status = {item["code"]: item["status"] for item in body["units"]}
+        assert status == {
+            "zz-prog-known": "completed",
+            "zz-prog-fragile": "in_progress",
+            "zz-prog-open": "in_progress",
+            "zz-prog-closed": "not_started",
+            "zz-prog-known-open": "completed",
+            "zz-prog-patch": "not_started",
+        }
+        assert body["units"][-1]["patch"] is True
+        assert body["units"][-1]["title"] == "Patch fact"
+        assert all(item["patch"] is False for item in body["units"][:-1])
+        ring = {item["code"]: item["status"] for item in body["ring"]}
+        assert ring["zz-prog-known"] == "known"
+        assert ring["zz-prog-fragile"] == "fragile"
+        assert ring["zz-prog-open"] == "not_started"
+        assert "zz-prog-patch" not in ring
+
+        again = client.get(
+            f"/kc/tutor/courses/{course['id']}",
+            params={"student_id": str(storm.id)},
+        ).json()
+        assert again["units"] == body["units"]
+        assert again["percent"] == body["percent"]
+        assert _counts()["sessions"] == sessions_after_open
+    finally:
+        _clear_progress(storm.id)
         _wipe_zz()

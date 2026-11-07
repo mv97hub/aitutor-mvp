@@ -877,6 +877,10 @@ body:has(.ds-landing) {
   color: rgb(236, 19, 19);
 }
 
+.ds-landing .menu-older {
+  margin-top: 28px;
+}
+
 .ds-logo-name {
   overflow: hidden;
   font-size: 16px;
@@ -2914,9 +2918,158 @@ a.ds-row { text-decoration: none; }
 .ds-shell .kc-modal-card { background: #fff; border-radius: 16px; }
 .ds-shell .kc-net circle { fill: rgb(65, 118, 230); }
 .ds-shell .kc-net circle.is-patch { fill: rgb(129, 133, 140); }
+.ds-shell .kc-net circle.is-completed { fill: #1d6b45; }
+.ds-shell .kc-net circle.is-in-progress { fill: #c47b12; }
+.ds-shell .kc-net circle.is-not-started { fill: #c5c1b8; }
+.ds-shell .kc-net circle.is-patch.is-completed,
+.ds-shell .kc-net circle.is-patch.is-in-progress,
+.ds-shell .kc-net circle.is-patch.is-not-started {
+  stroke: rgb(15, 17, 21);
+  stroke-width: 2.5;
+  stroke-dasharray: 3 2;
+}
 .ds-shell .kc-net text { fill: rgb(15, 17, 21); }
 .ds-shell .kc-net .is-prereq { stroke: rgb(65, 118, 230); stroke-width: 2; }
 .ds-shell .kc-net .is-encompass { stroke: rgb(15, 17, 21); stroke-width: 2; stroke-dasharray: 5 4; }
+
+.kc-progress {
+  grid-template-columns: minmax(0, 1fr);
+  height: auto;
+  min-height: 100dvh;
+  overflow: auto;
+}
+
+.kc-progress-body {
+  display: grid;
+  gap: 20px;
+  align-content: start;
+  min-width: 0;
+  padding: 20px 24px 40px;
+}
+
+.kc-progress-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: end;
+}
+
+.kc-progress-pick label {
+  display: grid;
+  gap: 4px;
+  min-width: min(280px, 100%);
+  color: rgb(97, 102, 107);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.kc-progress-pick select {
+  width: 100%;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px 10px;
+  color: rgb(15, 17, 21);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.kc-progress-pick .button {
+  margin: 0;
+}
+
+.kc-progress-score {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0;
+}
+
+.kc-progress-score strong {
+  font-size: 32px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 40px;
+}
+
+.kc-progress-score span {
+  color: rgb(97, 102, 107);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.kc-progress-map h2,
+.kc-progress-lists h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.kc-progress-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.kc-progress-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kc-progress-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #c5c1b8;
+}
+
+.kc-progress-swatch.is-completed { background: #1d6b45; }
+.kc-progress-swatch.is-in-progress { background: #c47b12; }
+.kc-progress-swatch.is-not-started { background: #c5c1b8; }
+.kc-progress-swatch.is-patch {
+  background: #fff;
+  border: 2px dashed rgb(15, 17, 21);
+  box-sizing: border-box;
+}
+
+.kc-progress-lists {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.kc-progress-lists ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kc-progress-lists li {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0.5px solid rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+}
+
+.kc-progress-lists li span,
+.kc-progress-lists .ds-quiet {
+  color: rgb(97, 102, 107);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+@media (max-width: 800px) {
+  .kc-progress-lists { grid-template-columns: 1fr; }
+}
 .ds-shell .kc-actions a { color: rgb(65, 118, 230); text-decoration: none; }
 
 @media (max-width: 860px) {
