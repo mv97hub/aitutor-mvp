@@ -19,7 +19,9 @@ export default function KcStudioDocsPage() {
 
         <h2>How it works</h2>
         <p>
-          KC Course Creator defines the component list. The left rail lists courses, links to Manage KC courses, and creates a new one.
+          KC Course Creator defines the component list. The left rail lists courses and links to Manage KC courses.
+          New course opens a popup with the name, what the kid should come away able to do, the audience, and the kind.
+          Minutes show in that popup only when the kind is Time boxed. Create course saves the course, closes the popup, and selects it.
           The open course has a preferences strip: name, what the kid should come away able to do, audience, kind, and optional minutes.
           Save course writes those fields. Mark ready calls the ready check and still refuses when the course has no components,
           or any target has no type, no core truth, no rubric check, or a prerequisite or encompasses code that does not exist.
@@ -75,7 +77,7 @@ export default function KcStudioDocsPage() {
           <li>What the kid should come away able to do.</li>
           <li>Audience: 6-8, 9-11, 12-14, or 15-17. A new course starts at 12-14.</li>
           <li>Kind: Mastery, Time boxed, or Curiosity. A new course starts at Mastery.</li>
-          <li>Minutes, optional. A blank value is allowed. A number has to be greater than zero. KC Tutor shows this number only for a time-boxed course.</li>
+          <li>Minutes, optional. A blank value is allowed. A number has to be greater than zero. The new-course popup asks for minutes only when the kind is Time boxed. KC Tutor shows this number only for a time-boxed course.</li>
         </ul>
         <p>
           Component fields are edited on KC Creator, not here. See that section for the type fields, the chat, Push, and Mark complete.

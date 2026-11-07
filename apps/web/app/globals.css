@@ -1912,6 +1912,8 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
 }
 
 .studio-new-form input,
+.studio-new-form select,
+.studio-new-form textarea,
 .studio-prefs input,
 .studio-prefs select,
 .studio-prefs textarea,
@@ -2535,6 +2537,7 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
 .kc-modal {
   position: fixed;
   inset: 0;
+  z-index: 40;
   display: grid;
   place-items: center;
   padding: 20px;
@@ -2547,6 +2550,27 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
   padding: 18px;
   border-radius: 18px;
   background: #fffaf3;
+}
+.kc-new-course {
+  width: min(440px, 100%);
+}
+.kc-new-course-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.kc-new-course-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.kc-new-course .studio-new-form {
+  margin: 4px 0 0;
+}
+.kc-screen .kc-new-course .button {
+  margin: 0;
 }
 .kc-net { width: 100%; height: auto; background: #fff; border-radius: 12px; }
 .kc-net circle { fill: #0f6e6b; }
