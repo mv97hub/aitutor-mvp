@@ -10,6 +10,7 @@ import {
   DEFAULT_TUTOR_PROFILE,
   FIELD_OPTIONS,
   LAYER_HEADINGS,
+  applyChild,
   applyResult,
   applyUnit,
   courseLabel,
@@ -25,19 +26,22 @@ import {
   type PromptTesterResult,
   type TesterValues,
 } from "@/lib/kc-prompt-tester";
-import type { TutorProfile } from "@/lib/types";
+import type { Student, TutorProfile } from "@/lib/types";
 
 export function KcPromptTester({
   courses,
+  students,
   profile,
   loadError,
 }: {
   courses: KcCourse[];
+  students: Student[];
   profile: TutorProfile | null;
   loadError: string | null;
 }) {
   const [courseId, setCourseId] = useState("");
   const [unitId, setUnitId] = useState("");
+  const [childId, setChildId] = useState("");
   const [typeFields, setTypeFields] = useState<Record<string, unknown>>({});
   const [values, setValues] = useState<TesterValues>(() => emptyTesterValues(profile ?? DEFAULT_TUTOR_PROFILE));
   const [prompt, setPrompt] = useState("");
@@ -67,6 +71,13 @@ export function KcPromptTester({
     if (!unit) return;
     setTypeFields({ ...(unit.component.type_fields ?? {}) });
     setValues((current) => applyUnit(current, course, unit.component));
+  }
+
+  function onChild(nextId: string) {
+    setChildId(nextId);
+    const child = students.find((item) => item.id === nextId);
+    if (!child) return;
+    setValues((current) => applyChild(current, child));
   }
 
   async function onSubmit(event: FormEvent) {
@@ -130,6 +141,19 @@ export function KcPromptTester({
                   </select>
                 </label>
               </>
+            ) : null}
+            {heading === "Layer 2, Child" ? (
+              <label>
+                Child
+                <select aria-label="Child" value={childId} onChange={(event) => onChild(event.target.value)}>
+                  <option value="">{students.length === 0 ? "No children yet" : "Choose a child"}</option>
+                  {students.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.display_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
             ) : null}
             {fieldsForLayer(heading).map((field) => {
               const hover = hoverFor(field.name);
