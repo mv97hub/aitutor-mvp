@@ -7,6 +7,7 @@ const sections = [
   { href: "/documentation/admin", label: "Admin" },
   { href: "/documentation/create-course", label: "Create course" },
   { href: "/documentation/view-chats", label: "View chats" },
+  { href: "/documentation/view-kc-chats", label: "View KC chats" },
   { href: "/documentation/kc-studio", label: "KC Course Creator" },
   { href: "/documentation/manage-kc-courses", label: "Manage KC courses" },
   { href: "/documentation/kc-creator", label: "KC Creator" },

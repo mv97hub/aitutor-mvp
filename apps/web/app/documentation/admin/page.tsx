@@ -12,7 +12,8 @@ export default function AdminDocsPage() {
         <h1>Admin</h1>
         <p>
           Admin is the lesson desk at <Link href="/admin">/admin</Link>, plus{" "}
-          <Link href="/admin/agent-customizations">Agent customizations</Link>. The bar also links to View chats.
+          <Link href="/admin/agent-customizations">Agent customizations</Link>. The bar also links to{" "}
+          <Link href="/viewchats">View chats</Link> and <Link href="/viewkcchats">View KC chats</Link>.
         </p>
 
         <h2>How it works</h2>

@@ -102,6 +102,53 @@ export type KcTutorCourse = {
   minutes: number | null;
 };
 
+export type KcChatSummary = {
+  id: string;
+  student_id: string;
+  student_display_name: string;
+  course_id: string;
+  course_code: string;
+  course_title: string;
+  kc_id: string;
+  kc_code: string;
+  kc_title: string;
+  kc_type: string | null;
+  recipe: string;
+  step: number;
+  step_label: string;
+  status: string;
+  score: number | null;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+};
+
+export type KcChatDetail = {
+  id: string;
+  status: string;
+  recipe: string;
+  step: number;
+  step_label: string;
+  score: number | null;
+  attempts: number;
+  created_at: string;
+  updated_at: string;
+  student: { id: string; display_name: string };
+  course: { id: string; code: string; title: string };
+  component: { id: string; code: string; title: string; kc_type: string | null };
+  messages: { id: string; role: "user" | "assistant"; content: string; seq: number; created_at: string }[];
+  prompts: {
+    id: string;
+    session_id: string;
+    message_id: string | null;
+    seq: number;
+    system_prompt: string;
+    messages: unknown[];
+    model: string;
+    created_at: string;
+  }[];
+};
+
 export type KcTutorSession = {
   id: string;
   course_id: string;
