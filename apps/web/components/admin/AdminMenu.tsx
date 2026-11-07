@@ -3,6 +3,7 @@ import Link from "next/link";
 export const ADMIN_SECTIONS = [
   { id: "lessons", href: "/admin", label: "Lesson Desk" },
   { id: "chats", href: "/viewchats", label: "View Chats" },
+  { id: "kc-chats", href: "/viewkcchats", label: "View KC Chats" },
   { id: "customizations", href: "/admin/agent-customizations", label: "Agent Customizations" },
 ] as const;
 

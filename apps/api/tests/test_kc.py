@@ -14,6 +14,7 @@ from app.models import (
     KcEdge,
     KcGoal,
     KcMessage,
+    KcModelPrompt,
     KcNode,
     KcSession,
     KcState,
@@ -40,6 +41,7 @@ def _drop_codes(codes: list[str]) -> None:
             return
         session_ids = list(db.scalars(select(KcSession.id).where(KcSession.kc_id.in_(node_ids))))
         if session_ids:
+            db.execute(delete(KcModelPrompt).where(KcModelPrompt.session_id.in_(session_ids)))
             db.execute(delete(KcMessage).where(KcMessage.session_id.in_(session_ids)))
             db.execute(delete(KcSession).where(KcSession.id.in_(session_ids)))
         db.execute(delete(KcCreatorMessage).where(KcCreatorMessage.node_id.in_(node_ids)))
@@ -72,6 +74,7 @@ def _wipe_zz() -> None:
             )
         session_ids = list(set(session_ids))
         if session_ids:
+            db.execute(delete(KcModelPrompt).where(KcModelPrompt.session_id.in_(session_ids)))
             db.execute(delete(KcMessage).where(KcMessage.session_id.in_(session_ids)))
             db.execute(delete(KcSession).where(KcSession.id.in_(session_ids)))
         if node_ids:
@@ -157,6 +160,7 @@ def _clear_progress(student_id) -> None:
     try:
         session_ids = list(db.scalars(select(KcSession.id).where(KcSession.student_id == student_id)))
         if session_ids:
+            db.execute(delete(KcModelPrompt).where(KcModelPrompt.session_id.in_(session_ids)))
             db.execute(delete(KcMessage).where(KcMessage.session_id.in_(session_ids)))
             db.execute(delete(KcSession).where(KcSession.id.in_(session_ids)))
         db.execute(delete(KcState).where(KcState.student_id == student_id))
@@ -1048,4 +1052,99 @@ def test_wrong_password_keeps_a_kc_course_and_the_right_password_deletes_it() ->
         assert after["chats"] == before["chats"]
         assert after["classes"] == before["classes"]
     finally:
+        _wipe_zz()
+
+
+PROMPT_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "019_kc_model_prompts.py"
+
+
+def test_kc_model_prompt_revision_adds_one_table() -> None:
+    text = PROMPT_REVISION.read_text()
+    upgrade = text.split("def upgrade")[1].split("def downgrade")[0]
+    assert "drop_table" not in upgrade
+    assert "delete(" not in upgrade
+    assert '"kc_model_prompts"' in upgrade
+    assert '"kc_sessions.id"' in upgrade
+    assert '"kc_messages.id"' in upgrade
+    for name in ("model_prompts", "sessions", "students", "courses"):
+        assert f'"{name}"' not in upgrade
+
+
+def test_kc_chat_admin_lists_the_session_and_the_stored_prompt() -> None:
+    course = _make("zz-chat-admin", title="ZZ chat course")
+    storm = _storm()
+    _clear_progress(storm.id)
+    try:
+        pushed = client.post(
+            f"/kc/courses/{course['id']}/push",
+            json={"components": [{"code": "zz-chat-fact", "title": "River fact"}]},
+        ).json()["components"]
+        node = pushed[0]
+        assert client.put(f"/kc/nodes/{node['id']}", json=_component("River fact")).status_code == 200
+        assert client.post(f"/kc/courses/{course['id']}/ready").status_code == 200
+        opened = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": node["id"]},
+        )
+        assert opened.status_code == 200, opened.text
+        session_id = opened.json()["id"]
+        spoken = client.post(
+            f"/kc/tutor/sessions/{session_id}/speech",
+            json={"content": "What is true of River fact?"},
+        )
+        assert spoken.status_code == 200, spoken.text
+        message_id = spoken.json()["messages"][-1]["id"]
+        saved = client.post(
+            f"/kc/sessions/{session_id}/model-prompts",
+            json={
+                "system_prompt": "You are the knowledge-component tutor.",
+                "messages": [
+                    {"role": "user", "content": "Say this step to the student now."},
+                    {"role": "request", "content": {"temperature": 0.2}},
+                ],
+                "model": "gpt-4o-mini",
+                "message_id": message_id,
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["model"] == "gpt-4o-mini"
+        assert saved.json()["message_id"] == message_id
+
+        listed = client.get("/kc/sessions")
+        assert listed.status_code == 200, listed.text
+        row = next(item for item in listed.json() if item["id"] == session_id)
+        assert row["student_id"] == str(storm.id)
+        assert row["kc_title"] == "River fact"
+        assert row["course_title"] == "ZZ chat course"
+        assert row["message_count"] == 1
+        assert row["score"] is None
+        assert row["step_label"]
+        filtered = client.get(f"/kc/sessions?student_id={storm.id}")
+        assert [item["id"] for item in filtered.json() if item["id"] == session_id] == [session_id]
+        assert client.get(f"/kc/sessions?student_id={uuid.uuid4()}").json() == []
+        kid = client.get("/sessions").json()
+        assert all(item["id"] != session_id for item in kid)
+
+        detail = client.get(f"/kc/sessions/{session_id}")
+        assert detail.status_code == 200, detail.text
+        body = detail.json()
+        assert body["student"]["id"] == str(storm.id)
+        assert body["component"]["code"] == "zz-chat-fact"
+        assert body["messages"][0]["content"] == "What is true of River fact?"
+        assert body["prompts"][0]["system_prompt"] == "You are the knowledge-component tutor."
+        assert body["prompts"][0]["messages"][0]["content"] == "Say this step to the student now."
+        assert body["prompts"][0]["messages"][1]["role"] == "request"
+
+        missing = client.post(
+            f"/kc/sessions/{session_id}/model-prompts",
+            json={
+                "system_prompt": "Missing message.",
+                "messages": [],
+                "message_id": str(uuid.uuid4()),
+            },
+        )
+        assert missing.status_code == 400
+        assert client.get(f"/kc/sessions/{uuid.uuid4()}").status_code == 404
+    finally:
+        _clear_progress(storm.id)
         _wipe_zz()

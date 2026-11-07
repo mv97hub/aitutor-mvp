@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy import and_, delete, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.kc_prompt import build_kc_prompt, recipe_name, step_labels
 from app.kc_syllabus import component_brief, planning_context
@@ -23,11 +23,13 @@ from app.models import (
     KcEdge,
     KcGoal,
     KcMessage,
+    KcModelPrompt,
     KcNode,
     KcSession,
     KcState,
     Student,
 )
+from app.present import student_out
 from app.tutor_profile import load_profile
 
 AUDIENCES = ("6-8", "9-11", "12-14", "15-17")
@@ -1393,6 +1395,137 @@ def turn(db: Session, session: KcSession, answer: str) -> dict:
     body["reply"] = reply
     body["passed"] = passed
     return body
+
+
+def _chat_step_label(node: KcNode | None, step: int) -> str:
+    labels = step_labels(node.kc_type if node else None)
+    return labels[min(max(step, 0), len(labels) - 1)]
+
+
+def _chat_load_options():
+    return (
+        selectinload(KcSession.messages),
+        selectinload(KcSession.prompts),
+        selectinload(KcSession.student),
+        selectinload(KcSession.goal),
+        selectinload(KcSession.component),
+    )
+
+
+def kc_prompt_out(row: KcModelPrompt) -> dict:
+    return {
+        "id": row.id,
+        "session_id": row.session_id,
+        "message_id": row.message_id,
+        "seq": row.seq,
+        "system_prompt": row.system_prompt,
+        "messages": list(row.messages or []),
+        "model": row.model,
+        "created_at": row.created_at,
+    }
+
+
+def _chat_summary(session: KcSession) -> dict:
+    node = session.component
+    goal = session.goal
+    return {
+        "id": session.id,
+        "student_id": session.student_id,
+        "student_display_name": session.student.display_name,
+        "course_id": session.goal_id,
+        "course_code": goal.code if goal is not None else "",
+        "course_title": goal.title if goal is not None else "",
+        "kc_id": session.kc_id,
+        "kc_code": node.code if node is not None else "",
+        "kc_title": node.title if node is not None else "",
+        "kc_type": node.kc_type if node is not None else None,
+        "recipe": session.recipe,
+        "step": session.step,
+        "step_label": _chat_step_label(node, session.step),
+        "status": session.status,
+        "score": session.score,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "message_count": len(session.messages),
+    }
+
+
+def kc_chat_summaries(db: Session, student_id: uuid.UUID | None) -> list[dict]:
+    stmt = select(KcSession).options(*_chat_load_options()).order_by(KcSession.updated_at.desc())
+    if student_id is not None:
+        stmt = stmt.where(KcSession.student_id == student_id)
+    return [_chat_summary(row) for row in db.scalars(stmt).unique().all()]
+
+
+def kc_chat_detail(db: Session, session_id: uuid.UUID) -> dict:
+    session = db.scalar(
+        select(KcSession).options(*_chat_load_options()).where(KcSession.id == session_id)
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="That chat was not found.")
+    node = session.component
+    goal = session.goal
+    return {
+        "id": session.id,
+        "status": session.status,
+        "recipe": session.recipe,
+        "step": session.step,
+        "step_label": _chat_step_label(node, session.step),
+        "score": session.score,
+        "attempts": session.attempts,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "student": student_out(session.student).model_dump(),
+        "course": {
+            "id": session.goal_id,
+            "code": goal.code if goal is not None else "",
+            "title": goal.title if goal is not None else "",
+        },
+        "component": {
+            "id": session.kc_id,
+            "code": node.code if node is not None else "",
+            "title": node.title if node is not None else "",
+            "kc_type": node.kc_type if node is not None else None,
+        },
+        "messages": [
+            {
+                "id": message.id,
+                "role": message.role,
+                "content": message.content,
+                "seq": message.seq,
+                "created_at": message.created_at,
+            }
+            for message in session.messages
+        ],
+        "prompts": [kc_prompt_out(row) for row in session.prompts],
+    }
+
+
+def append_kc_model_prompt(
+    db: Session,
+    session: KcSession,
+    system_prompt: str,
+    messages: list,
+    model: str,
+    message_id: uuid.UUID | None = None,
+) -> KcModelPrompt:
+    linked = None
+    if message_id is not None:
+        linked = db.get(KcMessage, message_id)
+        if linked is None or linked.session_id != session.id:
+            raise HTTPException(status_code=400, detail="That message is not part of this chat.")
+    seq = db.scalar(select(func.max(KcModelPrompt.seq)).where(KcModelPrompt.session_id == session.id))
+    row = KcModelPrompt(
+        session_id=session.id,
+        message_id=linked.id if linked is not None else None,
+        seq=(seq or 0) + 1,
+        system_prompt=system_prompt,
+        messages=messages,
+        model=model.strip(),
+    )
+    db.add(row)
+    db.flush()
+    return row
 
 
 def record_speech(db: Session, session: KcSession, content: str) -> dict:

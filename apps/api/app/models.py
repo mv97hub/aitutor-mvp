@@ -667,10 +667,18 @@ class KcSession(Base):
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
 
+    student: Mapped[Student] = relationship()
+    goal: Mapped[KcGoal] = relationship()
+    component: Mapped[KcNode] = relationship(foreign_keys=[kc_id])
     messages: Mapped[list["KcMessage"]] = relationship(
         back_populates="session",
         cascade="all, delete-orphan",
         order_by="KcMessage.seq",
+    )
+    prompts: Mapped[list["KcModelPrompt"]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="KcModelPrompt.seq",
     )
 
 
@@ -695,6 +703,32 @@ class KcMessage(Base):
     )
 
     session: Mapped[KcSession] = relationship(back_populates="messages")
+
+
+class KcModelPrompt(Base):
+    """One model call for a component session: the system prompt and the messages sent."""
+
+    __tablename__ = "kc_model_prompts"
+    __table_args__ = (
+        UniqueConstraint("session_id", "seq", name="uq_kc_model_prompts_session_seq"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_messages.id", ondelete="SET NULL"), index=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    messages: Mapped[list] = mapped_column(JSON, nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    session: Mapped[KcSession] = relationship(back_populates="prompts")
 
 
 class KcCreatorMessage(Base):

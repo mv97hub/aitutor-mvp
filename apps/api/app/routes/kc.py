@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.kc import (
     add_component,
+    append_kc_model_prompt,
     apply_component,
     course_of_node,
     course_out,
@@ -18,6 +19,9 @@ from app.kc import (
     creator_thread,
     delete_kc_course,
     delete_node,
+    kc_chat_detail,
+    kc_chat_summaries,
+    kc_prompt_out,
     accept_model_turn,
     course_prompt_for,
     creator_prompt_for,
@@ -45,6 +49,7 @@ from app.kc import (
     _node_or_404,
     _student_or_404,
 )
+from app.schemas import KcChatDetail, KcChatSummary, ModelPromptIn, ModelPromptOut
 
 router = APIRouter()
 
@@ -337,3 +342,31 @@ def post_tutor_speech(session_id: uuid.UUID, body: SpeechIn, db: Session = Depen
 @router.post("/kc/tutor/sessions/{session_id}/turn")
 def post_tutor_turn(session_id: uuid.UUID, body: TurnIn, db: Session = Depends(get_db)) -> dict:
     return turn(db, _session_or_404(db, session_id), body.answer)
+
+
+@router.get("/kc/sessions", response_model=list[KcChatSummary])
+def list_kc_chats(
+    student_id: uuid.UUID | None = None, db: Session = Depends(get_db)
+) -> list[KcChatSummary]:
+    return kc_chat_summaries(db, student_id)
+
+
+@router.get("/kc/sessions/{session_id}", response_model=KcChatDetail)
+def get_kc_chat(session_id: uuid.UUID, db: Session = Depends(get_db)) -> KcChatDetail:
+    return kc_chat_detail(db, session_id)
+
+
+@router.post("/kc/sessions/{session_id}/model-prompts", response_model=ModelPromptOut)
+def post_kc_model_prompt(
+    session_id: uuid.UUID, body: ModelPromptIn, db: Session = Depends(get_db)
+) -> ModelPromptOut:
+    return kc_prompt_out(
+        append_kc_model_prompt(
+            db,
+            _session_or_404(db, session_id),
+            body.system_prompt,
+            list(body.messages),
+            body.model,
+            body.message_id,
+        )
+    )

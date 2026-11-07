@@ -492,6 +492,65 @@ class ModelPromptIn(BaseModel):
     message_id: UUID | None = None
 
 
+class KcChatSummary(BaseModel):
+    id: UUID
+    student_id: UUID
+    student_display_name: str
+    course_id: UUID
+    course_code: str
+    course_title: str
+    kc_id: UUID
+    kc_code: str
+    kc_title: str
+    kc_type: str | None = None
+    recipe: str
+    step: int
+    step_label: str
+    status: str
+    score: int | None = None
+    created_at: datetime
+    updated_at: datetime
+    message_count: int
+
+
+class KcChatCourse(BaseModel):
+    id: UUID
+    code: str
+    title: str
+
+
+class KcChatComponent(BaseModel):
+    id: UUID
+    code: str
+    title: str
+    kc_type: str | None = None
+
+
+class KcChatMessage(BaseModel):
+    id: UUID
+    role: Literal["user", "assistant"]
+    content: str
+    seq: int
+    created_at: datetime
+
+
+class KcChatDetail(BaseModel):
+    id: UUID
+    status: str
+    recipe: str
+    step: int
+    step_label: str
+    score: int | None = None
+    attempts: int
+    created_at: datetime
+    updated_at: datetime
+    student: StudentOut
+    course: KcChatCourse
+    component: KcChatComponent
+    messages: list[KcChatMessage]
+    prompts: list[ModelPromptOut] = Field(default_factory=list)
+
+
 StudioDepth = Literal["survey", "standard", "go_deep"]
 StudioCloseStyle = Literal["one", "several"]
 StudioAnswerStyle = Literal["multiple_choice", "essay", "mixed"]
