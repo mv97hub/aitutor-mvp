@@ -15,7 +15,7 @@ export default function KcTutorDocsPage() {
           The lesson is a chat. Questions and single-choice answers live in the thread.
           Settings is a button in the side column, separate from the lesson chat.
           It chooses the model from the same list as KC Course Creator. gpt-4.1 is the default.
-          deepseek/deepseek-flash-latest calls OpenRouter with OPENROUTER_API_KEY. The OpenAI models stay on OPENAI_API_KEY.
+          ~deepseek/deepseek-flash-latest calls OpenRouter with OPENROUTER_API_KEY. The OpenAI models stay on OPENAI_API_KEY.
           The same settings surface edits the child fields the prompt already includes: age, reading level, modality, and interests.
           Persona, lexicon, metaphors, sidekick, and the rest of the tutor profile stay on Agent customizations.
         </p>
@@ -46,7 +46,7 @@ export default function KcTutorDocsPage() {
           and the chosen text is the answer. The model says the current step. It does not set the type, the edges, or the score.
           Pass, fail, fragile, known, and redirect stay with the scorer.
           If the selected model is an OpenAI model and OPENAI_API_KEY is unset, the page shows the same missing-key error as the kid tutor.
-          If the selected model is deepseek/deepseek-flash-latest and OPENROUTER_API_KEY is unset, the page shows a missing-key error for that key.
+          If the selected model is ~deepseek/deepseek-flash-latest and OPENROUTER_API_KEY is unset, the page shows a missing-key error for that key.
           An OpenAI model does not read the OpenRouter key.
         </p>
         <p>The five types:</p>
@@ -103,7 +103,7 @@ export default function KcTutorDocsPage() {
         <p>
           This page does not edit the course. The choices on the page are which child, which ready course, which card to open, and Settings.
           Settings sits in the side column. It is not part of the lesson chat.
-          The model list is gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and deepseek/deepseek-flash-latest.
+          The model list is gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and ~deepseek/deepseek-flash-latest.
           gpt-4.1 is the default. Saving a model keeps it on this page. The next spoken step uses it.
           Age, reading level, modality, and interests save on the child. The next step&apos;s prompt uses the saved values.
           Those fields do not change the component type, the links, or the score.

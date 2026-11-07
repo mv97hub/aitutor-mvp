@@ -13,14 +13,17 @@ from app.kc_syllabus import planning_context, planned_reply
 
 # The original CreateCourse menu, then a capable default, then the strongest
 # chat model id the app's OpenAI client accepts (openai(), @ai-sdk/openai 4.0.106).
-# DeepSeek Flash is last. The web app calls it through OpenRouter.
+# DeepSeek Flash is last. OpenRouter's alias has a leading tilde. The web app
+# calls that alias. A saved deepseek/deepseek-flash-latest id is sent as it.
+DEEPSEEK_FLASH_MODEL = "~deepseek/deepseek-flash-latest"
+LEGACY_DEEPSEEK_FLASH_MODEL = "deepseek/deepseek-flash-latest"
 KC_CHAT_MODELS = (
     "gpt-4o-mini",
     "gpt-4o",
     "gpt-4.1-mini",
     "gpt-4.1",
     "gpt-6.1-sol",
-    "deepseek/deepseek-flash-latest",
+    DEEPSEEK_FLASH_MODEL,
 )
 DEFAULT_KC_CHAT_MODEL = "gpt-4.1"
 MAX_COMPONENTS = 16
@@ -150,8 +153,16 @@ CREATOR_SCHEMA = {
 }
 
 
+def model_for_call(model: str) -> str:
+    """The id sent to the provider. A saved row may still hold the id without the tilde."""
+    chosen = (model or "").strip()
+    if chosen == LEGACY_DEEPSEEK_FLASH_MODEL:
+        return DEEPSEEK_FLASH_MODEL
+    return chosen
+
+
 def checked_model(model: str) -> str:
-    chosen = (model or "").strip() or DEFAULT_KC_CHAT_MODEL
+    chosen = model_for_call(model) or DEFAULT_KC_CHAT_MODEL
     if chosen not in KC_CHAT_MODELS:
         raise ValueError("That model is not allowed.")
     return chosen

@@ -1,7 +1,7 @@
 import { Output, convertToModelMessages, jsonSchema, streamText, type JSONSchema7, type UIMessage } from "ai";
 
 import { api, apiBase } from "@/lib/api";
-import { DEEPSEEK_FLASH_MODEL, MISSING_OPENROUTER_KEY, usesOpenRouter } from "@/lib/kc-models";
+import { DEEPSEEK_FLASH_MODEL, MISSING_OPENROUTER_KEY, modelForCall, usesOpenRouter } from "@/lib/kc-models";
 import { languageModel } from "@/lib/language-model";
 import type { StudioMessage } from "@/lib/studio";
 import { detailFrom, plainFailure, replyIfUnwritten, settleModelResult } from "@/lib/studio-chat";
@@ -82,11 +82,12 @@ export async function POST(req: Request) {
     return new Response(message, { status: 502 });
   }
 
-  if (!ALLOWED_MODELS.has(bundle.model)) {
+  const modelName = modelForCall(bundle.model);
+  if (!ALLOWED_MODELS.has(modelName)) {
     return new Response("That CreateCourse model is not allowed.", { status: 422 });
   }
 
-  if (usesOpenRouter(bundle.model)) {
+  if (usesOpenRouter(modelName)) {
     if (!process.env.OPENROUTER_API_KEY?.trim()) {
       return new Response(MISSING_OPENROUTER_KEY, {
         status: 503,
@@ -131,7 +132,7 @@ export async function POST(req: Request) {
     let output: CourseEdit;
     try {
       const result = streamText({
-        model: languageModel(bundle.model),
+        model: languageModel(modelName),
         output: Output.object({
           schema: jsonSchema(bundle.response_schema),
           name: "course_edit",

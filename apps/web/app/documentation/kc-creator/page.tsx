@@ -34,9 +34,9 @@ export default function KcCreatorDocsPage() {
         </p>
         <p>
           The right pane is a conversation about this component only. It is stored for the component. It is not a kid-tutor message.
-          A model menu sits in the composer: gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and deepseek/deepseek-flash-latest. gpt-4.1 is the default.
+          A model menu sits in the composer: gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and ~deepseek/deepseek-flash-latest. gpt-4.1 is the default.
           The chosen model is sent with each message. It does not change scoring, edges, or which types exist.
-          OpenAI models use OPENAI_API_KEY. deepseek/deepseek-flash-latest uses OPENROUTER_API_KEY.
+          OpenAI models use OPENAI_API_KEY. ~deepseek/deepseek-flash-latest uses OPENROUTER_API_KEY.
           If the key for the chosen model is missing, the chat shows that missing-key error. The other key is not required for that call.
           The first view starts with the description, the brief for this component, and then the saved text: title, type,
           core truth, rubric lines, each wrong move and its component code, prerequisite codes, encompasses codes,
