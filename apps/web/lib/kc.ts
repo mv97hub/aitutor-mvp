@@ -96,6 +96,13 @@ export type KcProgress = {
     kc_type: string | null;
     patch: boolean;
     status: "completed" | "in_progress" | "not_started";
+    result?: {
+      status: "known" | "fragile";
+      rubric_met: string[];
+      justification: string;
+      strong: string;
+      work_on: string;
+    } | null;
   }[];
   ring: { id: string; code: string; title: string; kc_type: string | null; status: "known" | "fragile" | "not_started" }[];
   cards: KcCard[];

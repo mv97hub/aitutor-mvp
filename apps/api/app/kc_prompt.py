@@ -156,6 +156,71 @@ def is_fragment(answer: str, fact: str) -> bool:
     return 0 < len(answer_words) <= 3
 
 
+_BRIEF = re.compile(
+    r"^Outline:\s*(.*?)\nTopics:\s*(.*?)\nGoals:\s*(.*)\s*\Z",
+    re.DOTALL | re.IGNORECASE,
+)
+_LINK_SPLIT = re.compile(r"\s*(?:\n+|;|(?<=[.!?])\s+|\s+so\s+)\s*", re.IGNORECASE)
+
+
+def read_brief(description: str) -> tuple[str, list[str], list[str]]:
+    """Outline, topics, and goals from the three-line component description."""
+    match = _BRIEF.match((description or "").strip())
+    if match is None:
+        return "", [], []
+    outline = match.group(1).strip()
+    topics = [part.strip() for part in match.group(2).split(";") if part.strip()]
+    goals = [part.strip() for part in match.group(3).split(";") if part.strip()]
+    return outline, topics, goals
+
+
+def _has_text(value: object) -> bool:
+    return bool(str(value or "").strip())
+
+
+def _norm_text(value: str) -> str:
+    return " ".join(value.lower().split())
+
+
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _chain_links(chain: str) -> list[str]:
+    text = (chain or "").strip()
+    if not text:
+        return []
+    parts = [part.strip(" \t.;,") for part in _LINK_SPLIT.split(text)]
+    return [part for part in parts if part] or [text]
+
+
+def _discussions(topics: list[str], goals: list[str], fallback: list[str]) -> list[tuple[str, str]]:
+    """Topics in stored order, then any fallback field that is not already a topic."""
+    source = list(topics)
+    seen = {_norm_text(topic) for topic in topics}
+    for item in fallback:
+        key = _norm_text(item)
+        if key and key not in seen:
+            source.append(item)
+            seen.add(key)
+    pairs: list[tuple[str, str]] = []
+    for index, text in enumerate(source):
+        pairs.append((text, goals[index] if index < len(goals) else ""))
+    return pairs
+
+
+def _topic_moves(topics: list[str], goals: list[str], fallback: list[str]) -> list[Move]:
+    moves: list[Move] = []
+    for index, (text, goal) in enumerate(_discussions(topics, goals, fallback), start=1):
+        evidence = (f"goal-{index}",) if goal else ()
+        moves.append(Move(f"topic-{index}", text, evidence, False))
+    return moves
+
+
 def moves_for(
     node: KcNode,
     profile: TutorProfile,
@@ -163,37 +228,76 @@ def moves_for(
     *,
     fragment: bool = False,
 ) -> list[Move]:
-    """The move sequence for this type. Intro and the closes are not steps."""
+    """One step per stored field that has a value. An empty field is skipped."""
     kind = node.kc_type or ""
     fields = node.type_fields or {}
     explain = self_explanation_on(profile)
+    outline, topics, goals = read_brief(node.description or "")
+    steps = _string_list(fields.get("steps"))
+    mixes = _string_list(fields.get("mixes"))
+    chain = str(fields.get("causal_chain") or "").strip()
     sequence: list[Move] = []
+    if outline or (kind == "synthesis" and mixes):
+        sequence.append(Move("orient", "Orient", (), False))
     if kind == "factual":
-        sequence.append(Move("retrieve", "Retrieve", ("fact",), False))
-        if explain and fragment:
-            sequence.append(Move("restate", "Restate", ("restatement",), False))
+        sequence.extend(_topic_moves(topics, goals, []))
+        fact = str(fields.get("fact") or "").strip()
+        question = str(fields.get("retrieval_question") or "").strip()
+        if fact or question:
+            sequence.append(Move("retrieve", "Retrieve", ("fact",) if fact else (), False))
+            if explain and fragment:
+                sequence.append(Move("restate", "Restate", ("restatement",), False))
     elif kind == "procedural":
-        sequence.append(Move("worked", "Worked example", (), False))
-        sequence.append(Move("faded", "Faded step", ("blanked_step",), False))
-        sequence.append(Move("solo", "Solo", ("solo_check",), False))
-        if explain:
+        discussed = _topic_moves(topics, goals, steps)
+        sequence.extend(discussed)
+        if discussed:
+            sequence.append(Move("decide", "Decision point", (), False))
+        if steps:
+            sequence.append(Move("faded", "Faded step", ("blanked_step",), False))
+        problem = str(fields.get("solo_problem") or "").strip()
+        check = str(fields.get("solo_check") or "").strip()
+        if problem or check:
+            sequence.append(Move("solo", "Solo", ("solo_check",) if check else (), False))
+        if explain and discussed:
             sequence.append(Move("why_order", "Why this order", ("why_order",), False))
     elif kind == "conceptual":
-        sequence.append(Move("predict", "Predict", (), True))
-        sequence.append(Move("contrast", "Contrast", (), False))
-        sequence.append(Move("rule", "State the rule", ("rule",), False))
-        if str(fields.get("transfer_case") or "").strip():
+        sequence.extend(_topic_moves(topics, goals, []))
+        case_a = str(fields.get("case_a") or "").strip()
+        case_b = str(fields.get("case_b") or "").strip()
+        prediction = str(fields.get("prediction") or "").strip()
+        rule = str(fields.get("rule") or "").strip()
+        transfer = str(fields.get("transfer_case") or "").strip()
+        if case_a:
+            sequence.append(Move("predict_a", "Predict case one", (), True))
+        if case_b:
+            sequence.append(Move("predict_b", "Predict case two", (), True))
+        if case_a and case_b:
+            sequence.append(Move("contrast", "Contrast", (), False))
+        elif prediction and not case_a and not case_b:
+            sequence.append(Move("predict", "Predict", (), False))
+        if rule:
+            sequence.append(Move("rule", "State the rule", ("rule",), False))
+        if transfer:
             sequence.append(Move("transfer", "Transfer", ("transfer",), False))
     elif kind == "causal":
-        sequence.append(Move("stake", "What is at stake", (), False))
-        sequence.append(Move("mark", "Mark the claim", ("mark",), True))
-        sequence.append(Move("defend", "Defend the chain", ("causal_chain",), False))
-        if explain and str(fields.get("counterfactual") or "").strip():
+        links = [] if topics else _chain_links(chain)
+        sequence.extend(_topic_moves(topics, goals, links))
+        if _has_text(fields.get("decision_point")):
+            sequence.append(Move("stake", "What is at stake", (), False))
+        if _has_text(fields.get("flawed_claim")):
+            sequence.append(Move("mark", "Mark the claim", ("mark",), True))
+        if chain:
+            sequence.append(Move("defend", "Defend the chain", ("causal_chain",), False))
+        if explain and _has_text(fields.get("counterfactual")):
             sequence.append(Move("counterfactual", "Counterfactual", ("counterfactual",), False))
     elif kind == "synthesis":
-        sequence.append(Move("faulty", "Faulty plan", (), False))
-        sequence.append(Move("correct", "Correct the plan", ("core_truth",), False))
-        sequence.append(Move("which_job", "Which job", ("which_job",), False))
+        sequence.extend(_topic_moves(topics, goals, [] if topics else mixes))
+        if _has_text(fields.get("faulty_plan")):
+            sequence.append(Move("faulty", "Faulty plan", (), False))
+        if _has_text(node.core_truth):
+            sequence.append(Move("correct", "Correct the plan", ("core_truth",), False))
+        if mixes:
+            sequence.append(Move("which_job", "Which job", ("which_job",), False))
     else:
         sequence.append(Move("this", "This step", (), False))
     if goal is not None and goal.kind == "curiosity":
@@ -215,7 +319,8 @@ def step_labels(kc_type: str | None) -> list[str]:
         enrichment="on_request",
         misconception_policy="retry_once",
     )
-    return [move.name for move in moves_for(node, profile, None)]
+    names = [move.name for move in moves_for(node, profile, None)]
+    return names or ["This step"]
 
 
 def asks_why(profile: TutorProfile, move: Move) -> bool:
@@ -224,16 +329,54 @@ def asks_why(profile: TutorProfile, move: Move) -> bool:
     return move.key in {"restate", "why_order", "counterfactual", "extra_why", "which_job"}
 
 
+def _goal_text(node: KcNode, move: Move) -> str:
+    if not move.key.startswith("topic-"):
+        return ""
+    try:
+        index = int(move.key.split("-", 1)[1]) - 1
+    except ValueError:
+        return ""
+    _outline, _topics, goals = read_brief(node.description or "")
+    if 0 <= index < len(goals):
+        return goals[index]
+    return ""
+
+
+def _topic_count(moves: list[Move]) -> int:
+    return sum(1 for item in moves if item.key.startswith("topic-"))
+
+
+def _topic_number(moves: list[Move], move: Move) -> int:
+    number = 0
+    for item in moves:
+        if item.key.startswith("topic-"):
+            number += 1
+            if item.key == move.key:
+                return number
+    return 0
+
+
 def move_material(node: KcNode, move: Move) -> str:
     fields = node.type_fields or {}
+    if move.key == "orient":
+        outline, _topics, _goals = read_brief(node.description or "")
+        if outline:
+            return f"Outline: {outline}"
+        mixes = _string_list(fields.get("mixes"))
+        if mixes:
+            return "The two earlier components are " + " and ".join(mixes) + "."
+        return "Outline: "
+    if move.key.startswith("topic-"):
+        goal = _goal_text(node, move)
+        if goal:
+            return f"Topic: {move.name}. Goal: {goal}"
+        return f"Topic: {move.name}"
     if move.key == "retrieve":
         return str(fields.get("retrieval_question") or "What is the fact?")
     if move.key == "restate":
         return "Ask for the fact in a full sentence. The earlier answer was only a fragment."
-    if move.key == "worked":
-        steps = [str(item) for item in (fields.get("steps") or [])]
-        shown = " ".join(f"{index + 1}. {text}" for index, text in enumerate(steps))
-        return f"Worked steps: {shown}".strip()
+    if move.key == "decide":
+        return "Ask the child what to do next. Do not show the remaining steps."
     if move.key == "faded":
         steps = [str(item) for item in (fields.get("steps") or [])]
         blank = int(fields.get("blanked_step") or 0)
@@ -245,12 +388,12 @@ def move_material(node: KcNode, move: Move) -> str:
         return str(fields.get("solo_problem") or "Solve it on your own.")
     if move.key == "why_order":
         return "Ask why the steps go in this order."
+    if move.key == "predict_a":
+        return f"Case one: {fields.get('case_a') or ''}. {fields.get('prediction') or ''}".strip()
+    if move.key == "predict_b":
+        return f"Case two: {fields.get('case_b') or ''}. {fields.get('prediction') or ''}".strip()
     if move.key == "predict":
-        return (
-            f"Case one: {fields.get('case_a') or ''} "
-            f"Case two: {fields.get('case_b') or ''} "
-            f"{fields.get('prediction') or ''}"
-        ).strip()
+        return str(fields.get("prediction") or "What do you predict?")
     if move.key == "contrast":
         return f"Case one: {fields.get('case_a') or ''} Case two: {fields.get('case_b') or ''}".strip()
     if move.key == "rule":
@@ -262,13 +405,11 @@ def move_material(node: KcNode, move: Move) -> str:
     if move.key == "mark":
         return f"Flawed claim: {fields.get('flawed_claim') or ''}".strip()
     if move.key == "defend":
-        return "Ask the child to defend the causal chain."
+        return f"Causal chain: {fields.get('causal_chain') or ''}".strip()
     if move.key == "counterfactual":
         return f"Counterfactual: {fields.get('counterfactual') or ''}".strip()
     if move.key == "faulty":
-        mixes = fields.get("mixes") or []
-        joined = " and ".join(str(item) for item in mixes) or "two earlier components"
-        return f"A rookie mixes {joined} and says: {fields.get('faulty_plan') or ''}".strip()
+        return f"Faulty plan: {fields.get('faulty_plan') or ''}".strip()
     if move.key == "correct":
         return "Ask the child to correct the plan."
     if move.key == "which_job":
@@ -280,7 +421,7 @@ def move_material(node: KcNode, move: Move) -> str:
 
 _POSITION = re.compile(r"^(\d+) of (\d+); previous: (.*); next: (.*)$")
 
-_PICTURE_MOVES = {"predict", "contrast", "worked", "faded"}
+_PICTURE_MOVES = {"predict", "predict_a", "predict_b", "contrast", "faded"}
 
 
 def _early_reading(level: str) -> bool:
@@ -582,10 +723,21 @@ def _ending(
     return " ".join(part for part in (lead, length, close, outro) if part)
 
 
+def _step_intro(move: Move, moves: list[Move]) -> str:
+    if move.key.startswith("topic-"):
+        number = _topic_number(moves, move)
+        total = _topic_count(moves)
+        return f"This step is topic {number} of {total}: {move.name}. The child will type."
+    if move.choice:
+        return f"This step is {move.name}. The child will pick on screen."
+    return f"This step is {move.name}. The child will type."
+
+
 def _this_turn(
     *,
     node: KcNode,
     move: Move,
+    moves: list[Move],
     index: int,
     total: int,
     opening: bool,
@@ -599,9 +751,14 @@ def _this_turn(
     others_known: bool,
     course_title: str,
 ) -> list[str]:
+    # The orient move replaced the old opening script. The flag stays for callers.
+    del opening
+    del node
+    del index
+    del total
     lines = [
         "You are the knowledge-component tutor.",
-        f"This is move {index + 1} of {total}: {move.name}.",
+        _step_intro(move, moves),
     ]
     closing = unit_complete or course_complete
     if fragment and explain and move.key == "retrieve" and not closing:
@@ -609,16 +766,9 @@ def _this_turn(
             "The retrieval was only a fragment. Advance, and ask for the fact in a full sentence. "
             "Do not complete the unit on that fragment."
         )
-    elif opening and not closing:
-        lines.append(
-            "This is the opening. Say what this piece is, why it sits in this course, and what the child will do. "
-            f"Use this: {_prompt_material(node, move)}"
-        )
     elif move.key == "extra_why" and not closing:
         lines.append("This move is the one extra why. The unit is already known. Leave the score as it is.")
-    elif not closing:
-        lines.append(f"Do this move. {_prompt_material(node, move)}")
-    if choice_on_screen:
+    if move.choice or choice_on_screen:
         lines.append(
             "The child picks the choice on screen. Do not add a question beside it. "
             "A unit close or a course outro asks no new question."
@@ -636,6 +786,100 @@ def _this_turn(
     return lines
 
 
+def _withheld(label: str, text: str, anti_spoiler: bool) -> str:
+    sentence = _finish(text)
+    if anti_spoiler:
+        return (
+            f"Grade the answer against this {label}: {sentence} "
+            "Say it only when a reveal or a passed close allows it."
+        )
+    return f"The {label} is: {sentence} You may say it while you teach."
+
+
+def _practice_lines(node: KcNode, move: Move, anti_spoiler: bool) -> list[str]:
+    """The one field this practice step walks. Other fields stay out."""
+    fields = node.type_fields or {}
+    if move.key == "retrieve":
+        lines = [f"The retrieval question is: {fields.get('retrieval_question') or 'What is the fact?'}"]
+        fact = str(fields.get("fact") or "").strip()
+        if fact:
+            lines.append(_withheld("fact", fact, anti_spoiler))
+        return lines
+    if move.key == "restate":
+        fact = str(fields.get("fact") or node.core_truth or "").strip()
+        lines = ["Ask for the fact in a full sentence."]
+        if fact:
+            lines.append(_withheld("fact", fact, anti_spoiler))
+        return lines
+    if move.key == "decide":
+        return ["Ask the child what to do next. Do not show the remaining steps."]
+    if move.key == "faded":
+        return [move_material(node, move)]
+    if move.key == "solo":
+        lines = [f"The solo problem is: {fields.get('solo_problem') or 'Solve it on your own.'}"]
+        check = str(fields.get("solo_check") or "").strip()
+        if check:
+            lines.append(_withheld("solo check", check, True))
+        return lines
+    if move.key == "why_order":
+        return ["Ask why the steps go in this order."]
+    if move.key == "predict_a":
+        lines = [f"Case one: {fields.get('case_a') or ''}"]
+        prediction = str(fields.get("prediction") or "").strip()
+        if prediction:
+            lines.append(f"Prediction: {prediction}")
+        return lines
+    if move.key == "predict_b":
+        lines = [f"Case two: {fields.get('case_b') or ''}"]
+        prediction = str(fields.get("prediction") or "").strip()
+        if prediction:
+            lines.append(f"Prediction: {prediction}")
+        return lines
+    if move.key == "predict":
+        return [f"Prediction: {fields.get('prediction') or 'What do you predict?'}"]
+    if move.key == "contrast":
+        return [
+            f"Case one: {fields.get('case_a') or ''}",
+            f"Case two: {fields.get('case_b') or ''}",
+        ]
+    if move.key == "rule":
+        rule = str(fields.get("rule") or "").strip()
+        lines = ["Ask the child to state the rule."]
+        if rule:
+            lines.append(_withheld("rule", rule, True))
+        return lines
+    if move.key == "transfer":
+        return [f"Transfer case: {fields.get('transfer_case') or ''}"]
+    if move.key == "stake":
+        return [f"Decision point: {fields.get('decision_point') or ''}"]
+    if move.key == "mark":
+        return [f"Flawed claim: {fields.get('flawed_claim') or ''}"]
+    if move.key == "defend":
+        chain = str(fields.get("causal_chain") or "").strip()
+        lines = ["Ask the child to defend the causal chain."]
+        if chain:
+            lines.append(_withheld("causal chain", chain, anti_spoiler))
+        return lines
+    if move.key == "counterfactual":
+        return [f"Counterfactual: {fields.get('counterfactual') or ''}"]
+    if move.key == "faulty":
+        return [f"Faulty plan: {fields.get('faulty_plan') or ''}"]
+    if move.key == "correct":
+        truth = str(node.core_truth or "").strip()
+        lines = ["Ask the child to correct the plan."]
+        if truth:
+            lines.append(_withheld("core truth", truth, True))
+        return lines
+    if move.key == "which_job":
+        mixes = _string_list(fields.get("mixes"))
+        if mixes:
+            return ["Ask which component does which job: " + " and ".join(mixes) + "."]
+        return ["Ask which component does which job."]
+    if move.key == "extra_why":
+        return ["One extra why. The unit is already known. This does not change the score."]
+    return [move_material(node, move)]
+
+
 def _what_to_teach(
     *,
     node: KcNode,
@@ -645,29 +889,25 @@ def _what_to_teach(
     prerequisite_status: str,
     course_position: str,
 ) -> list[str]:
-    course = f"The course is {goal.title}, for ages {goal.audience}."
-    description = (goal.description or "").strip()
-    if description:
-        course = f"{course} {description}"
-    lines = [
-        f"{course} Keep the wording inside that age band.",
-        " ".join(
-            part
-            for part in (f"This piece is {node.title}.", (node.description or "").strip())
-            if part
-        ),
-    ]
-    recipe = recipe_name(node.kc_type)
-    if recipe == "unset":
-        lines.append(_path_sentence(node))
-    else:
-        lines.append(f"Teach this as a {recipe}. {_path_sentence(node)}")
-    lines.append(_core_sentence(node.core_truth or "", anti_spoiler))
-    rubric = [str(item).strip() for item in (node.rubric or []) if str(item).strip()]
-    if rubric:
-        lines.append("The points that count are: " + "; ".join(rubric) + ".")
-    else:
-        lines.append("No separate rubric lines are stored.")
+    # Course description, position, and prerequisites stay off this section.
+    del goal
+    del prerequisite_status
+    del course_position
+    if move.key.startswith("topic-"):
+        lines = [f"The topic is {move.name}."]
+        goal_text = _goal_text(node, move)
+        if goal_text:
+            lines.append(f"The goal is {goal_text}.")
+        return lines
+    if move.key == "orient":
+        outline, _topics, _goals = read_brief(node.description or "")
+        if outline:
+            return [f"The outline is {outline}."]
+        mixes = _string_list((node.type_fields or {}).get("mixes"))
+        if mixes:
+            return ["The two earlier components are " + " and ".join(mixes) + "."]
+        return ["No outline is stored."]
+    lines = _practice_lines(node, move, anti_spoiler)
     if move.evidence:
         lines.append(
             "On this move, count these ids only when the answer holds them: "
@@ -676,26 +916,111 @@ def _what_to_teach(
         )
     else:
         lines.append("This move is not checked. Advance when the child has done what the move asked.")
-    wrongs = _wrong_moves(node)
-    if wrongs:
-        lines.append("Listen for these wrong moves. " + " ".join(f"Wrong move: {_finish(wrong)}" for wrong in wrongs))
-    else:
-        lines.append("No stored wrong move to listen for.")
-    position = _position_sentence(course_position)
-    if position:
-        lines.append(position)
-    lines.append(_prereq_sentence(prerequisite_status))
-    later = _later_case(node, move)
-    if later:
-        lines.append(later)
     return lines
+
+
+def _step_rule(
+    node: KcNode,
+    move: Move,
+    moves: list[Move],
+    *,
+    anti_spoiler: bool,
+) -> str:
+    fields = node.type_fields or {}
+    kind = node.kc_type or ""
+    if move.choice:
+        return (
+            f"This step is {move.name}. The child picks on screen. "
+            "Do not add a second question."
+        )
+    if move.key == "orient":
+        if kind == "procedural":
+            rule = (
+                "This step is Orient. The child will type. "
+                "Elaborate the outline and name the goal of the procedure. "
+                "Do not show the steps or the goals."
+            )
+        elif kind == "conceptual":
+            rule = (
+                "This step is Orient. The child will type. "
+                "Elaborate the outline. Do not name the rule, and do not open the topics."
+            )
+        elif kind == "causal":
+            decision = str(fields.get("decision_point") or "").strip()
+            named = f" Name this decision: {decision}." if decision else ""
+            rule = (
+                "This step is Orient. The child will type. "
+                "Elaborate the outline and name the decision as the situation."
+                f"{named} Do not give the chain, the topics, or the goals."
+            )
+        elif kind == "synthesis":
+            mixes = _string_list(fields.get("mixes"))
+            named = " and ".join(mixes) if mixes else "the two earlier components"
+            rule = (
+                "This step is Orient. The child will type. "
+                f"Name the job of this piece and the two earlier components it mixes: {named}. "
+                "Do not open the topics or correct the rookie."
+            )
+        else:
+            withheld = " Do not state the fact." if anti_spoiler else ""
+            rule = (
+                "This step is Orient. The child will type. "
+                "Elaborate the outline and say where this piece sits. "
+                f"Do not open the topics or the goals.{withheld}"
+            )
+        return rule
+    if move.key.startswith("topic-"):
+        number = _topic_number(moves, move)
+        total = _topic_count(moves)
+        goal_text = _goal_text(node, move)
+        sentence = (
+            f"This turn is topic {number} of {total}: {move.name}. "
+        )
+        if goal_text:
+            point = move.evidence[0] if move.evidence else ""
+            count = f" Count {point} when the answer holds the goal." if point else ""
+            sentence += (
+                f"The goal that belongs to it is {goal_text}. "
+                "Discuss that topic and look for the goal inside the discussion. "
+                "If the goal was not met, ask about the goal directly and stay on this topic."
+                f"{count}"
+            )
+        else:
+            sentence += "Discuss that topic. Do not open a later topic."
+        if kind == "procedural":
+            sentence += " The child says what that step did. Do not show a later step."
+        return sentence
+    if move.key == "extra_why":
+        return "This step is Extra why. The child will type."
+    rules = {
+        "retrieve": "Ask the retrieval question.",
+        "restate": "Ask for the fact in a full sentence.",
+        "decide": "Ask what to do next. Do not show the remaining steps.",
+        "faded": "Ask for the blanked step.",
+        "solo": "Ask the child to solve the solo problem.",
+        "why_order": "Ask why the steps go in this order.",
+        "predict": "Ask for the prediction.",
+        "contrast": "Ask the child to contrast the two cases.",
+        "rule": "Ask the child to state the rule. Do not say the rule first.",
+        "transfer": "Ask the child to use the transfer case.",
+        "stake": "Ask what is at stake.",
+        "defend": "Ask the child to defend the causal chain.",
+        "counterfactual": "Ask what would change.",
+        "faulty": "Show the rookie's faulty plan.",
+        "correct": "Ask the child to correct the plan.",
+        "which_job": "Ask which component does which job.",
+    }
+    detail = rules.get(move.key, "Do this step.")
+    return f"This step is {move.name}. The child will type. {detail}"
 
 
 def _how_to_teach(
     *,
     profile: TutorProfile,
+    node: KcNode,
     goal: KcGoal,
     move: Move,
+    moves: list[Move],
     level: int,
     window_name: str,
     enrichment: str,
@@ -704,8 +1029,13 @@ def _how_to_teach(
     choice_on_screen: bool,
     minutes_used: int,
     has_misconceptions: bool,
+    anti_spoiler: bool,
 ) -> list[str]:
-    lines = [_EXPLAIN[level]]
+    lines = [
+        _step_rule(node, move, moves, anti_spoiler=anti_spoiler),
+        _EXPLAIN[level],
+    ]
+    wrongs = _wrong_moves(node) if has_misconceptions else []
     kind = goal.kind or "mastery"
     if kind == "time_boxed":
         budget = ""
@@ -738,6 +1068,8 @@ def _how_to_teach(
             "The first time a stored wrong move matches, explain that mistake and ask the same move again. "
             "The second time, redirect, and this unit ends fragile."
         )
+        if wrongs:
+            lines.append(" ".join(f"Wrong move: {_finish(wrong)}" for wrong in wrongs))
     if support_band == "hold":
         lines.append(
             "Name the missing earlier idea and the patch card. Do not teach that other component in this chat."
@@ -880,12 +1212,13 @@ def build_kc_prompt(
                 _this_turn(
                     node=node,
                     move=move,
+                    moves=labels,
                     index=index,
                     total=len(labels),
                     opening=opening,
                     unit_complete=unit_complete,
                     course_complete=course_complete,
-                    choice_on_screen=choice_on_screen,
+                    choice_on_screen=choice_on_screen or move.choice,
                     fragment=fragment,
                     explain=explain,
                     level=level,
@@ -910,16 +1243,19 @@ def build_kc_prompt(
                 "How to teach",
                 _how_to_teach(
                     profile=profile,
+                    node=node,
                     goal=goal,
                     move=move,
+                    moves=labels,
                     level=level,
                     window_name=window_name,
                     enrichment=enrichment,
                     support_band=support_band,
                     prerequisite_status=prerequisite_status,
-                    choice_on_screen=choice_on_screen,
+                    choice_on_screen=choice_on_screen or move.choice,
                     minutes_used=minutes_used,
                     has_misconceptions=bool(_wrong_moves(node)),
+                    anti_spoiler=bool(profile.anti_spoiler),
                 ),
             ),
             ("How to sound", [_voice_paragraph(profile)]),
