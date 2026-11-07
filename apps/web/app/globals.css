@@ -2772,6 +2772,25 @@ a.ds-row { text-decoration: none; }
 .kc-editor .kc-check input { width: auto; }
 .kc-editor .kc-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .kc-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.kc-history { display: grid; gap: 4px; }
+.kc-history h3 {
+  margin: 0;
+  color: rgb(97, 102, 107);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+.kc-history pre {
+  margin: 0;
+  min-height: 2.5rem;
+  white-space: pre-wrap;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: rgb(249, 250, 251);
+  padding: 8px 10px;
+  color: rgb(15, 17, 21);
+  font: 13px/20px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 .kc-draft-list { margin: 0; padding-left: 2rem; list-style: decimal; }
 
 .kc-tutor-side { overflow: auto; }

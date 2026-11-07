@@ -127,6 +127,7 @@ export function KcStudio({
                 </label>
               </div>
             </form>
+            <HistoryLog label="Course history" text={course.history ?? ""} />
             <div className="studio-columns">
               <div className="studio-tree" aria-label="Course structure">
                 <StructureView
@@ -191,6 +192,15 @@ export function KcStudio({
         <NetworkModal title={course.title} network={initialNetwork} closeHref={`/kc-studio?course=${course.id}`} />
       ) : null}
     </main>
+  );
+}
+
+function HistoryLog({ label, text }: { label: string; text: string }) {
+  return (
+    <section className="kc-history">
+      <h3>{label}</h3>
+      <pre aria-label={label}>{text.trim() ? text : "No history yet."}</pre>
+    </section>
   );
 }
 

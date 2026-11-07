@@ -2004,3 +2004,236 @@ def test_course_progress_reports_percent_and_unit_status() -> None:
     finally:
         _clear_progress(storm.id)
         _wipe_zz()
+
+
+def _history_lines(text: str) -> list[str]:
+    return [line for line in (text or "").splitlines() if line.strip()]
+
+
+def _assert_et_stamp(line: str) -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    stamp = line.split(" ", 2)[:2]
+    parsed = datetime.strptime(" ".join(stamp), "%Y-%m-%d %H:%M:%S")
+    now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    assert abs((now - parsed).total_seconds()) < 180
+    assert " ET " in f"{line} "
+
+
+def test_a_bad_broken_kc_is_repaired_and_creation_continues() -> None:
+    course = _make("zz-repair", description="The river in this course is blue.")
+    storm = _storm()
+    _clear_progress(storm.id)
+    try:
+        pushed = client.post(
+            f"/kc/courses/{course['id']}/push",
+            json={
+                "components": [
+                    {"code": "zz-repair-a", "title": "River fact"},
+                    {"code": "zz-repair-b", "title": "Other"},
+                ]
+            },
+        ).json()
+        river, other = pushed["components"]
+        assert river["history"] == ""
+        assert other["history"] == ""
+        assert pushed["history"] == ""
+
+        prompt = client.post(
+            f"/kc/nodes/{river['id']}/creator-prompt",
+            json={"message": "Draft this component.", "model": "gpt-4.1"},
+        )
+        assert prompt.status_code == 200, prompt.text
+        enum = prompt.json()["schema"]["properties"]["misconceptions"]["items"]["properties"]["broken_kc"]["enum"]
+        assert enum == ["zz-repair-b"]
+        assert "zz-repair-a" not in enum
+        instructions = prompt.json()["system_prompt"]
+        assert "Copy one code from the other component codes into broken_kc." in instructions
+        assert "It is not a description and not this component's code." in instructions
+        assert "empty misconception" not in instructions.lower()
+
+        missing = client.post(
+            f"/kc/nodes/{river['id']}/model-turn",
+            json={
+                "message": "Draft this component.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(misconceptions=[], prerequisite_codes=["zz-repair-b"]),
+            },
+        )
+        assert missing.status_code == 422
+        assert "Recommend a misconception" in missing.json()["detail"]
+        assert client.get(f"/kc/nodes/{river['id']}").json()["history"] == ""
+
+        bad = client.post(
+            f"/kc/nodes/{river['id']}/model-turn",
+            json={
+                "message": "Draft this component.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(
+                    misconceptions=[{"wrong_move": "The river is purple", "broken_kc": "not-a-component"}],
+                    prerequisite_codes=["zz-repair-b"],
+                ),
+            },
+        )
+        assert bad.status_code == 200, bad.text
+        assert bad.json()["messages"]
+        assert bad.json()["draft"]["misconceptions"] == []
+        assert "not-a-component" not in str(bad.json()["draft"]["misconceptions"])
+        assert "zz-repair-b" not in str(bad.json()["draft"]["misconceptions"])
+
+        mixed = client.post(
+            f"/kc/nodes/{river['id']}/model-turn",
+            json={
+                "message": "Revise the draft.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(
+                    misconceptions=[
+                        {"wrong_move": "The river is red", "broken_kc": "zz-repair-b"},
+                        {"wrong_move": "The river is green", "broken_kc": "zz-repair-a"},
+                    ],
+                    prerequisite_codes=["zz-repair-b"],
+                ),
+            },
+        )
+        assert mixed.status_code == 200, mixed.text
+        assert mixed.json()["draft"]["misconceptions"] == [
+            {"wrong_move": "The river is red", "broken_kc": "zz-repair-b"}
+        ]
+
+        node = client.get(f"/kc/nodes/{river['id']}").json()
+        stored = client.get(f"/kc/courses/{course['id']}").json()
+        lines = _history_lines(node["history"])
+        assert lines == _history_lines(stored["history"])
+        assert len(lines) == 2
+        assert all("Warning:" in line for line in lines)
+        assert "not-a-component" in lines[0]
+        assert "not another component on this course" in lines[0]
+        assert "zz-repair-b" in lines[0]
+        assert 'Changed broken_kc from "not-a-component" to removed' in lines[0]
+        assert "zz-repair-a" in lines[1]
+        assert 'Changed broken_kc from "zz-repair-a" to removed' in lines[1]
+        assert "so creation could continue" in lines[0]
+        for line in lines:
+            _assert_et_stamp(line)
+        assert client.get(f"/kc/nodes/{other['id']}").json()["history"] == ""
+
+        fresh = client.post(
+            f"/kc/nodes/{river['id']}/creator-prompt",
+            json={"message": "Draft this component again.", "model": "gpt-4.1"},
+        )
+        assert fresh.status_code == 200, fresh.text
+        for line in lines:
+            assert line not in fresh.text
+        assert "history" not in fresh.json()["schema"]["properties"]
+
+        written = client.post(f"/kc/nodes/{river['id']}/push", json=mixed.json()["draft"])
+        assert written.status_code == 200, written.text
+        assert written.json()["misconceptions"] == [
+            {"wrong_move": "The river is red", "broken_kc": "zz-repair-b"}
+        ]
+        pushed_lines = _history_lines(written.json()["history"])
+        assert pushed_lines[:2] == lines
+        _stamp, note = pushed_lines[2].split(" ET ", 1)
+        assert note == "Push from AI."
+        _assert_et_stamp(pushed_lines[2])
+        assert client.get(f"/kc/courses/{course['id']}").json()["history"] == written.json()["history"]
+
+        saved = client.put(f"/kc/nodes/{river['id']}", json=_component("River fact", prerequisite_codes=["zz-repair-b"]))
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["history"] == written.json()["history"]
+        assert client.put(
+            f"/kc/nodes/{other['id']}",
+            json=_component("Other"),
+        ).status_code == 200
+        assert client.get(f"/kc/nodes/{other['id']}").json()["history"] == ""
+        assert client.post(f"/kc/courses/{course['id']}/ready").status_code == 200
+
+        opened = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": river["id"]},
+        )
+        assert opened.status_code == 200, opened.text
+        tutor = client.get(f"/kc/tutor/sessions/{opened.json()['id']}/prompt")
+        variables = client.get(
+            "/kc/tutor/variables",
+            params={"session_id": opened.json()["id"]},
+        )
+        assert tutor.status_code == 200, tutor.text
+        names = [row["name"] for row in variables.json()["variables"]]
+        assert "History" not in names
+        for line in _history_lines(client.get(f"/kc/nodes/{river['id']}").json()["history"]):
+            assert line not in tutor.text
+            assert line not in variables.text
+            assert line not in fresh.text
+    finally:
+        _clear_progress(storm.id)
+        _wipe_zz()
+
+
+def test_a_course_with_no_sibling_clears_a_bad_broken_kc() -> None:
+    course = _make("zz-alone", description="The river in this course is blue.")
+    try:
+        pushed = client.post(
+            f"/kc/courses/{course['id']}/push",
+            json={"components": [{"code": "zz-alone-a", "title": "River fact"}]},
+        ).json()
+        river = pushed["components"][0]
+        assert river["history"] == ""
+        assert pushed["history"] == ""
+
+        prompt = client.post(
+            f"/kc/nodes/{river['id']}/creator-prompt",
+            json={"message": "Draft this component.", "model": "gpt-4.1"},
+        )
+        assert prompt.status_code == 200, prompt.text
+        misconceptions = prompt.json()["schema"]["properties"]["misconceptions"]
+        assert misconceptions["maxItems"] == 0
+        assert "broken_kc" not in misconceptions["items"].get("properties", {})
+        instructions = prompt.json()["system_prompt"]
+        assert "Return an empty misconceptions array." in instructions
+        assert "Do not ask for a broken_kc." in instructions
+        assert "Copy one code from the other component codes" not in instructions
+
+        turned = client.post(
+            f"/kc/nodes/{river['id']}/model-turn",
+            json={
+                "message": "Draft this component.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(
+                    misconceptions=[{"wrong_move": "The river is purple", "broken_kc": "not-a-component"}],
+                    prerequisite_codes=[],
+                ),
+            },
+        )
+        assert turned.status_code == 200, turned.text
+        assert turned.json()["draft"]["misconceptions"] == [
+            {"wrong_move": "The river is purple", "broken_kc": ""}
+        ]
+        node = client.get(f"/kc/nodes/{river['id']}").json()
+        stored = client.get(f"/kc/courses/{course['id']}").json()
+        lines = _history_lines(node["history"])
+        assert lines == _history_lines(stored["history"])
+        assert len(lines) == 1
+        assert 'broken_kc "not-a-component"' in lines[0]
+        assert "not another component on this course" in lines[0]
+        assert 'Changed broken_kc from "not-a-component" to ""' in lines[0]
+        assert "Allowed codes: none." in lines[0]
+        _assert_et_stamp(lines[0])
+        again = client.post(
+            f"/kc/nodes/{river['id']}/creator-prompt",
+            json={"message": "Draft this component again.", "model": "gpt-4.1"},
+        )
+        assert again.status_code == 200, again.text
+        assert lines[0] not in again.text
+        assert "history" not in again.json()["schema"]["properties"]
+
+        written = client.post(f"/kc/nodes/{river['id']}/push", json=turned.json()["draft"])
+        assert written.status_code == 200, written.text
+        assert written.json()["misconceptions"][0]["broken_kc"] == ""
+        pushed_lines = _history_lines(written.json()["history"])
+        assert pushed_lines[0] == lines[0]
+        assert pushed_lines[1].split(" ET ", 1)[1] == "Push from AI."
+        assert client.get(f"/kc/courses/{course['id']}").json()["history"] == written.json()["history"]
+    finally:
+        _wipe_zz()

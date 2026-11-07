@@ -37,6 +37,7 @@ function component(overrides: Partial<KcComponent> = {}): KcComponent {
     type_fields: { transfer_case: "a quadrilateral", case_a: "thin", case_b: "wide" },
     marked_complete: false,
     missing: [],
+    history: "",
     ...overrides,
   };
 }
@@ -60,6 +61,7 @@ function course(overrides: Partial<KcCourse> = {}): KcCourse {
     kind: "mastery",
     minutes: null,
     ready: false,
+    history: "",
     components: [first, second],
     patches: [component({ id: "patch-1", code: "patch", title: "Lines", target: false })],
     ...overrides,

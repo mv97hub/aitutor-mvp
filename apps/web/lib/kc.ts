@@ -17,6 +17,7 @@ export type KcComponent = {
   type_fields: Record<string, unknown>;
   marked_complete: boolean;
   missing: string[];
+  history: string;
 };
 
 export type KcCourse = {
@@ -28,6 +29,7 @@ export type KcCourse = {
   kind: "mastery" | "time_boxed" | "curiosity";
   minutes: number | null;
   ready: boolean;
+  history: string;
   components: KcComponent[];
   patches: KcComponent[];
 };

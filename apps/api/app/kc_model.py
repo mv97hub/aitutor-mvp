@@ -8,6 +8,7 @@ stays as written. Scoring is not part of this module.
 
 from __future__ import annotations
 
+import copy
 import re
 
 from app.kc_syllabus import MAX_COMPONENTS, planned_reply, planning_context
@@ -554,6 +555,59 @@ def assemble_course(
     }
 
 
+def _creator_schema(other_codes: list[str]) -> dict:
+    """The creator schema for this call.
+
+    When the course has other components, broken_kc is one of those codes.
+    When it has none, the misconceptions array is empty and broken_kc is not a field.
+    History is not a field on this schema.
+    """
+    schema = copy.deepcopy(CREATOR_SCHEMA)
+    if other_codes:
+        schema["properties"]["misconceptions"] = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "wrong_move": {"type": "string"},
+                    "broken_kc": {
+                        "type": "string",
+                        "enum": list(other_codes),
+                        "description": (
+                            "Copy one code from this list. "
+                            "Not a description and not this component's code."
+                        ),
+                    },
+                },
+                "required": ["wrong_move", "broken_kc"],
+            },
+        }
+        return schema
+    schema["properties"]["misconceptions"] = {
+        "type": "array",
+        "maxItems": 0,
+        "items": {"type": "string"},
+    }
+    return schema
+
+
+def _creator_links(other_codes: list[str]) -> str:
+    if not other_codes:
+        return (
+            "This course has no other component. Return an empty misconceptions array. "
+            "Do not ask for a broken_kc. "
+            "Prerequisite codes, encompasses codes, and synthesis mixes stay empty."
+        )
+    return (
+        "Copy one code from the other component codes into broken_kc. "
+        "It is not a description and not this component's code. "
+        "Prerequisite codes, encompasses codes, and synthesis mixes "
+        "have to be chosen from the other component codes. "
+        "Use an empty list for prerequisites, encompasses, or mixes when none of those links fit."
+    )
+
+
 def creator_bundle(
     *,
     course_title: str,
@@ -603,17 +657,15 @@ def creator_bundle(
             "Write description as three lines: Outline, Topics, and Goals. "
             "Fill title, one type, the fields for that type, the core truth, "
             "one to three rubric checks, misconceptions, prerequisites, and encompasses. "
-            "Leave the fields of the other types empty. "
-            "Prerequisite codes, encompasses codes, misconception codes, and synthesis mixes "
-            "have to be chosen from the other component codes. "
-            "Use an empty list when none of those links fit.",
+            "Leave the fields of the other types empty. ",
+            _creator_links(other_codes),
         ]
     )
     return {
         "model": chosen,
         "system_prompt": system,
         "user_prompt": (message or "").strip(),
-        "schema": CREATOR_SCHEMA,
+        "schema": _creator_schema(other_codes),
     }
 
 
