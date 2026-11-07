@@ -60,7 +60,7 @@ export default function KcStudioDocsPage() {
         <p>
           KC Creator is the editor. Choose a course from the dropdown, then a component. Targets are listed in course order, then patches.
           Changing the course opens that course’s first component.
-          The middle pane is the manual editor: description, title, type, the fields for that type, core truth, one to three rubric checks,
+          The middle pane is the manual editor: description, title, type, the fields for that type, core truth, one rubric line for each topic goal and then the practice checks,
           misconceptions, prerequisites, and encompasses. Save this component writes that component and clears course ready.
           The right-hand chat is about that component only. It opens with the description, then the saved text, and goes into the topic before the fields. Each reply ends with a draft.
           A later message revises that draft. The middle pane keeps the saved component until Push. Push writes the draft for this component only.

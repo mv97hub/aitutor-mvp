@@ -154,19 +154,12 @@ def test_a_factual_opening_states_each_setting_once() -> None:
     _sections_in_order(text)
     for phrase in (
         "You are the knowledge-component tutor.",
-        "This is the opening.",
         "What color is the river?",
-        "Teach this as a retrieval.",
-        "Grade the answer against this core truth: The river is blue.",
+        "Grade the answer against this fact: The river is blue.",
         "Say it only when a reveal or a passed close allows it.",
-        "The points that count are: Names the color.",
         "holds them: fact.",
         "Wrong move: The river is red.",
         "The first time a stored wrong move matches",
-        "piece 2 of 4",
-        "already come through Rain",
-        "Maps comes next",
-        "An earlier idea this piece needs is still unknown.",
         "Name the missing earlier idea",
         "Speak to Ada.",
         "10-year-old",
@@ -187,7 +180,10 @@ def test_a_factual_opening_states_each_setting_once() -> None:
         "When the decision ends the unit",
     ):
         _once(text, phrase)
+    assert "This step is Retrieve. The child will type." in text
     assert "shorter sentences" not in text
+    assert "How a river moves." not in text
+    assert "This is the opening." not in text
     for code in CODES:
         assert code not in text
     for label in (
@@ -309,3 +305,159 @@ def test_deprecated_switches_are_not_printed_as_yes_or_no() -> None:
     choice = _text(choice_on_screen=True)
     _once(choice, "The child picks the choice on screen.")
     assert "End a learning reply" not in choice
+
+
+def _section(text: str, heading: str) -> str:
+    start = text.index(heading) + len(heading)
+    rest = text[start:]
+    ends = [rest.index(name) for name in HEADINGS if name in rest]
+    stop = min(ends) if ends else len(rest)
+    return rest[:stop]
+
+
+def test_a_conceptual_topic_names_only_that_topic_and_its_goal() -> None:
+    node = _node(
+        title="Floating",
+        description=(
+            "Outline: A principle about floating.\n"
+            "Topics: shape; density\n"
+            "Goals: Say why shape matters; Say why density matters"
+        ),
+        kc_type="conceptual",
+        core_truth="Spread-out objects float.",
+        type_fields={
+            "case_a": "A wide boat",
+            "case_b": "A solid cube",
+            "prediction": "What happens to this one?",
+            "rule": "Spread-out objects float.",
+            "transfer_case": "A hollow ball",
+        },
+        rubric=["Say why shape matters", "Say why density matters", "States the rule"],
+        misconceptions=[],
+        prerequisite_codes=[],
+        encompasses_codes=[],
+    )
+    goal = _goal(description="Boats and cubes in a harbor.")
+    moves = moves_for(node, _profile(), goal)
+    assert [move.key for move in moves] == [
+        "orient",
+        "topic-1",
+        "topic-2",
+        "predict_a",
+        "predict_b",
+        "contrast",
+        "rule",
+        "transfer",
+    ]
+    assert moves[1].evidence == ("goal-1",)
+    assert moves[1].choice is False
+    assert moves[3].choice is True
+    assert moves[4].choice is True
+    text = _text(node=node, goal=goal, moves=moves, step=1, opening=False, prerequisite_status="none", support_band="ready")
+    taught = _section(text, "What to teach")
+    assert "The topic is shape." in taught
+    assert "The goal is Say why shape matters." in taught
+    for hidden in (
+        "density",
+        "Say why density matters",
+        "Spread-out objects float",
+        "A wide boat",
+        "A solid cube",
+        "A hollow ball",
+        "A principle about floating",
+        "Boats and cubes in a harbor",
+    ):
+        assert hidden not in text, hidden
+    assert "topic 1 of 2: shape" in text
+    assert "The child will type." in text
+    assert "ask about the goal directly and stay on this topic" in text
+    assert "Count goal-1 when the answer holds the goal." in text
+    assert "a nudge, then an analogy, then a scaffold, then a reveal" in text
+
+
+def test_every_stored_field_is_a_step_and_an_empty_field_is_skipped() -> None:
+    profile = _profile()
+    goal = _goal()
+    factual = _node(
+        description="Outline: Setup.\nTopics: color\nGoals: Say the color",
+        type_fields={"fact": "The river is blue.", "retrieval_question": ""},
+    )
+    factual_moves = moves_for(factual, profile, goal)
+    assert [move.key for move in factual_moves] == ["orient", "topic-1", "retrieve"]
+    bare = _node(description="The color of this river.", type_fields={"fact": "", "retrieval_question": ""})
+    assert [move.key for move in moves_for(bare, profile, goal)] == []
+
+    procedural = _node(
+        kc_type="procedural",
+        description="Outline: Find the angle.\nTopics: Add the angles\nGoals: Say what adding did",
+        type_fields={
+            "steps": ["Add the angles", "Subtract from 180"],
+            "blanked_step": 1,
+            "solo_problem": "Find the third angle.",
+            "solo_check": "80",
+        },
+        misconceptions=[],
+    )
+    procedural_moves = moves_for(procedural, profile, goal)
+    assert [move.key for move in procedural_moves] == [
+        "orient",
+        "topic-1",
+        "topic-2",
+        "decide",
+        "faded",
+        "solo",
+        "why_order",
+    ]
+    assert procedural_moves[1].name == "Add the angles"
+    assert procedural_moves[2].name == "Subtract from 180"
+    no_solo = _node(
+        kc_type="procedural",
+        description="",
+        type_fields={"steps": ["Add the angles"], "blanked_step": 0, "solo_problem": "", "solo_check": ""},
+        misconceptions=[],
+    )
+    assert [move.key for move in moves_for(no_solo, _profile(self_explanation=False), goal)] == [
+        "topic-1",
+        "decide",
+        "faded",
+    ]
+
+    conceptual = _node(
+        kc_type="conceptual",
+        description="",
+        type_fields={"case_a": "Wide", "case_b": "", "prediction": "Will it float?", "rule": "", "transfer_case": ""},
+        misconceptions=[],
+    )
+    assert [move.key for move in moves_for(conceptual, profile, goal)] == ["predict_a"]
+
+    causal = _node(
+        kc_type="causal",
+        description="Outline: A tax.\nTopics: prices rise\nGoals: Say why prices rise",
+        type_fields={
+            "decision_point": "A council sets a tax.",
+            "flawed_claim": "The tax lowers prices.",
+            "causal_chain": "The tax rises, so buyers pay more.",
+            "counterfactual": "",
+        },
+        misconceptions=[],
+    )
+    assert [move.key for move in moves_for(causal, profile, goal)] == ["orient", "topic-1", "stake", "mark", "defend"]
+    assert moves_for(causal, profile, goal)[4].choice is False
+    marked = next(move for move in moves_for(causal, profile, goal) if move.key == "mark")
+    assert marked.choice is True
+
+    synthesis = _node(
+        kc_type="synthesis",
+        description="",
+        core_truth="Use both pieces.",
+        type_fields={"mixes": ["earlier-a", "earlier-b"], "faulty_plan": "The rookie swaps them."},
+        misconceptions=[],
+    )
+    assert [move.key for move in moves_for(synthesis, profile, goal)] == [
+        "orient",
+        "topic-1",
+        "topic-2",
+        "faulty",
+        "correct",
+        "which_job",
+    ]

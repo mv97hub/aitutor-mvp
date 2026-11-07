@@ -68,13 +68,15 @@ def resolve_decision(
 ) -> Resolution:
     """Return the state change the app is allowed to write."""
     tier = hint_tier if hint_tier in HINTS else "nudge"
-    met = _clean_ids([*stored_rubric, *rubric_met])
+    fresh = _clean_ids(list(rubric_met))
+    met = _clean_ids([*stored_rubric, *fresh])
     evidence = set(move.evidence)
     checked = bool(evidence)
     proposed = decision if decision in {"stay", "advance", "complete", "redirect"} else "stay"
     last_index = len(moves) - 1
     mastery_index = last_index - 1 if moves and moves[-1].key == "extra_why" else last_index
-    evidence_met = evidence <= set(met) if checked else proposed in {"advance", "complete"} or bool(met)
+    # Earlier points stay on the component. They do not pass an unchecked move by themselves.
+    evidence_met = evidence <= set(met) if checked else proposed in {"advance", "complete"} or bool(fresh)
 
     if matched_wrong and last_misconception == matched_wrong:
         return Resolution(
@@ -200,7 +202,7 @@ def resolve_decision(
             move_attempts=0,
             reveals=reveals,
             enrichment_turns=0,
-            rubric_met=[],
+            rubric_met=met,
             misconception="",
             mark_known=mark_known,
             mark_fragile=False,

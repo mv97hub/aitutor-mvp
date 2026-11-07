@@ -28,10 +28,9 @@ export default function KcPromptLayersPage() {
 
         <h2>Intro</h2>
         <p>
-          The intro is the first turn of a component. It says what the piece is, why it sits in the course, and what the
-          child will do, then asks one question. It does not give the core truth. Instructive sets the shape. 1 opens on
-          the question. 3 names the goal, then asks. 5 teaches a little more first. An interest is the example only when
-          use interests is on. A time-boxed course keeps the intro to one sentence.
+          Orient is the first turn when an outline is stored. It elaborates that outline and does not open the topics
+          or the goals. It does not use the course description. Instructive still sets how much is said before the
+          question. A time-boxed course keeps that opening to one sentence.
         </p>
 
         <h2>Unit close</h2>
@@ -80,10 +79,9 @@ export default function KcPromptLayersPage() {
         </p>
         <h3>What to teach</h3>
         <p>
-          The course and the component, in prose. The core truth is what to grade against, and it is said only
-          when a reveal or a passed close allows it. The rubric is the points that count. Each misconception
-          is a wrong move to listen for. Course position and prerequisite status become what the child already
-          knows, not a list of codes.
+          Only this step&apos;s field. A topic turn names that topic and its goal. The outline is included on
+          Orient and not on a later topic. The course description is not used. A practice step shows the field
+          for that step. A withheld fact or rule is said only when a reveal or a passed close allows it.
         </p>
         <h3>Who you are talking to</h3>
         <p>
