@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 
 import { KcBanner } from "@/components/KcBanner";
 import { KcDebugPanel } from "@/components/KcDebugPanel";
@@ -10,6 +10,7 @@ import type { KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from 
 import type { KcDebugTurn } from "@/lib/kc-debug";
 import { hoverFor } from "@/lib/kc-layer-fields";
 import { KC_MODELS, kcModel, type KcModel } from "@/lib/kc-models";
+import { tutorPath } from "@/lib/kc-tutor-path";
 import type { KidQuiz, ProfileDefaults, Student } from "@/lib/types";
 import { useRouter } from "next/navigation";
 
@@ -20,17 +21,6 @@ type SettingsDraft = {
   modality: string;
   interests: string;
 };
-
-function tutorPath(parts: { student?: string; course?: string; kc?: string; session?: string; model?: string }) {
-  const params = new URLSearchParams();
-  if (parts.student) params.set("student", parts.student);
-  if (parts.course) params.set("course", parts.course);
-  if (parts.kc) params.set("kc", parts.kc);
-  if (parts.session) params.set("session", parts.session);
-  if (parts.model) params.set("model", parts.model);
-  const query = params.toString();
-  return query ? `/kc-tutor?${query}` : "/kc-tutor";
-}
 
 function settingsDraft(learner: Student | null, model: string): SettingsDraft {
   return {
@@ -443,11 +433,7 @@ export function KcTutor({
         {session?.redirect ? <p className="kc-redirect">Next card: {session.redirect.title}</p> : null}
         {!session ? <div className="ds-empty"><p>A card opens one component.</p></div> : null}
         {session ? (
-          <KcLesson
-            key={`${session.id}:${session.step}:${session.messages.length}:${session.status}`}
-            session={session}
-            model={model}
-          />
+          <KcLesson key={session.id} session={session} model={model} />
         ) : null}
       </section>
       {debugOpen ? <KcDebugPanel variables={variables} turns={turns} /> : null}
@@ -463,20 +449,35 @@ function KcLesson({
   model: string;
 }) {
   const router = useRouter();
+  const routerRef = useRef(router);
+  routerRef.current = router;
   const started = useRef("");
+  const threadRef = useRef<HTMLDivElement>(null);
   const [speakError, setSpeakError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [speaking, setSpeaking] = useState(false);
   const [answering, setAnswering] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
-  const [settled, setSettled] = useState<{ ids: string[]; note: string } | null>(null);
+  const [settled, setSettled] = useState<{ anchorId: string; ids: string[]; note: string } | null>(null);
   const anchor = [...session.messages].reverse().find((message) => message.role === "assistant");
   const quiz = session.choice ? quizFor(session.choice) : null;
-  const choosing = Boolean(quiz) && session.status !== "completed" && !session.needs_speech && !settled;
+  const activeSettled = settled && anchor && settled.anchorId === anchor.id ? settled : null;
+  const choosing = Boolean(quiz) && session.status !== "completed" && !session.needs_speech && !activeSettled;
+  const latestMessageId = session.messages[session.messages.length - 1]?.id ?? "";
+
+  useLayoutEffect(() => {
+    const node = threadRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [latestMessageId, session.messages.length]);
 
   useEffect(() => {
-    if (!session.needs_speech) return;
-    const key = `${session.id}:${session.step}:${session.messages.length}:${attempt}:${model}`;
+    if (!session.needs_speech) {
+      setSpeaking(false);
+      return;
+    }
+    // Message count is omitted: a new line must not abort the intro and start it again.
+    const key = `${session.id}:${session.step}:${attempt}:${model}`;
     if (started.current === key) return;
     started.current = key;
     const controller = new AbortController();
@@ -494,7 +495,7 @@ function KcLesson({
           const text = (await response.text()).trim();
           throw new Error(text || "The tutor could not say this step.");
         }
-        if (!cancelled) router.refresh();
+        if (!cancelled) routerRef.current.refresh();
       })
       .catch((err: unknown) => {
         if (cancelled || (err instanceof DOMException && err.name === "AbortError")) return;
@@ -508,7 +509,7 @@ function KcLesson({
       controller.abort();
       if (started.current === key) started.current = "";
     };
-  }, [attempt, model, router, session.id, session.messages.length, session.needs_speech, session.step]);
+  }, [attempt, model, session.id, session.needs_speech, session.step]);
 
   async function sendAnswer(answer: string) {
     const cleaned = answer.trim();
@@ -536,7 +537,7 @@ function KcLesson({
 
   return (
     <>
-      <div className="ds-scroll" role="log" aria-live="polite" aria-relevant="additions">
+      <div ref={threadRef} className="ds-scroll" role="log" aria-live="polite" aria-relevant="additions">
         <div className="ds-column">
           {session.messages.map((message) => (
             <div key={message.id}>
@@ -546,15 +547,15 @@ function KcLesson({
               {quiz && anchor?.id === message.id ? (
                 <article
                   className="bubble assistant widget-message"
-                  aria-label={settled ? "Your choice" : "Choose an answer"}
+                  aria-label={activeSettled ? "Your choice" : "Choose an answer"}
                 >
                   <ChoiceWidget
                     quiz={quiz}
                     busy={answering}
-                    settled={settled}
+                    settled={activeSettled}
                     onSubmit={(choice, explanation, transcript) => {
                       const ids = Array.isArray(choice) ? choice : [choice];
-                      setSettled({ ids, note: explanation });
+                      setSettled({ anchorId: message.id, ids, note: explanation });
                       void sendAnswer(transcript);
                     }}
                   />
