@@ -30,6 +30,9 @@ export type TutorProfile = {
   use_interests: boolean;
   stay_on_course: boolean;
   growth_praise: boolean;
+  misconception_policy: string;
+  self_explanation: boolean;
+  enrichment: string;
   updated_at?: string;
 };
 

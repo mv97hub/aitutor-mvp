@@ -1,4 +1,4 @@
-import { generateText, wrapLanguageModel, type LanguageModelMiddleware } from "ai";
+import { generateText, jsonSchema, Output, wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 
 import { api } from "@/lib/api";
 import type { KcTutorSession } from "@/lib/kc";
@@ -10,13 +10,19 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const SPEAK_PROMPT =
-  "Say this step to the student now. Follow the system instructions. Do not set the type, the edges, or the score.";
+  "Say the opening now. Return the decision object. The reply is the only text the child sees. Follow the system instructions. Do not set the type, the edges, or the score.";
 
 type PromptBundle = {
   system_prompt: string;
+  response_schema: Record<string, unknown>;
+  temperature: number;
   recipe: string;
   step: number;
   step_label: string;
+};
+
+type Decision = {
+  reply?: string;
 };
 
 type StoredCall = {
@@ -84,8 +90,11 @@ export async function POST(req: Request) {
       model: wrapLanguageModel({ model: languageModel(modelName), middleware: captureRequest }),
       instructions: bundle.system_prompt,
       prompt: SPEAK_PROMPT,
+      temperature: bundle.temperature,
+      output: Output.object({ schema: jsonSchema(bundle.response_schema) }),
     });
-    spoken = result.text.trim();
+    const decision = result.output as Decision | undefined;
+    spoken = (decision?.reply || result.text || "").trim();
   } catch (error) {
     const message = error instanceof Error ? error.message : "The tutor could not say this step.";
     return new Response(message, { status: 502 });

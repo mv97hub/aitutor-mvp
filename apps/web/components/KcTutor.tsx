@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { KcBanner } from "@/components/KcBanner";
 import { KcDebugPanel } from "@/components/KcDebugPanel";
 import { ChoiceWidget } from "@/components/LessonBlocks";
 import { api } from "@/lib/api";
-import { answerKcTurn } from "@/lib/kc-actions";
 import type { KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
 import type { KcDebugTurn } from "@/lib/kc-debug";
+import { hoverFor } from "@/lib/kc-layer-fields";
 import { KC_MODELS, kcModel, type KcModel } from "@/lib/kc-models";
 import type { KidQuiz, Student } from "@/lib/types";
 import { useRouter } from "next/navigation";
@@ -249,8 +249,6 @@ export function KcTutor({
           <KcLesson
             key={`${session.id}:${session.step}:${session.messages.length}:${session.status}`}
             session={session}
-            studentId={studentId}
-            courseId={courseId}
             model={model}
           />
         ) : null}
@@ -262,13 +260,9 @@ export function KcTutor({
 
 function KcLesson({
   session,
-  studentId,
-  courseId,
   model,
 }: {
   session: KcTutorSession;
-  studentId: string;
-  courseId: string;
   model: string;
 }) {
   const router = useRouter();
@@ -276,8 +270,9 @@ function KcLesson({
   const [speakError, setSpeakError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [speaking, setSpeaking] = useState(false);
+  const [answering, setAnswering] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
   const [settled, setSettled] = useState<{ ids: string[]; note: string } | null>(null);
-  const [pending, startTransition] = useTransition();
   const anchor = [...session.messages].reverse().find((message) => message.role === "assistant");
   const quiz = session.choice ? quizFor(session.choice) : null;
   const choosing = Boolean(quiz) && session.status !== "completed" && !session.needs_speech && !settled;
@@ -318,15 +313,28 @@ function KcLesson({
     };
   }, [attempt, model, router, session.id, session.messages.length, session.needs_speech, session.step]);
 
-  function sendChoice(transcript: string) {
-    const data = new FormData();
-    data.set("session_id", session.id);
-    data.set("student", studentId);
-    data.set("course", courseId);
-    data.set("answer", transcript);
-    startTransition(() => {
-      void answerKcTurn(data);
-    });
+  async function sendAnswer(answer: string) {
+    const cleaned = answer.trim();
+    if (!cleaned || answering) return;
+    setAnswering(true);
+    setReplyError(null);
+    try {
+      const response = await fetch("/api/kc/tutor/answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: session.id, answer: cleaned, model }),
+      });
+      if (!response.ok) {
+        const text = (await response.text()).trim();
+        throw new Error(text || "The tutor could not answer.");
+      }
+      router.refresh();
+    } catch (err: unknown) {
+      setSettled(null);
+      setReplyError(err instanceof Error ? err.message : "The tutor could not answer.");
+    } finally {
+      setAnswering(false);
+    }
   }
 
   return (
@@ -345,12 +353,12 @@ function KcLesson({
                 >
                   <ChoiceWidget
                     quiz={quiz}
-                    busy={pending}
+                    busy={answering}
                     settled={settled}
                     onSubmit={(choice, explanation, transcript) => {
                       const ids = Array.isArray(choice) ? choice : [choice];
                       setSettled({ ids, note: explanation });
-                      sendChoice(transcript);
+                      void sendAnswer(transcript);
                     }}
                   />
                 </article>
@@ -368,18 +376,21 @@ function KcLesson({
           </button>
         </div>
       ) : null}
+      {replyError ? (
+        <div className="banner" role="alert">
+          <p>{replyError}</p>
+        </div>
+      ) : null}
       {session.status === "completed" || session.needs_speech ? null : (
         <form
           className="ds-composer-seat"
-          action={answerKcTurn}
           onSubmit={(event) => {
-            if (choosing) event.preventDefault();
+            event.preventDefault();
+            if (choosing || answering) return;
+            const data = new FormData(event.currentTarget);
+            void sendAnswer(String(data.get("answer") || ""));
           }}
         >
-          <input type="hidden" name="session_id" value={session.id} />
-          <input type="hidden" name="student" value={studentId} />
-          <input type="hidden" name="course" value={courseId} />
-          <input type="hidden" name="model" value={model} />
           <div className="ds-card">
             <textarea
               className="ds-draft"
@@ -388,7 +399,7 @@ function KcLesson({
               required={!choosing}
               placeholder={choosing ? "Choose an answer above" : "Message"}
               aria-label="Your answer"
-              disabled={choosing || pending}
+              disabled={choosing || answering}
               maxLength={2000}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -398,7 +409,7 @@ function KcLesson({
               }}
             />
             <div className="ds-card-row">
-              <button className="ds-send" type="submit" aria-label="Send" disabled={choosing || pending}>
+              <button className="ds-send" type="submit" aria-label="Send" disabled={choosing || answering}>
                 ↑
               </button>
             </div>
@@ -467,10 +478,11 @@ function TutorSettingsDialog({
           </button>
         </header>
         <form className="prompt-body" onSubmit={onSubmit}>
-          <label>
+          <label title={hoverFor("Model")}>
             Model
             <select
               aria-label="Model"
+              title={hoverFor("Model")}
               value={draft.model}
               onChange={(event) => onChange({ ...draft, model: kcModel(event.target.value) })}
             >
@@ -483,44 +495,52 @@ function TutorSettingsDialog({
           </label>
           {learner ? (
             <>
-              <label>
+              <label title={hoverFor("Display name")}>
+                Display name
+                <input value={learner.display_name} title={hoverFor("Display name")} disabled readOnly />
+              </label>
+              <label title={hoverFor("Age")}>
                 Age
                 <input
                   type="number"
                   min={4}
                   max={18}
                   required
+                  title={hoverFor("Age")}
                   value={draft.age}
                   onChange={(event) => onChange({ ...draft, age: event.target.value })}
                 />
               </label>
-              <label>
+              <label title={hoverFor("Reading level")}>
                 Reading level
                 <input
                   maxLength={80}
+                  title={hoverFor("Reading level")}
                   value={draft.reading_level}
                   onChange={(event) => onChange({ ...draft, reading_level: event.target.value })}
                 />
               </label>
-              <label>
+              <label title={hoverFor("Modality")}>
                 Modality
                 <input
                   maxLength={80}
+                  title={hoverFor("Modality")}
                   value={draft.modality}
                   onChange={(event) => onChange({ ...draft, modality: event.target.value })}
                 />
               </label>
-              <label>
+              <label title={hoverFor("Interests")}>
                 Interests
                 <input
+                  title={hoverFor("Interests")}
                   value={draft.interests}
                   placeholder="cities, fairness"
                   onChange={(event) => onChange({ ...draft, interests: event.target.value })}
                 />
               </label>
               <p className="help">
-                Age, reading level, modality, and interests are sent with the next step. Persona and the other tutor
-                settings stay on Agent customizations.
+                Age, reading level, modality, and interests are sent with the next step. Voice, guidance, and
+                self-explanation stay on Agent customizations.
               </p>
             </>
           ) : null}

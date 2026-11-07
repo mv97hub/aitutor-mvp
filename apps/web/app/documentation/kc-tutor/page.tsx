@@ -17,7 +17,9 @@ export default function KcTutorDocsPage() {
           It chooses the model from the same list as KC Course Creator. gpt-4.1 is the default.
           deepseek/deepseek-flash-latest calls OpenRouter with OPENROUTER_API_KEY. The OpenAI models stay on OPENAI_API_KEY.
           The same settings surface edits the child fields the prompt already includes: age, reading level, modality, and interests.
-          Persona, lexicon, metaphors, sidekick, and the rest of the tutor profile stay on Agent customizations.
+          Persona, lexicon, metaphors, sidekick, instructive, struggle window, stay on course, use interests,
+          misconception policy, enrichment, and self-explanation stay on Agent customizations.
+          The field catalog is <Link href="/documentation/kc-prompt-layers">KC prompt layers</Link>.
         </p>
 
         <h2>How it works</h2>
@@ -43,60 +45,27 @@ export default function KcTutorDocsPage() {
           A redirect still reads &quot;Next card: &quot; and the title. The tutor&apos;s question is an assistant bubble. A typed answer is a user bubble.
           Enter sends. Two steps are single-choice bubbles in the thread. Every other step is typed in the same thread.
           While a choice is unanswered, the composer says &quot;Choose an answer above&quot; and does not send. After Check, the widget settles on &quot;Your choice&quot;
-          and the chosen text is the answer. The model says the current step. It does not set the type, the edges, or the score.
-          Pass, fail, fragile, known, and redirect stay with the scorer.
+          and the chosen text is the answer. The model writes the reply and a structured decision. It does not set the type, the edges, or the score.
+          The app checks that decision, then writes known, fragile, redirect, the unit close, and the course outro.
           If the selected model is an OpenAI model and OPENAI_API_KEY is unset, the page shows the same missing-key error as the kid tutor.
           If the selected model is deepseek/deepseek-flash-latest and OPENROUTER_API_KEY is unset, the page shows a missing-key error for that key.
           An OpenAI model does not read the OpenRouter key.
         </p>
-        <p>The five types:</p>
-        <ul>
-          <li>
-            Factual, recipe retrieval. Labels: Retrieval question, then Short confirmation. The known step is the retrieval question, so Short confirmation is the pass line, not another question.
-            The retrieval question is typed. The check is a phrase match on the fact, or on the core truth when the fact is empty.
-            An empty question is asked as &quot;What is the fact?&quot; A pass says &quot;Yes.&quot; and the fact or the core truth, and the session scores 100.
-          </li>
-          <li>
-            Procedural, recipe worked-example. Labels: Worked example, Faded step, Solo solve. All three are typed.
-            The worked example shows the steps and asks &quot;What did this example do?&quot; Any answer of at least 2 characters passes.
-            The faded step shows the steps with a blank on the stored blanked step and says &quot;Fill the blank step.&quot; The check is that step&apos;s text.
-            An index outside the list expects nothing and fails the phrase check. Solo solve asks the solo problem, or &quot;Solve it on your own.&quot; when that field is empty.
-            The check is the solo check, or the core truth when the solo check is empty. A pass says &quot;That holds.&quot; and the core truth.
-          </li>
-          <li>
-            Conceptual principle, recipe contrasting-cases. Labels: Predict two cases, See the contrast, State the rule.
-            Predict two cases is a single choice. The prompt is the prediction. The two choices are case one and case two. Either choice passes when the text is at least 2 characters. There is no correct-case flag.
-            See the contrast is typed. The tutor repeats both cases and asks &quot;What is different?&quot; Any answer of at least 2 characters passes.
-            State the rule is typed. The check is a phrase match on the rule, or on the core truth when the rule is empty. A pass says &quot;That holds.&quot; and the core truth.
-          </li>
-          <li>
-            Causal or historical, recipe decision-point. Labels: Decision point, Flawed claim, Short defense.
-            Decision point is typed. The tutor says the decision point and &quot;What is at stake?&quot; Any answer of at least 2 characters passes.
-            Flawed claim is a single choice. The prompt is &quot;Mark this claim:&quot; and the flawed claim. One choice is a mark the scorer already accepts, and its label contains one of: wrong, flawed, false, not true, no. The other choice is that the claim holds, and its label does not contain those phrases. A misconception match still runs first, on the choice text.
-            Short defense is typed. The tutor says &quot;Defend the causal chain.&quot; The check is the causal chain, or the core truth when the chain is empty. A pass says &quot;That holds.&quot; and the core truth.
-          </li>
-          <li>
-            Synthesis, recipe rookie-correction. Labels: Faulty plan, then Correct the plan. The known step is the faulty plan, so Correct the plan is the pass line.
-            The card is offered only when prerequisites are known and at least 2 conceptual components on the course are known.
-            Faulty plan is typed. The tutor says a rookie mixes the two component codes and states the faulty plan, then &quot;Correct the plan.&quot;
-            When the mixes are empty, the joined text is &quot;two earlier components&quot;. The check is a phrase match on the core truth.
-            A pass says &quot;Yes. The plan that holds is:&quot; and the core truth, and the session scores 100.
-          </li>
-        </ul>
         <p>
-          A misconception hit finishes the session: status fragile, score 0, and a redirect to the broken component.
-          The reply names the wrong move and that component&apos;s title and core truth, then &quot;The next card opens that component.&quot;
-          A miss stays on the same step. The reply is &quot;Not yet.&quot;, the core truth, and &quot;That explanation is the one retry. Answer this same step again.&quot;
-          Attempts increment and the loop does not stop. A pass on the final step marks the component known, with stability at least 1.0 and score 100.
-          Each encompassed component gains 0.25 stability. An encompassed component that was not started becomes fragile.
+          Each type runs a fixed move sequence. The sequences, the intro, the unit close, the course outro, and every field
+          are on <Link href="/documentation/kc-prompt-layers">KC prompt layers</Link>.
+          Choice widgets stay only for conceptual predict and the causal flawed claim. Every other move is typed.
+          Phrase matching is not the pass rule. A stored wrong move is still a backstop when the model misses it.
+          The first hit explains that move and asks it again. A second hit redirects and leaves the unit fragile.
+          Known requires the final move with no reveal. Stability still rises to at least 1.0, and each encompassed component gains 0.25.
         </p>
         <p>
           The tutor profile changes how a step is said. It does not change the component type, the links between components, or the score.
         </p>
         <p>
           Debug, on the right, opens a panel beside the lesson. The chat stays usable while the panel is open.
-          Variables lists each input to the chat, with the field name and the current value.
-          Prompts lists each request and response for this session, newest at the bottom.
+          Variables groups every layer field under seven headings. An empty value stays visible.
+          Prompts lists each request and response for this session, oldest first.
         </p>
 
         <h2>Settings you can change</h2>
@@ -107,40 +76,10 @@ export default function KcTutorDocsPage() {
           gpt-4.1 is the default. Saving a model keeps it on this page. The next spoken step uses it.
           Age, reading level, modality, and interests save on the child. The next step&apos;s prompt uses the saved values.
           Those fields do not change the component type, the links, or the score.
-          Component content is set in KC Creator. How the tutor speaks — persona, lexicon, metaphors, sidekick, the instructive slider,
-          stay on course, and use interests — is the shared profile on Agent customizations. Those are not copied onto this list.
+          Component content is set in KC Creator, including transfer case and counterfactual.
+          How the tutor speaks is the shared profile on Agent customizations, grouped by layer.
+          The same hover text is the field description on <Link href="/documentation/kc-prompt-layers">KC prompt layers</Link>.
         </p>
-        <p>
-          The balances below are configuration. They are values in code, not controls on this page. A later admin page will hold them.
-          That page is not described here.
-        </p>
-        <ul>
-          <li>Step labels and their order, for each type.</li>
-          <li>The step index that marks the component known. Factual and synthesis use the first step, so the second label is the pass line.</li>
-          <li>Recipe name and the one-line recipe description.</li>
-          <li>Open-step pass: when a step has no expected phrase, the normalized answer must be at least 2 characters.</li>
-          <li>
-            Phrase match. A phrase of 4 characters or fewer matches only as a whole word. A longer phrase matches when the answer contains it.
-            The answer matches when it sits inside the phrase and is at least 8 characters. If the phrase has digits, the answer&apos;s digits include them and the answer has at most 8 words.
-            If the answer has at least 3 words longer than 3 characters and every one of them is in the phrase, it matches.
-            Otherwise the share of phrase words longer than 3 characters that appear in the answer must reach 0.6, rounded up.
-          </li>
-          <li>
-            Wrong-move match. A negated answer (not, never, no, isnt, doesnt, dont, cannot, cant) does not match a wrong move that is not negated.
-            The wrong move as a substring matches. Otherwise every word of a wrong move of at least 2 words must appear in order.
-          </li>
-          <li>The misconception finish: fragile, score 0, redirect to the broken component, and the reply that names the wrong move, the title, the core truth, and the next card.</li>
-          <li>A final pass: known, stability at least 1.0, score 100. Each encompassed component gains 0.25 stability, and an unknown one becomes fragile.</li>
-          <li>A miss stays on the same step. The retry wording is the one retry. The struggle window is in the prompt and is not a second KC setting.</li>
-          <li>Pass lines: factual &quot;Yes.&quot; and the fact or core truth; synthesis &quot;Yes. The plan that holds is:&quot; and the core truth; the other three types &quot;That holds.&quot; and the core truth.</li>
-          <li>Prompt sentences that stay fixed: one step this turn, do not ask a later step, one question at the end when the step asks something, and settings do not change the type, the edges, or the score.</li>
-          <li>Card labels Fastest path, Foundation patch, and Stretch; at most 3 cards; a synthesis card only after 2 conceptual components are known.</li>
-          <li>Factual: the retrieval question, the fact, the empty-question fallback &quot;What is the fact?&quot;, and the pass line.</li>
-          <li>Procedural: the step list, the blanked index and its default 0, the blank marker, the lead-in sentences, the solo problem, the solo check, and the empty solo fallback.</li>
-          <li>Conceptual: case one, case two, the prediction prompt, the contrast lead-in and &quot;What is different?&quot;, the rule, and &quot;State the rule.&quot;</li>
-          <li>Causal: the decision-point text, &quot;What is at stake?&quot;, &quot;Defend the causal chain.&quot;, the flawed claim, the mark lead-in, the five passing phrases, and the two choice labels.</li>
-          <li>Synthesis: the two mix codes, the joiner &quot; and &quot;, the empty-mix fallback &quot;two earlier components&quot;, the faulty plan, the rookie lead-in, &quot;Correct the plan.&quot;, the pass line, and the offer count of 2 known conceptual components.</li>
-        </ul>
 
         <h2>What to know when using it</h2>
         <ul>

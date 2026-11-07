@@ -78,8 +78,8 @@ export default function KcCreatorDocsPage() {
         <ul>
           <li>Factual: Fact, and Retrieval question.</li>
           <li>Procedural: Worked steps, one per line; Blanked step, starting at 0; Solo problem; Solo check.</li>
-          <li>Conceptual principle: Case one, Case two, Prediction, and Rule.</li>
-          <li>Causal or historical: Decision point, Flawed claim, and Causal chain.</li>
+          <li>Conceptual principle: Case one, Case two, Prediction, Rule, and Transfer case. An empty transfer case skips that move.</li>
+          <li>Causal or historical: Decision point, Flawed claim, Causal chain, and Counterfactual. An empty counterfactual skips that move.</li>
           <li>Synthesis: First component it mixes, Second component it mixes, and Rookie&apos;s faulty plan.</li>
         </ul>
 

@@ -23,6 +23,7 @@ from app.kc import (
     kc_chat_summaries,
     kc_prompt_out,
     accept_model_turn,
+    apply_decision,
     course_prompt_for,
     creator_prompt_for,
     draft_course,
@@ -128,6 +129,18 @@ class OpenSessionIn(BaseModel):
 
 class TurnIn(BaseModel):
     answer: str
+
+
+class DecisionIn(BaseModel):
+    reply: str
+    decision: str
+    rubric_met: list[str] = Field(default_factory=list)
+    misconception: str | None = None
+    hint_tier: str = "nudge"
+    help_requested: bool = False
+    off_course: bool = False
+    affect: str = "engaged"
+    confidence: str = "ok"
 
 
 class SpeechIn(BaseModel):
@@ -359,6 +372,11 @@ def post_tutor_turn(session_id: uuid.UUID, body: TurnIn, db: Session = Depends(g
     return turn(db, _session_or_404(db, session_id), body.answer)
 
 
+@router.post("/kc/tutor/sessions/{session_id}/decision")
+def post_tutor_decision(session_id: uuid.UUID, body: DecisionIn, db: Session = Depends(get_db)) -> dict:
+    return apply_decision(db, _session_or_404(db, session_id), body.model_dump())
+
+
 @router.get("/kc/sessions", response_model=list[KcChatSummary])
 def list_kc_chats(
     student_id: uuid.UUID | None = None, db: Session = Depends(get_db)
@@ -383,5 +401,7 @@ def post_kc_model_prompt(
             list(body.messages),
             body.model,
             body.message_id,
+            list(body.rubric_met),
+            body.misconception,
         )
     )

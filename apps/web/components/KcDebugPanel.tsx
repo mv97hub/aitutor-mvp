@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { KcDebugTurn } from "@/lib/kc-debug";
 import type { KcDebugVariable } from "@/lib/kc";
+import { LAYER_HEADINGS } from "@/lib/kc-layer-fields";
 
 function when(iso: string) {
   const date = new Date(iso);
@@ -74,14 +75,34 @@ export function KcDebugPanel({
       </div>
       {tab === "variables" ? (
         <div className="kc-debug-body">
-          <dl className="kc-debug-vars">
-            {variables.map((item) => (
-              <div key={item.name}>
-                <dt>{item.name}</dt>
-                <dd>{item.value}</dd>
-              </div>
-            ))}
-          </dl>
+          {LAYER_HEADINGS.map((heading) => {
+            const rows = variables.filter((item) => item.layer === heading);
+            return (
+              <section key={heading}>
+                <h3 className="kc-debug-layer">{heading}</h3>
+                <dl className="kc-debug-vars">
+                  {rows.map((item) => (
+                    <div key={item.name}>
+                      <dt>{item.name}</dt>
+                      <dd>{item.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            );
+          })}
+          {variables.some((item) => !item.layer || !LAYER_HEADINGS.includes(item.layer as (typeof LAYER_HEADINGS)[number])) ? (
+            <dl className="kc-debug-vars">
+              {variables
+                .filter((item) => !item.layer || !LAYER_HEADINGS.includes(item.layer as (typeof LAYER_HEADINGS)[number]))
+                .map((item) => (
+                  <div key={item.name}>
+                    <dt>{item.name}</dt>
+                    <dd>{item.value}</dd>
+                  </div>
+                ))}
+            </dl>
+          ) : null}
         </div>
       ) : (
         <div className="kc-debug-body" ref={log} role="log" aria-label="Model calls">
@@ -117,6 +138,10 @@ export function KcDebugPanel({
                 ))}
                 <h4>Response</h4>
                 <pre className="prompt-pre">{turn.response}</pre>
+                {turn.rubric_met && turn.rubric_met.length > 0 ? (
+                  <p className="meta">Rubric points met: {turn.rubric_met.join(", ")}</p>
+                ) : null}
+                {turn.misconception ? <p className="meta">Misconception: {turn.misconception}</p> : null}
               </article>
             );
           })}

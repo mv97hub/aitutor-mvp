@@ -17,7 +17,26 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, VOICES
-from app.kc_prompt import build_kc_prompt, instructive_value, labeled_choice, recipe_name, step_labels
+from app.kc_loop import resolve_decision
+from app.kc_prompt import (
+    AFFECTS,
+    DECISIONS,
+    asks_why,
+    build_kc_prompt,
+    effective_enrichment,
+    effective_window_name,
+    instructive_value,
+    is_fragment,
+    labeled_choice,
+    Move,
+    move_material,
+    moves_for,
+    recipe_name,
+    self_explanation_on,
+    step_labels,
+    stored_enrichment,
+    struggle_tries,
+)
 from app.kc_syllabus import component_brief, planning_context
 from app.models import (
     KcCreatorMessage,
@@ -39,8 +58,8 @@ KC_TYPES = ("factual", "procedural", "conceptual", "causal", "synthesis")
 TYPE_KEYS = {
     "factual": ("fact", "retrieval_question"),
     "procedural": ("steps", "blanked_step", "solo_problem", "solo_check"),
-    "conceptual": ("case_a", "case_b", "prediction", "rule"),
-    "causal": ("decision_point", "flawed_claim", "causal_chain"),
+    "conceptual": ("case_a", "case_b", "prediction", "rule", "transfer_case"),
+    "causal": ("decision_point", "flawed_claim", "causal_chain", "counterfactual"),
     "synthesis": ("mixes", "faulty_plan"),
 }
 FINAL_STEP = {"factual": 0, "procedural": 2, "conceptual": 2, "causal": 2, "synthesis": 0}
@@ -113,6 +132,8 @@ FIELD_LABELS = {
     "causal_chain": "Causal chain",
     "mixes": "Mixes",
     "faulty_plan": "Rookie's faulty plan",
+    "transfer_case": "Transfer case",
+    "counterfactual": "Counterfactual",
 }
 _EXPLICIT_TYPES = {
     "factual": "factual",
@@ -1218,10 +1239,12 @@ def _pass_reply(node: KcNode) -> str:
     return OTHER_PASS.format(body=node.core_truth)
 
 
-def choice_for(node: KcNode, step: int) -> dict | None:
-    """The two closed picks. Every other step is typed."""
+def choice_for(node: KcNode, move) -> dict | None:
+    """The two closed picks. Every other move is typed."""
+    if not getattr(move, "choice", False):
+        return None
     fields = node.type_fields or {}
-    if node.kc_type == "conceptual" and step == 0:
+    if move.key == "predict":
         return {
             "prompt": str(fields.get("prediction") or ""),
             "choices": [
@@ -1229,7 +1252,7 @@ def choice_for(node: KcNode, step: int) -> dict | None:
                 {"id": "case-b", "text": str(fields.get("case_b") or "")},
             ],
         }
-    if node.kc_type == "causal" and step == 1:
+    if move.key == "mark":
         return {
             "prompt": f"{CLAIM_LEAD} {fields.get('flawed_claim') or ''}".strip(),
             "choices": [
@@ -1247,22 +1270,35 @@ def _session_messages(db: Session, session: KcSession) -> list[KcMessage]:
 
 
 def _needs_speech(session: KcSession, messages: list[KcMessage]) -> bool:
+    """The opening intro has not been stored yet."""
     if session.status != "in_progress":
         return False
-    if not messages:
-        return True
-    return messages[-1].role == "user"
+    return not any(message.role == "assistant" for message in messages)
+
+
+def _move_context(db: Session, session: KcSession, node: KcNode | None):
+    profile = load_profile(db)
+    goal = db.get(KcGoal, session.goal_id)
+    messages = _session_messages(db, session)
+    fragment = False
+    if node is not None and node.kc_type == "factual":
+        fact = str((node.type_fields or {}).get("fact") or node.core_truth or "")
+        first = next((message.content for message in messages if message.role == "user"), "")
+        fragment = is_fragment(first, fact)
+    moves = moves_for(node, profile, goal, fragment=fragment) if node is not None else []
+    if not moves:
+        moves = [Move("this", "This step", (), False)]
+    return profile, goal, messages, fragment, moves
 
 
 def session_out(db: Session, session: KcSession) -> dict:
     node = db.get(KcNode, session.kc_id)
-    labels = step_labels(node.kc_type if node else None)
-    index = min(session.step, len(labels) - 1)
-    messages = _session_messages(db, session)
+    _profile, _goal, messages, _fragment, moves = _move_context(db, session, node)
+    index = min(max(session.step, 0), len(moves) - 1)
     needs_speech = _needs_speech(session, messages)
     choice = None
     if node is not None and session.status == "in_progress" and not needs_speech:
-        choice = choice_for(node, session.step)
+        choice = choice_for(node, moves[index])
     redirect = db.get(KcNode, session.redirect_kc_id) if session.redirect_kc_id else None
     return {
         "id": str(session.id),
@@ -1273,7 +1309,7 @@ def session_out(db: Session, session: KcSession) -> dict:
         "kc_type": node.kc_type if node else None,
         "recipe": session.recipe,
         "step": session.step,
-        "step_label": labels[index],
+        "step_label": moves[index].name,
         "status": session.status,
         "score": session.score,
         "needs_speech": needs_speech,
@@ -1354,7 +1390,8 @@ def _type_rows(node: KcNode | None) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
     for key in keys:
         label = FIELD_LABELS.get(key, key)
-        rows.append((f"Type field: {label}", _text(fields.get(key))))
+        name = label if key in ("transfer_case", "counterfactual") else f"Type field: {label}"
+        rows.append((name, _text(fields.get(key))))
     return rows
 
 
@@ -1381,6 +1418,98 @@ def _type_value(kc_type: str | None) -> str:
     return f"{kc_type} ({label})"
 
 
+_LAYER_1 = "Layer 1, Component"
+_LAYER_2 = "Layer 2, Child"
+_LAYER_3 = "Layer 3, Voice"
+_LAYER_4 = "Layer 4, Guidance"
+_LAYER_5 = "Layer 5, Encouragement"
+_LAYER_6 = "Layer 6, Metacognition"
+_LAYER_7 = "Layer 7, Feedback loop"
+
+
+def _row(name: str, value: object, layer: str) -> dict[str, str]:
+    return {"name": name, "value": "" if value is None else str(value), "layer": layer}
+
+
+def _state_row(db: Session, student: Student | None, node: KcNode | None) -> KcState | None:
+    if student is None or node is None:
+        return None
+    return db.scalar(select(KcState).where(KcState.student_id == student.id, KcState.kc_id == node.id))
+
+
+def _prerequisite_status(db: Session, student: Student | None, node: KcNode | None) -> str:
+    if node is None:
+        return ""
+    codes = [str(item) for item in (node.prerequisite_codes or []) if str(item).strip()]
+    if not codes:
+        return ""
+    by_code = _nodes_by_code(db)
+    parts = []
+    for code in codes:
+        other = by_code.get(code)
+        if other is None or student is None:
+            parts.append(f"{code}: unknown")
+            continue
+        state = _state_row(db, student, other)
+        parts.append(f"{code}: {state.status if state is not None else 'unknown'}")
+    return "; ".join(parts)
+
+
+def _support_band(prerequisite_status: str) -> str:
+    if ": unknown" in f"; {prerequisite_status}":
+        return "hold"
+    if ": fragile" in f"; {prerequisite_status}":
+        return "stretch"
+    return "ready" if prerequisite_status or True else "ready"
+
+
+def _course_position(db: Session, goal: KcGoal | None, node: KcNode | None) -> str:
+    if goal is None or node is None:
+        return ""
+    targets = load_targets(db, goal)
+    ids = [item.id for item in targets]
+    if node.id not in ids:
+        return "Patch"
+    index = ids.index(node.id)
+    previous = targets[index - 1].title if index else ""
+    nxt = targets[index + 1].title if index + 1 < len(targets) else ""
+    return f"{index + 1} of {len(targets)}; previous: {previous or 'none'}; next: {nxt or 'none'}"
+
+
+def _minutes_used(db: Session, student: Student | None, goal: KcGoal | None) -> str:
+    if student is None or goal is None:
+        return ""
+    total = 0.0
+    now = _now()
+    rows = db.scalars(
+        select(KcSession).where(KcSession.student_id == student.id, KcSession.goal_id == goal.id)
+    )
+    for row in rows:
+        start = row.created_at or now
+        end = row.updated_at or now
+        total += max(0.0, (end - start).total_seconds() / 60.0)
+    return str(int(round(total)))
+
+
+def _others_known(db: Session, student: Student | None, goal: KcGoal | None, node: KcNode | None) -> bool:
+    if student is None or goal is None:
+        return False
+    for target in load_targets(db, goal):
+        if node is not None and target.id == node.id:
+            continue
+        state = _state_row(db, student, target)
+        if state is None or state.status != "known":
+            return False
+    return True
+
+
+def _last_messages(messages: list[KcMessage], limit: int = 4) -> str:
+    chosen = messages[-limit:]
+    if not chosen:
+        return ""
+    return " | ".join(f"{message.role}: {message.content}" for message in chosen)
+
+
 def tutor_variables(
     db: Session,
     *,
@@ -1388,7 +1517,7 @@ def tutor_variables(
     course_id: uuid.UUID | None = None,
     session_id: uuid.UUID | None = None,
 ) -> list[dict[str, str]]:
-    """Named inputs for the current KC chat. Empty layers stay in the list."""
+    """Named inputs for the current KC chat, grouped under the seven layers."""
     session = db.get(KcSession, session_id) if session_id is not None else None
     if session_id is not None and session is None:
         raise HTTPException(status_code=404, detail="That session is not open.")
@@ -1401,146 +1530,303 @@ def tutor_variables(
         goal = _course_or_404(db, course_id) if course_id is not None else None
         node = None
     profile = load_profile(db)
+    messages: list[KcMessage] = []
+    moves: list[Move] = []
+    fragment = False
+    if session is not None and node is not None:
+        _profile, _goal, messages, fragment, moves = _move_context(db, session, node)
+    elif node is not None:
+        moves = moves_for(node, profile, goal, fragment=False)
+    index = 0
+    move = moves[0] if moves else None
+    if session is not None and moves:
+        index = min(max(session.step, 0), len(moves) - 1)
+        move = moves[index]
+    state = _state_row(db, student, node)
+    prereq = _prerequisite_status(db, student, node)
+    band = _support_band(prereq) if node is not None else ""
+    position = _course_position(db, goal, node)
+    others = _others_known(db, student, goal, node)
+    known = state is not None and state.status == "known"
+    unit_complete = bool(session is not None and session.status == "completed")
+    course_complete = unit_complete and known and others
     redirect = ""
     if session is not None and session.redirect_kc_id is not None:
         target = db.get(KcNode, session.redirect_kc_id)
         if target is not None:
             redirect = f"{target.title} ({target.code})"
-    if session is None or node is None:
-        step = ""
-        step_label = ""
-        spoken = ""
-        recipe = ""
-        score = ""
-        status = ""
-    else:
-        labels = step_labels(node.kc_type)
-        index = min(max(session.step, 0), len(labels) - 1)
-        step = f"{index + 1} of {len(labels)}"
-        step_label = labels[index]
-        spoken = step_text(node, session.step)
-        recipe = session.recipe or ""
-        score = "" if session.score is None else str(session.score)
-        status = session.status or ""
     interests = ""
     if student is not None:
         interests = ", ".join(str(item).strip() for item in (student.interests or []) if str(item).strip())
-    rows: list[tuple[str, str]] = [
-        ("Course name", goal.title if goal is not None else ""),
-        ("Course description", (goal.description or "") if goal is not None else ""),
-        ("Audience", goal.audience if goal is not None else ""),
-        ("Kind", goal.kind if goal is not None else ""),
-        ("Minutes", "" if goal is None or goal.minutes is None else str(goal.minutes)),
-        ("Component title", node.title if node is not None else ""),
-        ("Component code", node.code if node is not None else ""),
-        ("Component type", _type_value(node.kc_type if node is not None else None)),
-        ("Component description", (node.description or "") if node is not None else ""),
-        ("Core truth", (node.core_truth or "") if node is not None else ""),
-        *_type_rows(node),
-        ("Rubric", _csv(node.rubric if node is not None else [])),
-        ("Misconceptions", _misconceptions(node.misconceptions if node is not None else [])),
-        ("Edges: prerequisites", _csv(node.prerequisite_codes if node is not None else [])),
-        ("Edges: encompasses", _csv(node.encompasses_codes if node is not None else [])),
-        ("Child name", student.display_name if student is not None else ""),
-        ("Age", "" if student is None or student.age is None else str(student.age)),
-        ("Reading level", (student.reading_level or "") if student is not None else ""),
-        ("Modality", (student.modality or "") if student is not None else ""),
-        ("Interests", interests),
-        ("Persona", labeled_choice(PERSONAS, profile.persona)),
-        ("Lexicon", labeled_choice(VOICES, profile.lexicon)),
-        ("Metaphors", labeled_choice(METAPHORS, profile.metaphors)),
-        ("Sidekick", labeled_choice(SIDEKICKS, profile.sidekick)),
-        ("Instructive", instructive_value(profile.instructive)),
-        ("Struggle window", profile.struggle_window or ""),
-        ("Stay on course", "yes" if profile.stay_on_course else "no"),
-        ("Use interests", "yes" if profile.use_interests else "no"),
-        ("Recipe", recipe),
-        ("Step", step),
-        ("Step label", step_label),
-        ("Step text", spoken),
-        ("Score", score),
-        ("Status", status),
-        ("Redirect", redirect),
+    window = effective_window_name(profile, goal) if goal is not None or session is not None else effective_window_name(profile, goal)
+    rows: list[dict[str, str]] = [
+        _row("Course title", goal.title if goal is not None else "", _LAYER_1),
+        _row("Course description", (goal.description or "") if goal is not None else "", _LAYER_1),
+        _row("Audience", goal.audience if goal is not None else "", _LAYER_1),
+        _row("Kind", goal.kind if goal is not None else "", _LAYER_1),
+        _row("Minutes", "" if goal is None or goal.minutes is None else str(goal.minutes), _LAYER_1),
+        _row("Component title", node.title if node is not None else "", _LAYER_1),
+        _row("Component code", node.code if node is not None else "", _LAYER_1),
+        _row("Component description", (node.description or "") if node is not None else "", _LAYER_1),
+        _row("Type", _type_value(node.kc_type if node is not None else None), _LAYER_1),
+        _row("Core truth", (node.core_truth or "") if node is not None else "", _LAYER_1),
+        _row("Rubric lines", _csv(node.rubric if node is not None else []), _LAYER_1),
+        _row("Misconceptions", _misconceptions(node.misconceptions if node is not None else []), _LAYER_1),
+        _row("Prerequisite codes", _csv(node.prerequisite_codes if node is not None else []), _LAYER_1),
+        _row("Encompass codes", _csv(node.encompasses_codes if node is not None else []), _LAYER_1),
     ]
-    return [{"name": name, "value": value if value is not None else ""} for name, value in rows]
+    for name, value in _type_rows(node):
+        rows.append(_row(name, value, _LAYER_1))
+    rows.extend(
+        [
+            _row("Move index", "" if move is None else f"{index + 1} of {len(moves)}", _LAYER_1),
+            _row("Move name", "" if move is None else move.name, _LAYER_1),
+            _row("Evidence", "" if move is None else (", ".join(move.evidence) if move.evidence else ""), _LAYER_1),
+            _row("Choice widget", "" if move is None else ("yes" if move.choice else "no"), _LAYER_1),
+            _row("Prerequisite status", prereq, _LAYER_1),
+            _row("Course position", position, _LAYER_1),
+            _row("Move content", "" if move is None or node is None else move_material(node, move), _LAYER_1),
+            _row("Display name", student.display_name if student is not None else "", _LAYER_2),
+            _row("Age", "" if student is None or student.age is None else str(student.age), _LAYER_2),
+            _row("Reading level", (student.reading_level or "") if student is not None else "", _LAYER_2),
+            _row("Modality", (student.modality or "") if student is not None else "", _LAYER_2),
+            _row("Interests", interests, _LAYER_2),
+            _row("Attempts on this move", "" if session is None else str(session.move_attempts or 0), _LAYER_2),
+            _row("Hint tier already given", "" if session is None else (session.hint_tier or "nudge"), _LAYER_2),
+            _row("Component status", "" if state is None else state.status, _LAYER_2),
+            _row("Stability", "" if state is None else str(state.stability), _LAYER_2),
+            _row(
+                "Last answer",
+                next((message.content for message in reversed(messages) if message.role == "user"), ""),
+                _LAYER_2,
+            ),
+            _row("Last misconception", "" if session is None else (session.last_misconception or ""), _LAYER_2),
+            _row("Minutes used", _minutes_used(db, student, goal), _LAYER_2),
+            _row("Support band", band, _LAYER_2),
+            _row("Persona", labeled_choice(PERSONAS, profile.persona), _LAYER_3),
+            _row("Lexicon", labeled_choice(VOICES, profile.lexicon), _LAYER_3),
+            _row("Metaphors", labeled_choice(METAPHORS, profile.metaphors), _LAYER_3),
+            _row("Sidekick", labeled_choice(SIDEKICKS, profile.sidekick), _LAYER_3),
+            _row("Use interests", "yes" if profile.use_interests else "no", _LAYER_3),
+            _row("Instructive", instructive_value(profile.instructive), _LAYER_4),
+            _row("Struggle window", profile.struggle_window or "", _LAYER_4),
+            _row(
+                "Effective struggle window",
+                f"{window} ({struggle_tries(window)} tries)",
+                _LAYER_4,
+            ),
+            _row("Stay on course", "yes" if profile.stay_on_course else "no", _LAYER_4),
+            _row("Anti-spoiler", "yes" if profile.anti_spoiler else "no", _LAYER_4),
+            _row("One question", "yes" if profile.one_question else "no", _LAYER_4),
+            _row("Misconception policy", getattr(profile, "misconception_policy", None) or "retry_once", _LAYER_4),
+            _row("Enrichment", stored_enrichment(profile), _LAYER_4),
+            _row("Effective enrichment", effective_enrichment(profile, goal), _LAYER_4),
+            _row("Growth-mindset praise", "yes" if profile.growth_praise else "no", _LAYER_5),
+            _row("Self-explanation", "yes" if self_explanation_on(profile) else "no", _LAYER_6),
+            _row("Asks why", "" if move is None else ("yes" if asks_why(profile, move) else "no"), _LAYER_6),
+            _row("Reveals used", "" if session is None else str(session.reveals or 0), _LAYER_7),
+            _row("Off-course count", "" if session is None else str(session.off_course_count or 0), _LAYER_7),
+            _row("Rubric points met", "" if session is None else _csv(list(session.rubric_met or [])), _LAYER_7),
+            _row("Last four messages", _last_messages(messages), _LAYER_7),
+            _row("Affect", "" if session is None else (session.affect or ""), _LAYER_7),
+            _row("Help requested", "" if session is None else ("yes" if session.help_requested else "no"), _LAYER_7),
+            _row("Last practiced", "" if state is None or state.last_practiced is None else state.last_practiced.isoformat(), _LAYER_7),
+            _row("Redirect pending", "yes" if redirect else "no", _LAYER_7),
+            _row("Enrichment turns", "" if session is None else str(session.enrichment_turns or 0), _LAYER_7),
+            _row("Score", "" if session is None or session.score is None else str(session.score), _LAYER_7),
+            _row("Status", "" if session is None else (session.status or ""), _LAYER_7),
+            _row("Unit close", "yes" if unit_complete else "no", _LAYER_7),
+            _row("Course outro", "yes" if course_complete else "no", _LAYER_7),
+            _row("Recipe", "" if session is None else (session.recipe or ""), _LAYER_7),
+        ]
+    )
+    return rows
 
 
 def prompt_for(db: Session, session: KcSession) -> dict:
     student = _student_or_404(db, session.student_id)
     goal = _course_or_404(db, session.goal_id)
     node = _node_or_404(db, session.kc_id)
-    profile = load_profile(db)
-    text = step_text(node, session.step)
-    return {
-        "system_prompt": build_kc_prompt(
-            student=student,
-            profile=profile,
-            node=node,
-            goal=goal,
-            step=session.step,
-            step_text=text,
-        ),
-        "recipe": session.recipe,
-        "step": session.step,
-        "step_label": step_labels(node.kc_type)[min(session.step, len(step_labels(node.kc_type)) - 1)],
-    }
+    profile, _goal, messages, fragment, moves = _move_context(db, session, node)
+    index = min(max(session.step, 0), len(moves) - 1)
+    move = moves[index]
+    state = _state_row(db, student, node)
+    opening = not any(message.role == "assistant" for message in messages)
+    others = _others_known(db, student, goal, node)
+    known = state is not None and state.status == "known"
+    unit_complete = session.status == "completed"
+    course_complete = unit_complete and known and others
+    prereq = _prerequisite_status(db, student, node)
+    bundle = build_kc_prompt(
+        student=student,
+        profile=profile,
+        node=node,
+        goal=goal,
+        step=session.step,
+        moves=moves,
+        opening=opening,
+        choice_on_screen=bool(move.choice),
+        prerequisite_status=prereq,
+        support_band=_support_band(prereq),
+        course_position=_course_position(db, goal, node),
+        unit_complete=unit_complete,
+        course_complete=course_complete,
+        attempts=int(session.move_attempts or 0),
+        hint_tier=session.hint_tier or "nudge",
+        reveals=int(session.reveals or 0),
+        off_course_count=int(session.off_course_count or 0),
+        affect=session.affect or "",
+        enrichment_turns=int(session.enrichment_turns or 0),
+        help_requested=bool(session.help_requested),
+        minutes_used=int(_minutes_used(db, student, goal) or 0),
+        component_status="" if state is None else state.status,
+        stability="" if state is None else str(state.stability),
+        last_answer=next((message.content for message in reversed(messages) if message.role == "user"), ""),
+        last_misconception=session.last_misconception or "",
+        last_messages=_last_messages(messages),
+        rubric_met=[str(item) for item in (session.rubric_met or [])],
+        redirect_pending=session.redirect_kc_id is not None,
+        fragment=fragment,
+        others_known=others,
+    )
+    bundle["recipe"] = session.recipe
+    bundle["step"] = session.step
+    bundle["step_label"] = move.name
+    return bundle
+
+
+def _stored_wrong(node: KcNode, answer: str, reported: str | None) -> str:
+    items = [item for item in (node.misconceptions or []) if isinstance(item, dict)]
+    text = (reported or "").strip()
+    if text:
+        for item in items:
+            wrong = str(item.get("wrong_move") or "").strip()
+            if wrong and (_norm(wrong) == _norm(text) or matches_wrong(text, wrong)):
+                return wrong
+    signature = _matched_signature(node, answer)
+    if signature is None:
+        return ""
+    return str(signature.get("wrong_move") or "").strip()
+
+
+def _mark_known(db: Session, session: KcSession, node: KcNode) -> None:
+    state = _get_state(db, session.student_id, node.id)
+    if state.status != "known":
+        state.status = "known"
+        state.stability = round(max(float(state.stability or 0), KNOWN_STABILITY), 2)
+        state.last_practiced = _now()
+        _bump_encompassed(db, session.student_id, node)
+        session.score = PASS_SCORE
+        return
+    state.last_practiced = _now()
+    if session.score is None:
+        session.score = PASS_SCORE
+
+
+def _mark_fragile(db: Session, session: KcSession, node: KcNode) -> None:
+    state = _get_state(db, session.student_id, node.id)
+    state.status = "fragile"
+    state.last_practiced = _now()
+    session.score = MISS_SCORE
 
 
 def turn(db: Session, session: KcSession, answer: str) -> dict:
+    """Store the child's answer and return the layer bundle. Scoring waits for the decision."""
     if session.status == "completed":
         raise HTTPException(status_code=422, detail="This component session is already finished.")
     cleaned = answer.strip()
     if not cleaned:
         raise HTTPException(status_code=422, detail="Write an answer first.")
-    node = _node_or_404(db, session.kc_id)
     _add_message(db, session, "user", cleaned)
-    signature = _matched_signature(node, cleaned)
-    passed = False
-    speak_next = False
-    reply = ""
-    if signature is not None:
-        broken = _nodes_by_code(db).get(str(signature.get("broken_kc") or ""))
-        state = _get_state(db, session.student_id, node.id)
-        state.status = "fragile"
-        state.last_practiced = _now()
-        session.score = MISS_SCORE
-        session.status = "completed"
-        session.redirect_kc_id = broken.id if broken is not None else None
-        title = broken.title if broken is not None else str(signature.get("broken_kc") or "the earlier component")
-        truth = broken.core_truth if broken is not None and broken.core_truth else ""
-        reply = (
-            f"That answer matches this wrong move: {signature.get('wrong_move')}. "
-            f"The component that is actually broken is {title}. {truth} "
-            f"{MISCONCEPTION_TAIL}"
-        ).strip()
-    elif _step_passes(node, session.step, cleaned):
-        final = FINAL_STEP.get(node.kc_type or "", 0)
-        if session.step >= final:
-            state = _get_state(db, session.student_id, node.id)
-            state.status = "known"
-            state.stability = round(max(float(state.stability or 0), KNOWN_STABILITY), 2)
-            state.last_practiced = _now()
-            _bump_encompassed(db, session.student_id, node)
-            session.score = PASS_SCORE
-            session.status = "completed"
-            labels = step_labels(node.kc_type)
-            session.step = min(session.step + 1, len(labels) - 1)
-            passed = True
-            reply = _pass_reply(node)
-        else:
-            session.step += 1
-            reply = ""
-            speak_next = True
-    else:
-        session.attempts += 1
-        reply = MISS_REPLY.format(truth=node.core_truth).strip()
     session.updated_at = _now()
-    if not speak_next:
-        _add_message(db, session, "assistant", reply)
     body = session_out(db, session)
-    body["reply"] = reply
-    body["passed"] = passed
+    body.update(prompt_for(db, session))
+    body["reply"] = ""
+    body["passed"] = False
+    body["unit_complete"] = False
+    body["course_complete"] = False
     return body
+
+
+def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
+    """Check the model's decision and write mastery, edges, and the reply."""
+    if session.status == "completed":
+        raise HTTPException(status_code=422, detail="This component session is already finished.")
+    reply = str(body.get("reply") or "").strip()
+    if not reply:
+        raise HTTPException(status_code=422, detail="The tutor did not write a reply.")
+    decision = str(body.get("decision") or "").strip()
+    if decision not in DECISIONS:
+        raise HTTPException(status_code=422, detail="The decision is stay, advance, complete, or redirect.")
+    affect = str(body.get("affect") or "engaged").strip()
+    if affect not in AFFECTS:
+        affect = "engaged"
+    node = _node_or_404(db, session.kc_id)
+    profile, goal, messages, fragment, moves = _move_context(db, session, node)
+    if not any(message.role == "user" for message in messages):
+        raise HTTPException(status_code=422, detail="Write an answer first.")
+    answer = next(message.content for message in reversed(messages) if message.role == "user")
+    index = min(max(session.step, 0), len(moves) - 1)
+    move = moves[index]
+    reported = body.get("misconception")
+    matched = _stored_wrong(node, answer, None if reported is None else str(reported))
+    rubric = [str(item).strip() for item in (body.get("rubric_met") or []) if str(item).strip()]
+    resolution = resolve_decision(
+        decision=decision,
+        rubric_met=rubric,
+        stored_rubric=[str(item) for item in (session.rubric_met or [])],
+        matched_wrong=matched,
+        move=move,
+        step=index,
+        moves=moves,
+        move_attempts=int(session.move_attempts or 0),
+        hint_tier=session.hint_tier or "nudge",
+        reveals=int(session.reveals or 0),
+        enrichment_turns=int(session.enrichment_turns or 0),
+        enrichment=effective_enrichment(profile, goal),
+        window_tries=struggle_tries(effective_window_name(profile, goal)),
+        last_misconception=session.last_misconception or "",
+        fragment=fragment,
+        self_explanation=self_explanation_on(profile),
+    )
+    if resolution.mark_fragile:
+        _mark_fragile(db, session, node)
+        if resolution.redirect:
+            broken_code = ""
+            for item in node.misconceptions or []:
+                if isinstance(item, dict) and str(item.get("wrong_move") or "").strip() == resolution.misconception:
+                    broken_code = str(item.get("broken_kc") or "")
+            broken = _nodes_by_code(db).get(broken_code)
+            session.redirect_kc_id = broken.id if broken is not None else None
+    if resolution.mark_known:
+        _mark_known(db, session, node)
+    session.hint_tier = resolution.hint_tier
+    session.move_attempts = resolution.move_attempts
+    session.reveals = resolution.reveals
+    session.enrichment_turns = resolution.enrichment_turns
+    session.rubric_met = list(resolution.rubric_met)
+    session.last_misconception = resolution.misconception
+    session.affect = affect
+    session.help_requested = bool(body.get("help_requested"))
+    if bool(body.get("off_course")):
+        session.off_course_count = int(session.off_course_count or 0) + 1
+    session.attempts = int(session.attempts or 0) + 1
+    if resolution.advance:
+        session.step = index + 1
+    if resolution.unit_complete:
+        session.status = "completed"
+    session.updated_at = _now()
+    _add_message(db, session, "assistant", reply)
+    student = _student_or_404(db, session.student_id)
+    state = _state_row(db, student, node)
+    known = state is not None and state.status == "known"
+    course_complete = bool(resolution.unit_complete and known and _others_known(db, student, goal, node))
+    result = session_out(db, session)
+    result["reply"] = reply
+    result["passed"] = resolution.passed
+    result["unit_complete"] = resolution.unit_complete
+    result["course_complete"] = course_complete
+    return result
 
 
 def _chat_step_label(node: KcNode | None, step: int) -> str:
@@ -1567,6 +1853,8 @@ def kc_prompt_out(row: KcModelPrompt) -> dict:
         "system_prompt": row.system_prompt,
         "messages": list(row.messages or []),
         "model": row.model,
+        "rubric_met": [str(item) for item in (row.rubric_met or [])],
+        "misconception": row.misconception,
         "created_at": row.created_at,
     }
 
@@ -1654,6 +1942,8 @@ def append_kc_model_prompt(
     messages: list,
     model: str,
     message_id: uuid.UUID | None = None,
+    rubric_met: list | None = None,
+    misconception: str | None = None,
 ) -> KcModelPrompt:
     linked = None
     if message_id is not None:
@@ -1668,6 +1958,8 @@ def append_kc_model_prompt(
         system_prompt=system_prompt,
         messages=messages,
         model=model.strip(),
+        rubric_met=[str(item) for item in (rubric_met or []) if str(item).strip()],
+        misconception=(misconception or "").strip() or None,
     )
     db.add(row)
     db.flush()
@@ -2108,6 +2400,10 @@ def clean_model_component(node: KcNode, raw: dict, other_codes: list[str] | None
         }
     else:
         fields = {key: raw.get(key) for key in TYPE_KEYS[kc_type]}
+    stored = node.type_fields or {}
+    for key in ("transfer_case", "counterfactual"):
+        if not str(fields.get(key) or "").strip() and str(stored.get(key) or "").strip():
+            fields[key] = stored.get(key)
     shaped = {
         "kind": "component",
         "id": str(node.id),
