@@ -26,6 +26,7 @@ from app.kc import (
     apply_decision,
     course_prompt_for,
     creator_prompt_for,
+    description_prompts_for,
     draft_course,
     finish_model_course,
     mark_node_complete,
@@ -81,6 +82,14 @@ class DraftIn(BaseModel):
 class FinishDraftIn(BaseModel):
     message: str = ""
     proposal: dict
+
+
+class SliceDraftIn(BaseModel):
+    message: str = ""
+    model: str = ""
+    titles: list[str] = Field(default_factory=list)
+    subject: str = ""
+    major_ideas: list[str] = Field(default_factory=list)
 
 
 class ModelTurnIn(BaseModel):
@@ -193,6 +202,19 @@ def post_course_draft(course_id: uuid.UUID, body: DraftIn, db: Session = Depends
 def post_course_draft_prompt(course_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
     goal = _course_or_404(db, course_id)
     return course_prompt_for(goal, body.message, body.model)
+
+
+@router.post("/kc/courses/{course_id}/draft-slices")
+def post_course_draft_slices(course_id: uuid.UUID, body: SliceDraftIn, db: Session = Depends(get_db)) -> dict:
+    goal = _course_or_404(db, course_id)
+    return description_prompts_for(
+        goal,
+        body.message,
+        body.model,
+        body.titles,
+        body.subject,
+        body.major_ideas,
+    )
 
 
 @router.post("/kc/courses/{course_id}/draft-finish")

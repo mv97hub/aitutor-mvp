@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-MAX_COMPONENTS = 16
+MAX_COMPONENTS = 250
 _KINDS = ("mastery", "time_boxed", "curiosity")
 _NUMBER_WORDS = {
     "two": 2,
@@ -35,7 +35,7 @@ _NUMBER_WORDS = {
     "twenty": 20,
 }
 _NUMBER = (
-    r"(\d{1,2}|twenty|nineteen|eighteen|seventeen|sixteen|fifteen|fourteen|"
+    r"(\d{1,3}|twenty|nineteen|eighteen|seventeen|sixteen|fifteen|fourteen|"
     r"thirteen|twelve|eleven|ten|nine|eight|seven|six|five|four|three|two)"
 )
 _INSTRUCTION = re.compile(
@@ -96,7 +96,7 @@ def _vet(outline: Outline) -> None:
         if title.lower() not in known:
             raise RuntimeError(f"{outline.name} essential is not part of the subject: {title}")
     combined = [item.lower() for item in (*outline.mastery, *outline.deeper)]
-    if len(combined) != len(set(combined)) or len(combined) < MAX_COMPONENTS:
+    if len(combined) != len(set(combined)):
         raise RuntimeError(f"{outline.name} repeats itself when the count grows")
 
 
@@ -1222,7 +1222,9 @@ def _pasted_titles(message: str) -> list[str] | None:
         return None
     if _INSTRUCTION.search(message or ""):
         return None
-    return lines[:40]
+    if len(lines) > MAX_COMPONENTS:
+        raise ValueError(f"Return at most {MAX_COMPONENTS} distinct components.")
+    return lines
 
 
 def _number(token: str) -> int | None:

@@ -2,8 +2,10 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.kc import KC_TYPES, draft_course
-from app.kc_syllabus import plan_component_titles
+from app.kc_syllabus import MAX_COMPONENTS, plan_component_titles
 
 GEOMETRY = (
     "Tell congruent triangles apart, find a missing angle, and explain why "
@@ -248,9 +250,25 @@ def test_a_known_science_topic_uses_its_own_structure() -> None:
 
 
 def test_a_requested_count_above_the_real_structure_does_not_invent_fillers() -> None:
-    titles = _titles(**_geometry(message="20 components"))
-    reply = _reply(**_geometry(message="20 components"))
+    titles = _titles(**_geometry(message="40 components"))
+    reply = _reply(**_geometry(message="40 components"))
+    assert MAX_COMPONENTS == 250
     assert len(titles) == 16
+    assert len(titles) < MAX_COMPONENTS
     assert len(titles) == len({title.lower() for title in titles})
     assert "earn a place" in reply
+    assert "40" in reply
     assert not any(title.lower().startswith("euclidean geometry ") for title in titles)
+
+
+def test_a_pasted_list_between_17_and_250_is_kept() -> None:
+    titles = [f"Topic {index:02d}" for index in range(1, 31)]
+    kept = _titles(**_geometry(message="\n".join(titles)))
+    assert kept == titles
+    assert 17 <= len(kept) <= MAX_COMPONENTS
+
+
+def test_a_pasted_list_above_the_cap_is_rejected() -> None:
+    titles = [f"Topic {index:03d}" for index in range(1, 252)]
+    with pytest.raises(ValueError, match="at most 250"):
+        _titles(**_geometry(message="\n".join(titles)))

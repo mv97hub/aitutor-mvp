@@ -2,14 +2,15 @@
 
 The syllabus still chooses a careful title list. The model names the subject
 and the major ideas, then writes each component's outline, topics, and goals.
-A pasted title list stays as written. Scoring is not part of this module.
+A long list is titles first, then descriptions in slices. A pasted title list
+stays as written. Scoring is not part of this module.
 """
 
 from __future__ import annotations
 
 import re
 
-from app.kc_syllabus import planning_context, planned_reply
+from app.kc_syllabus import MAX_COMPONENTS, planned_reply, planning_context
 
 # The original CreateCourse menu, then a capable default, then the strongest
 # chat model id the app's OpenAI client accepts (openai(), @ai-sdk/openai 4.0.106).
@@ -26,7 +27,7 @@ KC_CHAT_MODELS = (
     DEEPSEEK_FLASH_MODEL,
 )
 DEFAULT_KC_CHAT_MODEL = "gpt-4.1"
-MAX_COMPONENTS = 16
+DESCRIPTION_SLICE = 25
 
 COURSE_RULES = (
     "You are an expert curriculum maker. "
@@ -78,6 +79,26 @@ COURSE_SCHEMA = {
         "components": {"type": "array", "items": _COMPONENT_FIELDS},
     },
     "required": ["subject", "major_ideas", "components"],
+}
+
+TITLES_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "subject": {"type": "string"},
+        "major_ideas": {"type": "array", "items": {"type": "string"}},
+        "titles": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["subject", "major_ideas", "titles"],
+}
+
+SLICE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "components": {"type": "array", "items": _COMPONENT_FIELDS},
+    },
+    "required": ["components"],
 }
 
 _MISCONCEPTION = {
@@ -218,7 +239,16 @@ def _count_line(ctx: dict) -> str:
     return f'The author asked for {number} components. Return {min(number, MAX_COMPONENTS)} distinct components.'
 
 
-def course_bundle(
+def _draft_width(ctx: dict) -> int:
+    if ctx["pasted"]:
+        return len(ctx["titles"])
+    count = ctx["count"]
+    if count:
+        return min(int(count[1]), MAX_COMPONENTS)
+    return len(ctx["titles"])
+
+
+def _course_setup(
     *,
     title: str,
     description: str,
@@ -227,7 +257,7 @@ def course_bundle(
     minutes: int | None,
     message: str,
     model: str,
-) -> dict:
+) -> tuple[str, dict, list[str]]:
     chosen = checked_model(model)
     ctx = planning_context(
         title=title,
@@ -245,6 +275,90 @@ def course_bundle(
             "You may use them. If you choose others, they are distinct parts of the subject, "
             "not clauses cut from the description."
         )
+    lines = [
+        COURSE_RULES,
+        f"Course name: {title}",
+        f"Course description: {description or 'None yet.'}",
+        f"Audience: {audience}",
+        _kind_line(ctx),
+        _count_line(ctx),
+        title_rule,
+        "Syllabus titles:",
+        listed or "- None",
+    ]
+    return chosen, ctx, lines
+
+
+def course_bundle(
+    *,
+    title: str,
+    description: str,
+    audience: str,
+    kind: str,
+    minutes: int | None,
+    message: str,
+    model: str,
+) -> dict:
+    chosen, ctx, lines = _course_setup(
+        title=title,
+        description=description,
+        audience=audience,
+        kind=kind,
+        minutes=minutes,
+        message=message,
+        model=model,
+    )
+    if _draft_width(ctx) > DESCRIPTION_SLICE:
+        lines.append(
+            "Return the subject, the major ideas, and the titles only. "
+            "Do not write outlines, topics, or goals in this reply."
+        )
+        schema = TITLES_SCHEMA
+        phase = "titles"
+    else:
+        lines.append(
+            "Return the subject, the major ideas, and then the components. "
+            "Each component has a title, a short outline, key topics, and key goals."
+        )
+        schema = COURSE_SCHEMA
+        phase = "full"
+    return {
+        "model": chosen,
+        "system_prompt": "\n".join(lines),
+        "user_prompt": (message or "").strip() or "Draft the component list.",
+        "schema": schema,
+        "pass": phase,
+        "slice_size": DESCRIPTION_SLICE,
+    }
+
+
+def _plain_titles(titles: list[str]) -> list[str]:
+    chosen: list[str] = []
+    for item in titles:
+        title = str(item or "").strip()
+        if title:
+            chosen.append(title)
+    return chosen
+
+
+def _groups(titles: list[str], size: int) -> list[list[str]]:
+    return [titles[start : start + size] for start in range(0, len(titles), size)]
+
+
+def _description_bundle(
+    *,
+    model: str,
+    ctx: dict,
+    title: str,
+    description: str,
+    audience: str,
+    message: str,
+    titles: list[str],
+    subject: str,
+    major_ideas: list[str],
+) -> dict:
+    listed = "\n".join(f"- {item}" for item in titles)
+    ideas = "; ".join(major_ideas) if major_ideas else subject
     system = "\n".join(
         [
             COURSE_RULES,
@@ -253,19 +367,66 @@ def course_bundle(
             f"Audience: {audience}",
             _kind_line(ctx),
             _count_line(ctx),
-            title_rule,
-            "Syllabus titles:",
-            listed or "- None",
-            "Return the subject, the major ideas, and then the components. "
-            "Each component has a title, a short outline, key topics, and key goals.",
+            f"Subject: {subject}",
+            f"Major ideas: {ideas}",
+            "These titles are already chosen. Write a short outline, the key topics, and the key goals for each one.",
+            "Do not add a title, drop a title, or rename a title. Keep this order.",
+            "Titles:",
+            listed,
+            "Return only these components.",
         ]
     )
     return {
-        "model": chosen,
+        "model": model,
         "system_prompt": system,
-        "user_prompt": (message or "").strip() or "Draft the component list.",
-        "schema": COURSE_SCHEMA,
+        "user_prompt": (message or "").strip() or "Write the descriptions for these titles.",
+        "schema": SLICE_SCHEMA,
+        "titles": list(titles),
     }
+
+
+def description_plan(
+    *,
+    title: str,
+    description: str,
+    audience: str,
+    kind: str,
+    minutes: int | None,
+    message: str,
+    model: str,
+    titles: list[str],
+    subject: str = "",
+    major_ideas: list[str] | None = None,
+) -> dict:
+    """Description calls for one slice of titles at a time. The full list is checked first."""
+    chosen, ctx, _lines = _course_setup(
+        title=title,
+        description=description,
+        audience=audience,
+        kind=kind,
+        minutes=minutes,
+        message=message,
+        model=model,
+    )
+    chosen_titles = list(ctx["titles"]) if ctx["pasted"] else _plain_titles(titles)
+    _check_titles(description, chosen_titles, ctx)
+    subject_text = (subject or "").strip() or str(ctx["subject"])
+    ideas = [str(item).strip() for item in (major_ideas or []) if str(item).strip()] or list(ctx["ideas"])
+    slices = [
+        _description_bundle(
+            model=chosen,
+            ctx=ctx,
+            title=title,
+            description=description,
+            audience=audience,
+            message=message,
+            titles=group,
+            subject=subject_text,
+            major_ideas=ideas,
+        )
+        for group in _groups(chosen_titles, DESCRIPTION_SLICE)
+    ]
+    return {"slice_size": DESCRIPTION_SLICE, "slices": slices}
 
 
 def _model_rows(proposal: dict) -> list[dict]:
