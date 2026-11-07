@@ -251,6 +251,12 @@ def test_create_student_keeps_layer_2_apart_from_tutor_settings() -> None:
         assert patched.json()["interests"] == ["ships"]
         assert patched.json()["tutor_persona"] == "Harbor Guide"
         assert patched.json()["age"] == 10
+        aged = client.patch(f"/students/{named.json()['id']}", json={"age": 11})
+        assert aged.status_code == 200
+        assert aged.json()["age"] == 11
+        assert aged.json()["reading_level"] == "early-reader"
+        too_young = client.patch(f"/students/{named.json()['id']}", json={"age": 3})
+        assert too_young.status_code == 422
     finally:
         _drop_named("Ada Lovelace")
         _drop_named("Grace Hopper")

@@ -253,7 +253,8 @@ export async function answerKcTurn(formData: FormData) {
   const sessionId = String(formData.get("session_id") || "");
   const student = String(formData.get("student") || "");
   const course = String(formData.get("course") || "");
-  const back = `/kc-tutor?student=${encodeURIComponent(student)}&course=${encodeURIComponent(course)}&session=${encodeURIComponent(sessionId)}`;
+  const model = kcModel(String(formData.get("model") || ""));
+  const back = `/kc-tutor?student=${encodeURIComponent(student)}&course=${encodeURIComponent(course)}&session=${encodeURIComponent(sessionId)}&model=${encodeURIComponent(model)}`;
   try {
     await api(`/kc/tutor/sessions/${sessionId}/turn`, {
       method: "POST",

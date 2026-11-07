@@ -1,19 +1,67 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition, type FormEvent } from "react";
 
 import { KcBanner } from "@/components/KcBanner";
 import { ChoiceWidget } from "@/components/LessonBlocks";
+import { api } from "@/lib/api";
 import { answerKcTurn } from "@/lib/kc-actions";
 import type { KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
+import { KC_MODELS, kcModel, type KcModel } from "@/lib/kc-models";
 import type { KidQuiz, Student } from "@/lib/types";
 import { useRouter } from "next/navigation";
+
+type SettingsDraft = {
+  model: KcModel;
+  age: string;
+  reading_level: string;
+  modality: string;
+  interests: string;
+};
+
+function tutorPath(parts: { student?: string; course?: string; kc?: string; session?: string; model?: string }) {
+  const params = new URLSearchParams();
+  if (parts.student) params.set("student", parts.student);
+  if (parts.course) params.set("course", parts.course);
+  if (parts.kc) params.set("kc", parts.kc);
+  if (parts.session) params.set("session", parts.session);
+  if (parts.model) params.set("model", parts.model);
+  const query = params.toString();
+  return query ? `/kc-tutor?${query}` : "/kc-tutor";
+}
+
+function settingsDraft(learner: Student | null, model: string): SettingsDraft {
+  return {
+    model: kcModel(model),
+    age: learner?.age == null ? "" : String(learner.age),
+    reading_level: learner?.reading_level ?? "",
+    modality: learner?.modality ?? "",
+    interests: learner?.interests.join(", ") ?? "",
+  };
+}
+
+function GearIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M12.6 3.4l-1.2 1.2M4.6 11.4l-1.2 1.2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
 
 export function KcTutor({
   students,
   courses,
   studentId,
   courseId,
+  kcId,
+  model,
   progress,
   session,
   error,
@@ -22,21 +70,80 @@ export function KcTutor({
   courses: KcTutorCourse[];
   studentId: string;
   courseId: string;
+  kcId: string;
+  model: string;
   progress: KcProgress | null;
   session: KcTutorSession | null;
   error: string | null;
 }) {
   const course = courses.find((item) => item.id === courseId) ?? null;
+  const learner = students.find((item) => item.id === studentId) ?? null;
+  const router = useRouter();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  const [draft, setDraft] = useState<SettingsDraft>(() => settingsDraft(learner, model));
+
+  function openSettings() {
+    setDraft(settingsDraft(learner, model));
+    setSettingsNotice(null);
+    setSettingsOpen(true);
+  }
+
+  async function saveSettings(event: FormEvent) {
+    event.preventDefault();
+    setSavingSettings(true);
+    setSettingsNotice(null);
+    try {
+      if (learner) {
+        const age = Number(draft.age);
+        if (!Number.isInteger(age) || age < 4 || age > 18) {
+          setSettingsNotice("Age must be from 4 to 18.");
+          return;
+        }
+        await api<Student>(`/students/${learner.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            age,
+            reading_level: draft.reading_level.trim(),
+            modality: draft.modality.trim(),
+            interests: draft.interests
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean),
+          }),
+        });
+      }
+      const nextModel = kcModel(draft.model);
+      setSettingsOpen(false);
+      router.push(
+        tutorPath({
+          student: studentId,
+          course: courseId,
+          kc: session ? undefined : kcId,
+          session: session?.id,
+          model: nextModel,
+        }),
+      );
+      router.refresh();
+    } catch (err) {
+      setSettingsNotice(err instanceof Error ? err.message : "Could not save those settings.");
+    } finally {
+      setSavingSettings(false);
+    }
+  }
+
   return (
     <main className="ds-shell kc-screen">
       <KcBanner name="KC Tutor" />
-      <aside className="ds-side">
+      <aside className="ds-side kc-tutor-side">
         {error && !session ? (
           <div className="banner" role="alert">
             <p>{error}</p>
           </div>
         ) : null}
         <form className="kc-tutor-pick" method="get" action="/kc-tutor">
+          <input type="hidden" name="model" value={model} />
           <label>
             Child
             <select aria-label="Choose a child" name="student" defaultValue={studentId}>
@@ -72,7 +179,7 @@ export function KcTutor({
             <ul className="kc-cards" aria-label="Next work">
               {progress.cards.map((card) => (
                 <li key={card.role}>
-                  <a href={`/kc-tutor?student=${studentId}&course=${courseId}&kc=${card.id}`}>
+                  <a href={tutorPath({ student: studentId, course: courseId, kc: card.id, model })}>
                     <span>{card.label}</span>
                     <strong>{card.title}</strong>
                     <small>{card.reason}</small>
@@ -82,6 +189,29 @@ export function KcTutor({
             </ul>
             {progress.cards.length === 0 ? <p className="ds-quiet">Every target component is known.</p> : null}
           </>
+        ) : null}
+        <div className="ds-foot">
+          <button
+            type="button"
+            className="ds-settings"
+            aria-expanded={settingsOpen}
+            aria-haspopup="dialog"
+            onClick={openSettings}
+          >
+            <GearIcon />
+            Settings
+          </button>
+        </div>
+        {settingsOpen ? (
+          <TutorSettingsDialog
+            learner={learner}
+            draft={draft}
+            saving={savingSettings}
+            notice={settingsNotice}
+            onChange={setDraft}
+            onSubmit={(event) => void saveSettings(event)}
+            onClose={() => setSettingsOpen(false)}
+          />
         ) : null}
       </aside>
       <section className="ds-stage">
@@ -101,6 +231,7 @@ export function KcTutor({
             session={session}
             studentId={studentId}
             courseId={courseId}
+            model={model}
           />
         ) : null}
       </section>
@@ -112,10 +243,12 @@ function KcLesson({
   session,
   studentId,
   courseId,
+  model,
 }: {
   session: KcTutorSession;
   studentId: string;
   courseId: string;
+  model: string;
 }) {
   const router = useRouter();
   const started = useRef("");
@@ -130,7 +263,7 @@ function KcLesson({
 
   useEffect(() => {
     if (!session.needs_speech) return;
-    const key = `${session.id}:${session.step}:${session.messages.length}:${attempt}`;
+    const key = `${session.id}:${session.step}:${session.messages.length}:${attempt}:${model}`;
     if (started.current === key) return;
     started.current = key;
     const controller = new AbortController();
@@ -140,7 +273,7 @@ function KcLesson({
     void fetch("/api/kc/tutor/speak", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: session.id }),
+      body: JSON.stringify({ sessionId: session.id, model }),
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -162,7 +295,7 @@ function KcLesson({
       controller.abort();
       if (started.current === key) started.current = "";
     };
-  }, [attempt, router, session.id, session.messages.length, session.needs_speech, session.step]);
+  }, [attempt, model, router, session.id, session.messages.length, session.needs_speech, session.step]);
 
   function sendChoice(transcript: string) {
     const data = new FormData();
@@ -225,6 +358,7 @@ function KcLesson({
           <input type="hidden" name="session_id" value={session.id} />
           <input type="hidden" name="student" value={studentId} />
           <input type="hidden" name="course" value={courseId} />
+          <input type="hidden" name="model" value={model} />
           <div className="ds-card">
             <textarea
               className="ds-draft"
@@ -251,6 +385,137 @@ function KcLesson({
         </form>
       )}
     </>
+  );
+}
+
+function TutorSettingsDialog({
+  learner,
+  draft,
+  saving,
+  notice,
+  onChange,
+  onSubmit,
+  onClose,
+}: {
+  learner: Student | null;
+  draft: SettingsDraft;
+  saving: boolean;
+  notice: string | null;
+  onChange: (next: SettingsDraft) => void;
+  onSubmit: (event: FormEvent) => void;
+  onClose: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    panelRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const subtitle = learner
+    ? learner.age == null
+      ? learner.display_name
+      : `${learner.display_name} · age ${learner.age}`
+    : "Choose a child to edit age, reading level, modality, and interests.";
+
+  return (
+    <div className="prompt-backdrop" role="presentation" onMouseDown={onClose}>
+      <div
+        ref={panelRef}
+        className="prompt-dialog settings-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="kc-tutor-settings-title"
+        tabIndex={-1}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <h2 id="kc-tutor-settings-title">Settings</h2>
+            <p>{subtitle}</p>
+          </div>
+          <button type="button" className="ghost" onClick={onClose}>
+            Close
+          </button>
+        </header>
+        <form className="prompt-body" onSubmit={onSubmit}>
+          <label>
+            Model
+            <select
+              aria-label="Model"
+              value={draft.model}
+              onChange={(event) => onChange({ ...draft, model: kcModel(event.target.value) })}
+            >
+              {KC_MODELS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          {learner ? (
+            <>
+              <label>
+                Age
+                <input
+                  type="number"
+                  min={4}
+                  max={18}
+                  required
+                  value={draft.age}
+                  onChange={(event) => onChange({ ...draft, age: event.target.value })}
+                />
+              </label>
+              <label>
+                Reading level
+                <input
+                  maxLength={80}
+                  value={draft.reading_level}
+                  onChange={(event) => onChange({ ...draft, reading_level: event.target.value })}
+                />
+              </label>
+              <label>
+                Modality
+                <input
+                  maxLength={80}
+                  value={draft.modality}
+                  onChange={(event) => onChange({ ...draft, modality: event.target.value })}
+                />
+              </label>
+              <label>
+                Interests
+                <input
+                  value={draft.interests}
+                  placeholder="cities, fairness"
+                  onChange={(event) => onChange({ ...draft, interests: event.target.value })}
+                />
+              </label>
+              <p className="help">
+                Age, reading level, modality, and interests are sent with the next step. Persona and the other tutor
+                settings stay on Agent customizations.
+              </p>
+            </>
+          ) : null}
+          {notice ? (
+            <div className="banner" role="alert">
+              <p>{notice}</p>
+            </div>
+          ) : null}
+          <div className="rail-actions">
+            <button className="button" type="submit" disabled={saving}>
+              Save settings
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 

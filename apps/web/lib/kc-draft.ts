@@ -1,9 +1,9 @@
-import { openai } from "@ai-sdk/openai";
 import { Output, jsonSchema, streamText, type JSONSchema7 } from "ai";
 
 import { api } from "@/lib/api";
 import type { KcDraft } from "@/lib/kc";
-import { MISSING_OPENAI_KEY, isKcModel, type KcModel } from "@/lib/kc-models";
+import { languageModel } from "@/lib/language-model";
+import { isKcModel, missingKeyMessage, usesOpenRouter, type KcModel } from "@/lib/kc-models";
 
 type PromptBundle = {
   model: string;
@@ -19,10 +19,9 @@ type CourseResult = {
 
 const cache = new Map<string, CourseResult>();
 
-function requireKey() {
-  if (!process.env.OPENAI_API_KEY?.trim()) {
-    throw new Error(MISSING_OPENAI_KEY);
-  }
+function requireKey(model: string) {
+  const missing = missingKeyMessage(model);
+  if (missing) throw new Error(missing);
 }
 
 function requireModel(model: string): KcModel {
@@ -34,7 +33,7 @@ function requireModel(model: string): KcModel {
 
 async function completeObject(model: KcModel, instructions: string, prompt: string, schema: JSONSchema7) {
   const result = streamText({
-    model: openai(model),
+    model: languageModel(model),
     output: Output.object({
       schema: jsonSchema(schema),
       name: "kc_draft",
@@ -42,7 +41,7 @@ async function completeObject(model: KcModel, instructions: string, prompt: stri
     }),
     instructions,
     prompt,
-    ...(model.startsWith("gpt-4") ? { temperature: 0.3 } : {}),
+    ...(model.startsWith("gpt-4") || usesOpenRouter(model) ? { temperature: 0.3 } : {}),
   });
   const output = await result.output;
   if (!output || typeof output !== "object") {
@@ -80,8 +79,8 @@ export async function draftKcCourse(input: {
   message: string;
   model: string;
 }): Promise<CourseResult> {
-  requireKey();
   const model = requireModel(input.model);
+  requireKey(model);
   const message = input.message.trim();
   if (!message) throw new Error("Write a message first.");
   const key = `${input.courseId}\n${model}\n${message}`;
@@ -106,8 +105,8 @@ export async function draftKcComponent(input: {
   message: string;
   model: string;
 }): Promise<void> {
-  requireKey();
   const model = requireModel(input.model);
+  requireKey(model);
   const message = input.message.trim();
   if (!message) throw new Error("Write a message first.");
   const bundle = await api<PromptBundle>(`/kc/nodes/${input.nodeId}/creator-prompt`, {

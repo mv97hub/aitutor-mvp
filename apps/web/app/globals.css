@@ -2736,6 +2736,14 @@ a.ds-row { text-decoration: none; }
 .kc-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .kc-draft-list { margin: 0; padding-left: 2rem; list-style: decimal; }
 
+.kc-tutor-side { overflow: auto; }
+.kc-tutor-side > .ds-foot {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  background: rgb(249, 250, 251);
+}
+
 .kc-tutor-pick { display: grid; gap: 8px; margin: 8px; }
 .kc-tutor-pick select {
   width: 100%;

@@ -47,7 +47,7 @@ CHOICE_MODES = ("predefined", "dynamic")
 DEPTHS = ("survey", "standard", "go_deep")
 QUIZ_MINUTES = (2, 5, 10)
 AGE_BANDS = ("6-8", "9-11", "12-14", "15-17")
-STUDIO_MODELS = ("gpt-4o-mini", "gpt-4o", "gpt-4.1-mini")
+STUDIO_MODELS = ("gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "deepseek/deepseek-flash-latest")
 DEFAULT_STUDIO_MODEL = "gpt-4o-mini"
 SCHEMA_VERSION = 2
 SETTINGS_ID = "default"
@@ -3156,7 +3156,10 @@ def ensure_settings(db: Session) -> StudioSettings:
 
 def set_model(db: Session, model: str) -> StudioSettings:
     if not isinstance(model, str) or model not in STUDIO_MODELS:
-        raise StudioError("model", "must be gpt-4o-mini, gpt-4o, or gpt-4.1-mini")
+        raise StudioError(
+            "model",
+            "must be gpt-4o-mini, gpt-4o, gpt-4.1-mini, or deepseek/deepseek-flash-latest",
+        )
     row = ensure_settings(db)
     row.model = model
     db.flush()

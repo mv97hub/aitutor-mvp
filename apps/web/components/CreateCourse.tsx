@@ -1252,7 +1252,7 @@ export function CreateCourse() {
               <label>
                 Model
                 <select value={modelDraft} onChange={(event) => setModelDraft(event.target.value)}>
-                  {(settings?.options ?? ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"]).map((option) => (
+                  {(settings?.options ?? ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "deepseek/deepseek-flash-latest"]).map((option) => (
                     <option key={option} value={option}>{option}</option>
                   ))}
                 </select>

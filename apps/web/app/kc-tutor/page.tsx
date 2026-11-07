@@ -1,6 +1,7 @@
 import { KcTutor } from "@/components/KcTutor";
 import { api } from "@/lib/api";
 import type { KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
+import { kcModel } from "@/lib/kc-models";
 import type { Student } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +11,7 @@ export const metadata = { title: "KC Tutor · AI Tutor" };
 export default async function KcTutorPage({
   searchParams,
 }: {
-  searchParams: Promise<{ student?: string; course?: string; kc?: string; session?: string; error?: string }>;
+  searchParams: Promise<{ student?: string; course?: string; kc?: string; session?: string; model?: string; error?: string }>;
 }) {
   const params = await searchParams;
   let students: Student[] = [];
@@ -40,6 +41,8 @@ export default async function KcTutorPage({
       courses={courses}
       studentId={params.student ?? ""}
       courseId={params.course ?? ""}
+      kcId={params.kc ?? ""}
+      model={kcModel(params.model)}
       progress={progress}
       session={session}
       error={error}
