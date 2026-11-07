@@ -5,6 +5,7 @@ export const kcAndAdminPages = [
   { href: "/manage-kc-courses", label: "Manage KC courses" },
   { href: "/kc-creator", label: "KC Creator" },
   { href: "/kc-tutor", label: "KC Tutor" },
+  { href: "/kc-prompt-tester", label: "KC Prompt Tester" },
   { href: "/kc-progress", label: "KC Course Progress" },
   { href: "/viewkcchats", label: "View KC chats" },
   { href: "/documentation", label: "Documentation" },

@@ -13,12 +13,16 @@ test("KC and admin links sit above the older pages, with Course Progress in the 
       "Manage KC courses",
       "KC Creator",
       "KC Tutor",
+      "KC Prompt Tester",
       "KC Course Progress",
       "View KC chats",
       "Documentation",
     ],
   );
   assert.equal(kcAndAdminPages.find((page) => page.label === "KC Course Progress")?.href, "/kc-progress");
+  assert.equal(kcAndAdminPages.find((page) => page.label === "KC Prompt Tester")?.href, "/kc-prompt-tester");
+  const labels = kcAndAdminPages.map((page) => page.label);
+  assert.equal(labels.indexOf("KC Prompt Tester"), labels.indexOf("KC Tutor") + 1);
   assert.deepEqual(
     olderPages.map((page) => page.label),
     ["Home", "Create course", "Manage courses", "View chats"],

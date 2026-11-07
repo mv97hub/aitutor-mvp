@@ -3123,3 +3123,110 @@ a.ds-row { text-decoration: none; }
   font-weight: 400;
   line-height: 20px;
 }
+
+.ds-shell.kc-prompt-tester {
+  grid-template-columns: minmax(280px, 440px) minmax(0, 1fr);
+}
+
+.kc-prompt-form,
+.kc-prompt-result {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.kc-prompt-form {
+  padding: 8px 16px 28px;
+  border-right: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+
+.kc-prompt-form h2,
+.kc-prompt-result h2 {
+  margin: 20px 0 10px;
+  color: rgb(15, 17, 21);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 22px;
+}
+
+.kc-prompt-result h2 { margin-top: 0; }
+
+.kc-prompt-form label {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 12px;
+  color: rgb(15, 17, 21);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.kc-prompt-form input,
+.kc-prompt-form textarea,
+.kc-prompt-form select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px 10px;
+  color: rgb(15, 17, 21);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
+.kc-prompt-form textarea { min-height: 72px; resize: vertical; }
+
+.kc-prompt-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.kc-prompt-derived {
+  color: rgb(97, 102, 107);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.kc-prompt-form output {
+  display: block;
+  min-height: 22px;
+  margin: 0;
+  padding: 8px 0;
+  color: rgb(15, 17, 21);
+  font-weight: 400;
+}
+
+.kc-prompt-note {
+  margin: 8px 0 16px;
+  color: rgb(97, 102, 107);
+  font-size: 13px;
+}
+
+.kc-prompt-form .button { margin-top: 8px; }
+
+.kc-prompt-result { padding: 16px 20px 32px; }
+
+.kc-prompt-result pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+@media (max-width: 860px) {
+  .ds-shell.kc-prompt-tester {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr) minmax(10rem, 38vh);
+  }
+
+  .kc-prompt-form {
+    border-right: 0;
+    border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
+  }
+}
