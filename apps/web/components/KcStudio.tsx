@@ -2,10 +2,10 @@ import Link from "next/link";
 
 import { KcBanner } from "@/components/KcBanner";
 import { KcCourseList } from "@/components/KcCourseList";
+import { KcNewCourse } from "@/components/KcNewCourse";
 import { KcStudioComposer } from "@/components/KcComposer";
 import {
   addKcComponent,
-  createKcCourse,
   markKcReady,
   moveKcComponent,
   pushKcDraft,
@@ -55,47 +55,12 @@ export function KcStudio({
         <Link href="/manage-kc-courses" className="studio-manage-link">
           Manage KC courses
         </Link>
+        <KcNewCourse />
         <KcCourseList
           courses={initialCourses}
           activeId={course?.id ?? null}
           hrefBase="/kc-studio?course="
         />
-        <form className="studio-new-form" action={createKcCourse}>
-          <h2>New course</h2>
-          <label>
-            Name
-            <input aria-label="New course name" name="title" required />
-          </label>
-          <label>
-            What the kid should come away able to do
-            <textarea aria-label="New course description" name="description" rows={3} />
-          </label>
-          <label>
-            Audience
-            <select aria-label="New course audience" name="audience" defaultValue="12-14">
-              {AUDIENCES.map((band) => (
-                <option key={band}>{band}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Kind
-            <select aria-label="New course kind" name="kind" defaultValue="mastery">
-              {KINDS.map((kind) => (
-                <option key={kind.id} value={kind.id}>
-                  {kind.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Minutes, optional
-            <input aria-label="New course minutes" name="minutes" inputMode="numeric" />
-          </label>
-          <button className="button" type="submit">
-            Create course
-          </button>
-        </form>
       </aside>
       <section className="studio-stage kc-course-stage">
         {initialError ? (
