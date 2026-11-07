@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 
 import { KcBanner } from "@/components/KcBanner";
@@ -14,6 +14,30 @@ import {
   type KcMisconception,
   type KcType,
 } from "@/lib/kc";
+import {
+  CREATE_DRAFT_MESSAGE,
+  beginFastCreate,
+  creatorHref,
+  emptyComponentIds,
+  gapLabel,
+  readFastCreate,
+  stepFastCreate,
+  writeFastCreate,
+  type FastAction,
+  type FastRecord,
+} from "@/lib/kc-fast-create";
+import { kcModel } from "@/lib/kc-models";
+
+const acted = new Set<string>();
+
+function actionKey(record: FastRecord, action: FastAction): string {
+  const id = record.ids[record.index] ?? "";
+  if (action.type === "open") return `${record.token}:open:${action.componentId}:${record.done}`;
+  if (action.type === "draft") return `${record.token}:draft:${id}:${record.baseline}`;
+  if (action.type === "push") return `${record.token}:push:${id}:${record.done}`;
+  if (action.type === "complete") return `${record.token}:complete:${id}:${record.done}`;
+  return `${record.token}:none`;
+}
 
 export function KcCreator({
   courses,
@@ -32,6 +56,112 @@ export function KcCreator({
 }) {
   const router = useRouter();
   const rows = course ? [...course.components, ...course.patches] : [];
+  const [record, setRecord] = useState<FastRecord | null>(null);
+  const [ready, setReady] = useState(false);
+  const draftFormRef = useRef<HTMLFormElement>(null);
+  const pushFormRef = useRef<HTMLFormElement>(null);
+  const completeRef = useRef<HTMLButtonElement>(null);
+  const booted = useRef(false);
+  const lock = useRef(false);
+  const gap =
+    record?.gapId && component?.id === record.gapId && component.missing.length > 0
+      ? gapLabel(component.missing)
+      : null;
+  const notice = error || gap;
+
+  useEffect(() => {
+    if (booted.current) return;
+    booted.current = true;
+    setRecord(readFastCreate());
+    setReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (record && !record.active) lock.current = false;
+  }, [record]);
+
+  useEffect(() => {
+    if (!ready || !record?.active) return;
+    const next = stepFastCreate(record, {
+      courseId: course?.id ?? null,
+      componentId: component?.id ?? null,
+      messageCount: thread?.messages.length ?? 0,
+      hasDraft: Boolean(thread?.draft),
+      missing: component?.missing ?? [],
+      markedComplete: Boolean(component?.marked_complete),
+      error,
+    });
+    if (!runFastAction(next.action, next.record)) return;
+    if (next.record !== record) {
+      writeFastCreate(next.record);
+      setRecord(next.record);
+    }
+
+    function runFastAction(action: FastAction, committed: FastRecord): boolean {
+      if (action.type === "none") return true;
+      const key = actionKey(committed, action);
+      if (acted.has(key)) return true;
+      try {
+        if (action.type === "open") {
+          const href = creatorHref(action.courseId, action.componentId, action.model);
+          const here = `${window.location.pathname}${window.location.search}`;
+          if (here === href && error) {
+            const stopped = { ...committed, active: false };
+            writeFastCreate(stopped);
+            setRecord(stopped);
+            return true;
+          }
+          acted.add(key);
+          router.push(href);
+          return true;
+        }
+        if (action.type === "draft") {
+          const form = draftFormRef.current;
+          const field = form?.querySelector("textarea[name=message]");
+          if (!form || !(field instanceof HTMLTextAreaElement) || field.disabled) return false;
+          field.value = CREATE_DRAFT_MESSAGE;
+          const select = form.querySelector("select[name=model]");
+          if (select instanceof HTMLSelectElement) select.value = action.model;
+          acted.add(key);
+          form.requestSubmit();
+          return true;
+        }
+        if (action.type === "push") {
+          const form = pushFormRef.current;
+          if (!form) return false;
+          acted.add(key);
+          form.requestSubmit();
+          return true;
+        }
+        const button = completeRef.current;
+        const form = button?.form;
+        if (!button || !form || button.disabled) return false;
+        acted.add(key);
+        form.requestSubmit(button);
+        return true;
+      } catch {
+        acted.delete(key);
+        return false;
+      }
+    }
+  }, [ready, record, course, component, thread, error, router]);
+
+  function chosenModel() {
+    const select = document.querySelector(".kc-creator-stage select[name=model]");
+    if (select instanceof HTMLSelectElement && select.value) return kcModel(select.value);
+    return model;
+  }
+
+  function startFastCreate() {
+    if (!course || record?.active || lock.current) return;
+    lock.current = true;
+    booted.current = true;
+    const next = beginFastCreate(course.id, emptyComponentIds(course.components), chosenModel());
+    if (!next.active) lock.current = false;
+    writeFastCreate(next);
+    setRecord(next);
+    setReady(true);
+  }
 
   function openCourse(id: string) {
     const next = courses.find((item) => item.id === id);
@@ -45,7 +175,18 @@ export function KcCreator({
 
   return (
     <main className="ds-shell studio-shell kc-screen">
-      <KcBanner name="KC Creator" />
+      <KcBanner name="KC Creator">
+        <div className="kc-fast">
+          {record ? (
+            <span className="kc-fast-count" aria-live="polite">
+              {record.done} / {record.ids.length}
+            </span>
+          ) : null}
+          <button className="button" type="button" onClick={startFastCreate} disabled={!course || Boolean(record?.active)}>
+            Fast Create All
+          </button>
+        </div>
+      </KcBanner>
       <aside className="ds-side">
         {courses.length === 0 ? (
           <p className="ds-quiet">No courses yet</p>
@@ -99,18 +240,33 @@ export function KcCreator({
         )}
       </aside>
       <section className="studio-stage kc-creator-stage">
-        {error ? (
+        {notice ? (
           <div className="banner" role="alert">
-            <p>{error}</p>
+            <p>{notice}</p>
           </div>
         ) : null}
         <div className="studio-columns">
           <div className="studio-tree">
             {!course || !component ? <p className="ds-quiet">Choose a component to edit it.</p> : null}
-            {course && component ? <ComponentEditor key={component.id} course={course} component={component} /> : null}
+            {course && component ? (
+              <ComponentEditor
+                key={component.id}
+                course={course}
+                component={component}
+                model={model}
+                completeRef={completeRef}
+              />
+            ) : null}
           </div>
           <div className="studio-chat">
-            <CreatorChat course={course} component={component} thread={thread} model={model} />
+            <CreatorChat
+              course={course}
+              component={component}
+              thread={thread}
+              model={model}
+              draftFormRef={draftFormRef}
+              pushFormRef={pushFormRef}
+            />
           </div>
         </div>
       </section>
@@ -123,11 +279,15 @@ function CreatorChat({
   component,
   thread,
   model,
+  draftFormRef,
+  pushFormRef,
 }: {
   course: KcCourse | null;
   component: KcComponent | null;
   thread: KcCreatorThread | null;
   model: string;
+  draftFormRef: RefObject<HTMLFormElement | null>;
+  pushFormRef: RefObject<HTMLFormElement | null>;
 }) {
   if (!course || !component || !thread) {
     return <p className="ds-quiet">Open a component before asking for a draft.</p>;
@@ -153,9 +313,10 @@ function CreatorChat({
         </div>
       </div>
       {draft ? (
-        <form action={pushKcComponent}>
+        <form action={pushKcComponent} ref={pushFormRef}>
           <input type="hidden" name="course_id" value={course.id} />
           <input type="hidden" name="node_id" value={component.id} />
+          <input type="hidden" name="model" value={model} />
           <input
             type="hidden"
             name="payload"
@@ -176,7 +337,7 @@ function CreatorChat({
           </button>
         </form>
       ) : null}
-      <KcCreatorComposer courseId={course.id} nodeId={component.id} model={model} />
+      <KcCreatorComposer courseId={course.id} nodeId={component.id} model={model} formRef={draftFormRef} />
     </>
   );
 }
@@ -210,7 +371,17 @@ const TIPS = {
   encompasses: "When the kid passes this component, the tutor gives that component a stability bump.",
 } as const;
 
-function ComponentEditor({ course, component }: { course: KcCourse; component: KcComponent }) {
+function ComponentEditor({
+  course,
+  component,
+  model,
+  completeRef,
+}: {
+  course: KcCourse;
+  component: KcComponent;
+  model: string;
+  completeRef: RefObject<HTMLButtonElement | null>;
+}) {
   const codes = [...course.components, ...course.patches]
     .map((item) => item.code)
     .filter((code) => code !== component.code);
@@ -237,6 +408,7 @@ function ComponentEditor({ course, component }: { course: KcCourse; component: K
     <form className="kc-editor" action={saveKcComponent}>
       <input type="hidden" name="course_id" value={course.id} />
       <input type="hidden" name="node_id" value={component.id} />
+      <input type="hidden" name="model" value={model} />
       <h2>Component</h2>
       <label title={TIPS.description}>
         Description
@@ -355,7 +527,14 @@ function ComponentEditor({ course, component }: { course: KcCourse; component: K
         <button className="button" type="submit">
           Save this component
         </button>
-        <button className="button" type="submit" formAction={markKcComplete} disabled={!canComplete}>
+        <button
+          className="button"
+          type="submit"
+          formAction={markKcComplete}
+          formNoValidate
+          ref={completeRef}
+          disabled={!canComplete}
+        >
           {component.marked_complete ? "Marked complete" : "Mark complete"}
         </button>
       </div>

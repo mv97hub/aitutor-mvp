@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState, useTransition, type Ref } from "react";
 import { useRouter } from "next/navigation";
 import { useFormStatus } from "react-dom";
 
@@ -93,13 +93,15 @@ export function KcCreatorComposer({
   courseId,
   nodeId,
   model,
+  formRef,
 }: {
   courseId: string;
   nodeId: string;
   model: string;
+  formRef?: Ref<HTMLFormElement>;
 }) {
   return (
-    <form className="ds-composer-seat" action={postKcCreatorMessage}>
+    <form className="ds-composer-seat" action={postKcCreatorMessage} ref={formRef}>
       <input type="hidden" name="course_id" value={courseId} />
       <input type="hidden" name="node_id" value={nodeId} />
       <CreatorFields model={model} />

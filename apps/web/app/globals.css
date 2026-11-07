@@ -2590,6 +2590,29 @@ a.ds-row { text-decoration: none; }
   line-height: 24px;
 }
 
+.kc-fast {
+  margin-left: auto;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+}
+
+.kc-fast-count {
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 22px;
+}
+
+.kc-banner .kc-fast .button {
+  background: #fff;
+  color: rgb(15, 17, 21);
+  border-color: #fff;
+  white-space: nowrap;
+}
+
 .kc-course-stage,
 .kc-creator-stage {
   display: flex;

@@ -18,6 +18,15 @@ function minutesOf(formData: FormData): number | null {
   return raw ? Number(raw) : null;
 }
 
+function creatorBack(courseId: string, nodeId: string, formData: FormData) {
+  const raw = String(formData.get("model") || "").trim();
+  const params = new URLSearchParams();
+  params.set("course", courseId);
+  params.set("kc", nodeId);
+  if (raw) params.set("model", kcModel(raw));
+  return `/kc-creator?${params.toString()}`;
+}
+
 export async function createKcCourse(formData: FormData) {
   let created: KcCourse | null = null;
   try {
@@ -83,7 +92,7 @@ export async function pushKcDraft(formData: FormData) {
 export async function pushKcComponent(formData: FormData) {
   const courseId = String(formData.get("course_id") || "");
   const nodeId = String(formData.get("node_id") || "");
-  const back = `/kc-creator?course=${courseId}&kc=${nodeId}`;
+  const back = creatorBack(courseId, nodeId, formData);
   try {
     const payload = JSON.parse(String(formData.get("payload") || "{}")) as Record<string, unknown>;
     await api(`/kc/nodes/${nodeId}/push`, { method: "POST", body: JSON.stringify(payload) });
@@ -113,7 +122,7 @@ export async function postKcCreatorMessage(formData: FormData) {
 export async function markKcComplete(formData: FormData) {
   const courseId = String(formData.get("course_id") || "");
   const nodeId = String(formData.get("node_id") || "");
-  const back = `/kc-creator?course=${courseId}&kc=${nodeId}`;
+  const back = creatorBack(courseId, nodeId, formData);
   try {
     await api(`/kc/nodes/${nodeId}/complete`, { method: "POST" });
   } catch (error) {
@@ -209,6 +218,7 @@ function typeFields(kcType: string, formData: FormData): Record<string, unknown>
 export async function saveKcComponent(formData: FormData) {
   const courseId = String(formData.get("course_id") || "");
   const nodeId = String(formData.get("node_id") || "");
+  const back = creatorBack(courseId, nodeId, formData);
   const kcType = String(formData.get("kc_type") || "factual");
   const wrong = formData.getAll("wrong_move").map(String);
   const broken = formData.getAll("broken_kc").map(String);
@@ -234,9 +244,9 @@ export async function saveKcComponent(formData: FormData) {
       }),
     });
   } catch (error) {
-    bounce(`/kc-creator?course=${courseId}&kc=${nodeId}`, error);
+    bounce(back, error);
   }
-  redirect(`/kc-creator?course=${courseId}&kc=${nodeId}`);
+  redirect(back);
 }
 
 export async function answerKcTurn(formData: FormData) {

@@ -53,6 +53,13 @@ export default function KcCreatorDocsPage() {
           A first message starts from the description and the course kind, goes into the topic, and then drafts the fields.
           A later message revises that draft. Nothing from the chat is stored on the component until Push.
         </p>
+        <p>
+          Fast Create All, at the top right, fills every empty component of the selected course with the default draft,
+          pushes it, and marks the component complete. Empty means the component has no type. The button walks those
+          components in course order. The count beside it is how many of them are done, and it stays until the next press.
+          The chat shows Writing… while each draft is in flight. A push that still has a gap stops on that component and
+          shows the gap text. A missing OpenAI key shows the missing-key error and stops the run.
+        </p>
 
         <h2>Settings you can change</h2>
         <p>Every component has:</p>
@@ -78,6 +85,7 @@ export default function KcCreatorDocsPage() {
         <h2>What to know when using it</h2>
         <ul>
           <li>Choose a course, then a component. With neither selected, the page says to choose a component.</li>
+          <li>Fast Create All fills empty components on the selected course. It skips a component that already has a type.</li>
           <li>The chat draft is not the saved component until Push.</li>
           <li>Push and Save both clear Mark complete and mark the course not ready.</li>
           <li>Mark complete stays unavailable while any gap string would show on the structure row.</li>
