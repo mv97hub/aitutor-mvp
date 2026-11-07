@@ -4,9 +4,11 @@ import test from "node:test";
 
 import { LAYER_FIELDS, LAYER_HEADINGS } from "./kc-layer-fields.ts";
 import type { KcComponent, KcCourse } from "./kc.ts";
+import type { Student } from "./types.ts";
 import {
   DEFAULT_TUTOR_PROFILE,
   READ_ONLY_DERIVED,
+  applyChild,
   applyResult,
   applyUnit,
   choiceForMove,
@@ -137,6 +139,73 @@ test("choosing a unit fills layer 1 from that course and component", () => {
   assert.equal(prerequisiteStatus(["lines", ""]), "lines: unknown");
 });
 
+function child(overrides: Partial<Student> = {}): Student {
+  return {
+    id: "child-1",
+    slug: "ada",
+    display_name: "Ada",
+    age: 11,
+    age_band: "9-11",
+    reading_level: "middle-grade",
+    modality: "visual",
+    interests: ["kites", "maps"],
+    tutor_persona: "curious-co-explorer",
+    tutor_lexicon: "middle-grade-vivid",
+    tutor_metaphors: "playground-sports",
+    tutor_sidekick: "bumbling-partner",
+    tutor_socratic_strictness: "balanced",
+    tutor_struggle_window: "minimum",
+    tutor_anti_spoiler: true,
+    tutor_pacing: "short-turns-one-question",
+    ...overrides,
+  };
+}
+
+test("choosing a child fills the layer 2 settings and leaves session fields", () => {
+  const values = emptyTesterValues();
+  values["Course title"] = "Triangles";
+  values.Persona = "tactical-coach";
+  values["Attempts on this move"] = "2";
+  values["Hint tier already given"] = "scaffold";
+  values["Component status"] = "fragile";
+  values.Stability = "0.4";
+  values["Last answer"] = "90 degrees";
+  values["Last misconception"] = "right angle";
+  values["Minutes used"] = "6";
+  values["Support band"] = "stretch";
+  const filled = applyChild(values, child());
+  assert.equal(filled["Display name"], "Ada");
+  assert.equal(filled.Age, "11");
+  assert.equal(filled["Reading level"], "middle-grade");
+  assert.equal(filled.Modality, "visual");
+  assert.equal(filled.Interests, "kites, maps");
+  assert.equal(filled["Course title"], "Triangles");
+  assert.equal(filled.Persona, "tactical-coach");
+  assert.equal(filled["Attempts on this move"], "2");
+  assert.equal(filled["Hint tier already given"], "scaffold");
+  assert.equal(filled["Component status"], "fragile");
+  assert.equal(filled.Stability, "0.4");
+  assert.equal(filled["Last answer"], "90 degrees");
+  assert.equal(filled["Last misconception"], "right angle");
+  assert.equal(filled["Minutes used"], "6");
+  assert.equal(filled["Support band"], "stretch");
+  const blank = applyChild(values, child({ age: null, reading_level: "", modality: "", interests: [] }));
+  assert.equal(blank.Age, "");
+  assert.equal(blank["Reading level"], "");
+  assert.equal(blank.Modality, "");
+  assert.equal(blank.Interests, "");
+  assert.equal(blank["Attempts on this move"], "2");
+  filled.Age = "15";
+  filled["Display name"] = "Edited";
+  const body = testerPayload(filled);
+  assert.equal(body.age, 15);
+  assert.equal(body.display_name, "Edited");
+  assert.equal(body.reading_level, "middle-grade");
+  assert.deepEqual(body.interests, ["kites", "maps"]);
+  assert.equal(body.attempts, 2);
+  assert.equal(body.support_band, "stretch");
+});
+
 test("the payload keeps an edited instructive level and unit close", () => {
   const values = emptyTesterValues();
   values.Instructive = "5";
@@ -169,8 +238,11 @@ test("the page posts to the read-only route and the menu link is the tester", ()
   const page = readFileSync(new URL("../app/kc-prompt-tester/page.tsx", import.meta.url), "utf8");
   const component = readFileSync(new URL("../components/KcPromptTester.tsx", import.meta.url), "utf8");
   assert.match(page, /\/kc\/courses/);
+  assert.match(page, /\/students/);
   assert.doesNotMatch(page, /\/kc\/tutor\/courses/);
   assert.match(component, /LAYER_HEADINGS\.map/);
+  assert.match(component, /aria-label="Child"/);
+  assert.match(component, /applyChild/);
   assert.match(component, /<output/);
   assert.match(component, /\/kc\/prompt-tester/);
   assert.match(component, /field\.kind === "Derived"/);

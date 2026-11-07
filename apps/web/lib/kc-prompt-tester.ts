@@ -2,7 +2,7 @@
 
 import { LAYER_FIELDS, LAYER_HEADINGS, type LayerField } from "./kc-layer-fields.ts";
 import { AUDIENCES, KINDS, type KcComponent, type KcCourse } from "./kc.ts";
-import type { TutorProfile } from "./types.ts";
+import type { Student, TutorProfile } from "./types.ts";
 
 export { LAYER_HEADINGS };
 
@@ -365,6 +365,17 @@ export function selectCourse(values: TesterValues, course: KcCourse): TesterValu
   for (const name of UNIT_FIELDS) next[name] = "";
   next["Choice widget"] = "no";
   return next;
+}
+
+export function applyChild(values: TesterValues, child: Student): TesterValues {
+  return {
+    ...values,
+    "Display name": child.display_name ?? "",
+    Age: child.age == null ? "" : String(child.age),
+    "Reading level": child.reading_level ?? "",
+    Modality: child.modality ?? "",
+    Interests: (child.interests ?? []).join(", "),
+  };
 }
 
 export function applyUnit(values: TesterValues, course: KcCourse, unit: KcComponent): TesterValues {
