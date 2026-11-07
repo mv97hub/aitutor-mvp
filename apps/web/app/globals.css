@@ -2861,10 +2861,13 @@ a.ds-row { text-decoration: none; }
   padding: 4px 12px 16px;
 }
 
-.kc-debug-layer {
+.kc-debug .kc-debug-layer {
   margin: 16px 0 0;
-  font-size: 13px;
-  font-weight: 650;
+  color: rgb(15, 17, 21);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 22px;
 }
 .kc-debug-body > section:first-child .kc-debug-layer { margin-top: 0; }
 
