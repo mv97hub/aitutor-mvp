@@ -598,22 +598,25 @@ def test_kid_prompt_uses_the_tutor_profile() -> None:
             "rubric_met",
             "misconception",
         }
-        assert "debate-moderator" in text
-        assert "analytical-high-school" in text
-        assert "policy-cause" in text
+        assert "debate moderator" in text
+        assert "analytical high-school" in text
+        assert "cause-and-effect" in text
         assert "pundit" in text
-        assert "Instructive: 5." in text
-        assert "Struggle window: long" in text
-        assert "Stay on course: no" in text
-        assert f"Age: {age}" in text
+        assert "Teach a little more first, then ask one question." in text
+        assert "three tries" in text
+        assert "You may follow a tangent." in text
+        assert f"{age}-year-old" in text
         for interest in interests:
             assert interest in text
         assert "HARBOR-GUIDE-SHOULD-NOT-APPEAR" not in text
         assert "curious-co-explorer" not in text
-        assert "Layer 1, Component" in text
-        assert "Layer 7, Feedback loop" in text
-        assert "Factual:" in text
-        assert "Settings do not change the type, the edges, or the score." in text
+        assert "debate-moderator" not in text
+        assert "This turn" in text
+        assert "What to return" in text
+        assert "Layer 1, Component" not in text
+        assert "Layer 7, Feedback loop" not in text
+        assert "retrieval" in text
+        assert "You do not set the type, the edges, the score, or the step index." in text
         db = SessionLocal()
         try:
             stored = db.get(KcSession, opened.json()["id"])
@@ -1675,8 +1678,9 @@ def test_decision_overrides_and_course_outro() -> None:
         ).json()
         prompt = client.get(f"/kc/tutor/sessions/{opened['id']}/prompt").json()
         assert prompt["temperature"] == 0.4
-        assert "Layer 3, Voice" in prompt["system_prompt"]
-        assert "Layer 6, Metacognition" in prompt["system_prompt"]
+        assert "How to sound" in prompt["system_prompt"]
+        assert "Layer 3, Voice" not in prompt["system_prompt"]
+        assert "Layer 6, Metacognition" not in prompt["system_prompt"]
         client.post(f"/kc/tutor/sessions/{opened['id']}/turn", json={"answer": "180"})
         held = client.post(
             f"/kc/tutor/sessions/{opened['id']}/decision",
@@ -1707,8 +1711,8 @@ def test_decision_overrides_and_course_outro() -> None:
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": second["id"]},
         ).json()
         other_prompt = client.get(f"/kc/tutor/sessions/{other['id']}/prompt").json()["system_prompt"]
-        assert "Transfer case:" in other_prompt
-        assert "transfer" in other_prompt
+        assert "A third case the child already knows." in other_prompt
+        assert "Do not invent a different one" in other_prompt
         for answer, decision, rubric in (
             ("Closed", "advance", []),
             ("They differ.", "advance", []),
