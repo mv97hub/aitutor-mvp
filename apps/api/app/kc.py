@@ -996,6 +996,38 @@ def _ring_status(states: dict[uuid.UUID, KcState], node: KcNode) -> str:
     return row.status
 
 
+def _percent(known: int, total: int) -> int:
+    if total <= 0:
+        return 0
+    return (known * 100 + total // 2) // total
+
+
+def _open_unit_ids(
+    db: Session, student_id: uuid.UUID, goal_id: uuid.UUID, node_ids: list[uuid.UUID]
+) -> set[uuid.UUID]:
+    if not node_ids:
+        return set()
+    return set(
+        db.scalars(
+            select(KcSession.kc_id).where(
+                KcSession.student_id == student_id,
+                KcSession.goal_id == goal_id,
+                KcSession.kc_id.in_(node_ids),
+                KcSession.status == "in_progress",
+            )
+        )
+    )
+
+
+def _unit_status(states: dict[uuid.UUID, KcState], node: KcNode, open_ids: set[uuid.UUID]) -> str:
+    row = states.get(node.id)
+    if row is not None and row.status == "known":
+        return "completed"
+    if (row is not None and row.status == "fragile") or node.id in open_ids:
+        return "in_progress"
+    return "not_started"
+
+
 def _latest_redirect(db: Session, student_id: uuid.UUID, goal_id: uuid.UUID) -> KcNode | None:
     session = db.scalar(
         select(KcSession)
@@ -1018,7 +1050,9 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
     patches = load_patches(db, targets)
     by_code = {node.code: node for node in targets + patches}
     everyone = targets + patches
+    target_ids = {node.id for node in targets}
     states = _state_map(db, student.id, [node.id for node in everyone])
+    open_ids = _open_unit_ids(db, student.id, goal.id, [node.id for node in everyone])
     known = sum(1 for node in targets if _is_known(states, node))
     conceptual_known = sum(
         1 for node in targets if node.kc_type == "conceptual" and _is_known(states, node)
@@ -1124,7 +1158,19 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
         "minutes": goal.minutes if goal.kind == "time_boxed" else None,
         "known": known,
         "total": len(targets),
+        "percent": _percent(known, len(targets)),
         "count_label": f"{known} of {len(targets)}",
+        "units": [
+            {
+                "id": str(node.id),
+                "code": node.code,
+                "title": node.title,
+                "kc_type": node.kc_type,
+                "patch": node.id not in target_ids,
+                "status": _unit_status(states, node, open_ids),
+            }
+            for node in everyone
+        ],
         "ring": [
             {
                 "id": str(node.id),

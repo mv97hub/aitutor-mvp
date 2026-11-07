@@ -87,7 +87,16 @@ export type KcProgress = {
   minutes: number | null;
   known: number;
   total: number;
+  percent: number;
   count_label: string;
+  units: {
+    id: string;
+    code: string;
+    title: string;
+    kc_type: string | null;
+    patch: boolean;
+    status: "completed" | "in_progress" | "not_started";
+  }[];
   ring: { id: string; code: string; title: string; kc_type: string | null; status: "known" | "fragile" | "not_started" }[];
   cards: KcCard[];
 };

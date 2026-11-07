@@ -1,21 +1,8 @@
 import Link from "next/link";
 
-export const metadata = { title: "Menu · AI Tutor" };
+import { kcAndAdminPages, olderPages } from "@/lib/menu-pages";
 
-const pages = [
-  { href: "/", label: "Home" },
-  { href: "/admin", label: "Admin" },
-  { href: "/admin/agent-customizations", label: "Agent customizations" },
-  { href: "/create-course", label: "Create course" },
-  { href: "/manage-courses", label: "Manage courses" },
-  { href: "/viewchats", label: "View chats" },
-  { href: "/viewkcchats", label: "View KC chats" },
-  { href: "/kc-studio", label: "KC Course Creator" },
-  { href: "/manage-kc-courses", label: "Manage KC courses" },
-  { href: "/kc-creator", label: "KC Creator" },
-  { href: "/kc-tutor", label: "KC Tutor" },
-  { href: "/documentation", label: "Documentation" },
-] as const;
+export const metadata = { title: "Menu · AI Tutor" };
 
 export default function MenuPage() {
   return (
@@ -24,7 +11,14 @@ export default function MenuPage() {
         <h1>Menu</h1>
         <nav aria-label="Pages">
           <ul>
-            {pages.map((page) => (
+            {kcAndAdminPages.map((page) => (
+              <li key={page.href}>
+                <Link href={page.href}>{page.label}</Link>
+              </li>
+            ))}
+          </ul>
+          <ul className="menu-older">
+            {olderPages.map((page) => (
               <li key={page.href}>
                 <Link href={page.href}>{page.label}</Link>
               </li>
