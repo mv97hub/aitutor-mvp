@@ -420,6 +420,7 @@ def test_unknown_model_is_rejected_and_prompt_names_the_framework_rule() -> None
             "gpt-4o-mini",
             "gpt-4o",
             "gpt-4.1-mini",
+            "deepseek/deepseek-flash-latest",
         ]
 
         prompt = client.get(f"/studio/courses/{course_id}/prompt").json()

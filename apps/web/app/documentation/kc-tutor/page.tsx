@@ -13,7 +13,11 @@ export default function KcTutorDocsPage() {
         <p>
           KC Tutor, at <Link href="/kc-tutor">/kc-tutor</Link>, practices one component at a time.
           The lesson is a chat. Questions and single-choice answers live in the thread.
-          The same child and the same tutor settings as the lesson page are used. Those settings stay on Agent customizations.
+          Settings is a button in the side column, separate from the lesson chat.
+          It chooses the model from the same list as KC Course Creator. gpt-4.1 is the default.
+          deepseek/deepseek-flash-latest calls OpenRouter with OPENROUTER_API_KEY. The OpenAI models stay on OPENAI_API_KEY.
+          The same settings surface edits the child fields the prompt already includes: age, reading level, modality, and interests.
+          Persona, lexicon, metaphors, sidekick, and the rest of the tutor profile stay on Agent customizations.
         </p>
 
         <h2>How it works</h2>
@@ -40,7 +44,10 @@ export default function KcTutorDocsPage() {
           Enter sends. Two steps are single-choice bubbles in the thread. Every other step is typed in the same thread.
           While a choice is unanswered, the composer says &quot;Choose an answer above&quot; and does not send. After Check, the widget settles on &quot;Your choice&quot;
           and the chosen text is the answer. The model says the current step. It does not set the type, the edges, or the score.
-          Pass, fail, fragile, known, and redirect stay with the scorer. If the model key is unset, the page shows the same missing-key error as the kid tutor.
+          Pass, fail, fragile, known, and redirect stay with the scorer.
+          If the selected model is an OpenAI model and OPENAI_API_KEY is unset, the page shows the same missing-key error as the kid tutor.
+          If the selected model is deepseek/deepseek-flash-latest and OPENROUTER_API_KEY is unset, the page shows a missing-key error for that key.
+          An OpenAI model does not read the OpenRouter key.
         </p>
         <p>The five types:</p>
         <ul>
@@ -94,7 +101,12 @@ export default function KcTutorDocsPage() {
 
         <h2>Settings you can change</h2>
         <p>
-          This page does not edit the course. The choices on the page are which child, which ready course, and which card to open.
+          This page does not edit the course. The choices on the page are which child, which ready course, which card to open, and Settings.
+          Settings sits in the side column. It is not part of the lesson chat.
+          The model list is gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and deepseek/deepseek-flash-latest.
+          gpt-4.1 is the default. Saving a model keeps it on this page. The next spoken step uses it.
+          Age, reading level, modality, and interests save on the child. The next step&apos;s prompt uses the saved values.
+          Those fields do not change the component type, the links, or the score.
           Component content is set in KC Creator. How the tutor speaks — persona, lexicon, metaphors, sidekick, the instructive slider,
           stay on course, and use interests — is the shared profile on Agent customizations. Those are not copied onto this list.
         </p>

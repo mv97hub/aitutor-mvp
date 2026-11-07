@@ -1,17 +1,15 @@
-import { openai } from "@ai-sdk/openai";
 import { Output, convertToModelMessages, jsonSchema, streamText, type JSONSchema7, type UIMessage } from "ai";
 
 import { api, apiBase } from "@/lib/api";
+import { DEEPSEEK_FLASH_MODEL, MISSING_OPENROUTER_KEY, usesOpenRouter } from "@/lib/kc-models";
+import { languageModel } from "@/lib/language-model";
 import type { StudioMessage } from "@/lib/studio";
 import { detailFrom, plainFailure, replyIfUnwritten, settleModelResult } from "@/lib/studio-chat";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const MISSING_KEY =
-  "OPENAI_API_KEY is not set. Copy .env.example to apps/web/.env.local, set OPENAI_API_KEY to your real key, and restart the Next.js server.";
-
-const ALLOWED_MODELS = new Set(["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"]);
+const ALLOWED_MODELS = new Set(["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", DEEPSEEK_FLASH_MODEL]);
 
 type PromptBundle = {
   model: string;
@@ -74,7 +72,28 @@ export async function POST(req: Request) {
     return new Response(message, { status: 502 });
   }
 
-  if (!process.env.OPENAI_API_KEY?.trim()) {
+  let bundle: PromptBundle;
+  let history: StudioMessage[];
+  try {
+    bundle = await api<PromptBundle>(`/studio/courses/${courseId}/prompt`);
+    history = await api<StudioMessage[]>(`/studio/courses/${courseId}/messages`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not load the course.";
+    return new Response(message, { status: 502 });
+  }
+
+  if (!ALLOWED_MODELS.has(bundle.model)) {
+    return new Response("That CreateCourse model is not allowed.", { status: 422 });
+  }
+
+  if (usesOpenRouter(bundle.model)) {
+    if (!process.env.OPENROUTER_API_KEY?.trim()) {
+      return new Response(MISSING_OPENROUTER_KEY, {
+        status: 503,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+  } else if (!process.env.OPENAI_API_KEY?.trim()) {
     try {
       const drafted = await api<{ assistant: StudioMessage; course?: unknown }>(
         `/studio/courses/${courseId}/fallback`,
@@ -96,20 +115,6 @@ export async function POST(req: Request) {
     }
   }
 
-  let bundle: PromptBundle;
-  let history: StudioMessage[];
-  try {
-    bundle = await api<PromptBundle>(`/studio/courses/${courseId}/prompt`);
-    history = await api<StudioMessage[]>(`/studio/courses/${courseId}/messages`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not load the course.";
-    return new Response(message, { status: 502 });
-  }
-
-  if (!ALLOWED_MODELS.has(bundle.model)) {
-    return new Response("That CreateCourse model is not allowed.", { status: 422 });
-  }
-
   const uiMessages: UIMessage[] = history.map((message) => ({
     id: message.id,
     role: message.role,
@@ -126,7 +131,7 @@ export async function POST(req: Request) {
     let output: CourseEdit;
     try {
       const result = streamText({
-        model: openai(bundle.model),
+        model: languageModel(bundle.model),
         output: Output.object({
           schema: jsonSchema(bundle.response_schema),
           name: "course_edit",
