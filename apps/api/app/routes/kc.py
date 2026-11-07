@@ -53,6 +53,7 @@ from app.kc import (
     _node_or_404,
     _student_or_404,
 )
+from app.kc_prompt_tester import PromptTesterIn, preview_kc_prompt
 from app.schemas import KcChatDetail, KcChatSummary, ModelPromptIn, ModelPromptOut
 
 router = APIRouter()
@@ -423,6 +424,12 @@ def list_kc_chats(
 @router.get("/kc/sessions/{session_id}", response_model=KcChatDetail)
 def get_kc_chat(session_id: uuid.UUID, db: Session = Depends(get_db)) -> KcChatDetail:
     return kc_chat_detail(db, session_id)
+
+
+@router.post("/kc/prompt-tester")
+def post_prompt_tester(body: PromptTesterIn) -> dict:
+    """Build the tutor prompt from the form. Does not write a session or change a course."""
+    return preview_kc_prompt(body)
 
 
 @router.post("/kc/sessions/{session_id}/model-prompts", response_model=ModelPromptOut)
