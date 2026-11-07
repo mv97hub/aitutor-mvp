@@ -529,13 +529,16 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
 
 def draft_course(goal: KcGoal, message: str) -> dict:
     """Return a component list. This does not write."""
-    ctx = planning_context(
-        title=goal.title,
-        description=goal.description,
-        kind=goal.kind,
-        minutes=goal.minutes,
-        message=message or "",
-    )
+    try:
+        ctx = planning_context(
+            title=goal.title,
+            description=goal.description,
+            kind=goal.kind,
+            minutes=goal.minutes,
+            message=message or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     taken: set[str] = set()
     components = []
     for title in ctx["titles"]:
@@ -595,6 +598,33 @@ def course_prompt_for(goal: KcGoal, message: str, model: str) -> dict:
             minutes=goal.minutes,
             message=message or "",
             model=model,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def description_prompts_for(
+    goal: KcGoal,
+    message: str,
+    model: str,
+    titles: list[str],
+    subject: str = "",
+    major_ideas: list[str] | None = None,
+) -> dict:
+    from app.kc_model import description_plan
+
+    try:
+        return description_plan(
+            title=goal.title,
+            description=goal.description or "",
+            audience=goal.audience,
+            kind=goal.kind,
+            minutes=goal.minutes,
+            message=message or "",
+            model=model,
+            titles=titles,
+            subject=subject,
+            major_ideas=major_ideas,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

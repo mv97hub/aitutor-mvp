@@ -10,6 +10,16 @@ type PromptBundle = {
   system_prompt: string;
   user_prompt: string;
   schema: JSONSchema7;
+  pass?: "full" | "titles";
+};
+
+type SliceBundle = PromptBundle & {
+  titles?: string[];
+};
+
+type SlicePlan = {
+  slice_size?: number;
+  slices: SliceBundle[];
 };
 
 type CourseResult = {
@@ -75,6 +85,64 @@ async function withModel<T>(
   throw new Error(last);
 }
 
+function noted(prompt: string, note: string) {
+  return note ? `${prompt}\n${note}` : prompt;
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item ?? "").trim()).filter(Boolean);
+}
+
+function componentRows(proposal: Record<string, unknown>): Record<string, unknown>[] {
+  const raw = proposal.components;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+}
+
+async function draftLongCourse(
+  courseId: string,
+  message: string,
+  model: KcModel,
+  bundle: PromptBundle,
+): Promise<CourseResult> {
+  let note = "";
+  let last = "The model reply could not be read.";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const titlesProposal = await completeObject(
+        model,
+        noted(bundle.system_prompt, note),
+        bundle.user_prompt,
+        bundle.schema,
+      );
+      const titles = stringList(titlesProposal.titles);
+      const subject = typeof titlesProposal.subject === "string" ? titlesProposal.subject : "";
+      const majorIdeas = stringList(titlesProposal.major_ideas);
+      const plan = await api<SlicePlan>(`/kc/courses/${courseId}/draft-slices`, {
+        method: "POST",
+        body: JSON.stringify({ message, model, titles, subject, major_ideas: majorIdeas }),
+      });
+      const components: Record<string, unknown>[] = [];
+      for (const slice of plan.slices) {
+        const piece = await completeObject(model, noted(slice.system_prompt, note), slice.user_prompt, slice.schema);
+        components.push(...componentRows(piece));
+      }
+      return await api<CourseResult>(`/kc/courses/${courseId}/draft-finish`, {
+        method: "POST",
+        body: JSON.stringify({
+          message,
+          proposal: { subject, major_ideas: majorIdeas, components },
+        }),
+      });
+    } catch (error) {
+      last = error instanceof Error ? error.message : last;
+      note = `The previous reply was rejected. ${last}`;
+    }
+  }
+  throw new Error(last);
+}
+
 export async function draftKcCourse(input: {
   courseId: string;
   message: string;
@@ -91,12 +159,15 @@ export async function draftKcCourse(input: {
     method: "POST",
     body: JSON.stringify({ message, model }),
   });
-  const finished = await withModel(model, bundle, (proposal) =>
-    api<CourseResult>(`/kc/courses/${input.courseId}/draft-finish`, {
-      method: "POST",
-      body: JSON.stringify({ message, proposal }),
-    }),
-  );
+  const finished =
+    bundle.pass === "titles"
+      ? await draftLongCourse(input.courseId, message, model, bundle)
+      : await withModel(model, bundle, (proposal) =>
+          api<CourseResult>(`/kc/courses/${input.courseId}/draft-finish`, {
+            method: "POST",
+            body: JSON.stringify({ message, proposal }),
+          }),
+        );
   cache.set(key, finished);
   return finished;
 }

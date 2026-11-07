@@ -12,12 +12,15 @@ from app.kc_model import (
     COURSE_RULES,
     CREATOR_RULES,
     DEFAULT_KC_CHAT_MODEL,
+    DESCRIPTION_SLICE,
     KC_CHAT_MODELS,
+    MAX_COMPONENTS,
     assemble_course,
     checked_discussion,
     checked_model,
     course_bundle,
     creator_bundle,
+    description_plan,
     titles_are_sliced,
 )
 
@@ -151,6 +154,90 @@ def test_sliced_description_titles_are_rejected() -> None:
         )
 
 
+def _course_kwargs(message: str) -> dict:
+    return {
+        "title": "Euclidean geometry",
+        "description": GEOMETRY,
+        "audience": "12-14",
+        "kind": "mastery",
+        "minutes": None,
+        "message": message,
+        "model": "gpt-4.1",
+    }
+
+
+def test_a_requested_count_is_not_clamped_to_16() -> None:
+    bundle = course_bundle(**_course_kwargs("40 components"))
+    prompt = bundle["system_prompt"]
+    assert MAX_COMPONENTS == 250
+    assert "Return 40 distinct components" in prompt
+    assert "Return 16" not in prompt
+    assert bundle["pass"] == "titles"
+    assert "titles" in bundle["schema"]["properties"]
+    assert "Do not write outlines" in prompt
+    minimum = course_bundle(**_course_kwargs("minimum of 40"))
+    assert minimum["pass"] == "titles"
+    assert "at least 40" in minimum["system_prompt"]
+    assert "at least 16" not in minimum["system_prompt"]
+
+
+def test_a_list_under_one_slice_stays_a_single_call() -> None:
+    bundle = course_bundle(**_course_kwargs("17 components"))
+    assert DESCRIPTION_SLICE == 25
+    assert bundle["pass"] == "full"
+    assert "Return 17 distinct components" in bundle["system_prompt"]
+    assert "outline" in bundle["schema"]["properties"]["components"]["items"]["properties"]
+
+
+def test_descriptions_are_sliced_and_the_full_list_is_checked() -> None:
+    titles = [f"Topic {index:02d}" for index in range(1, 31)]
+    plan = description_plan(**_course_kwargs("30 components"), titles=titles)
+    assert plan["slice_size"] == DESCRIPTION_SLICE
+    assert [len(item["titles"]) for item in plan["slices"]] == [25, 5]
+    first = plan["slices"][0]["system_prompt"]
+    assert COURSE_RULES.split(".")[0] in first
+    assert "short outline" in first
+    assert "Topic 01" in first
+    assert "Topic 26" not in first
+    assert "Topic 26" in plan["slices"][1]["system_prompt"]
+    drafted = assemble_course(
+        title="Euclidean geometry",
+        description=GEOMETRY,
+        kind="mastery",
+        minutes=None,
+        message="30 components",
+        proposal={
+            "subject": "Euclidean geometry",
+            "major_ideas": ["congruence", "proof"],
+            "components": [_row(title) for title in titles],
+        },
+    )
+    assert [item["title"] for item in drafted["components"]] == titles
+    assert 17 <= len(drafted["components"]) <= MAX_COMPONENTS
+
+
+def test_the_full_cap_is_ten_slices_and_one_past_it_is_rejected() -> None:
+    titles = [f"Topic {index:03d}" for index in range(1, 251)]
+    bundle = course_bundle(**_course_kwargs("250 components"))
+    assert bundle["pass"] == "titles"
+    assert "Return 250 distinct components" in bundle["system_prompt"]
+    plan = description_plan(**_course_kwargs("250 components"), titles=titles)
+    assert [len(item["titles"]) for item in plan["slices"]] == [DESCRIPTION_SLICE] * 10
+    with pytest.raises(ValueError, match="at most 250"):
+        assemble_course(
+            title="Euclidean geometry",
+            description=GEOMETRY,
+            kind="mastery",
+            minutes=None,
+            message="Draft the components",
+            proposal={
+                "subject": "Euclidean geometry",
+                "major_ideas": ["congruence"],
+                "components": [_row(f"Topic {index:03d}") for index in range(1, 252)],
+            },
+        )
+
+
 def test_a_minimum_count_is_enforced() -> None:
     with pytest.raises(ValueError, match="at least 10"):
         assemble_course(
@@ -242,6 +329,27 @@ def test_finish_route_keeps_pasted_titles_and_does_not_write() -> None:
         from tests.test_kc import _wipe_zz
 
         _wipe_zz()
+
+
+def test_slice_route_rejects_a_short_list_before_the_description_calls() -> None:
+    from app.kc import description_prompts_for
+    from app.routes.kc import router as kc_router
+
+    paths = [getattr(route, "path", "") for route in kc_router.routes]
+    assert "/kc/courses/{course_id}/draft-slices" in paths
+
+    class Goal:
+        title = "Euclidean geometry"
+        description = GEOMETRY
+        audience = "12-14"
+        kind = "mastery"
+        minutes = None
+
+    titles = [f"Topic {index:02d}" for index in range(1, 31)]
+    with pytest.raises(HTTPException) as caught:
+        description_prompts_for(Goal(), "30 components", "gpt-4.1", titles[:4])
+    assert caught.value.status_code == 422
+    assert "30" in str(caught.value.detail)
 
 
 def test_prompt_route_rejects_an_unknown_model() -> None:
