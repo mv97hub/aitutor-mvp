@@ -29,6 +29,7 @@ REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "009_s
 READY_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "010_studio_ready.py"
 QUIZ_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "011_studio_quiz_minutes.py"
 LIFT_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "012_quests_on_course.py"
+TILDE_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "021_deepseek_tilde_model.py"
 
 
 def _wipe(code: str) -> None:
@@ -111,6 +112,19 @@ def test_ready_revision_adds_one_column() -> None:
     assert 'op.drop_column("studio_courses", "ready")' in downgrade
     for name in ("students", "courses", "units", "quests", "beats", "sessions", "messages"):
         assert f'"{name}"' not in upgrade
+
+
+def test_tilde_revision_allows_the_alias_and_keeps_saved_rows() -> None:
+    text = TILDE_REVISION.read_text()
+    upgrade = text.split("def upgrade")[1].split("def downgrade")[0]
+    downgrade = text.split("def downgrade")[1]
+    assert "~deepseek/deepseek-flash-latest" in text
+    assert "deepseek/deepseek-flash-latest" in text
+    assert "gpt-4o-mini" in text
+    assert "_WITH_ALIAS" in upgrade
+    assert "UPDATE" not in upgrade
+    assert "drop_table" not in upgrade
+    assert "WHERE model = '~deepseek/deepseek-flash-latest'" in downgrade
 
 
 def test_quiz_minutes_revision_adds_one_column() -> None:
@@ -420,7 +434,7 @@ def test_unknown_model_is_rejected_and_prompt_names_the_framework_rule() -> None
             "gpt-4o-mini",
             "gpt-4o",
             "gpt-4.1-mini",
-            "deepseek/deepseek-flash-latest",
+            "~deepseek/deepseek-flash-latest",
         ]
 
         prompt = client.get(f"/studio/courses/{course_id}/prompt").json()
@@ -441,6 +455,50 @@ def test_unknown_model_is_rejected_and_prompt_names_the_framework_rule() -> None
         switched = client.put("/studio/settings", json={"model": "gpt-4o"})
         assert switched.status_code == 200
         assert client.get(f"/studio/courses/{course_id}/prompt").json()["model"] == "gpt-4o"
+    finally:
+        _restore_model()
+        _wipe("ZZGEO")
+
+
+def test_saved_deepseek_id_is_sent_as_the_openrouter_alias() -> None:
+    course = _make()
+    course_id = course["id"]
+    created = client.get("/studio/settings")
+    assert created.status_code == 200, created.text
+    db = SessionLocal()
+    try:
+        row = db.get(StudioSettings, "default")
+        assert row is not None
+        row.model = "deepseek/deepseek-flash-latest"
+        db.commit()
+    finally:
+        db.close()
+    try:
+        prompt = client.get(f"/studio/courses/{course_id}/prompt")
+        assert prompt.status_code == 200, prompt.text
+        assert prompt.json()["model"] == "~deepseek/deepseek-flash-latest"
+        shown = client.get("/studio/settings")
+        assert shown.status_code == 200, shown.text
+        assert shown.json()["model"] == "~deepseek/deepseek-flash-latest"
+        assert shown.json()["options"][:3] == ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"]
+        db = SessionLocal()
+        try:
+            kept = db.get(StudioSettings, "default")
+            assert kept is not None and kept.model == "deepseek/deepseek-flash-latest"
+        finally:
+            db.close()
+        saved = client.put("/studio/settings", json={"model": "deepseek/deepseek-flash-latest"})
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["model"] == "~deepseek/deepseek-flash-latest"
+        db = SessionLocal()
+        try:
+            stored = db.get(StudioSettings, "default")
+            assert stored is not None and stored.model == "~deepseek/deepseek-flash-latest"
+        finally:
+            db.close()
+        openai = client.put("/studio/settings", json={"model": "gpt-4.1-mini"})
+        assert openai.status_code == 200, openai.text
+        assert openai.json()["model"] == "gpt-4.1-mini"
     finally:
         _restore_model()
         _wipe("ZZGEO")

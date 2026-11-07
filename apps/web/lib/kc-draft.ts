@@ -3,7 +3,7 @@ import { Output, jsonSchema, streamText, type JSONSchema7 } from "ai";
 import { api } from "@/lib/api";
 import type { KcDraft } from "@/lib/kc";
 import { languageModel } from "@/lib/language-model";
-import { isKcModel, missingKeyMessage, usesOpenRouter, type KcModel } from "@/lib/kc-models";
+import { isKcModel, missingKeyMessage, modelForCall, usesOpenRouter, type KcModel } from "@/lib/kc-models";
 
 type PromptBundle = {
   model: string;
@@ -25,10 +25,11 @@ function requireKey(model: string) {
 }
 
 function requireModel(model: string): KcModel {
-  if (!isKcModel(model)) {
+  const called = modelForCall(model);
+  if (!isKcModel(called)) {
     throw new Error("That model is not allowed.");
   }
-  return model;
+  return called;
 }
 
 async function completeObject(model: KcModel, instructions: string, prompt: string, schema: JSONSchema7) {

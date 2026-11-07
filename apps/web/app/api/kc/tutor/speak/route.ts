@@ -3,7 +3,7 @@ import { generateText, jsonSchema, Output, wrapLanguageModel, type LanguageModel
 import { api } from "@/lib/api";
 import type { KcTutorSession } from "@/lib/kc";
 import { languageModel } from "@/lib/language-model";
-import { DEFAULT_KC_MODEL, isKcModel, missingKeyMessage } from "@/lib/kc-models";
+import { DEFAULT_KC_MODEL, isKcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { requestForCall, type ModelCall } from "@/lib/stored-prompt";
 
 export const runtime = "nodejs";
@@ -42,10 +42,11 @@ export async function POST(req: Request) {
   if (!sessionId) return new Response("sessionId is required.", { status: 400 });
 
   const requested = typeof body.model === "string" ? body.model.trim() : "";
-  if (requested && !isKcModel(requested)) {
+  const called = requested ? modelForCall(requested) : "";
+  if (requested && !isKcModel(called)) {
     return new Response("That model is not allowed.", { status: 422 });
   }
-  const modelName = requested && isKcModel(requested) ? requested : DEFAULT_KC_MODEL;
+  const modelName = called && isKcModel(called) ? called : DEFAULT_KC_MODEL;
   const missingKey = missingKeyMessage(modelName);
   if (missingKey) {
     return new Response(missingKey, {

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.kc_model import model_for_call
 from app.models import StudioMessage
 from app.schemas import (
     StudioAcceptOut,
@@ -342,7 +343,7 @@ def get_prompt(course_id: UUID, db: Session = Depends(get_db)) -> StudioPromptOu
     settings = ensure_settings(db)
     messages = list_messages(db, course)
     return StudioPromptOut(
-        model=settings.model,
+        model=model_for_call(settings.model),
         system_prompt=system_prompt(course, messages),
         response_schema=response_schema(course),
         temperature=STUDIO_TEMPERATURE,
@@ -352,7 +353,7 @@ def get_prompt(course_id: UUID, db: Session = Depends(get_db)) -> StudioPromptOu
 @router.get("/settings", response_model=StudioSettingsOut)
 def get_settings(db: Session = Depends(get_db)) -> StudioSettingsOut:
     row = ensure_settings(db)
-    return StudioSettingsOut(model=row.model, options=list(STUDIO_MODELS))
+    return StudioSettingsOut(model=model_for_call(row.model), options=list(STUDIO_MODELS))
 
 
 @router.put("/settings", response_model=StudioSettingsOut)
@@ -361,4 +362,4 @@ def put_settings(body: StudioSettingsIn, db: Session = Depends(get_db)) -> Studi
         row = set_model(db, body.model)
     except StudioError as exc:
         raise _fail(exc) from exc
-    return StudioSettingsOut(model=row.model, options=list(STUDIO_MODELS))
+    return StudioSettingsOut(model=model_for_call(row.model), options=list(STUDIO_MODELS))

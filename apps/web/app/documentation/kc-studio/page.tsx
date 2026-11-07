@@ -35,9 +35,9 @@ export default function KcStudioDocsPage() {
           Patches are listed as Not a target. A row, including a patch, opens that component on KC Creator. This page does not edit a component&apos;s fields.
         </p>
         <p>
-          The chat on this page has a model menu in the composer: gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and deepseek/deepseek-flash-latest.
+          The chat on this page has a model menu in the composer: gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and ~deepseek/deepseek-flash-latest.
           gpt-4.1 is the default. gpt-6.1-sol is the strongest model this app&apos;s OpenAI client accepts.
-          deepseek/deepseek-flash-latest is called through OpenRouter.
+          ~deepseek/deepseek-flash-latest is called through OpenRouter.
           The chosen model is sent with the draft. It does not change scoring, edges, or the component types.
           OpenAI models use OPENAI_API_KEY. DeepSeek Flash uses OPENROUTER_API_KEY.
           If the key for the chosen model is missing, the chat shows that missing-key error. The other key is not required for that call.

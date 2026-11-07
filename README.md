@@ -12,7 +12,7 @@ There is no login. The kid page is a name picker. Admin is a separate URL.
 
 The kid chat model is OpenAI through `@ai-sdk/openai`. The chat route reads `OPENAI_API_KEY` and returns a clear error when it is missing. Do not invent a key. The model id lives in `apps/web/lib/model.ts` and defaults to `gpt-4o-mini`. Set `OPENAI_MODEL` to override it. That uses the same key.
 
-KC Course Creator, KC Creator, CreateCourse, and KC Tutor can also pick `deepseek/deepseek-flash-latest`. That call goes to OpenRouter and reads `OPENROUTER_API_KEY`. A missing OpenRouter key fails only that model. OpenAI models still use `OPENAI_API_KEY`. The KC lists still default to `gpt-4.1`. CreateCourse still defaults to `gpt-4o-mini`. KC Tutor settings uses the KC list and the same `gpt-4.1` default. It does not follow `OPENAI_MODEL`.
+KC Course Creator, KC Creator, CreateCourse, and KC Tutor can also pick `~deepseek/deepseek-flash-latest`. That call goes to OpenRouter and reads `OPENROUTER_API_KEY`. A saved `deepseek/deepseek-flash-latest` id is sent as that alias. A missing OpenRouter key fails only that model. OpenAI models still use `OPENAI_API_KEY`. The KC lists still default to `gpt-4.1`. CreateCourse still defaults to `gpt-4o-mini`. KC Tutor settings uses the KC list and the same `gpt-4.1` default. It does not follow `OPENAI_MODEL`.
 
 ## Syllabus
 
@@ -63,7 +63,7 @@ Leave it empty if you only want to boot the screens. Chat will fail with the mis
 
 `OPENAI_MODEL` is optional. When it is unset, the kid chat route uses `gpt-4o-mini`.
 
-`OPENROUTER_API_KEY` is optional until a picker is set to `deepseek/deepseek-flash-latest`. Leave it empty. Do not commit a key.
+`OPENROUTER_API_KEY` is optional until a picker is set to `~deepseek/deepseek-flash-latest`. Leave it empty. Do not commit a key.
 
 ## Run
 
