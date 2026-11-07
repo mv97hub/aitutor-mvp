@@ -36,39 +36,20 @@ export default function AdminDocsPage() {
           The lesson desk has no course-content fields. Import and remove are the actions, and the tree is a view.
           A course header shows its code, title, description, quest count, goals per quest, the stored quiz minutes, and the age band.
         </p>
-        <p>Agent customizations is the profile a person can change:</p>
+        <p>
+          Agent customizations groups the shared profile by layer. The field text is the same as{" "}
+          <Link href="/documentation/kc-prompt-layers">KC prompt layers</Link>.
+        </p>
         <ul>
+          <li>Layer 3, Voice: persona, reading voice, metaphor set, sidekick, and use interests.</li>
           <li>
-            How instructive, from 1 to 5. 1 is Socratic: one short question, and almost no explanation until they try.
-            2 is Mostly questions: one short question, and a real explanation after two misses.
-            3 is Balanced: a short explanation, then one question.
-            4 is Mostly instructive: the fact and why it matters, then one question, with the longer explanation on the first miss.
-            5 is Instructive: a fuller lesson first, and stuck students get the longer explanation sooner.
+            Layer 4, Guidance: how instructive from 1 to 5, struggle window, stay on course, misconception policy, and enrichment.
+            The struggle window labels are Minimum (1 try), Standard (2 tries), and Wide (3 tries). The stored values stay short, standard, and long.
           </li>
           <li>
-            Persona: Curious co-explorer, Tactical coach, Debate moderator, or Patient explainer.
+            Anti-spoiler, one question, and growth-mindset praise are shown disabled and labeled Deprecated. Their stored values stay as they are.
           </li>
-          <li>
-            Reading voice: Early concrete, Middle-grade vivid, Precise visual, or Analytical high-school.
-            It follows the persona unless a different voice is picked. Curious co-explorer uses Middle-grade vivid,
-            Tactical coach uses Precise visual, Debate moderator uses Analytical high-school, and Patient explainer uses Early concrete.
-          </li>
-          <li>Metaphor set: Playground and sports, Buildings and machines, Policy and cause-and-effect, or None (plain language only).</li>
-          <li>
-            Sidekick: Bumbling partner, Rookie who trusts a picture, Pundit who skips the chain, or Off.
-            The page says this is used only on teach-back.
-          </li>
-          <li>
-            Struggle window: Short (1 miss), Standard (2), or Long (3). After that many misses, the tutor states the worked answer and explains why.
-          </li>
-          <li>Anti-spoiler. On hides the answer until the struggle window. Off confirms a correct idea as soon as they attempt it.</li>
-          <li>One question. On never stacks a second question.</li>
-          <li>Use student interests. On puts hobbies inside examples. Off keeps examples on the subject.</li>
-          <li>
-            Stay on the course. On stays with this course, unit, and quest, including closely related ideas.
-            A different subject gets a short acknowledgment, then the tutor returns to the course. Off lets the tutor follow a tangent.
-          </li>
-          <li>Growth-mindset praise only. The page says this is on by default. Turning it off allows praise for a correct result.</li>
+          <li>Layer 6, Metacognition: self-explanation.</li>
         </ul>
 
         <h2>What to know when using it</h2>

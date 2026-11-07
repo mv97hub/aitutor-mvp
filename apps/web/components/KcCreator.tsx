@@ -357,6 +357,10 @@ const TIPS = {
   case_b: "The second case the tutor shows, set against the first.",
   prediction: "The question the tutor asks when the kid picks a case.",
   rule: "The rule the tutor asks the kid to state, and the answer it accepts.",
+  transfer_case:
+    "A third case the child uses after stating the rule. Conceptual components only. Leave it empty to skip that move. The model does not invent one.",
+  counterfactual:
+    "The what-if the child answers after defending the chain. Causal components only, and only when self-explanation is on. Leave it empty to skip that move.",
   decision_point: "The situation the tutor opens with, then asks what is at stake.",
   flawed_claim: "The claim the tutor asks the kid to mark as flawed or as holding.",
   causal_chain: "The explanation the tutor accepts when the kid defends the chain.",
@@ -635,6 +639,16 @@ function TypeFields({
           Rule
           <textarea aria-label="Rule" name="rule" title={TIPS.rule} defaultValue={textOf(fields, "rule")} rows={2} />
         </label>
+        <label title={TIPS.transfer_case}>
+          Transfer case
+          <textarea
+            aria-label="Transfer case"
+            name="transfer_case"
+            title={TIPS.transfer_case}
+            defaultValue={textOf(fields, "transfer_case")}
+            rows={2}
+          />
+        </label>
       </>
     );
   }
@@ -668,6 +682,16 @@ function TypeFields({
             name="causal_chain"
             title={TIPS.causal_chain}
             defaultValue={textOf(fields, "causal_chain")}
+            rows={2}
+          />
+        </label>
+        <label title={TIPS.counterfactual}>
+          Counterfactual
+          <textarea
+            aria-label="Counterfactual"
+            name="counterfactual"
+            title={TIPS.counterfactual}
+            defaultValue={textOf(fields, "counterfactual")}
             rows={2}
           />
         </label>

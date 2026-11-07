@@ -6,6 +6,8 @@ export type KcDebugTurn = {
   system_prompt: string;
   messages: unknown[];
   response: string;
+  rubric_met?: string[];
+  misconception?: string | null;
 };
 
 type StoredPrompt = {
@@ -15,6 +17,8 @@ type StoredPrompt = {
   system_prompt: string;
   messages: unknown[];
   model: string;
+  rubric_met?: string[];
+  misconception?: string | null;
   created_at: string;
 };
 
@@ -34,5 +38,7 @@ export function debugTurns(detail: {
       system_prompt: prompt.system_prompt,
       messages: Array.isArray(prompt.messages) ? prompt.messages : [],
       response: prompt.message_id ? (byId.get(prompt.message_id) ?? "") : "",
+      rubric_met: prompt.rubric_met,
+      misconception: prompt.misconception,
     }));
 }

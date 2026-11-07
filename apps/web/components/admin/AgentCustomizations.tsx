@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { AdminFrame } from "@/components/admin/AdminFrame";
 import { api } from "@/lib/api";
+import { hoverFor } from "@/lib/kc-layer-fields";
 import type { TutorProfile } from "@/lib/types";
 
 const PERSONAS = [
@@ -35,9 +36,17 @@ const SIDEKICKS = [
 ] as const;
 
 const WINDOWS = [
-  ["short", "Short (1 miss)"],
-  ["standard", "Standard (2)"],
-  ["long", "Long (3)"],
+  ["short", "Minimum (1 try)"],
+  ["standard", "Standard (2 tries)"],
+  ["long", "Wide (3 tries)"],
+] as const;
+
+const POLICIES = [["retry_once", "Retry once"]] as const;
+
+const ENRICHMENT = [
+  ["direct", "Direct"],
+  ["on_request", "On request"],
+  ["offer", "Offer"],
 ] as const;
 
 const VOICE_FOR: Record<string, string> = {
@@ -76,18 +85,20 @@ function Choice({
   value,
   options,
   help,
+  title,
   onChange,
 }: {
   label: string;
   value: string;
   options: readonly (readonly [string, string])[];
   help?: string;
+  title?: string;
   onChange: (value: string) => void;
 }) {
   return (
-    <label>
+    <label title={title}>
       {label}
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <select title={title} value={value} onChange={(event) => onChange(event.target.value)}>
         {options.map(([id, text]) => (
           <option key={id} value={id}>
             {text}
@@ -169,6 +180,9 @@ export function AgentCustomizations() {
           use_interests: draft.use_interests,
           stay_on_course: draft.stay_on_course,
           growth_praise: draft.growth_praise,
+          misconception_policy: draft.misconception_policy || "retry_once",
+          self_explanation: draft.self_explanation !== false,
+          enrichment: draft.enrichment || "on_request",
         }),
       });
       setDraft(savedProfile);
@@ -188,12 +202,68 @@ export function AgentCustomizations() {
         <p className="eyebrow">Administration</p>
         <h2>Agent Customizations</h2>
         <p className="help">
-          One tutor profile for every student. Name, age, reading level, modality, and interests stay on the child.
+          One tutor profile for every student. The component, the child, and the feedback loop are not settings on this
+          screen. Name, age, reading level, modality, and interests stay on the child.
         </p>
         {loading ? <p className="help">Loading the profile.</p> : null}
         {draft ? (
           <form className="agent-form" onSubmit={(event) => void onSubmit(event)}>
-            <label>
+            <h3 className="agent-layer">Layer 3, Voice</h3>
+            <Choice
+              label="Persona"
+              value={draft.persona}
+              options={PERSONAS}
+              title={hoverFor("Persona")}
+              help={hoverFor("Persona")}
+              onChange={setPersona}
+            />
+            <Choice
+              label="Reading voice"
+              value={draft.lexicon}
+              options={VOICES}
+              title={hoverFor("Lexicon")}
+              help={hoverFor("Lexicon")}
+              onChange={setVoice}
+            />
+            <Choice
+              label="Metaphor set"
+              value={draft.metaphors}
+              options={METAPHORS}
+              title={hoverFor("Metaphors")}
+              help={hoverFor("Metaphors")}
+              onChange={(metaphors) => {
+                setSaved(false);
+                setDraft({ ...draft, metaphors });
+              }}
+            />
+            <Choice
+              label="Sidekick"
+              value={draft.sidekick}
+              options={SIDEKICKS}
+              title={hoverFor("Sidekick")}
+              help={hoverFor("Sidekick")}
+              onChange={(sidekick) => {
+                setSaved(false);
+                setDraft({ ...draft, sidekick });
+              }}
+            />
+            <label className="check" title={hoverFor("Use interests")}>
+              <input
+                type="checkbox"
+                checked={draft.use_interests}
+                title={hoverFor("Use interests")}
+                onChange={(event) => {
+                  setSaved(false);
+                  setDraft({ ...draft, use_interests: event.target.checked });
+                }}
+              />
+              <span>
+                Use interests
+                <span className="help">{hoverFor("Use interests")}</span>
+              </span>
+            </label>
+            <h3 className="agent-layer">Layer 4, Guidance</h3>
+            <label title={hoverFor("Instructive")}>
               How instructive
               <span className="agent-level">
                 {draft.instructive} · {level.label}
@@ -204,138 +274,107 @@ export function AgentCustomizations() {
                 max={5}
                 step={1}
                 value={draft.instructive}
+                title={hoverFor("Instructive")}
                 aria-valuemin={1}
                 aria-valuemax={5}
                 aria-valuenow={draft.instructive}
-                aria-valuetext={`${draft.instructive} ${level.label}. ${level.detail}`}
+                aria-valuetext={`${draft.instructive} ${level.label}. ${hoverFor("Instructive")}`}
                 onChange={(event) => {
                   setSaved(false);
                   setDraft({ ...draft, instructive: Number(event.target.value) });
                 }}
               />
               <span className="agent-scale">
-                <span>1 Socratic</span>
-                <span>3 Balanced</span>
-                <span>5 Instructive</span>
+                <span>1 Asks first</span>
+                <span>3 Short lead-in</span>
+                <span>5 Explains more</span>
               </span>
-              <span className="help">{level.detail}</span>
+              <span className="help">{hoverFor("Instructive")}</span>
             </label>
-            <Choice
-              label="Persona"
-              value={draft.persona}
-              options={PERSONAS}
-              onChange={setPersona}
-            />
-            <Choice
-              label="Reading voice"
-              value={draft.lexicon}
-              options={VOICES}
-              help="Follows the persona unless you pick a different voice."
-              onChange={setVoice}
-            />
-            <Choice
-              label="Metaphor set"
-              value={draft.metaphors}
-              options={METAPHORS}
-              onChange={(metaphors) => {
-                setSaved(false);
-                setDraft({ ...draft, metaphors });
-              }}
-            />
-            <Choice
-              label="Sidekick"
-              value={draft.sidekick}
-              options={SIDEKICKS}
-              help="Used only on teach-back."
-              onChange={(sidekick) => {
-                setSaved(false);
-                setDraft({ ...draft, sidekick });
-              }}
-            />
             <Choice
               label="Struggle window"
               value={draft.struggle_window}
               options={WINDOWS}
-              help="Then the tutor states the worked answer and explains why."
+              title={hoverFor("Struggle window")}
+              help={hoverFor("Struggle window")}
               onChange={(struggle_window) => {
                 setSaved(false);
                 setDraft({ ...draft, struggle_window });
               }}
             />
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={draft.anti_spoiler}
-                onChange={(event) => {
-                  setSaved(false);
-                  setDraft({ ...draft, anti_spoiler: event.target.checked });
-                }}
-              />
-              <span>
-                Anti-spoiler
-                <span className="help">
-                  On: hide the answer until the struggle window. Off: confirm a correct idea as soon as they attempt it.
-                </span>
-              </span>
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={draft.one_question}
-                onChange={(event) => {
-                  setSaved(false);
-                  setDraft({ ...draft, one_question: event.target.checked });
-                }}
-              />
-              <span>
-                One question
-                <span className="help">On: never stack a second question.</span>
-              </span>
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={draft.use_interests}
-                onChange={(event) => {
-                  setSaved(false);
-                  setDraft({ ...draft, use_interests: event.target.checked });
-                }}
-              />
-              <span>
-                Use student interests
-                <span className="help">
-                  On: hobbies appear inside examples. Off: examples stay on the subject.
-                </span>
-              </span>
-            </label>
-            <label className="check">
+            <label className="check" title={hoverFor("Stay on course")}>
               <input
                 type="checkbox"
                 checked={draft.stay_on_course}
+                title={hoverFor("Stay on course")}
                 onChange={(event) => {
                   setSaved(false);
                   setDraft({ ...draft, stay_on_course: event.target.checked });
                 }}
               />
               <span>
-                Stay on the course
-                <span className="help">
-                  On: go deep on this course, unit, and quest, including closely related ideas. A different subject gets a short acknowledgment, then back to the course. Off: the tutor can follow the student's tangent.
-                </span>
+                Stay on course
+                <span className="help">{hoverFor("Stay on course")}</span>
               </span>
             </label>
-            <label className="check">
+            <Choice
+              label="Misconception policy"
+              value={draft.misconception_policy || "retry_once"}
+              options={POLICIES}
+              title={hoverFor("Misconception policy")}
+              help={hoverFor("Misconception policy")}
+              onChange={(misconception_policy) => {
+                setSaved(false);
+                setDraft({ ...draft, misconception_policy });
+              }}
+            />
+            <Choice
+              label="Enrichment"
+              value={draft.enrichment || "on_request"}
+              options={ENRICHMENT}
+              title={hoverFor("Enrichment")}
+              help={hoverFor("Enrichment")}
+              onChange={(enrichment) => {
+                setSaved(false);
+                setDraft({ ...draft, enrichment });
+              }}
+            />
+            <label className="check" title={hoverFor("Anti-spoiler")}>
+              <input type="checkbox" checked={draft.anti_spoiler} disabled title={hoverFor("Anti-spoiler")} />
+              <span>
+                Anti-spoiler <span className="deprecated">Deprecated</span>
+                <span className="help">{hoverFor("Anti-spoiler")}</span>
+              </span>
+            </label>
+            <label className="check" title={hoverFor("One question")}>
+              <input type="checkbox" checked={draft.one_question} disabled title={hoverFor("One question")} />
+              <span>
+                One question <span className="deprecated">Deprecated</span>
+                <span className="help">{hoverFor("One question")}</span>
+              </span>
+            </label>
+            <h3 className="agent-layer">Layer 5, Encouragement</h3>
+            <label className="check" title={hoverFor("Growth-mindset praise")}>
+              <input type="checkbox" checked={draft.growth_praise} disabled title={hoverFor("Growth-mindset praise")} />
+              <span>
+                Growth-mindset praise only <span className="deprecated">Deprecated</span>
+                <span className="help">{hoverFor("Growth-mindset praise")}</span>
+              </span>
+            </label>
+            <h3 className="agent-layer">Layer 6, Metacognition</h3>
+            <label className="check" title={hoverFor("Self-explanation")}>
               <input
                 type="checkbox"
-                checked={draft.growth_praise}
+                checked={draft.self_explanation !== false}
+                title={hoverFor("Self-explanation")}
                 onChange={(event) => {
                   setSaved(false);
-                  setDraft({ ...draft, growth_praise: event.target.checked });
+                  setDraft({ ...draft, self_explanation: event.target.checked });
                 }}
               />
               <span>
-                Growth-mindset praise only
-                <span className="help">On by default. Turn it off to allow praise for a correct result.</span>
+                Self-explanation
+                <span className="help">{hoverFor("Self-explanation")}</span>
               </span>
             </label>
             {error ? (

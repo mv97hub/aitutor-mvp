@@ -31,6 +31,9 @@ def default_row() -> TutorProfile:
         use_interests=True,
         stay_on_course=True,
         growth_praise=True,
+        misconception_policy="retry_once",
+        self_explanation=True,
+        enrichment="on_request",
         updated_at=_now(),
     )
 
@@ -48,6 +51,9 @@ def _fill(row: TutorProfile, source: TutorProfile) -> TutorProfile:
     row.use_interests = source.use_interests
     row.stay_on_course = source.stay_on_course
     row.growth_praise = source.growth_praise
+    row.misconception_policy = source.misconception_policy
+    row.self_explanation = source.self_explanation
+    row.enrichment = source.enrichment
     row.updated_at = _now()
     return row
 
@@ -104,6 +110,9 @@ def save_profile(
     use_interests: bool,
     stay_on_course: bool,
     growth_praise: bool,
+    misconception_policy: str = "retry_once",
+    self_explanation: bool = True,
+    enrichment: str = "on_request",
 ) -> TutorProfile:
     row = ensure_default_profile(db)
     if voice_override and lexicon != PERSONA_VOICE[persona]:
@@ -124,6 +133,9 @@ def save_profile(
     row.use_interests = use_interests
     row.stay_on_course = stay_on_course
     row.growth_praise = growth_praise
+    row.misconception_policy = misconception_policy
+    row.self_explanation = self_explanation
+    row.enrichment = enrichment
     row.updated_at = _now()
     db.flush()
     return row

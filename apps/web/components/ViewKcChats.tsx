@@ -203,6 +203,10 @@ function PromptDialog({
               <pre className="prompt-pre">{messageBody(message)}</pre>
             </div>
           ))}
+          {prompt.rubric_met && prompt.rubric_met.length > 0 ? (
+            <p className="meta">Rubric points met: {prompt.rubric_met.join(", ")}</p>
+          ) : null}
+          {prompt.misconception ? <p className="meta">Misconception: {prompt.misconception}</p> : null}
         </div>
       </div>
     </div>

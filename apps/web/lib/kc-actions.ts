@@ -203,6 +203,7 @@ function typeFields(kcType: string, formData: FormData): Record<string, unknown>
       case_b: text("case_b"),
       prediction: text("prediction"),
       rule: text("rule"),
+      transfer_case: text("transfer_case"),
     };
   }
   if (kcType === "causal") {
@@ -210,6 +211,7 @@ function typeFields(kcType: string, formData: FormData): Record<string, unknown>
       decision_point: text("decision_point"),
       flawed_claim: text("flawed_claim"),
       causal_chain: text("causal_chain"),
+      counterfactual: text("counterfactual"),
     };
   }
   return { fact: text("fact"), retrieval_question: text("retrieval_question") };
@@ -249,19 +251,3 @@ export async function saveKcComponent(formData: FormData) {
   redirect(back);
 }
 
-export async function answerKcTurn(formData: FormData) {
-  const sessionId = String(formData.get("session_id") || "");
-  const student = String(formData.get("student") || "");
-  const course = String(formData.get("course") || "");
-  const model = kcModel(String(formData.get("model") || ""));
-  const back = `/kc-tutor?student=${encodeURIComponent(student)}&course=${encodeURIComponent(course)}&session=${encodeURIComponent(sessionId)}&model=${encodeURIComponent(model)}`;
-  try {
-    await api(`/kc/tutor/sessions/${sessionId}/turn`, {
-      method: "POST",
-      body: JSON.stringify({ answer: String(formData.get("answer") || "").trim() }),
-    });
-  } catch (error) {
-    bounce(back, error);
-  }
-  redirect(back);
-}

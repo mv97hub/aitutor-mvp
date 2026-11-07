@@ -83,6 +83,9 @@ class TutorProfileIn(BaseModel):
     use_interests: bool = True
     stay_on_course: bool = True
     growth_praise: bool = True
+    misconception_policy: str = "retry_once"
+    self_explanation: bool = True
+    enrichment: str = "on_request"
 
     @model_validator(mode="after")
     def closed_choices(self) -> "TutorProfileIn":
@@ -91,6 +94,10 @@ class TutorProfileIn(BaseModel):
         _closed(self.metaphors, METAPHORS, "metaphors")
         _closed(self.sidekick, SIDEKICKS, "sidekick")
         _closed(self.struggle_window, STRUGGLE_WINDOWS, "struggle_window")
+        if self.misconception_policy != "retry_once":
+            raise ValueError("misconception_policy must be retry_once")
+        if self.enrichment not in {"direct", "on_request", "offer"}:
+            raise ValueError("enrichment must be one of: direct, on_request, offer")
         return self
 
 
@@ -421,6 +428,8 @@ class ModelPromptOut(BaseModel):
     system_prompt: str
     messages: list[Any]
     model: str
+    rubric_met: list[str] = Field(default_factory=list)
+    misconception: str | None = None
     created_at: datetime
 
 
@@ -491,6 +500,8 @@ class ModelPromptIn(BaseModel):
     messages: list[Any] = Field(default_factory=list)
     model: str = Field(default="", max_length=120)
     message_id: UUID | None = None
+    rubric_met: list[str] = Field(default_factory=list)
+    misconception: str | None = None
 
 
 class KcChatSummary(BaseModel):

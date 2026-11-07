@@ -479,11 +479,18 @@ def test_kid_prompt_uses_the_tutor_profile() -> None:
         assert prompt.status_code == 200, prompt.text
         text = prompt.json()["system_prompt"]
         assert prompt.json()["recipe"] == "retrieval"
+        assert prompt.json()["temperature"] == 0.4
+        assert set(prompt.json()["response_schema"]["required"]) >= {
+            "reply",
+            "decision",
+            "rubric_met",
+            "misconception",
+        }
         assert "debate-moderator" in text
         assert "analytical-high-school" in text
         assert "policy-cause" in text
         assert "pundit" in text
-        assert "Explain before the question: level 5" in text
+        assert "Instructive: 5." in text
         assert "Struggle window: long" in text
         assert "Stay on course: no" in text
         assert f"Age: {age}" in text
@@ -491,7 +498,9 @@ def test_kid_prompt_uses_the_tutor_profile() -> None:
             assert interest in text
         assert "HARBOR-GUIDE-SHOULD-NOT-APPEAR" not in text
         assert "curious-co-explorer" not in text
-        assert "one retrieval question, then a short confirmation" in text
+        assert "Layer 1, Component" in text
+        assert "Layer 7, Feedback loop" in text
+        assert "Factual:" in text
         assert "Settings do not change the type, the edges, or the score." in text
         db = SessionLocal()
         try:
@@ -552,13 +561,25 @@ def test_pass_bumps_an_encompassed_component() -> None:
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": later["id"]},
         )
         assert opened.status_code == 200, opened.text
-        done = client.post(
+        answered = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
             json={"answer": "The river in this course is blue."},
+        )
+        assert answered.status_code == 200, answered.text
+        done = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/decision",
+            json={
+                "reply": "Yes. The river in this course is blue. This unit is complete.",
+                "decision": "complete",
+                "rubric_met": ["fact"],
+                "affect": "engaged",
+                "confidence": "ok",
+            },
         )
         assert done.status_code == 200, done.text
         assert done.json()["passed"] is True
         assert done.json()["score"] == 100
+        assert done.json()["unit_complete"] is True
         later_state = _state(storm.id, "zz-bump-later")
         earlier_state = _state(storm.id, "zz-bump-earlier")
         assert later_state is not None and later_state.status == "known"
@@ -581,9 +602,25 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": sas["id"]},
         )
         assert opened.status_code == 200, opened.text
-        failed = client.post(
+        client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
             json={"answer": "SSA proves congruence"},
+        )
+        first = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/decision",
+            json={"reply": "That move is stored. Try the same move again.", "decision": "redirect"},
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["passed"] is False
+        assert first.json()["redirect"] is None
+        assert first.json()["status"] == "in_progress"
+        client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/turn",
+            json={"answer": "SSA proves congruence"},
+        )
+        failed = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/decision",
+            json={"reply": "This unit is paused. The next card is the included angle.", "decision": "stay"},
         )
         assert failed.status_code == 200, failed.text
         assert failed.json()["passed"] is False
@@ -610,13 +647,21 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
         )
         assert again.status_code == 200, again.text
         session_id = again.json()["id"]
-        for answer in (
-            "The case with the included angle locks one triangle.",
-            "One case closes and the other leaves two shapes.",
-            rule,
-        ):
-            step = client.post(f"/kc/tutor/sessions/{session_id}/turn", json={"answer": answer})
+        steps = (
+            ("The case with the included angle locks one triangle.", "advance", []),
+            ("One case closes and the other leaves two shapes.", "advance", []),
+            (rule, "complete", ["rule"]),
+        )
+        step = None
+        for answer, decision, rubric in steps:
+            posted = client.post(f"/kc/tutor/sessions/{session_id}/turn", json={"answer": answer})
+            assert posted.status_code == 200, posted.text
+            step = client.post(
+                f"/kc/tutor/sessions/{session_id}/decision",
+                json={"reply": "That holds.", "decision": decision, "rubric_met": rubric},
+            )
             assert step.status_code == 200, step.text
+        assert step is not None
         assert step.json()["passed"] is True
         assert step.json()["score"] == 100
         assert _state(storm.id, "geo-sas-ssa").status == "known"
@@ -672,14 +717,22 @@ def test_fixtures_time_box_synthesis_and_factual_recipe() -> None:
             json={"student_id": str(storm.id), "course_id": geometry["id"], "kc_id": factual["id"]},
         )
         assert opened.json()["recipe"] == "retrieval"
-        assert opened.json()["step_label"] == "Retrieval question"
-        answered = client.post(
+        assert opened.json()["step_label"] == "Retrieve"
+        client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
-            json={"answer": "180"},
+            json={"answer": "The interior angles of a triangle add up to 180 degrees."},
+        )
+        answered = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/decision",
+            json={
+                "reply": "Yes. The interior angles add up to 180 degrees. This unit is complete.",
+                "decision": "complete",
+                "rubric_met": ["fact"],
+            },
         )
         assert answered.status_code == 200, answered.text
         assert answered.json()["passed"] is True
-        assert answered.json()["step_label"] == "Short confirmation"
+        assert answered.json()["step_label"] == "Retrieve"
         assert "180" in answered.json()["reply"]
 
         _clear_progress(storm.id)
@@ -848,24 +901,37 @@ def test_tutor_speech_is_separate_from_the_score_and_two_steps_are_choices() -> 
             json={"content": "Asked twice."},
         )
         assert again.json()["messages"][-1]["content"] == "Which case fits?"
-        stepped = client.post(
+        client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
             json={"answer": "The closed case"},
+        )
+        stepped = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/decision",
+            json={"reply": "Look at the contrast. What is different?", "decision": "advance"},
         )
         assert stepped.status_code == 200, stepped.text
         assert stepped.json()["passed"] is False
         assert stepped.json()["step"] == 1
-        assert stepped.json()["needs_speech"] is True
+        assert stepped.json()["needs_speech"] is False
+        assert stepped.json()["choice"] is None
 
         causal = client.post(
             "/kc/tutor/sessions",
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": cause["id"]},
         ).json()
+        client.post(f"/kc/tutor/sessions/{causal['id']}/speech", json={"content": "What is at stake?"})
         client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "The tax is the stake."})
-        client.post(f"/kc/tutor/sessions/{causal['id']}/speech", json={"content": "Mark the claim."})
+        client.post(
+            f"/kc/tutor/sessions/{causal['id']}/decision",
+            json={"reply": "Mark this claim.", "decision": "advance"},
+        )
         marked = client.get(f"/kc/tutor/sessions/{causal['id']}").json()
         assert [item["text"] for item in marked["choice"]["choices"]] == ["This claim is flawed", "This claim holds"]
-        held = client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "This claim holds"})
+        client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "This claim holds"})
+        held = client.post(
+            f"/kc/tutor/sessions/{causal['id']}/decision",
+            json={"reply": "Look again.", "decision": "advance", "rubric_met": []},
+        )
         assert held.json()["passed"] is False
         assert held.json()["step"] == 1
         fresh = client.post(
@@ -873,11 +939,14 @@ def test_tutor_speech_is_separate_from_the_score_and_two_steps_are_choices() -> 
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": cause["id"]},
         )
         assert fresh.status_code == 200, fresh.text
-        # The in-progress session is reused, so finish it and the flawed mark passes the choice step.
-        done = client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "This claim is flawed"})
+        client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "This claim is flawed"})
+        done = client.post(
+            f"/kc/tutor/sessions/{causal['id']}/decision",
+            json={"reply": "Defend the chain.", "decision": "advance", "rubric_met": ["mark"]},
+        )
         assert done.status_code == 200, done.text
         assert done.json()["step"] == 2
-        assert done.json()["needs_speech"] is True
+        assert done.json()["needs_speech"] is False
         assert done.json()["passed"] is False
     finally:
         _clear_progress(storm.id)
@@ -1164,34 +1233,45 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
     course = _make("zz-vars", title="ZZ variables", description="One idea, said plainly.")
     try:
         blank = _variable_map(client.get("/kc/tutor/variables"))
+        layers = [row["layer"] for row in client.get("/kc/tutor/variables").json()["variables"]]
+        assert layers[:1] == ["Layer 1, Component"]
+        assert "Layer 7, Feedback loop" in layers
         for name in (
-            "Course name",
+            "Course title",
             "Course description",
             "Audience",
             "Kind",
             "Minutes",
             "Component title",
             "Component code",
-            "Component type",
+            "Type",
             "Component description",
             "Core truth",
             "Type fields",
-            "Rubric",
+            "Rubric lines",
             "Misconceptions",
-            "Edges: prerequisites",
-            "Edges: encompasses",
-            "Child name",
+            "Prerequisite codes",
+            "Encompass codes",
+            "Move index",
+            "Move name",
+            "Evidence",
+            "Choice widget",
+            "Course position",
+            "Move content",
+            "Display name",
             "Age",
             "Reading level",
             "Modality",
             "Interests",
-            "Recipe",
-            "Step",
-            "Step label",
-            "Step text",
+            "Attempts on this move",
+            "Last answer",
+            "Last misconception",
+            "Minutes used",
+            "Support band",
             "Score",
             "Status",
-            "Redirect",
+            "Affect",
+            "Last four messages",
         ):
             assert blank[name] == ""
         assert blank["Persona"]
@@ -1199,23 +1279,31 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         assert blank["Instructive"]
         assert blank["Stay on course"] in {"yes", "no"}
         assert blank["Use interests"] in {"yes", "no"}
-        for unused in ("Voice override", "Anti spoiler", "One question", "Growth praise", "Tutor persona"):
+        assert blank["Misconception policy"] == "retry_once"
+        assert blank["Self-explanation"] in {"yes", "no"}
+        assert blank["Enrichment"] in {"direct", "on_request", "offer"}
+        assert blank["Growth-mindset praise"] in {"yes", "no"}
+        assert blank["Anti-spoiler"] in {"yes", "no"}
+        assert blank["One question"] in {"yes", "no"}
+        assert blank["Unit close"] == "no"
+        assert blank["Course outro"] == "no"
+        for unused in ("Voice override", "Tutor persona"):
             assert unused not in blank
 
         picked = _variable_map(
             client.get("/kc/tutor/variables", params={"student_id": str(storm.id), "course_id": course["id"]})
         )
-        assert picked["Course name"] == "ZZ variables"
+        assert picked["Course title"] == "ZZ variables"
         assert picked["Course description"] == "One idea, said plainly."
         assert picked["Audience"] == "12-14"
         assert picked["Kind"] == "mastery"
         assert picked["Minutes"] == ""
-        assert picked["Child name"] == "Storm"
+        assert picked["Display name"] == "Storm"
         assert picked["Age"] == "10"
         assert picked["Component title"] == ""
         assert picked["Type fields"] == ""
-        assert picked["Step"] == ""
-        assert picked["Redirect"] == ""
+        assert picked["Move index"] == ""
+        assert picked["Redirect pending"] == "no"
 
         pushed = client.post(
             f"/kc/courses/{course['id']}/push",
@@ -1247,37 +1335,191 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         live = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
         assert live["Component title"] == "River fact"
         assert live["Component code"] == "zz-vars-fact"
-        assert live["Component type"] == "factual (Factual)"
+        assert live["Type"] == "factual (Factual)"
         assert live["Component description"] == "A short brief."
         assert live["Core truth"] == "Truth for River fact."
         assert live["Type field: Fact"] == "Truth for River fact."
         assert live["Type field: Retrieval question"] == "What is true of River fact?"
         assert "Type fields" not in live
-        assert live["Rubric"] == "Check for River fact."
+        assert live["Rubric lines"] == "Check for River fact."
         assert live["Misconceptions"] == "The river is red. -> zz-vars-other"
-        assert live["Edges: prerequisites"] == "zz-vars-other"
-        assert live["Edges: encompasses"] == ""
+        assert live["Prerequisite codes"] == "zz-vars-other"
+        assert live["Encompass codes"] == ""
         assert live["Recipe"] == "retrieval"
-        assert live["Step"] == "1 of 2"
-        assert live["Step label"] == "Retrieval question"
-        assert live["Step text"] == "What is true of River fact?"
+        assert live["Move index"] == "1 of 1"
+        assert live["Move name"] == "Retrieve"
+        assert live["Move content"] == "What is true of River fact?"
+        assert live["Evidence"] == "fact"
+        assert live["Support band"] == "hold"
         assert live["Score"] == ""
         assert live["Status"] == "in_progress"
-        assert live["Redirect"] == ""
+        assert live["Redirect pending"] == "no"
+        assert live["Unit close"] == "no"
         assert "weather" in live["Interests"]
 
-        done = client.post(
+        client.post(
             f"/kc/tutor/sessions/{session_id}/turn",
             json={"answer": "Truth for River fact."},
         )
+        done = client.post(
+            f"/kc/tutor/sessions/{session_id}/decision",
+            json={
+                "reply": "Yes. Truth for River fact. This unit is complete.",
+                "decision": "complete",
+                "rubric_met": ["fact"],
+            },
+        )
         assert done.status_code == 200, done.text
         after = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
-        assert after["Step"] == "2 of 2"
-        assert after["Step label"] == "Short confirmation"
+        assert after["Move index"] == "1 of 1"
+        assert after["Move name"] == "Retrieve"
         assert after["Score"] == "100"
         assert after["Status"] == "completed"
-        assert after["Redirect"] == ""
+        assert after["Unit close"] == "yes"
+        assert after["Course outro"] == "no"
+        assert after["Redirect pending"] == "no"
         assert client.get("/kc/tutor/variables", params={"session_id": str(uuid.uuid4())}).status_code == 404
+    finally:
+        _clear_progress(storm.id)
+        _wipe_zz()
+
+
+LAYER_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "021_kc_seven_layer.py"
+
+
+def test_seven_layer_revision_adds_columns_only() -> None:
+    text = LAYER_REVISION.read_text()
+    upgrade = text.split("def upgrade")[1].split("def downgrade")[0]
+    assert "drop_table" not in upgrade
+    assert "delete(" not in upgrade
+    assert "misconception_policy" in upgrade
+    assert "self_explanation" in upgrade
+    assert "enrichment" in upgrade
+    assert "hint_tier" in upgrade
+    assert "enrichment_turns" in upgrade
+    loop = Path(__file__).resolve().parents[1].joinpath("app", "kc_loop.py").read_text()
+    prompt = Path(__file__).resolve().parents[1].joinpath("app", "kc_prompt.py").read_text()
+    assert "engine.assemble" not in loop
+    assert "engine.assemble" not in prompt
+    assert "import assemble" not in loop
+
+
+def test_decision_overrides_and_course_outro() -> None:
+    course = _make("zz-layers", description="Two facts, then the course is done.")
+    storm = _storm()
+    _clear_progress(storm.id)
+    try:
+        pushed = client.post(
+            f"/kc/courses/{course['id']}/push",
+            json={
+                "components": [
+                    {"code": "zz-layers-a", "title": "First fact"},
+                    {"code": "zz-layers-b", "title": "Second fact"},
+                ]
+            },
+        ).json()["components"]
+        first, second = pushed
+        assert client.put(f"/kc/nodes/{first['id']}", json=_component("First fact")).status_code == 200
+        conceptual = _component(
+            "Second fact",
+            kc_type="conceptual",
+            core_truth="The rule is the contrast.",
+            type_fields={
+                "case_a": "Closed",
+                "case_b": "Open",
+                "prediction": "Which fits?",
+                "rule": "The rule is the contrast.",
+                "transfer_case": "A third case the child already knows.",
+            },
+        )
+        assert client.put(f"/kc/nodes/{second['id']}", json=conceptual).status_code == 200
+        assert client.post(f"/kc/courses/{course['id']}/ready").status_code == 200
+
+        opened = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": first["id"]},
+        ).json()
+        prompt = client.get(f"/kc/tutor/sessions/{opened['id']}/prompt").json()
+        assert prompt["temperature"] == 0.4
+        assert "Layer 3, Voice" in prompt["system_prompt"]
+        assert "Layer 6, Metacognition" in prompt["system_prompt"]
+        client.post(f"/kc/tutor/sessions/{opened['id']}/turn", json={"answer": "180"})
+        held = client.post(
+            f"/kc/tutor/sessions/{opened['id']}/decision",
+            json={"reply": "Say the whole fact.", "decision": "complete", "rubric_met": ["fact"]},
+        )
+        assert held.status_code == 200, held.text
+        assert held.json()["passed"] is False
+        assert held.json()["status"] == "in_progress"
+        assert held.json()["step_label"] == "Restate"
+        client.post(
+            f"/kc/tutor/sessions/{opened['id']}/turn",
+            json={"answer": "Truth for First fact is the whole line."},
+        )
+        finished = client.post(
+            f"/kc/tutor/sessions/{opened['id']}/decision",
+            json={
+                "reply": "This unit is complete. You can state the fact.",
+                "decision": "complete",
+                "rubric_met": ["restatement"],
+            },
+        )
+        assert finished.json()["passed"] is True
+        assert finished.json()["unit_complete"] is True
+        assert finished.json()["course_complete"] is False
+
+        other = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": second["id"]},
+        ).json()
+        other_prompt = client.get(f"/kc/tutor/sessions/{other['id']}/prompt").json()["system_prompt"]
+        assert "Transfer case:" in other_prompt
+        assert "transfer" in other_prompt
+        for answer, decision, rubric in (
+            ("Closed", "advance", []),
+            ("They differ.", "advance", []),
+            ("The rule is the contrast.", "advance", []),
+        ):
+            client.post(f"/kc/tutor/sessions/{other['id']}/turn", json={"answer": answer})
+            step = client.post(
+                f"/kc/tutor/sessions/{other['id']}/decision",
+                json={"reply": "Stay with the rule.", "decision": decision, "rubric_met": rubric},
+            )
+            assert step.status_code == 200, step.text
+        assert step.json()["status"] == "in_progress"
+        assert step.json()["passed"] is False
+        client.post(f"/kc/tutor/sessions/{other['id']}/turn", json={"answer": "The rule is the contrast."})
+        blocked = client.post(
+            f"/kc/tutor/sessions/{other['id']}/decision",
+            json={"reply": "Not yet.", "decision": "complete", "rubric_met": []},
+        )
+        assert blocked.json()["status"] == "in_progress"
+        assert blocked.json()["step_label"] == "State the rule"
+        client.post(
+            f"/kc/tutor/sessions/{other['id']}/turn",
+            json={"answer": "Use it on the third case."},
+        )
+        # The blocked complete did not advance, so this answer is still on the rule move.
+        # Finish the rule, then the transfer move.
+        ruled = client.post(
+            f"/kc/tutor/sessions/{other['id']}/decision",
+            json={"reply": "The rule holds. Try the third case.", "decision": "advance", "rubric_met": ["rule"]},
+        )
+        assert ruled.json()["step_label"] == "Transfer"
+        assert ruled.json()["passed"] is False
+        client.post(f"/kc/tutor/sessions/{other['id']}/turn", json={"answer": "The third case follows the rule."})
+        outro = client.post(
+            f"/kc/tutor/sessions/{other['id']}/decision",
+            json={
+                "reply": "This unit is complete. The course is complete.",
+                "decision": "complete",
+                "rubric_met": ["transfer"],
+            },
+        )
+        assert outro.status_code == 200, outro.text
+        assert outro.json()["passed"] is True
+        assert outro.json()["course_complete"] is True
+        assert outro.json()["unit_complete"] is True
     finally:
         _clear_progress(storm.id)
         _wipe_zz()

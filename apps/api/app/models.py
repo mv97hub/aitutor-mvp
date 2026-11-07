@@ -85,6 +85,15 @@ class TutorProfile(Base):
     use_interests: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     stay_on_course: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     growth_praise: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    misconception_policy: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="retry_once", server_default="retry_once"
+    )
+    self_explanation: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    enrichment: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="on_request", server_default="on_request"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -660,6 +669,17 @@ class KcSession(Base):
     redirect_kc_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("kc_nodes.id", ondelete="SET NULL")
     )
+    hint_tier: Mapped[str] = mapped_column(String(16), nullable=False, default="nudge", server_default="nudge")
+    move_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    reveals: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    off_course_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    affect: Mapped[str] = mapped_column(String(16), nullable=False, default="", server_default="")
+    enrichment_turns: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    help_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    rubric_met: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    last_misconception: Mapped[str] = mapped_column(String(240), nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
@@ -724,6 +744,8 @@ class KcModelPrompt(Base):
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     messages: Mapped[list] = mapped_column(JSON, nullable=False)
     model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    rubric_met: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    misconception: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

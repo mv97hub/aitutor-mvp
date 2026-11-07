@@ -145,6 +145,8 @@ export type KcChatDetail = {
     system_prompt: string;
     messages: unknown[];
     model: string;
+    rubric_met?: string[];
+    misconception?: string | null;
     created_at: string;
   }[];
 };
@@ -152,6 +154,7 @@ export type KcChatDetail = {
 export type KcDebugVariable = {
   name: string;
   value: string;
+  layer?: string;
 };
 
 export type KcTutorSession = {

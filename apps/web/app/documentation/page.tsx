@@ -12,6 +12,7 @@ const sections = [
   { href: "/documentation/manage-kc-courses", label: "Manage KC courses" },
   { href: "/documentation/kc-creator", label: "KC Creator" },
   { href: "/documentation/kc-tutor", label: "KC Tutor" },
+  { href: "/documentation/kc-prompt-layers", label: "KC prompt layers" },
 ] as const;
 
 export default function DocumentationPage() {

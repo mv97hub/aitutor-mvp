@@ -1756,6 +1756,16 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
 }
 
 .agent-form { max-width: 640px; }
+.agent-layer {
+  margin: 28px 0 8px;
+  font-size: 1.05rem;
+}
+.agent-form .deprecated {
+  margin-left: 8px;
+  color: rgb(97, 102, 107);
+  font-size: 12px;
+  font-weight: 650;
+}
 .agent-form .check { align-items: flex-start; }
 .agent-form .check > span { display: grid; gap: 2px; }
 .agent-level { font-weight: 600; }
@@ -2826,6 +2836,13 @@ a.ds-row { text-decoration: none; }
   overflow: auto;
   padding: 4px 12px 16px;
 }
+
+.kc-debug-layer {
+  margin: 16px 0 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+.kc-debug-body > section:first-child .kc-debug-layer { margin-top: 0; }
 
 .kc-debug-vars {
   display: grid;

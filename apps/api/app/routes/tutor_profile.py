@@ -23,6 +23,9 @@ def _out(row: TutorProfile) -> TutorProfileOut:
         use_interests=row.use_interests,
         stay_on_course=row.stay_on_course,
         growth_praise=row.growth_praise,
+        misconception_policy=row.misconception_policy,
+        self_explanation=row.self_explanation,
+        enrichment=row.enrichment,
         updated_at=row.updated_at,
     )
 
@@ -48,5 +51,8 @@ def put_tutor_profile(body: TutorProfileIn, db: Session = Depends(get_db)) -> Tu
         use_interests=body.use_interests,
         stay_on_course=body.stay_on_course,
         growth_praise=body.growth_praise,
+        misconception_policy=body.misconception_policy,
+        self_explanation=body.self_explanation,
+        enrichment=body.enrichment,
     )
     return _out(row)
