@@ -16,7 +16,8 @@ from fastapi import HTTPException
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.kc_prompt import build_kc_prompt, recipe_name, step_labels
+from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, VOICES
+from app.kc_prompt import build_kc_prompt, instructive_value, labeled_choice, recipe_name, step_labels
 from app.kc_syllabus import component_brief, planning_context
 from app.models import (
     KcCreatorMessage,
@@ -1317,6 +1318,151 @@ def open_session(db: Session, student: Student, goal: KcGoal, node: KcNode) -> K
     db.add(session)
     db.flush()
     return session
+
+
+def _text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [_text(item) for item in value]
+        return "\n".join(part for part in parts if part)
+    return str(value)
+
+
+def _csv(values: object) -> str:
+    if not isinstance(values, list):
+        return ""
+    return ", ".join(part for part in (_text(item).strip() for item in values) if part)
+
+
+def _type_rows(node: KcNode | None) -> list[tuple[str, str]]:
+    if node is None:
+        return [("Type fields", "")]
+    fields = dict(node.type_fields or {})
+    keys = [key for key in TYPE_KEYS.get(node.kc_type or "", ())]
+    for key in fields:
+        if str(key) not in keys:
+            keys.append(str(key))
+    if not keys:
+        return [("Type fields", "")]
+    rows: list[tuple[str, str]] = []
+    for key in keys:
+        label = FIELD_LABELS.get(key, key)
+        rows.append((f"Type field: {label}", _text(fields.get(key))))
+    return rows
+
+
+def _misconceptions(values: object) -> str:
+    if not isinstance(values, list):
+        return ""
+    lines: list[str] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        wrong = str(item.get("wrong_move") or "").strip()
+        broken = str(item.get("broken_kc") or "").strip()
+        if wrong or broken:
+            lines.append(f"{wrong} -> {broken}")
+    return "\n".join(lines)
+
+
+def _type_value(kc_type: str | None) -> str:
+    if not kc_type:
+        return ""
+    label = TYPE_LABELS.get(kc_type, "")
+    if not label or label == kc_type:
+        return kc_type
+    return f"{kc_type} ({label})"
+
+
+def tutor_variables(
+    db: Session,
+    *,
+    student_id: uuid.UUID | None = None,
+    course_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+) -> list[dict[str, str]]:
+    """Named inputs for the current KC chat. Empty layers stay in the list."""
+    session = db.get(KcSession, session_id) if session_id is not None else None
+    if session_id is not None and session is None:
+        raise HTTPException(status_code=404, detail="That session is not open.")
+    if session is not None:
+        student = _student_or_404(db, session.student_id)
+        goal = _course_or_404(db, session.goal_id)
+        node = _node_or_404(db, session.kc_id)
+    else:
+        student = _student_or_404(db, student_id) if student_id is not None else None
+        goal = _course_or_404(db, course_id) if course_id is not None else None
+        node = None
+    profile = load_profile(db)
+    redirect = ""
+    if session is not None and session.redirect_kc_id is not None:
+        target = db.get(KcNode, session.redirect_kc_id)
+        if target is not None:
+            redirect = f"{target.title} ({target.code})"
+    if session is None or node is None:
+        step = ""
+        step_label = ""
+        spoken = ""
+        recipe = ""
+        score = ""
+        status = ""
+    else:
+        labels = step_labels(node.kc_type)
+        index = min(max(session.step, 0), len(labels) - 1)
+        step = f"{index + 1} of {len(labels)}"
+        step_label = labels[index]
+        spoken = step_text(node, session.step)
+        recipe = session.recipe or ""
+        score = "" if session.score is None else str(session.score)
+        status = session.status or ""
+    interests = ""
+    if student is not None:
+        interests = ", ".join(str(item).strip() for item in (student.interests or []) if str(item).strip())
+    rows: list[tuple[str, str]] = [
+        ("Course name", goal.title if goal is not None else ""),
+        ("Course description", (goal.description or "") if goal is not None else ""),
+        ("Audience", goal.audience if goal is not None else ""),
+        ("Kind", goal.kind if goal is not None else ""),
+        ("Minutes", "" if goal is None or goal.minutes is None else str(goal.minutes)),
+        ("Component title", node.title if node is not None else ""),
+        ("Component code", node.code if node is not None else ""),
+        ("Component type", _type_value(node.kc_type if node is not None else None)),
+        ("Component description", (node.description or "") if node is not None else ""),
+        ("Core truth", (node.core_truth or "") if node is not None else ""),
+        *_type_rows(node),
+        ("Rubric", _csv(node.rubric if node is not None else [])),
+        ("Misconceptions", _misconceptions(node.misconceptions if node is not None else [])),
+        ("Edges: prerequisites", _csv(node.prerequisite_codes if node is not None else [])),
+        ("Edges: encompasses", _csv(node.encompasses_codes if node is not None else [])),
+        ("Child name", student.display_name if student is not None else ""),
+        ("Age", "" if student is None or student.age is None else str(student.age)),
+        ("Reading level", (student.reading_level or "") if student is not None else ""),
+        ("Modality", (student.modality or "") if student is not None else ""),
+        ("Interests", interests),
+        ("Persona", labeled_choice(PERSONAS, profile.persona)),
+        ("Lexicon", labeled_choice(VOICES, profile.lexicon)),
+        ("Metaphors", labeled_choice(METAPHORS, profile.metaphors)),
+        ("Sidekick", labeled_choice(SIDEKICKS, profile.sidekick)),
+        ("Instructive", instructive_value(profile.instructive)),
+        ("Struggle window", profile.struggle_window or ""),
+        ("Stay on course", "yes" if profile.stay_on_course else "no"),
+        ("Use interests", "yes" if profile.use_interests else "no"),
+        ("Recipe", recipe),
+        ("Step", step),
+        ("Step label", step_label),
+        ("Step text", spoken),
+        ("Score", score),
+        ("Status", status),
+        ("Redirect", redirect),
+    ]
+    return [{"name": name, "value": value if value is not None else ""} for name, value in rows]
 
 
 def prompt_for(db: Session, session: KcSession) -> dict:

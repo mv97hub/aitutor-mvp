@@ -86,6 +86,11 @@ export default function KcTutorDocsPage() {
         <p>
           The tutor profile changes how a step is said. It does not change the component type, the links between components, or the score.
         </p>
+        <p>
+          Debug, on the right, opens a panel beside the lesson. The chat stays usable while the panel is open.
+          Variables lists each input to the chat, with the field name and the current value.
+          Prompts lists each request and response for this session, newest at the bottom.
+        </p>
 
         <h2>Settings you can change</h2>
         <p>

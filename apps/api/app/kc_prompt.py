@@ -66,6 +66,22 @@ def _label(options: tuple[tuple[str, str], ...], value: str) -> str:
     return value
 
 
+def labeled_choice(options: tuple[tuple[str, str], ...], value: str) -> str:
+    """The stored id, with the profile label the prompt also sends."""
+    text = (value or "").strip()
+    if not text:
+        return ""
+    label = _label(options, text)
+    if label == text:
+        return text
+    return f"{text} ({label})"
+
+
+def instructive_value(level: int) -> str:
+    bounded = min(5, max(1, int(level)))
+    return f"{bounded}. {_EXPLAIN[bounded]}"
+
+
 def _codes(values: list | None) -> str:
     items = [str(item) for item in (values or []) if str(item).strip()]
     return ", ".join(items) if items else "none"

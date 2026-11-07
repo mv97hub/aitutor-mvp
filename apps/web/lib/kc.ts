@@ -149,6 +149,11 @@ export type KcChatDetail = {
   }[];
 };
 
+export type KcDebugVariable = {
+  name: string;
+  value: string;
+};
+
 export type KcTutorSession = {
   id: string;
   course_id: string;

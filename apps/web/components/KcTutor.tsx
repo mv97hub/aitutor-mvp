@@ -3,9 +3,11 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 
 import { KcBanner } from "@/components/KcBanner";
+import { KcDebugPanel } from "@/components/KcDebugPanel";
 import { ChoiceWidget } from "@/components/LessonBlocks";
 import { answerKcTurn } from "@/lib/kc-actions";
-import type { KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
+import type { KcDebugTurn } from "@/lib/kc-debug";
+import type { KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
 import type { KidQuiz, Student } from "@/lib/types";
 import { useRouter } from "next/navigation";
 
@@ -17,6 +19,8 @@ export function KcTutor({
   progress,
   session,
   error,
+  variables,
+  turns,
 }: {
   students: Student[];
   courses: KcTutorCourse[];
@@ -25,11 +29,27 @@ export function KcTutor({
   progress: KcProgress | null;
   session: KcTutorSession | null;
   error: string | null;
+  variables: KcDebugVariable[];
+  turns: KcDebugTurn[];
 }) {
+  const [debugOpen, setDebugOpen] = useState(false);
   const course = courses.find((item) => item.id === courseId) ?? null;
   return (
-    <main className="ds-shell kc-screen">
-      <KcBanner name="KC Tutor" />
+    <main className={`ds-shell kc-screen${debugOpen ? " is-debug" : ""}`}>
+      <KcBanner name="KC Tutor">
+        <div className="kc-fast">
+          <button
+            type="button"
+            className="button"
+            aria-pressed={debugOpen}
+            aria-expanded={debugOpen}
+            aria-controls="kc-debug-panel"
+            onClick={() => setDebugOpen((open) => !open)}
+          >
+            Debug
+          </button>
+        </div>
+      </KcBanner>
       <aside className="ds-side">
         {error && !session ? (
           <div className="banner" role="alert">
@@ -104,6 +124,7 @@ export function KcTutor({
           />
         ) : null}
       </section>
+      {debugOpen ? <KcDebugPanel variables={variables} turns={turns} /> : null}
     </main>
   );
 }
