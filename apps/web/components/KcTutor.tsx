@@ -10,7 +10,7 @@ import { answerKcTurn } from "@/lib/kc-actions";
 import type { KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
 import type { KcDebugTurn } from "@/lib/kc-debug";
 import { KC_MODELS, kcModel, type KcModel } from "@/lib/kc-models";
-import type { KidQuiz, Student } from "@/lib/types";
+import type { KidQuiz, ProfileDefaults, Student } from "@/lib/types";
 import { useRouter } from "next/navigation";
 
 type SettingsDraft = {
@@ -40,6 +40,43 @@ function settingsDraft(learner: Student | null, model: string): SettingsDraft {
     modality: learner?.modality ?? "",
     interests: learner?.interests.join(", ") ?? "",
   };
+}
+
+const ADD_NEW_CHILD = "__add_new_child__";
+
+type ChildDraft = {
+  name: string;
+  age: string;
+  reading_level: string;
+  modality: string;
+  interests: string;
+};
+
+function blankChild(): ChildDraft {
+  return { name: "", age: "", reading_level: "", modality: "", interests: "" };
+}
+
+function childCreateBody(draft: ChildDraft) {
+  const body: {
+    display_name: string;
+    age: number;
+    reading_level?: string;
+    modality?: string;
+    interests?: string[];
+  } = {
+    display_name: draft.name.trim(),
+    age: Number(draft.age),
+  };
+  const readingLevel = draft.reading_level.trim();
+  const modality = draft.modality.trim();
+  const interests = draft.interests
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (readingLevel) body.reading_level = readingLevel;
+  if (modality) body.modality = modality;
+  if (interests.length > 0) body.interests = interests;
+  return body;
 }
 
 function GearIcon() {
@@ -90,11 +127,68 @@ export function KcTutor({
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState<SettingsDraft>(() => settingsDraft(learner, model));
+  const [pickedStudent, setPickedStudent] = useState(studentId);
+  const [createdStudents, setCreatedStudents] = useState<Student[]>([]);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addKey, setAddKey] = useState(0);
+  const [savingChild, setSavingChild] = useState(false);
+  const [addNotice, setAddNotice] = useState<string | null>(null);
+  const roster = students.concat(
+    createdStudents.filter((student) => !students.some((row) => row.id === student.id)),
+  );
+
+  useEffect(() => {
+    setPickedStudent(studentId);
+  }, [studentId]);
 
   function openSettings() {
+    setAddOpen(false);
     setDraft(settingsDraft(learner, model));
     setSettingsNotice(null);
     setSettingsOpen(true);
+  }
+
+  function openAddChild() {
+    setSettingsOpen(false);
+    setAddNotice(null);
+    setAddKey((key) => key + 1);
+    setAddOpen(true);
+  }
+
+  async function createChild(child: ChildDraft) {
+    const name = child.name.trim();
+    const age = Number(child.age);
+    if (!name) {
+      setAddNotice("Name is required.");
+      return;
+    }
+    if (!Number.isInteger(age) || age < 4 || age > 18) {
+      setAddNotice("Age must be from 4 to 18.");
+      return;
+    }
+    setSavingChild(true);
+    setAddNotice(null);
+    try {
+      const student = await api<Student>("/students", {
+        method: "POST",
+        body: JSON.stringify(childCreateBody({ ...child, name, age: String(age) })),
+      });
+      setCreatedStudents((rows) => [...rows.filter((row) => row.id !== student.id), student]);
+      setPickedStudent(student.id);
+      setAddOpen(false);
+      router.push(
+        tutorPath({
+          student: student.id,
+          course: courseId || undefined,
+          model,
+        }),
+      );
+      router.refresh();
+    } catch (err) {
+      setAddNotice(err instanceof Error ? err.message : "Could not add that child.");
+    } finally {
+      setSavingChild(false);
+    }
   }
 
   async function saveSettings(event: FormEvent) {
@@ -162,13 +256,37 @@ export function KcTutor({
             <p>{error}</p>
           </div>
         ) : null}
-        <form className="kc-tutor-pick" method="get" action="/kc-tutor">
+        <form
+          className="kc-tutor-pick"
+          method="get"
+          action="/kc-tutor"
+          onSubmit={(event) => {
+            if (new FormData(event.currentTarget).get("student") === ADD_NEW_CHILD) {
+              event.preventDefault();
+              openAddChild();
+            }
+          }}
+        >
           <input type="hidden" name="model" value={model} />
           <label>
             Child
-            <select aria-label="Choose a child" name="student" defaultValue={studentId}>
+            <select
+              aria-label="Choose a child"
+              name="student"
+              value={pickedStudent}
+              onChange={(event) => {
+                const next = event.target.value;
+                if (next === ADD_NEW_CHILD) {
+                  event.currentTarget.value = pickedStudent;
+                  openAddChild();
+                  return;
+                }
+                setPickedStudent(next);
+              }}
+            >
+              <option value={ADD_NEW_CHILD}>Add New Child</option>
               <option value="">Choose a child</option>
-              {students.map((student) => (
+              {roster.map((student) => (
                 <option key={student.id} value={student.id}>
                   {student.display_name}
                 </option>
@@ -231,6 +349,15 @@ export function KcTutor({
             onChange={setDraft}
             onSubmit={(event) => void saveSettings(event)}
             onClose={() => setSettingsOpen(false)}
+          />
+        ) : null}
+        {addOpen ? (
+          <AddChildDialog
+            key={addKey}
+            saving={savingChild}
+            notice={addNotice}
+            onCreate={(child) => void createChild(child)}
+            onClose={() => setAddOpen(false)}
           />
         ) : null}
       </aside>
@@ -406,6 +533,167 @@ function KcLesson({
         </form>
       )}
     </>
+  );
+}
+
+function AddChildDialog({
+  saving,
+  notice,
+  onCreate,
+  onClose,
+}: {
+  saving: boolean;
+  notice: string | null;
+  onCreate: (draft: ChildDraft) => void;
+  onClose: () => void;
+}) {
+  const nameRef = useRef<HTMLInputElement>(null);
+  const readingTouched = useRef(false);
+  const modalityTouched = useRef(false);
+  const [draft, setDraft] = useState<ChildDraft>(blankChild);
+
+  useEffect(() => {
+    nameRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    const age = Number(draft.age);
+    if (!Number.isInteger(age) || age < 4 || age > 18) return;
+    if (readingTouched.current && modalityTouched.current) return;
+    let cancelled = false;
+    void api<ProfileDefaults>(`/profile-defaults?age=${age}`)
+      .then((defaults) => {
+        if (cancelled) return;
+        setDraft((current) => {
+          if (current.age !== draft.age) return current;
+          return {
+            ...current,
+            reading_level: readingTouched.current ? current.reading_level : defaults.reading_level,
+            modality: modalityTouched.current ? current.modality : defaults.modality,
+          };
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [draft.age]);
+
+  return (
+    <div className="prompt-backdrop" role="presentation" onMouseDown={onClose}>
+      <div
+        className="prompt-dialog settings-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="kc-add-child-title"
+        tabIndex={-1}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <h2 id="kc-add-child-title">Add New Child</h2>
+            <p>Name, age, reading level, modality, and interests.</p>
+          </div>
+          <button type="button" className="ghost" onClick={onClose}>
+            Close
+          </button>
+        </header>
+        <form
+          className="prompt-body"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onCreate(draft);
+          }}
+        >
+          <label>
+            Name
+            <input
+              ref={nameRef}
+              value={draft.name}
+              onChange={(event) => {
+                const name = event.target.value;
+                setDraft((current) => ({ ...current, name }));
+              }}
+              required
+              maxLength={120}
+              autoComplete="off"
+            />
+          </label>
+          <label>
+            Age
+            <input
+              type="number"
+              inputMode="numeric"
+              min={4}
+              max={18}
+              required
+              value={draft.age}
+              onChange={(event) => {
+                const age = event.target.value;
+                setDraft((current) => ({ ...current, age }));
+              }}
+            />
+          </label>
+          <label>
+            Reading level
+            <input
+              maxLength={80}
+              value={draft.reading_level}
+              onChange={(event) => {
+                readingTouched.current = true;
+                const reading_level = event.target.value;
+                setDraft((current) => ({ ...current, reading_level }));
+              }}
+            />
+          </label>
+          <label>
+            Modality
+            <input
+              maxLength={80}
+              value={draft.modality}
+              onChange={(event) => {
+                modalityTouched.current = true;
+                const modality = event.target.value;
+                setDraft((current) => ({ ...current, modality }));
+              }}
+            />
+          </label>
+          <label>
+            Interests
+            <input
+              value={draft.interests}
+              placeholder="cities, fairness"
+              onChange={(event) => {
+                const interests = event.target.value;
+                setDraft((current) => ({ ...current, interests }));
+              }}
+            />
+          </label>
+          <p className="help">
+            Age, reading level, modality, and interests are saved on the child. A blank reading level or modality
+            keeps the age default. Persona and the other tutor settings stay on Agent customizations.
+          </p>
+          {notice ? (
+            <div className="banner" role="alert">
+              <p>{notice}</p>
+            </div>
+          ) : null}
+          <div className="rail-actions">
+            <button className="button" type="submit" disabled={saving}>
+              Save
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
