@@ -1,6 +1,7 @@
 "use client";
 
-import { BLOCK_TYPES, type KcBlockType } from "@/lib/kc";
+import { BLOCK_TYPES } from "@/lib/kc-blocks";
+import type { KcBlockType } from "@/lib/kc";
 import {
   BLOCK_CONFIG_FIELDS,
   BLOCK_CONFIG_TITLES,

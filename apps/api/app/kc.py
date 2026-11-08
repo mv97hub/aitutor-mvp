@@ -43,6 +43,7 @@ from app.kc_prompt import (
 )
 from app.kc_syllabus import component_fields, planning_context
 from app.models import (
+    ALL_BLOCK_TYPES,
     KcCreatorMessage,
     KcEdge,
     KcGoal,
@@ -382,6 +383,42 @@ def load_patches(db: Session, targets: list[KcNode]) -> list[KcNode]:
     return patches
 
 
+_BANNER_LABELS = {
+    "topic_goal": "Topic + Goal",
+    "mcq": "Multiple choice",
+    "case_study": "Case study",
+    "socratic": "Socratic",
+    "curiosity": "Curiosity",
+    "worked_example": "Worked example",
+    "spot_the_flaw": "Spot the flaw",
+    "teach_back": "Teach back",
+    "retrieval_check": "Retrieval check",
+}
+
+
+def _public_blocks(node: KcNode | None) -> list[dict]:
+    if node is None:
+        return []
+    blocks: list[dict] = []
+    for item in node.blocks or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "")
+        if kind not in ALL_BLOCK_TYPES:
+            continue
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        blocks.append({"id": str(item.get("id") or ""), "type": kind, "data": dict(data)})
+    return blocks
+
+
+def _block_title(data: dict, fallback: str) -> str:
+    for key in ("topic", "question", "question_stem", "scenario", "recall_prompt", "goal"):
+        text = str(data.get(key) or "").strip()
+        if text:
+            return text
+    return fallback
+
+
 def _summary(node: KcNode, *, target: bool) -> dict:
     return {
         "id": str(node.id),
@@ -407,6 +444,7 @@ def _detail(node: KcNode, *, target: bool, codes: set[str]) -> dict:
             "prerequisite_codes": list(node.prerequisite_codes or []),
             "encompasses_codes": list(node.encompasses_codes or []),
             "type_fields": dict(node.type_fields or {}),
+            "blocks": _public_blocks(node),
             "marked_complete": bool(node.marked_complete),
             "missing": gaps_for(node, codes),
             "history": node.history or "",
@@ -431,6 +469,7 @@ def course_out(db: Session, goal: KcGoal) -> dict:
         "audience": goal.audience,
         "kind": goal.kind,
         "minutes": goal.minutes,
+        "allowed_block_types": list(goal.allowed_block_types or []),
         "ready": goal.ready,
         "history": goal.history or "",
         "updated_at": goal.updated_at.isoformat(),
@@ -981,6 +1020,7 @@ def structure(db: Session, goal: KcGoal) -> dict:
             "title": node.title,
             "description": node.description or "",
             "kc_type": node.kc_type,
+            "blocks": _public_blocks(node),
             "position": position,
             "missing": gaps_for(node, codes),
             "marked_complete": bool(node.marked_complete),
@@ -1482,6 +1522,60 @@ def _move_context(db: Session, session: KcSession, node: KcNode | None):
     return profile, goal, messages, fragment, moves
 
 
+def _session_block_progress(node: KcNode | None, session: KcSession) -> dict:
+    blocks = _public_blocks(node)
+    if not blocks or node is None:
+        return {}
+    total = len(blocks)
+    if session.status == "completed":
+        active = total - 1
+        completed = total
+    else:
+        active = min(max(int(session.step or 0), 0), total - 1)
+        completed = active
+    state = session.active_block_state if isinstance(session.active_block_state, dict) else {}
+    substep = str(state.get("substep") or "").strip()
+    results = session.block_results if isinstance(session.block_results, list) else []
+    by_id = {str(item.get("id")): item for item in results if isinstance(item, dict)}
+    progress: list[dict] = []
+    for index, block in enumerate(blocks):
+        bid = str(block.get("id") or f"blk_{index + 1}")
+        if session.status == "completed" or index < completed:
+            status = "completed"
+        elif index == active:
+            status = "active"
+        else:
+            status = "upcoming"
+        stored = by_id.get(bid) or {}
+        data = block.get("data") if isinstance(block.get("data"), dict) else {}
+        kind = str(block.get("type") or "topic_goal")
+        progress.append(
+            {
+                "id": bid,
+                "index": index,
+                "type": kind,
+                "type_label": _BANNER_LABELS.get(kind, kind),
+                "title": _block_title(data, node.title),
+                "status": status,
+                "outcome": stored.get("outcome"),
+                "attempts": int(stored.get("attempts") or 0),
+            }
+        )
+    sub_label = ""
+    if substep:
+        from app.kc_prompt import format_active_substep_label
+
+        sub_label = format_active_substep_label(blocks[active], substep)
+    return {
+        "total_blocks": total,
+        "completed_blocks": completed,
+        "completion_pct": round(100 * completed / total),
+        "active_block_index": active,
+        "active_substep_label": sub_label,
+        "block_progress": progress,
+    }
+
+
 def session_out(db: Session, session: KcSession) -> dict:
     node = db.get(KcNode, session.kc_id)
     _profile, _goal, messages, _fragment, moves = _move_context(db, session, node)
@@ -1512,6 +1606,7 @@ def session_out(db: Session, session: KcSession) -> dict:
             {"id": str(message.id), "role": message.role, "content": message.content, "seq": message.seq}
             for message in messages
         ],
+        **_session_block_progress(node, session),
     }
 
 
