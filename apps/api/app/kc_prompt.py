@@ -733,7 +733,10 @@ def _ending(
     course_complete: bool,
     others_known: bool,
     course_title: str,
+    last_move: bool,
 ) -> str:
+    if not last_move and not unit_complete and not course_complete:
+        return "The unit is not finished. This reply must not say it is complete."
     length = "" if kind == "time_boxed" else _close_length_sentence(level)
     close = _close_body()
     if course_complete:
@@ -777,13 +780,13 @@ def _this_turn(
     # The orient move replaced the old opening script. The flag stays for callers.
     del opening
     del node
-    del index
-    del total
     lines = [
         "You are the knowledge-component tutor.",
         _step_intro(move, moves),
     ]
     closing = unit_complete or course_complete
+    last_move = index >= total - 1
+    include_close = last_move or closing
     if fragment and explain and move.key == "retrieve" and not closing:
         lines.append(
             "The retrieval was only a fragment. Advance, and ask for the fact in a full sentence. "
@@ -792,10 +795,10 @@ def _this_turn(
     elif move.key == "extra_why" and not closing:
         lines.append("This move is the one extra why. The unit is already known. Leave the score as it is.")
     if move.choice or choice_on_screen:
-        lines.append(
-            "The child picks the choice on screen. Do not add a question beside it. "
-            "A unit close or a course outro asks no new question."
-        )
+        pick = "The child picks the choice on screen. Do not add a question beside it."
+        if include_close:
+            pick += " A unit close or a course outro asks no new question."
+        lines.append(pick)
     lines.append(
         _ending(
             level=level,
@@ -804,6 +807,7 @@ def _this_turn(
             course_complete=course_complete,
             others_known=others_known,
             course_title=course_title,
+            last_move=last_move,
         )
     )
     return lines
@@ -1053,6 +1057,7 @@ def _how_to_teach(
     minutes_used: int,
     has_misconceptions: bool,
     anti_spoiler: bool,
+    include_close: bool,
 ) -> list[str]:
     lines = [
         _step_rule(node, move, moves, anti_spoiler=anti_spoiler),
@@ -1102,9 +1107,10 @@ def _how_to_teach(
     elif support_band == "ready" and (prerequisite_status or "").strip() not in {"", "none"}:
         lines.append("The earlier ideas are in place, so teach this component.")
     if profile.one_question and not choice_on_screen:
-        lines.append(
-            "End a learning reply with a single question. A unit close or a course outro asks no new question."
-        )
+        question = "End a learning reply with a single question."
+        if include_close:
+            question += " A unit close or a course outro asks no new question."
+        lines.append(question)
     if profile.growth_praise:
         lines.append(
             "When you praise, name the move the child made, including in the close. "
@@ -1223,6 +1229,7 @@ def build_kc_prompt(
     labels = moves or [Move("this", "This step", (), False)]
     index = min(max(step, 0), len(labels) - 1)
     move = labels[index]
+    include_close = index >= len(labels) - 1 or unit_complete or course_complete
     level = min(5, max(1, int(profile.instructive)))
     window_name = effective_window_name(profile, goal)
     enrichment = effective_enrichment(profile, goal)
@@ -1279,6 +1286,7 @@ def build_kc_prompt(
                     minutes_used=minutes_used,
                     has_misconceptions=bool(_wrong_moves(node)),
                     anti_spoiler=bool(profile.anti_spoiler),
+                    include_close=include_close,
                 ),
             ),
             ("How to sound", [_voice_paragraph(profile)]),
