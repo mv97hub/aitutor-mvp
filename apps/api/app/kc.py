@@ -33,6 +33,7 @@ from app.kc_prompt import (
     Move,
     move_material,
     moves_for,
+    read_brief,
     recipe_name,
     self_explanation_on,
     step_labels,
@@ -50,6 +51,7 @@ from app.models import (
     KcSession,
     KcState,
     Student,
+    TutorProfile,
 )
 from app.present import student_out
 from app.tutor_profile import load_profile
@@ -243,8 +245,8 @@ def _clean_rubric(values: object) -> list[str]:
     if not isinstance(values, list):
         raise HTTPException(status_code=422, detail="Rubric checks are a list.")
     checks = [str(item).strip() for item in values if str(item).strip()]
-    if len(checks) > 3:
-        raise HTTPException(status_code=422, detail="A component has at most three rubric checks.")
+    if len(checks) > 16:
+        raise HTTPException(status_code=422, detail="A component has at most sixteen rubric checks.")
     return checks
 
 
@@ -1172,6 +1174,7 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
                 "kc_type": node.kc_type,
                 "patch": node.id not in target_ids,
                 "status": _unit_status(states, node, open_ids),
+                "result": None if states.get(node.id) is None else states.get(node.id).result,
             }
             for node in everyone
         ],
@@ -1360,6 +1363,17 @@ def choice_for(node: KcNode, move) -> dict | None:
     if not getattr(move, "choice", False):
         return None
     fields = node.type_fields or {}
+    if move.key in {"predict_a", "predict_b"}:
+        case_key = "case_a" if move.key == "predict_a" else "case_b"
+        case = str(fields.get(case_key) or "").strip()
+        question = str(fields.get("prediction") or "What do you predict?").strip()
+        return {
+            "prompt": f"{question} {case}".strip(),
+            "choices": [
+                {"id": "holds", "text": "This holds"},
+                {"id": "not", "text": "This does not hold"},
+            ],
+        }
     if move.key == "predict":
         return {
             "prompt": str(fields.get("prediction") or ""),
@@ -1839,6 +1853,44 @@ def _mark_known(db: Session, session: KcSession, node: KcNode) -> None:
         session.score = PASS_SCORE
 
 
+def _point_label(node: KcNode, point_id: str) -> str:
+    if point_id.startswith("goal-"):
+        try:
+            index = int(point_id.split("-", 1)[1]) - 1
+        except ValueError:
+            return point_id
+        _outline, _topics, goals = read_brief(node.description or "")
+        if 0 <= index < len(goals):
+            return goals[index]
+    return point_id
+
+
+def _save_component_result(db: Session, session: KcSession, node: KcNode, body: dict) -> None:
+    """Known or fragile, the points that held, and a short note. Not a course score."""
+    state = _get_state(db, session.student_id, node.id)
+    status = state.status if state.status in {"known", "fragile"} else "fragile"
+    met = [str(item).strip() for item in (session.rubric_met or []) if str(item).strip()]
+    labels = [_point_label(node, item) for item in met]
+    listed = ", ".join(labels) if labels else "none"
+    justification = str(body.get("justification") or "").strip()
+    strong = str(body.get("strong") or "").strip()
+    work_on = str(body.get("work_on") or "").strip()
+    if not justification:
+        word = "Known" if status == "known" else "Fragile"
+        justification = f"{word}. The rubric points that held are {listed}."
+    if not strong:
+        strong = listed if labels else "No rubric point was recorded."
+    if not work_on:
+        work_on = "Use this on the next piece." if status == "known" else "Look at this component again."
+    state.result = {
+        "status": status,
+        "rubric_met": met,
+        "justification": justification,
+        "strong": strong,
+        "work_on": work_on,
+    }
+
+
 def _mark_fragile(db: Session, session: KcSession, node: KcNode) -> None:
     state = _get_state(db, session.student_id, node.id)
     state.status = "fragile"
@@ -1931,6 +1983,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         session.step = index + 1
     if resolution.unit_complete:
         session.status = "completed"
+        _save_component_result(db, session, node, body)
     session.updated_at = _now()
     _add_message(db, session, "assistant", reply)
     student = _student_or_404(db, session.student_id)
@@ -1945,8 +1998,24 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     return result
 
 
-def _chat_step_label(node: KcNode | None, step: int) -> str:
-    labels = step_labels(node.kc_type if node else None)
+def _label_profile() -> TutorProfile:
+    return TutorProfile(
+        id="default",
+        instructive=3,
+        persona="curious-co-explorer",
+        lexicon="middle-grade-vivid",
+        metaphors="playground-sports",
+        sidekick="bumbling-partner",
+        self_explanation=True,
+        enrichment="on_request",
+        misconception_policy="retry_once",
+    )
+
+
+def _chat_step_label(node: KcNode | None, step: int, goal: KcGoal | None = None) -> str:
+    if node is None:
+        return "This step"
+    labels = [move.name for move in moves_for(node, _label_profile(), goal)] or ["This step"]
     return labels[min(max(step, 0), len(labels) - 1)]
 
 
@@ -1991,7 +2060,7 @@ def _chat_summary(session: KcSession) -> dict:
         "kc_type": node.kc_type if node is not None else None,
         "recipe": session.recipe,
         "step": session.step,
-        "step_label": _chat_step_label(node, session.step),
+        "step_label": _chat_step_label(node, session.step, session.goal),
         "status": session.status,
         "score": session.score,
         "created_at": session.created_at,
@@ -2020,7 +2089,7 @@ def kc_chat_detail(db: Session, session_id: uuid.UUID) -> dict:
         "status": session.status,
         "recipe": session.recipe,
         "step": session.step,
-        "step_label": _chat_step_label(node, session.step),
+        "step_label": _chat_step_label(node, session.step, session.goal),
         "score": session.score,
         "attempts": session.attempts,
         "created_at": session.created_at,
@@ -2648,7 +2717,10 @@ def _require_recommendation(draft: dict, other_codes: list[str], *, repaired: bo
     if not str(draft.get("core_truth") or "").strip():
         raise HTTPException(status_code=422, detail="Recommend a core truth.")
     if not draft.get("rubric"):
-        raise HTTPException(status_code=422, detail="Recommend one to three rubric checks.")
+        raise HTTPException(
+            status_code=422,
+            detail="Recommend one rubric line for each topic goal, then the practice checks.",
+        )
     allowed = set(other_codes)
     linked = list(draft["prerequisite_codes"]) + list(draft["encompasses_codes"])
     if any(code not in allowed for code in linked):

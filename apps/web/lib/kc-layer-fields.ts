@@ -20,11 +20,11 @@ export const LAYER_HEADINGS = [
 ] as const;
 
 export const MOVE_SEQUENCES = [
-  "Factual. Intro. Retrieve, evidence is the fact. Optional restatement when self-explanation is on and the retrieval was only a fragment. Unit close.",
-  "Procedural. Intro names the goal of the procedure. Worked example, the child says what the example did. Faded step, evidence is the blanked step. Solo, evidence is the solo check. Why this order, only when self-explanation is on. Unit close.",
-  "Conceptual. Intro does not name the rule. Predict the two cases. Contrast. State the rule, evidence is the rule. Transfer on transfer case when that field is present. Unit close.",
-  "Causal. Intro of the decision. What is at stake. Mark the flawed claim, and the choice widget stays. Defend the chain, evidence is the causal chain. Counterfactual when that field is present and self-explanation is on. Unit close.",
-  "Synthesis. Intro names the mixed components and the job. Rookie's faulty plan. Correct it, evidence is the core truth. Say which component does which job. Unit close.",
+  "Factual. Orient from the outline. Each topic is typed and checks that topic's goal. Retrieve, evidence is the fact. Optional restatement when self-explanation is on and the retrieval was only a fragment. An empty field is skipped.",
+  "Procedural. Orient names the procedure. Each step is one typed discussion and checks that step's goal. The child chooses what to do next, then fills the blanked step, then the solo problem, then why this order when self-explanation is on.",
+  "Conceptual. Orient does not name the rule. Each topic is typed and checks that topic's goal. Predict case one, then case two. Both are on-screen choices. Contrast, then state the rule. Transfer when that field is stored.",
+  "Causal. Orient names the decision. Each link is typed and checks that link's goal. What is at stake. Mark the flawed claim on screen. Defend the chain. Counterfactual when that field is stored and self-explanation is on.",
+  "Synthesis. Orient names the job and the two earlier components. Each job is a typed topic. The rookie's faulty plan, then the correction, then which component does which job.",
 ] as const;
 
 export const LAYER_FIELDS: LayerField[] = [

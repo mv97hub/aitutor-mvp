@@ -641,6 +641,7 @@ class KcState(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
     stability: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     last_practiced: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result: Mapped[dict | None] = mapped_column(JSON)
 
 
 class KcSession(Base):
