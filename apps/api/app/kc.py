@@ -7,6 +7,7 @@ do not call this module.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 import uuid
@@ -55,6 +56,8 @@ from app.models import (
 )
 from app.present import student_out
 from app.tutor_profile import load_profile
+
+logger = logging.getLogger(__name__)
 
 AUDIENCES = ("6-8", "9-11", "12-14", "15-17")
 KINDS = ("mastery", "time_boxed", "curiosity")
@@ -2575,6 +2578,20 @@ class BrokenKcRepair:
     dropped: bool
 
 
+@dataclass(frozen=True)
+class MixRepair:
+    """A synthesis mix that was not two different other-component codes.
+
+    kept is the other-component codes that stay. An empty kept means the mix
+    was cleared. A sibling the model did not name is never added.
+    """
+
+    mix_a: str
+    mix_b: str
+    allowed: tuple[str, ...]
+    kept: tuple[str, ...]
+
+
 def _et_stamp(moment: datetime | None = None) -> str:
     """A clock time in America/New_York, labeled ET."""
     current = moment or _now()
@@ -2608,12 +2625,58 @@ def _repair_line(repair: BrokenKcRepair, stamp: str) -> str:
     return f"{stamp} Warning: {issue} {change} so creation could continue."
 
 
-def record_repairs(node: KcNode, goal: KcGoal, repairs: list[BrokenKcRepair]) -> None:
-    if not repairs:
+def _mix_repair_line(repair: MixRepair, stamp: str) -> str:
+    allowed = ", ".join(repair.allowed) if repair.allowed else "none"
+    issue = (
+        f'mix_a "{repair.mix_a}" and mix_b "{repair.mix_b}" are not two different other components. '
+        f"Allowed codes: {allowed}."
+    )
+    if repair.kept:
+        kept = " and ".join(f'"{code}"' for code in repair.kept)
+        change = f'Changed mixes from "{repair.mix_a}" and "{repair.mix_b}" to {kept}'
+    else:
+        change = (
+            f'Changed mixes from "{repair.mix_a}" and "{repair.mix_b}" to cleared (kept nothing)'
+        )
+    return f"{stamp} Warning: {issue} {change} so creation could continue."
+
+
+def _log_mix(action: str, node_id: str, mix_a: str, mix_b: str, other_codes: list[str]) -> None:
+    """Log a mix rejection or repair. Codes and the node id only."""
+    allowed = ", ".join(other_codes) if other_codes else "none"
+    logger.warning(
+        "kc mix %s node_id=%s mix_a=%r mix_b=%r allowed=%s",
+        action,
+        node_id,
+        mix_a,
+        mix_b,
+        allowed,
+    )
+
+
+def _mix_rejection_detail(mix_a: str, mix_b: str, other_codes: list[str]) -> str:
+    allowed = ", ".join(other_codes) if other_codes else "none"
+    return (
+        "Recommend two different components for the mix. "
+        f'Rejected: "{mix_a}" and "{mix_b}". Allowed codes: {allowed}.'
+    )
+
+
+def record_repairs(
+    node: KcNode,
+    goal: KcGoal,
+    repairs: list[BrokenKcRepair],
+    mix_repair: MixRepair | None = None,
+) -> None:
+    if not repairs and mix_repair is None:
         return
     stamp = _et_stamp()
     for repair in repairs:
         line = _repair_line(repair, stamp)
+        append_history(node, line)
+        append_history(goal, line)
+    if mix_repair is not None:
+        line = _mix_repair_line(mix_repair, stamp)
         append_history(node, line)
         append_history(goal, line)
 
@@ -2657,9 +2720,55 @@ def _repair_broken_kc(
     return kept, repairs
 
 
+def _repair_mixes(
+    mix_a: object, mix_b: object, other_codes: list[str]
+) -> tuple[list[str], MixRepair | None]:
+    """Keep two different other codes the model named. Do not invent a sibling.
+
+    Drop a repeated code, a title, this component's code, or any other value
+    that is not an other-component code. When two different other codes exist,
+    a pair is kept only from codes the model actually named. If those names
+    are not two different allowed codes, the mix is cleared. When fewer than
+    two other components exist, a pair is not required: invalid values are
+    dropped and any allowed code the model named is kept. Empty mixes are valid.
+    """
+    submitted_a = "" if mix_a is None else str(mix_a).strip()
+    submitted_b = "" if mix_b is None else str(mix_b).strip()
+    allowed = set(other_codes)
+
+    def valid(code: str) -> bool:
+        return bool(code) and code in allowed
+
+    chosen: list[str] = []
+    for code in (submitted_a, submitted_b):
+        if valid(code) and code not in chosen:
+            chosen.append(code)
+
+    if len(other_codes) >= 2:
+        if len(chosen) >= 2:
+            return chosen[:2], None
+        if not submitted_a and not submitted_b:
+            return [], None
+        return [], MixRepair(
+            mix_a=submitted_a,
+            mix_b=submitted_b,
+            allowed=tuple(other_codes),
+            kept=(),
+        )
+
+    if all(not code or valid(code) for code in (submitted_a, submitted_b)):
+        return [code for code in (submitted_a, submitted_b) if code], None
+    return chosen, MixRepair(
+        mix_a=submitted_a,
+        mix_b=submitted_b,
+        allowed=tuple(other_codes),
+        kept=tuple(chosen),
+    )
+
+
 def clean_model_component(
     node: KcNode, raw: dict, other_codes: list[str] | None = None
-) -> tuple[dict, list[BrokenKcRepair]]:
+) -> tuple[dict, list[BrokenKcRepair], MixRepair | None]:
     if not isinstance(raw, dict):
         raise HTTPException(status_code=422, detail="The model reply could not be read.")
     kc_type = str(raw.get("kc_type") or "").strip()
@@ -2701,11 +2810,37 @@ def clean_model_component(
         codes,
     )
     shaped["misconceptions"] = misconceptions
-    _require_recommendation(shaped, codes, repaired=bool(repairs))
-    return shaped, repairs
+    mix_repair = None
+    submitted_mix = None
+    if kc_type == "synthesis":
+        submitted_mix = (
+            str(raw.get("mix_a") or "").strip(),
+            str(raw.get("mix_b") or "").strip(),
+        )
+        kept, mix_repair = _repair_mixes(submitted_mix[0], submitted_mix[1], codes)
+        shaped["type_fields"]["mixes"] = kept
+    _require_recommendation(
+        shaped,
+        codes,
+        repaired=bool(repairs),
+        node_id=str(node.id),
+        mix_repaired=mix_repair is not None,
+        submitted_mix=submitted_mix,
+    )
+    if mix_repair is not None:
+        _log_mix("repaired", str(node.id), mix_repair.mix_a, mix_repair.mix_b, codes)
+    return shaped, repairs, mix_repair
 
 
-def _require_recommendation(draft: dict, other_codes: list[str], *, repaired: bool = False) -> None:
+def _require_recommendation(
+    draft: dict,
+    other_codes: list[str],
+    *,
+    repaired: bool = False,
+    node_id: str = "",
+    mix_repaired: bool = False,
+    submitted_mix: tuple[str, str] | None = None,
+) -> None:
     """A model draft names every field the editor can enter."""
     description = str(draft.get("description") or "")
     lowered = description.lower()
@@ -2749,10 +2884,27 @@ def _require_recommendation(draft: dict, other_codes: list[str], *, repaired: bo
             status_code=422,
             detail="Recommend a misconception: a wrong move and the component that is broken.",
         )
-    _require_type_fields(str(draft["kc_type"]), dict(draft["type_fields"]), allowed)
+    _require_type_fields(
+        str(draft["kc_type"]),
+        dict(draft["type_fields"]),
+        allowed,
+        other_codes=other_codes,
+        node_id=node_id,
+        mix_repaired=mix_repaired,
+        submitted_mix=submitted_mix,
+    )
 
 
-def _require_type_fields(kc_type: str, fields: dict, allowed: set[str]) -> None:
+def _require_type_fields(
+    kc_type: str,
+    fields: dict,
+    allowed: set[str],
+    *,
+    other_codes: list[str] | None = None,
+    node_id: str = "",
+    mix_repaired: bool = False,
+    submitted_mix: tuple[str, str] | None = None,
+) -> None:
     def text(key: str) -> str:
         return str(fields.get(key) or "").strip()
 
@@ -2789,16 +2941,18 @@ def _require_type_fields(kc_type: str, fields: dict, allowed: set[str]) -> None:
             )
         return
     mixes = [str(item).strip() for item in (fields.get("mixes") or []) if str(item).strip()]
-    if any(code not in allowed for code in mixes) or not text("faulty_plan"):
-        raise HTTPException(
-            status_code=422,
-            detail="Recommend two other components and the rookie's faulty plan.",
-        )
-    if len(allowed) >= 2 and len(set(mixes)) < 2:
-        raise HTTPException(
-            status_code=422,
-            detail="Recommend two different components for the mix.",
-        )
+    codes = list(other_codes) if other_codes is not None else sorted(allowed)
+    if submitted_mix is None:
+        pair = (mixes[0] if mixes else "", mixes[1] if len(mixes) > 1 else "")
+    else:
+        pair = submitted_mix
+    invalid = any(code not in allowed for code in mixes)
+    short = len(allowed) >= 2 and len(set(mixes)) < 2 and not mix_repaired
+    if invalid or short:
+        _log_mix("rejected", node_id, pair[0], pair[1], codes)
+        raise HTTPException(status_code=422, detail=_mix_rejection_detail(pair[0], pair[1], codes))
+    if not text("faulty_plan"):
+        raise HTTPException(status_code=422, detail="Recommend the rookie's faulty plan.")
 
 
 def accept_model_turn(db: Session, node: KcNode, message: str, discussion: str, draft: dict) -> dict:
@@ -2813,8 +2967,8 @@ def accept_model_turn(db: Session, node: KcNode, message: str, discussion: str, 
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     goal, ordered = course_of_node(db, node)
-    shaped, repairs = clean_model_component(node, draft, _other_codes(db, node, ordered))
-    record_repairs(node, goal, repairs)
+    shaped, repairs, mix_repair = clean_model_component(node, draft, _other_codes(db, node, ordered))
+    record_repairs(node, goal, repairs, mix_repair)
     _add_creator_message(db, node, "user", cleaned)
     _add_creator_message(
         db,

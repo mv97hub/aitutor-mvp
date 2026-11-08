@@ -365,6 +365,145 @@ def test_an_unrepaired_broken_kc_names_the_rejected_code_and_the_allowed_codes()
     assert "zz-other" in detail
 
 
+def _creator(other_codes: list[str]):
+    return creator_bundle(
+        course_title="Euclidean geometry",
+        course_description=GEOMETRY,
+        audience="12-14",
+        kind="mastery",
+        minutes=None,
+        node_title="Triangle angle sum",
+        node_code="angle-sum",
+        node_description="Outline: The interior angles.\nTopics: 180 degrees\nGoals: State the sum",
+        other_codes=other_codes,
+        previous=None,
+        message="Draft this component.",
+        model="gpt-4.1",
+    )
+
+
+def test_creator_schema_limits_each_mix_to_a_different_other_code() -> None:
+    bundle = _creator(["missing-angle", "congruence"])
+    mix_a = bundle["schema"]["properties"]["mix_a"]
+    mix_b = bundle["schema"]["properties"]["mix_b"]
+    assert mix_a["enum"] == ["missing-angle", "congruence"]
+    assert mix_b["enum"] == ["missing-angle", "congruence"]
+    assert mix_a["enum"] is not mix_b["enum"]
+    assert "angle-sum" not in mix_a["enum"]
+    assert "the two values must differ" in mix_a["description"]
+    assert "the two values must differ" in mix_b["description"]
+    assert "allOf" not in bundle["schema"]
+    assert "if" not in mix_a
+    assert "if" not in mix_b
+    prompt = bundle["system_prompt"]
+    assert "mix_a and mix_b must be two different codes" in prompt
+    assert "A mix is not a title and not this component's code." in prompt
+    assert "Do not ask for two mixes." not in prompt
+    assert "history" not in bundle["schema"]["properties"]
+
+
+def test_creator_schema_does_not_ask_for_two_mixes_without_two_siblings() -> None:
+    one = _creator(["missing-angle"])
+    assert one["schema"]["properties"]["mix_a"]["enum"] == [""]
+    assert one["schema"]["properties"]["mix_b"]["enum"] == [""]
+    assert "Do not ask for two mixes." in one["system_prompt"]
+    assert "Leave mix_a and mix_b empty." in one["system_prompt"]
+    assert one["schema"]["properties"]["misconceptions"]["items"]["properties"]["broken_kc"]["enum"] == [
+        "missing-angle"
+    ]
+    none = _creator([])
+    assert none["schema"]["properties"]["mix_a"]["enum"] == [""]
+    assert none["schema"]["properties"]["mix_b"]["enum"] == [""]
+    assert "Do not ask for two mixes." in none["system_prompt"]
+    assert "Copy one code from the other component codes" not in none["system_prompt"]
+    assert "history" not in none["schema"]["properties"]
+
+
+def test_a_repeated_mix_is_cleared_without_inventing_a_sibling() -> None:
+    from app.kc import _mix_repair_line, _repair_mixes
+
+    kept, repair = _repair_mixes("angles", "angles", ["angles", "lines"])
+    assert kept == []
+    assert repair is not None
+    assert repair.kept == ()
+    line = _mix_repair_line(repair, "2026-11-08 01:40:00 ET")
+    assert line.startswith("2026-11-08 01:40:00 ET Warning:")
+    assert 'mix_a "angles" and mix_b "angles"' in line
+    assert "Allowed codes: angles, lines." in line
+    assert 'Changed mixes from "angles" and "angles" to cleared (kept nothing)' in line
+    assert "so creation could continue." in line
+    assert "lines" not in kept
+
+    kept, repair = _repair_mixes("angles", "Angle sum", ["angles", "lines"])
+    assert kept == []
+    assert repair is not None and repair.kept == ()
+
+    kept, repair = _repair_mixes("angle-sum", "lines", ["angles", "lines"])
+    assert kept == []
+    assert repair is not None and repair.kept == ()
+
+    kept, repair = _repair_mixes("angles", "", ["angles", "lines"])
+    assert kept == []
+    assert repair is not None and repair.kept == ()
+
+    kept, repair = _repair_mixes("lines", "angles", ["angles", "lines"])
+    assert kept == ["lines", "angles"]
+    assert repair is None
+
+    kept, repair = _repair_mixes("", "", ["angles", "lines"])
+    assert kept == []
+    assert repair is None
+
+
+def test_fewer_than_two_other_codes_keep_a_named_code_and_drop_a_title() -> None:
+    from app.kc import _repair_mixes
+
+    kept, repair = _repair_mixes("", "", ["angles"])
+    assert kept == []
+    assert repair is None
+    kept, repair = _repair_mixes("angles", "Angle sum", ["angles"])
+    assert kept == ["angles"]
+    assert repair is not None
+    assert repair.kept == ("angles",)
+    kept, repair = _repair_mixes("Angle sum", "", [])
+    assert kept == []
+    assert repair is not None
+    assert repair.kept == ()
+    assert repair.allowed == ()
+
+
+def test_an_unrepaired_mix_names_the_rejected_strings_and_the_allowed_codes(caplog) -> None:
+    from app.kc import _require_recommendation
+
+    caplog.set_level("WARNING", logger="app.kc")
+    draft = {
+        "description": "Outline: The river.\nTopics: color\nGoals: Recall it",
+        "core_truth": "The river is blue.",
+        "rubric": ["States the color"],
+        "prerequisite_codes": ["angles"],
+        "encompasses_codes": [],
+        "misconceptions": [{"wrong_move": "It is red", "broken_kc": "angles"}],
+        "kc_type": "synthesis",
+        "type_fields": {"mixes": ["angles", "angles"], "faulty_plan": "The rookie swaps them."},
+    }
+    with pytest.raises(HTTPException) as caught:
+        _require_recommendation(draft, ["angles", "lines"], node_id="15370df9-8e61-4e84-89d8-2d1af8651463")
+    assert caught.value.status_code == 422
+    detail = str(caught.value.detail)
+    assert 'Rejected: "angles" and "angles".' in detail
+    assert "Allowed codes: angles, lines." in detail
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "kc mix rejected" in message
+        and "node_id=15370df9-8e61-4e84-89d8-2d1af8651463" in message
+        and "mix_a='angles'" in message
+        and "mix_b='angles'" in message
+        and "allowed=angles, lines" in message
+        for message in messages
+    )
+    assert all("The rookie swaps them." not in message for message in messages)
+
+
 def test_finish_route_keeps_pasted_titles_and_does_not_write() -> None:
     created = client.post(
         "/kc/courses",
