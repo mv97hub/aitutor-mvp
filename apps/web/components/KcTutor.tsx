@@ -509,6 +509,7 @@ function KcLesson({
   const [speaking, setSpeaking] = useState(false);
   const [answering, setAnswering] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
+  const [pendingLine, setPendingLine] = useState<{ text: string; priorMatches: number } | null>(null);
   const [settled, setSettled] = useState<{ anchorId: string; ids: string[]; note: string } | null>(null);
   const anchor = [...session.messages].reverse().find((message) => message.role === "assistant");
   const quiz = session.choice ? quizFor(session.choice) : null;
@@ -516,6 +517,10 @@ function KcLesson({
   const choosing = Boolean(quiz) && session.status !== "completed" && !session.needs_speech && !activeSettled;
   const latestMessageId = session.messages[session.messages.length - 1]?.id ?? "";
   const composerOpen = session.status !== "completed" && !session.needs_speech;
+  const echoedMatches = pendingLine
+    ? session.messages.filter((message) => message.role === "user" && message.content === pendingLine.text).length
+    : 0;
+  const showPendingLine = pendingLine !== null && echoedMatches <= pendingLine.priorMatches;
 
   function focusDraft() {
     const field = draftRef.current;
@@ -527,7 +532,7 @@ function KcLesson({
     const node = threadRef.current;
     if (!node) return;
     node.scrollTop = node.scrollHeight;
-  }, [latestMessageId, session.messages.length]);
+  }, [latestMessageId, session.messages.length, pendingLine]);
 
   useEffect(() => {
     if (!composerOpen || choosing) return;
@@ -593,9 +598,11 @@ function KcLesson({
   async function sendAnswer(answer: string) {
     const cleaned = answer.trim();
     if (!cleaned || sending.current) return;
+    const priorMatches = session.messages.filter((message) => message.role === "user" && message.content === cleaned).length;
     sending.current = true;
     setAnswering(true);
     setReplyError(null);
+    setPendingLine({ text: cleaned, priorMatches });
     setDraft("");
     focusDraft();
     try {
@@ -611,6 +618,7 @@ function KcLesson({
       router.refresh();
     } catch (err: unknown) {
       setSettled(null);
+      setPendingLine(null);
       setDraft((current) => (current.trim() ? current : cleaned));
       setReplyError(err instanceof Error ? err.message : "The tutor could not answer.");
     } finally {
@@ -647,9 +655,14 @@ function KcLesson({
               ) : null}
             </div>
           ))}
+          {showPendingLine && pendingLine ? (
+            <div className="bubble user">
+              <p>{pendingLine.text}</p>
+            </div>
+          ) : null}
         </div>
       </div>
-      {speaking ? <p className="ds-typing">Tutor is writing…</p> : null}
+      {speaking || answering ? <p className="ds-typing">Tutor is writing…</p> : null}
       {speakError ? (
         <div className="banner" role="alert">
           <p>{speakError}</p>
