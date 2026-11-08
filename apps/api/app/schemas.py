@@ -71,13 +71,13 @@ def _closed(value: str, options: tuple[tuple[str, str], ...], field: str) -> Non
 
 
 class TutorProfileIn(BaseModel):
-    instructive: int = Field(ge=1, le=5)
+    instructive: int = Field(default=3, ge=1, le=5)
     persona: str
     lexicon: str
     voice_override: bool = False
     metaphors: str
     sidekick: str
-    struggle_window: str
+    struggle_window: str = "standard"
     anti_spoiler: bool = True
     one_question: bool = True
     use_interests: bool = True
@@ -86,22 +86,28 @@ class TutorProfileIn(BaseModel):
     misconception_policy: str = "retry_once"
     self_explanation: bool = True
     enrichment: str = "on_request"
+    kc_tutor_config: dict | None = None
 
     @model_validator(mode="after")
     def closed_choices(self) -> "TutorProfileIn":
+        from app.tutor_profile import normalize_kc_tutor_config
+
         _closed(self.persona, PERSONAS, "persona")
         _closed(self.lexicon, VOICES, "lexicon")
         _closed(self.metaphors, METAPHORS, "metaphors")
         _closed(self.sidekick, SIDEKICKS, "sidekick")
         _closed(self.struggle_window, STRUGGLE_WINDOWS, "struggle_window")
-        if self.misconception_policy != "retry_once":
-            raise ValueError("misconception_policy must be retry_once")
+        if self.misconception_policy not in {"retry_once", "explain_and_retry_once", "immediate_redirect"}:
+            raise ValueError("misconception_policy must be retry_once, explain_and_retry_once, or immediate_redirect")
         if self.enrichment not in {"direct", "on_request", "offer"}:
             raise ValueError("enrichment must be one of: direct, on_request, offer")
+        if self.kc_tutor_config is not None:
+            self.kc_tutor_config = normalize_kc_tutor_config(self.kc_tutor_config, strict=True)
         return self
 
 
 class TutorProfileOut(TutorProfileIn):
+    kc_tutor_config: dict = Field(default_factory=dict)
     updated_at: datetime
 
 
