@@ -21,11 +21,13 @@ export function KcBlockScope({
   nodeId,
   model,
   allowed,
+  surface = "creator",
 }: {
   courseId: string;
   nodeId: string;
   model: string;
   allowed: readonly string[] | null | undefined;
+  surface?: "creator" | "studio";
 }) {
   const saved = scopeFromCourse(allowed);
   const [open, setOpen] = useState(false);
@@ -59,6 +61,7 @@ export function KcBlockScope({
     data.set("course_id", courseId);
     data.set("node_id", nodeId);
     data.set("model", model);
+    if (surface === "studio") data.set("return_to", "studio");
     next.forEach((item) => data.append("allowed_block_types", item));
     startTransition(() => {
       saveKcBlockScope(data);
@@ -75,7 +78,9 @@ export function KcBlockScope({
         disabled={pending}
         onClick={() => setOpen((value) => !value)}
       >
-        AI Block Scope ({picked.length} of 9)
+        {picked.length === BLOCK_TYPES.length
+          ? "AI Block Scope: All 9 blocks ▾"
+          : `AI Block Scope (${picked.length} of 9) ▾`}
       </button>
       {open ? (
         <div className="kc-scope-menu" role="dialog" aria-label="AI Block Scope">

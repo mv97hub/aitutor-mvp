@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { KcBanner } from "@/components/KcBanner";
+import { KcBlockScope } from "@/components/KcBlockCanvas";
 import { KcCourseHistory } from "@/components/KcCourseHistory";
 import { KcCourseList } from "@/components/KcCourseList";
 import { NetworkMap } from "@/components/KcNetwork";
@@ -14,6 +15,7 @@ import {
   removeKcComponent,
   saveKcCourse,
 } from "@/lib/kc-actions";
+import { recommendedChips, type RecommendedChip } from "@/lib/kc-blocks";
 import {
   AUDIENCES,
   KINDS,
@@ -52,7 +54,19 @@ export function KcStudio({
 
   return (
     <main className="ds-shell studio-shell kc-screen">
-      <KcBanner name="KC Course Creator" />
+      <KcBanner name="KC Course Creator">
+        {course ? (
+          <div className="kc-fast">
+            <KcBlockScope
+              courseId={course.id}
+              nodeId=""
+              model={initialModel}
+              allowed={course.allowed_block_types}
+              surface="studio"
+            />
+          </div>
+        ) : null}
+      </KcBanner>
       <aside className="ds-side">
         <Link href="/manage-kc-courses" className="studio-manage-link">
           Manage KC courses
@@ -162,6 +176,7 @@ export function KcStudio({
                           <li key={item.code}>
                             <strong>{item.title}</strong> <span className="studio-code">{item.code}</span>
                             {item.description ? <p className="kc-brief">{item.description}</p> : null}
+                            <BlockChips chips={recommendedChips(item.description, item.recommended_blocks)} />
                           </li>
                         ))}
                       </ol>
@@ -196,6 +211,20 @@ export function KcStudio({
   );
 }
 
+function BlockChips({ chips }: { chips: RecommendedChip[] }) {
+  if (!chips.length) return null;
+  return (
+    <ol className="kc-block-chips" aria-label="Recommended blocks">
+      {chips.map((chip, index) => (
+        <li key={`${chip.label}-${index}`} title={chip.focus || undefined}>
+          <span>{index + 1}</span>
+          {chip.label}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function rowStatus(row: { missing: string[]; marked_complete: boolean }) {
   if (row.missing.length) return row.missing.join(", ");
   if (row.marked_complete) return "Marked complete";
@@ -225,6 +254,7 @@ function StructureView({
                 <a href={`/kc-creator?course=${courseId}&kc=${row.id}`}>
                   <strong>{row.title}</strong>
                   {row.description ? <p className="kc-brief">{row.description}</p> : null}
+                  <BlockChips chips={recommendedChips(row.description, row.recommended_blocks, row.blocks)} />
                   <span>{TYPE_LABELS[row.kc_type ?? "unset"]}</span>
                   <em>{rowStatus(row)}</em>
                 </a>
@@ -273,6 +303,7 @@ function StructureView({
                 <a href={`/kc-creator?course=${courseId}&kc=${patch.id}`}>
                   <strong>{patch.title}</strong>
                   {patch.description ? <p className="kc-brief">{patch.description}</p> : null}
+                  <BlockChips chips={recommendedChips(patch.description, patch.recommended_blocks, patch.blocks)} />
                   <span>{TYPE_LABELS[patch.kc_type ?? "unset"]}</span>
                   <em>Not a target</em>
                 </a>

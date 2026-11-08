@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { blankBlock, blockSummary, orderScope, scopeFromCourse, toggleScope } from "./kc-blocks.ts";
+import { blankBlock, blockSummary, orderScope, recommendedChips, scopeFromCourse, toggleScope } from "./kc-blocks.ts";
 
 test("an empty scope falls back to topic and goal, in canvas order", () => {
   assert.deepEqual(orderScope([]), ["topic_goal"]);
@@ -13,6 +13,21 @@ test("an empty scope falls back to topic and goal, in canvas order", () => {
 test("unchecking the last type keeps topic and goal", () => {
   assert.deepEqual(toggleScope(["mcq"], "mcq"), ["topic_goal"]);
   assert.deepEqual(toggleScope(["topic_goal", "mcq"], "topic_goal"), ["mcq"]);
+});
+
+test("recommended chips follow the description sequence", () => {
+  assert.deepEqual(
+    recommendedChips(
+      "Explains free fall. Recommended blocks: 1. Curiosity Hook (hammer vs. feather) -> 2. Topic / Goal (force-to-mass ratio).",
+    ),
+    [
+      { label: "Curiosity Hook", focus: "hammer vs. feather" },
+      { label: "Topic / Goal", focus: "force-to-mass ratio" },
+    ],
+  );
+  assert.deepEqual(recommendedChips("", [{ type: "mcq", focus: "check" }]), [
+    { label: "Multiple choice", focus: "check" },
+  ]);
 });
 
 test("the block summary groups a run of the same type", () => {

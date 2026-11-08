@@ -138,6 +138,40 @@ export function blockSummary(blocks: { type: string }[]): string {
     .join(" · ");
 }
 
+export type RecommendedChip = { label: string; focus: string };
+
+/** Ordered block-type chips from a stored recommendation, seeded blocks, or the description sentence. */
+export function recommendedChips(
+  description: string | undefined,
+  recommended?: { type: string; focus?: string }[] | null,
+  blocks?: { type: string }[] | null,
+): RecommendedChip[] {
+  if (recommended?.length) {
+    return recommended.map((item) => ({
+      label: isBlockType(item.type) ? BLOCK_LABELS[item.type] : item.type,
+      focus: item.focus?.trim() ?? "",
+    }));
+  }
+  if (blocks?.length) {
+    return blocks.map((item) => ({
+      label: isBlockType(item.type) ? BLOCK_LABELS[item.type] : item.type,
+      focus: "",
+    }));
+  }
+  const match = (description ?? "").match(/Recommended blocks:\s*(.+)$/i);
+  if (!match) return [];
+  return match[1]
+    .replace(/\.\s*$/, "")
+    .split("->")
+    .map((part) => {
+      const cleaned = part.replace(/^\s*\d+\.\s*/, "").trim();
+      const focus = cleaned.match(/^(.*?)\s*\((.*)\)\s*$/);
+      if (focus) return { label: focus[1].trim(), focus: focus[2].trim() };
+      return { label: cleaned, focus: "" };
+    })
+    .filter((chip) => chip.label);
+}
+
 /** Keep known types in canvas order. An empty pick falls back to Topic + Goal. */
 export function orderScope(picked: Iterable<string>): KcBlockType[] {
   const set = new Set(picked);

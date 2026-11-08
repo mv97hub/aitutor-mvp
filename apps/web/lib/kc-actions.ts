@@ -194,7 +194,10 @@ function blocksOf(formData: FormData): unknown[] {
 export async function saveKcBlockScope(formData: FormData) {
   const courseId = String(formData.get("course_id") || "");
   const nodeId = String(formData.get("node_id") || "");
-  const back = creatorBack(courseId, nodeId, formData);
+  const back =
+    String(formData.get("return_to") || "") === "studio"
+      ? `/kc-studio?course=${courseId}${formData.get("model") ? `&model=${encodeURIComponent(String(formData.get("model")))}` : ""}`
+      : creatorBack(courseId, nodeId, formData);
   const allowed = formData.getAll("allowed_block_types").map(String);
   try {
     await api(`/kc/courses/${courseId}`, {

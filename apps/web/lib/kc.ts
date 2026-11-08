@@ -20,6 +20,18 @@ export type KcBlock = {
 export type KcRecommendedBlock = {
   type: KcBlockType;
   reason?: string;
+  focus?: string;
+};
+
+export type KcBlockProgress = {
+  id: string;
+  index: number;
+  type: string;
+  type_label: string;
+  title: string;
+  status: "completed" | "active" | "upcoming";
+  outcome?: string | null;
+  attempts?: number;
 };
 
 export type KcMisconception = { wrong_move: string; broken_kc: string };
@@ -72,6 +84,8 @@ export type KcStructure = {
       title: string;
       description: string;
       kc_type: string | null;
+      recommended_blocks?: KcRecommendedBlock[];
+      blocks?: { type: string }[];
       missing: string[];
       marked_complete: boolean;
     }[];
@@ -104,7 +118,14 @@ export type KcComponentDraft = {
 export type KcDraft =
   | {
       kind: "course";
-      components: { code: string; title: string; description?: string; outline?: string; topics?: KcTopicPair[] }[];
+      components: {
+        code: string;
+        title: string;
+        description?: string;
+        outline?: string;
+        topics?: KcTopicPair[];
+        recommended_blocks?: KcRecommendedBlock[];
+      }[];
     }
   | KcComponentDraft;
 
@@ -225,6 +246,12 @@ export type KcTutorSession = {
   score: number | null;
   needs_speech: boolean;
   choice: { prompt: string; choices: { id: string; text: string }[] } | null;
+  total_blocks?: number;
+  completed_blocks?: number;
+  completion_pct?: number;
+  active_block_index?: number;
+  active_substep_label?: string;
+  block_progress?: KcBlockProgress[];
   reply?: string;
   passed?: boolean;
   redirect: { id: string; code: string; title: string } | null;
