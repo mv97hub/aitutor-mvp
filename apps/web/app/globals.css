@@ -2651,6 +2651,77 @@ a.ds-row { text-decoration: none; }
   white-space: nowrap;
 }
 
+.kc-scope {
+  position: relative;
+}
+
+.kc-scope-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 260px;
+  padding: 12px;
+  background: #fff;
+  color: rgb(15, 17, 21);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+.kc-scope-menu label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+  color: rgb(15, 17, 21);
+}
+
+.kc-scope-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.kc-block-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kc-block-list,
+.kc-block-body,
+.kc-block-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kc-block-card {
+  border: 1px solid rgba(15, 17, 21, 0.12);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.kc-block-head,
+.kc-block-tools,
+.kc-block-gap {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.kc-block-head select {
+  flex: 1;
+  min-width: 140px;
+}
+
+.kc-block-gap {
+  justify-content: flex-start;
+}
+
 .kc-course-stage,
 .kc-creator-stage {
   display: flex;

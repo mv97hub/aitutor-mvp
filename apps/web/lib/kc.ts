@@ -1,5 +1,27 @@
 export type KcType = "factual" | "procedural" | "conceptual" | "causal" | "synthesis";
 
+export type KcBlockType =
+  | "topic_goal"
+  | "mcq"
+  | "case_study"
+  | "socratic"
+  | "curiosity"
+  | "worked_example"
+  | "spot_the_flaw"
+  | "teach_back"
+  | "retrieval_check";
+
+export type KcBlock = {
+  id: string;
+  type: KcBlockType;
+  data: Record<string, unknown>;
+};
+
+export type KcRecommendedBlock = {
+  type: KcBlockType;
+  reason?: string;
+};
+
 export type KcMisconception = { wrong_move: string; broken_kc: string };
 
 export type KcTopicPair = { topic: string; goal: string };
@@ -19,6 +41,8 @@ export type KcComponent = {
   prerequisite_codes: string[];
   encompasses_codes: string[];
   type_fields: Record<string, unknown>;
+  blocks?: KcBlock[];
+  recommended_blocks?: KcRecommendedBlock[];
   marked_complete: boolean;
   missing: string[];
   history: string;
@@ -33,6 +57,7 @@ export type KcCourse = {
   kind: "mastery" | "time_boxed" | "curiosity";
   minutes: number | null;
   ready: boolean;
+  allowed_block_types?: KcBlockType[];
   history: string;
   components: KcComponent[];
   patches: KcComponent[];
@@ -72,6 +97,8 @@ export type KcComponentDraft = {
   prerequisite_codes: string[];
   encompasses_codes: string[];
   type_fields: Record<string, unknown>;
+  blocks?: KcBlock[];
+  recommended_blocks?: KcRecommendedBlock[];
 };
 
 export type KcDraft =

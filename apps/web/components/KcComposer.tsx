@@ -94,16 +94,19 @@ export function KcCreatorComposer({
   nodeId,
   model,
   formRef,
+  allowedBlockTypes = [],
 }: {
   courseId: string;
   nodeId: string;
   model: string;
   formRef?: Ref<HTMLFormElement>;
+  allowedBlockTypes?: string[];
 }) {
   return (
     <form className="ds-composer-seat" action={postKcCreatorMessage} ref={formRef}>
       <input type="hidden" name="course_id" value={courseId} />
       <input type="hidden" name="node_id" value={nodeId} />
+      <input type="hidden" name="allowed_block_types" value={allowedBlockTypes.join(",")} />
       <CreatorFields model={model} />
     </form>
   );

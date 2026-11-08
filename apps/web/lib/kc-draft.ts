@@ -100,11 +100,16 @@ function componentRows(proposal: Record<string, unknown>): Record<string, unknow
   return raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
 }
 
+function scopeBody(allowedBlockTypes?: string[]) {
+  return allowedBlockTypes && allowedBlockTypes.length ? { allowed_block_types: allowedBlockTypes } : {};
+}
+
 async function draftLongCourse(
   courseId: string,
   message: string,
   model: KcModel,
   bundle: PromptBundle,
+  allowedBlockTypes?: string[],
 ): Promise<CourseResult> {
   let note = "";
   let last = "The model reply could not be read.";
@@ -121,7 +126,7 @@ async function draftLongCourse(
       const majorIdeas = stringList(titlesProposal.major_ideas);
       const plan = await api<SlicePlan>(`/kc/courses/${courseId}/draft-slices`, {
         method: "POST",
-        body: JSON.stringify({ message, model, titles, subject, major_ideas: majorIdeas }),
+        body: JSON.stringify({ message, model, titles, subject, major_ideas: majorIdeas, ...scopeBody(allowedBlockTypes) }),
       });
       const components: Record<string, unknown>[] = [];
       for (const slice of plan.slices) {
@@ -133,6 +138,7 @@ async function draftLongCourse(
         body: JSON.stringify({
           message,
           proposal: { subject, major_ideas: majorIdeas, components },
+          ...scopeBody(allowedBlockTypes),
         }),
       });
     } catch (error) {
@@ -147,25 +153,27 @@ export async function draftKcCourse(input: {
   courseId: string;
   message: string;
   model: string;
+  allowedBlockTypes?: string[];
 }): Promise<CourseResult> {
   const model = requireModel(input.model);
   requireKey(model);
   const message = input.message.trim();
   if (!message) throw new Error("Write a message first.");
-  const key = `${input.courseId}\n${model}\n${message}`;
+  const scope = (input.allowedBlockTypes ?? []).join(",");
+  const key = `${input.courseId}\n${model}\n${scope}\n${message}`;
   const cached = cache.get(key);
   if (cached) return cached;
   const bundle = await api<PromptBundle>(`/kc/courses/${input.courseId}/draft-prompt`, {
     method: "POST",
-    body: JSON.stringify({ message, model }),
+    body: JSON.stringify({ message, model, ...scopeBody(input.allowedBlockTypes) }),
   });
   const finished =
     bundle.pass === "titles"
-      ? await draftLongCourse(input.courseId, message, model, bundle)
+      ? await draftLongCourse(input.courseId, message, model, bundle, input.allowedBlockTypes)
       : await withModel(model, bundle, (proposal) =>
           api<CourseResult>(`/kc/courses/${input.courseId}/draft-finish`, {
             method: "POST",
-            body: JSON.stringify({ message, proposal }),
+            body: JSON.stringify({ message, proposal, ...scopeBody(input.allowedBlockTypes) }),
           }),
         );
   cache.set(key, finished);
@@ -176,6 +184,7 @@ export async function draftKcComponent(input: {
   nodeId: string;
   message: string;
   model: string;
+  allowedBlockTypes?: string[];
 }): Promise<void> {
   const model = requireModel(input.model);
   requireKey(model);
@@ -183,13 +192,13 @@ export async function draftKcComponent(input: {
   if (!message) throw new Error("Write a message first.");
   const bundle = await api<PromptBundle>(`/kc/nodes/${input.nodeId}/creator-prompt`, {
     method: "POST",
-    body: JSON.stringify({ message, model }),
+    body: JSON.stringify({ message, model, ...scopeBody(input.allowedBlockTypes) }),
   });
   await withModel(model, bundle, async (proposal) => {
     const discussion = typeof proposal.discussion === "string" ? proposal.discussion : "";
     await api(`/kc/nodes/${input.nodeId}/model-turn`, {
       method: "POST",
-      body: JSON.stringify({ message, discussion, draft: proposal }),
+      body: JSON.stringify({ message, discussion, draft: proposal, ...scopeBody(input.allowedBlockTypes) }),
     });
   });
 }
