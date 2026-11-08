@@ -453,6 +453,10 @@ function KcLesson({
   routerRef.current = router;
   const started = useRef("");
   const threadRef = useRef<HTMLDivElement>(null);
+  const draftRef = useRef<HTMLTextAreaElement>(null);
+  const sending = useRef(false);
+  const awaitingReply = useRef(false);
+  const [draft, setDraft] = useState("");
   const [speakError, setSpeakError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [speaking, setSpeaking] = useState(false);
@@ -464,12 +468,40 @@ function KcLesson({
   const activeSettled = settled && anchor && settled.anchorId === anchor.id ? settled : null;
   const choosing = Boolean(quiz) && session.status !== "completed" && !session.needs_speech && !activeSettled;
   const latestMessageId = session.messages[session.messages.length - 1]?.id ?? "";
+  const composerOpen = session.status !== "completed" && !session.needs_speech;
+
+  function focusDraft() {
+    const field = draftRef.current;
+    if (!field || field.disabled) return;
+    field.focus({ preventScroll: true });
+  }
 
   useLayoutEffect(() => {
     const node = threadRef.current;
     if (!node) return;
     node.scrollTop = node.scrollHeight;
   }, [latestMessageId, session.messages.length]);
+
+  useEffect(() => {
+    if (!composerOpen || choosing) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body && active !== draftRef.current && isTyping(active)) return;
+    focusDraft();
+  }, [composerOpen, choosing]);
+
+  useEffect(() => {
+    if (answering) {
+      awaitingReply.current = true;
+      return;
+    }
+    if (!awaitingReply.current) return;
+    awaitingReply.current = false;
+    const field = draftRef.current;
+    if (!field || field.disabled) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== field && active !== document.body && isTyping(active)) return;
+    field.focus({ preventScroll: true });
+  }, [answering]);
 
   useEffect(() => {
     if (!session.needs_speech) {
@@ -513,9 +545,12 @@ function KcLesson({
 
   async function sendAnswer(answer: string) {
     const cleaned = answer.trim();
-    if (!cleaned || answering) return;
+    if (!cleaned || sending.current) return;
+    sending.current = true;
     setAnswering(true);
     setReplyError(null);
+    setDraft("");
+    focusDraft();
     try {
       const response = await fetch("/api/kc/tutor/answer", {
         method: "POST",
@@ -529,14 +564,16 @@ function KcLesson({
       router.refresh();
     } catch (err: unknown) {
       setSettled(null);
+      setDraft((current) => (current.trim() ? current : cleaned));
       setReplyError(err instanceof Error ? err.message : "The tutor could not answer.");
     } finally {
+      sending.current = false;
       setAnswering(false);
     }
   }
 
   return (
-    <>
+    <div className="kc-lesson">
       <div ref={threadRef} className="ds-scroll" role="log" aria-live="polite" aria-relevant="additions">
         <div className="ds-column">
           {session.messages.map((message) => (
@@ -579,26 +616,28 @@ function KcLesson({
           <p>{replyError}</p>
         </div>
       ) : null}
-      {session.status === "completed" || session.needs_speech ? null : (
+      {composerOpen ? (
         <form
           className="ds-composer-seat"
           onSubmit={(event) => {
             event.preventDefault();
-            if (choosing || answering) return;
-            const data = new FormData(event.currentTarget);
-            void sendAnswer(String(data.get("answer") || ""));
+            if (choosing || sending.current) return;
+            void sendAnswer(draft);
           }}
         >
           <div className="ds-card">
             <textarea
+              ref={draftRef}
               className="ds-draft"
               name="answer"
               rows={1}
+              value={draft}
               required={!choosing}
               placeholder={choosing ? "Choose an answer above" : "Message"}
               aria-label="Your answer"
-              disabled={choosing || answering}
+              disabled={choosing}
               maxLength={2000}
+              onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
@@ -607,15 +646,20 @@ function KcLesson({
               }}
             />
             <div className="ds-card-row">
-              <button className="ds-send" type="submit" aria-label="Send" disabled={choosing || answering}>
+              <button className="ds-send" type="submit" aria-label="Send" disabled={choosing || answering || draft.trim().length === 0}>
                 ↑
               </button>
             </div>
           </div>
         </form>
-      )}
-    </>
+      ) : null}
+    </div>
   );
+}
+
+function isTyping(element: HTMLElement) {
+  if (element.isContentEditable) return true;
+  return element.tagName === "INPUT" || element.tagName === "TEXTAREA" || element.tagName === "SELECT";
 }
 
 function AddChildDialog({
