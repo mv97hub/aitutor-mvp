@@ -322,6 +322,8 @@ function CreatorChat({
             name="payload"
             value={JSON.stringify({
               description: draft.description ?? component.description,
+              outline: draft.outline ?? component.outline,
+              topics: draft.topics ?? component.topics,
               title: draft.title,
               kc_type: draft.kc_type,
               core_truth: draft.core_truth,
@@ -343,8 +345,10 @@ function CreatorChat({
 }
 
 const TIPS = {
-  description:
-    "The outline, key topics, and key goals. The chat starts from this brief, and the tutor steps are written from it.",
+  description: "A short summary of this component. The walk does not read it.",
+  outline: "The outline Orient elaborates. It is not a topic.",
+  topic: "One topic the walk discusses, with the goal that belongs to it.",
+  goal: "The goal that belongs to this topic. The topic turn looks for it.",
   title: "The name the kid sees on the card and during the lesson.",
   type: "The recipe the tutor runs: recall a fact, work an example, compare two cases, judge a decision, or correct a rookie plan.",
   fact: "The fact the tutor accepts, and the line it says when the kid passes.",
@@ -410,7 +414,6 @@ function ComponentEditor({
 
   return (
     <>
-      <HistoryLog label="Course history" text={course.history ?? ""} />
       <form className="kc-editor" action={saveKcComponent}>
       <input type="hidden" name="course_id" value={course.id} />
       <input type="hidden" name="node_id" value={component.id} />
@@ -423,14 +426,26 @@ function ComponentEditor({
           name="description"
           title={TIPS.description}
           defaultValue={component.description}
-          placeholder="Outline, key topics, and key goals"
-          rows={4}
+          placeholder="A short summary"
+          rows={3}
         />
       </label>
       <label title={TIPS.title}>
         Title
         <input aria-label="Component title" name="title" title={TIPS.title} defaultValue={component.title} required />
       </label>
+      <label title={TIPS.outline}>
+        Outline
+        <textarea
+          aria-label="Outline"
+          name="outline"
+          title={TIPS.outline}
+          defaultValue={component.outline ?? ""}
+          placeholder="The outline Orient elaborates"
+          rows={3}
+        />
+      </label>
+      <TopicRows initial={component.topics ?? []} />
       <label title={TIPS.type}>
         Type
         <select
@@ -546,7 +561,56 @@ function ComponentEditor({
       </div>
       </form>
       <HistoryLog label="Component history" text={component.history ?? ""} />
+      <HistoryLog label="Course history" text={course.history ?? ""} />
     </>
+  );
+}
+
+function TopicRows({ initial }: { initial: { topic: string; goal: string }[] }) {
+  const [rows, setRows] = useState(initial.length ? initial : [{ topic: "", goal: "" }]);
+  return (
+    <fieldset>
+      <legend>Topics</legend>
+      {rows.map((row, index) => (
+        <div className="kc-topic-row" key={index}>
+          <input
+            aria-label={`Topic ${index + 1}`}
+            name="topic"
+            title={TIPS.topic}
+            value={row.topic}
+            placeholder="Topic"
+            onChange={(event) => {
+              const next = rows.slice();
+              next[index] = { ...row, topic: event.target.value };
+              setRows(next);
+            }}
+          />
+          <input
+            aria-label={`Goal ${index + 1}`}
+            name="goal"
+            title={TIPS.goal}
+            value={row.goal}
+            placeholder="Goal"
+            onChange={(event) => {
+              const next = rows.slice();
+              next[index] = { ...row, goal: event.target.value };
+              setRows(next);
+            }}
+          />
+          <button
+            className="ghost"
+            type="button"
+            aria-label={`Remove topic ${index + 1}`}
+            onClick={() => setRows(rows.filter((_, item) => item !== index))}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <button className="ghost kc-topic-add" type="button" onClick={() => setRows([...rows, { topic: "", goal: "" }])}>
+        Add topic
+      </button>
+    </fieldset>
   );
 }
 

@@ -27,6 +27,8 @@ function component(overrides: Partial<KcComponent> = {}): KcComponent {
     code: "angles",
     title: "Angle sum",
     description: "Why a triangle's angles add up.",
+    outline: "",
+    topics: [],
     kc_type: "conceptual",
     target: true,
     core_truth: "The angles add to 180.",

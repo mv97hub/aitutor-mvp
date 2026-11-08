@@ -1430,15 +1430,22 @@ def planned_reply(
     return _prefix(subject, ideas) + body
 
 
-def component_brief(subject: str, title: str, kind: str) -> str:
-    """Outline, topics, and goals for one component when no model has written them."""
+def component_fields(subject: str, title: str, kind: str) -> dict:
+    """Summary, outline, and topic pairs when no model has written them."""
     if kind == "curiosity":
         outline = f"{title} is a step on the path through {subject}."
     elif kind == "time_boxed":
         outline = f"{title} is a step that fits the time on {subject}."
     else:
         outline = f"{title} is part of the rigorous breakdown of {subject}."
-    return f"Outline: {outline}\nTopics: {title}; {subject}\nGoals: Explain {title}; Apply {title} in {subject}"
+    return {
+        "description": outline,
+        "outline": outline,
+        "topics": [
+            {"topic": title, "goal": f"Explain {title}"},
+            {"topic": subject, "goal": f"Apply {title} in {subject}"},
+        ],
+    }
 
 
 def planning_context(

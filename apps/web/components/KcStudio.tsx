@@ -127,7 +127,6 @@ export function KcStudio({
                 </label>
               </div>
             </form>
-            <HistoryLog label="Course history" text={course.history ?? ""} />
             <div className="studio-columns">
               <div className="studio-tree" aria-label="Course structure">
                 <StructureView
@@ -143,7 +142,7 @@ export function KcStudio({
                     {!initialMessage ? (
                       <p className="ds-quiet">
                         The draft names the subject and its major ideas, then the component list.
-                        Each component gets an outline, topics, and goals. Nothing is stored until you push it.
+                        Each component gets a short summary, an outline, and a topic with its goal. Nothing is stored until you push it.
                       </p>
                     ) : null}
                     {initialMessage ? (
@@ -185,6 +184,7 @@ export function KcStudio({
                 />
               </div>
             </div>
+            <HistoryLog label="Course history" text={course.history ?? ""} />
           </>
         ) : null}
       </section>

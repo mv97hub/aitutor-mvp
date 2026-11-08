@@ -2771,6 +2771,8 @@ a.ds-row { text-decoration: none; }
 }
 .kc-editor .kc-check input { width: auto; }
 .kc-editor .kc-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.kc-editor .kc-topic-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.kc-editor .kc-topic-add { justify-self: start; }
 .kc-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .kc-history { display: grid; gap: 4px; }
 .kc-history h3 {

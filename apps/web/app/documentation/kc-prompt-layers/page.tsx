@@ -29,7 +29,7 @@ export default function KcPromptLayersPage() {
         <h2>Intro</h2>
         <p>
           Orient is the first turn when an outline is stored. It elaborates that outline and does not open the topics
-          or the goals. It does not use the course description. Instructive still sets how much is said before the
+          or the goals. It reads the outline field. It does not parse the component description, and it does not use the course description. Instructive still sets how much is said before the
           question. A time-boxed course keeps that opening to one sentence.
         </p>
 

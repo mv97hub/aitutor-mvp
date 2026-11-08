@@ -320,9 +320,14 @@ def test_a_conceptual_topic_names_only_that_topic_and_its_goal() -> None:
         title="Floating",
         description=(
             "Outline: A principle about floating.\n"
-            "Topics: shape; density\n"
-            "Goals: Say why shape matters; Say why density matters"
+            "Topics: secret\n"
+            "Goals: Leak the secret"
         ),
+        outline="A principle about floating.",
+        topics=[
+            {"topic": "shape", "goal": "Say why shape matters"},
+            {"topic": "density", "goal": "Say why density matters"},
+        ],
         kc_type="conceptual",
         core_truth="Spread-out objects float.",
         type_fields={
@@ -366,6 +371,8 @@ def test_a_conceptual_topic_names_only_that_topic_and_its_goal() -> None:
         "A hollow ball",
         "A principle about floating",
         "Boats and cubes in a harbor",
+        "secret",
+        "Leak the secret",
     ):
         assert hidden not in text, hidden
     assert "topic 1 of 2: shape" in text
@@ -379,17 +386,22 @@ def test_every_stored_field_is_a_step_and_an_empty_field_is_skipped() -> None:
     profile = _profile()
     goal = _goal()
     factual = _node(
-        description="Outline: Setup.\nTopics: color\nGoals: Say the color",
+        description="Outline: Not this.\nTopics: not-color\nGoals: Not the goal",
+        outline="Setup.",
+        topics=[{"topic": "color", "goal": "Say the color"}],
         type_fields={"fact": "The river is blue.", "retrieval_question": ""},
     )
     factual_moves = moves_for(factual, profile, goal)
     assert [move.key for move in factual_moves] == ["orient", "topic-1", "retrieve"]
+    assert factual_moves[1].name == "color"
     bare = _node(description="The color of this river.", type_fields={"fact": "", "retrieval_question": ""})
     assert [move.key for move in moves_for(bare, profile, goal)] == []
 
     procedural = _node(
         kc_type="procedural",
-        description="Outline: Find the angle.\nTopics: Add the angles\nGoals: Say what adding did",
+        description="Find the missing angle.",
+        outline="Find the angle.",
+        topics=[{"topic": "Add the angles", "goal": "Say what adding did"}],
         type_fields={
             "steps": ["Add the angles", "Subtract from 180"],
             "blanked_step": 1,
@@ -432,7 +444,9 @@ def test_every_stored_field_is_a_step_and_an_empty_field_is_skipped() -> None:
 
     causal = _node(
         kc_type="causal",
-        description="Outline: A tax.\nTopics: prices rise\nGoals: Say why prices rise",
+        description="Outline: Not the outline.\nTopics: not-a-link\nGoals: Not the goal",
+        outline="A tax.",
+        topics=[{"topic": "prices rise", "goal": "Say why prices rise"}],
         type_fields={
             "decision_point": "A council sets a tax.",
             "flawed_claim": "The tax lowers prices.",
@@ -461,3 +475,20 @@ def test_every_stored_field_is_a_step_and_an_empty_field_is_skipped() -> None:
         "correct",
         "which_job",
     ]
+
+
+def test_an_empty_pair_is_skipped_and_the_description_is_not_the_walk() -> None:
+    node = _node(
+        description="Outline: Hidden.\nTopics: secret\nGoals: Find the secret",
+        outline="Setup.",
+        topics=[
+            {"topic": "color", "goal": ""},
+            {"topic": "", "goal": "Nope"},
+            {"topic": "banks", "goal": "Name a bank"},
+        ],
+        type_fields={"fact": "", "retrieval_question": ""},
+    )
+    moves = moves_for(node, _profile(), _goal())
+    assert [move.key for move in moves] == ["orient", "topic-1"]
+    assert moves[1].name == "banks"
+    assert moves[1].evidence == ("goal-1",)

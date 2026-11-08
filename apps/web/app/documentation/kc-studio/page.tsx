@@ -31,7 +31,7 @@ export default function KcStudioDocsPage() {
         <p>
           The structure column lists groups in this order: Factual, Procedural, Conceptual principle, Causal or historical, Synthesis,
           then No type yet. Each row shows the title, the description under the title, the type, and either the gap strings, Marked complete, or Complete.
-          The description is a short outline, the key topics, and the key goals. It is written with the draft and saved when you push.
+          The description is a short summary. The outline and the topic-goal pairs are stored beside it and saved when you push.
           Marked complete means the component was marked on KC Creator and still has no gaps. Complete means the gaps are empty and it has not been marked.
           Up and Down reorder the targets. Remove deletes that component. Add a component by title creates a target with no type and no fields.
           Patches are listed as Not a target. A row, including a patch, opens that component on KC Creator. This page does not edit a component&apos;s fields.
@@ -49,8 +49,8 @@ export default function KcStudioDocsPage() {
           Kind sets how full the list is. Mastery is the fuller rigorous breakdown. Time boxed fits the minutes.
           Curiosity is a path through the subject. A requested count is honored with distinct components:
           &quot;minimum of 10&quot; means at least ten, and &quot;10 components&quot; means ten.
-          A pasted list of titles is used as written. Each component also gets a description: a short outline, the key topics,
-          and the key goals. Push draft writes the titles and those descriptions. It does not fill one component&apos;s type fields.
+          A pasted list of titles is used as written. Each component also gets a short summary, an outline, and topic-goal pairs.
+          Push draft writes the titles and those fields. It does not fill one component&apos;s type fields.
           Nothing is saved until you push it.
         </p>
         <p>
@@ -60,7 +60,7 @@ export default function KcStudioDocsPage() {
         <p>
           KC Creator is the editor. Choose a course from the dropdown, then a component. Targets are listed in course order, then patches.
           Changing the course opens that course’s first component.
-          The middle pane is the manual editor: description, title, type, the fields for that type, core truth, one rubric line for each topic goal and then the practice checks,
+          The middle pane is the manual editor: description, title, outline, topic rows, type, the fields for that type, core truth, one rubric line for each topic goal and then the practice checks,
           misconceptions, prerequisites, and encompasses. Save this component writes that component and clears course ready.
           The right-hand chat is about that component only. It opens with the description, then the saved text, and goes into the topic before the fields. Each reply ends with a draft.
           A later message revises that draft. The middle pane keeps the saved component until Push. Push writes the draft for this component only.
