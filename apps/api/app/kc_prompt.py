@@ -33,9 +33,9 @@ SUBSTEP_LABELS: dict[str, str] = {
     "awaiting_why": "Explain Why",
     "predict": "Predict",
     "contrast_and_rule": "Contrast & Rule",
-    "transfer": "Transfer Application",
+    "transfer": "Transfer",
     "initial_thesis": "Initial Position",
-    "counterexample_probe": "Counterexample & Synthesis",
+    "counterexample_probe": "Counterexample Probe",
     "hook_and_predict": "Wonder & Predict",
     "faded_step": "Faded Step",
     "solo_solve": "Solo Problem",
@@ -285,6 +285,26 @@ def substeps_for_block(block: dict, cfg: dict | None = None) -> list[str]:
             return ["recall", "elaborate_why"]
         return ["recall"]
     return ["main"]
+
+
+def format_active_substep_label(block: dict, substep: str, cfg: dict | None = None) -> str:
+    """Human-readable label for multi-step blocks (e.g. 'Contrast & Rule · Substep 2 of 2')."""
+    if not block or not isinstance(block, dict):
+        return ""
+    substeps = substeps_for_block(block, cfg)
+    btype = str(block.get("type") or "topic_goal").strip()
+    if btype == "mcq" and substep == "awaiting_why" and "awaiting_why" not in substeps:
+        eff_substeps = ["choice", "awaiting_why"]
+    else:
+        eff_substeps = substeps
+    if len(eff_substeps) <= 1:
+        return ""
+    sub_name = SUBSTEP_LABELS.get(substep or "", substep or "")
+    pos = eff_substeps.index(substep) + 1 if substep in eff_substeps else 1
+    total_sub = len(eff_substeps)
+    if sub_name:
+        return f"{sub_name} · Substep {pos} of {total_sub}"
+    return f"Substep {pos} of {total_sub}"
 
 
 def block_step_label(block: dict, step_index: int, total_blocks: int, substep: str = "") -> str:

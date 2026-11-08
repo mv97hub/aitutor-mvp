@@ -515,6 +515,45 @@ def clean_recommended_blocks(
     return cleaned[:6]
 
 
+BLOCK_PLURAL_SHORT_LABELS: dict[str, str] = {
+    "topic_goal": "Topics",
+    "mcq": "MCQs",
+    "case_study": "Case Studies",
+    "socratic": "Socratic",
+    "curiosity": "Curiosity",
+    "worked_example": "Worked Examples",
+    "spot_the_flaw": "Spot the Flaw",
+    "teach_back": "Teach-Backs",
+    "retrieval_check": "Retrieval Checks",
+}
+
+
+def block_summary_label(blocks: list[dict]) -> str:
+    """Readable block summary pill (e.g. '1 Curiosity · 2 Topics · 1 Case Study · 1 MCQ')."""
+    if not isinstance(blocks, list) or not blocks:
+        return "No blocks yet"
+    runs: list[tuple[str, int]] = []
+    for item in blocks:
+        if not isinstance(item, dict):
+            continue
+        btype = str(item.get("type") or "topic_goal").strip()
+        if runs and runs[-1][0] == btype:
+            runs[-1] = (btype, runs[-1][1] + 1)
+        else:
+            runs.append((btype, 1))
+    if not runs:
+        return "No blocks yet"
+    parts: list[str] = []
+    for btype, count in runs:
+        label = (
+            BLOCK_SHORT_LABELS.get(btype, btype)
+            if count == 1
+            else BLOCK_PLURAL_SHORT_LABELS.get(btype, f"{BLOCK_SHORT_LABELS.get(btype, btype)}s")
+        )
+        parts.append(f"{count} {label}")
+    return " · ".join(parts)
+
+
 def format_recommended_blocks_summary(recommended_blocks: list[dict]) -> str:
     """Format 'Recommended blocks: 1. Type Label (focus) -> 2. ...'."""
     if not recommended_blocks:
@@ -541,12 +580,11 @@ def ensure_description_with_recommended_blocks(summary: str, recommended_blocks:
     rec_line = format_recommended_blocks_summary(recommended_blocks)
     if not rec_line:
         return text
-    if "recommended blocks:" in text.lower():
-        return text
-    if not text:
+    stripped = re.sub(r"\s*Recommended blocks:\s*.*\Z", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    if not stripped:
         return rec_line
-    sep = "" if text.endswith((".", "!", "?")) else "."
-    return f"{text}{sep} {rec_line}"
+    sep = "" if stripped.endswith((".", "!", "?")) else "."
+    return f"{stripped}{sep} {rec_line}"
 
 
 def seed_skeleton_blocks_from_recommendations(

@@ -520,10 +520,14 @@ class KcChatSummary(BaseModel):
     kc_id: UUID
     kc_code: str
     kc_title: str
-    kc_type: str | None = None
     recipe: str
     step: int
     step_label: str
+    total_blocks: int = 0
+    completed_blocks: int = 0
+    completion_pct: int = 0
+    active_block_index: int = 0
+    active_substep_label: str = ""
     status: str
     score: int | None = None
     created_at: datetime
@@ -541,7 +545,6 @@ class KcChatComponent(BaseModel):
     id: UUID
     code: str
     title: str
-    kc_type: str | None = None
 
 
 class KcChatMessage(BaseModel):
@@ -558,6 +561,12 @@ class KcChatDetail(BaseModel):
     recipe: str
     step: int
     step_label: str
+    total_blocks: int = 0
+    completed_blocks: int = 0
+    completion_pct: int = 0
+    active_block_index: int = 0
+    active_substep_label: str = ""
+    block_progress: list[dict] = Field(default_factory=list)
     score: int | None = None
     attempts: int
     created_at: datetime

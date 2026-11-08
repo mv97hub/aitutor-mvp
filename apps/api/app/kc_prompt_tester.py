@@ -1,4 +1,4 @@
-"""Read-only preview of the knowledge-component prompt.
+"""Read-only preview of the knowledge-component modular block prompt.
 
 The form is turned into in-memory rows. build_kc_prompt is the same
 function the tutor calls. Nothing is added to the database.
@@ -8,24 +8,28 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, STRUGGLE_WINDOWS, VOICES, ids
-from app.kc import AUDIENCES, KC_TYPES, KINDS
+from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, VOICES, ids
+from app.kc import AUDIENCES, KINDS
+from app.kc_model import BLOCK_LABELS, derive_rubric_from_blocks
 from app.kc_prompt import (
     AFFECTS,
     HINTS,
-    Move,
-    asks_why,
+    SUBSTEP_LABELS,
+    block_evidence_id,
+    block_step_label,
+    block_uses_choice_widget,
     build_kc_prompt,
-    effective_enrichment,
-    effective_window_name,
+    default_substep_for_block,
+    format_active_substep_label,
     is_fragment,
-    moves_for,
-    struggle_tries,
+    max_retries_for_block,
+    stored_blocks,
+    substeps_for_block,
 )
-from app.models import KcGoal, KcNode, Student, TutorProfile
+from app.models import ALL_BLOCK_TYPES, KcGoal, KcNode, Student, TutorProfile, default_kc_tutor_config
+from app.tutor_profile import OVERARCHING_ENUMS, normalize_kc_tutor_config
 
 SUPPORT_BANDS = ("ready", "stretch", "hold")
-ENRICHMENTS = ("direct", "on_request", "offer")
 COMPONENT_STATUSES = ("unknown", "fragile", "known")
 YES_NO = ("yes", "no")
 
@@ -44,16 +48,20 @@ class PromptTesterIn(BaseModel):
     component_title: str = ""
     component_code: str = ""
     component_description: str = ""
-    kc_type: str = ""
+    component_outline: str = ""
     core_truth: str = ""
+    blocks: list[dict] = Field(default_factory=list)
+    active_block_type: str = "topic_goal"
+    active_block_data: dict = Field(default_factory=dict)
+    active_substep: str = ""
+    block_index: int = Field(default=1, ge=1)
+    move_index: int | None = Field(default=None, ge=1)
+    dialogue_turns: int = Field(default=0, ge=0)
+    eliminated_indices: list[int] = Field(default_factory=list)
     rubric: list[str] = Field(default_factory=list)
     misconceptions: list[MisconceptionIn] = Field(default_factory=list)
     prerequisite_codes: list[str] = Field(default_factory=list)
     encompasses_codes: list[str] = Field(default_factory=list)
-    transfer_case: str = ""
-    counterfactual: str = ""
-    type_fields: dict = Field(default_factory=dict)
-    move_index: int = Field(default=1, ge=1)
     choice_on_screen: str = "no"
     prerequisite_status: str = ""
     course_position: str = ""
@@ -75,15 +83,12 @@ class PromptTesterIn(BaseModel):
     metaphors: str = "playground-sports"
     sidekick: str = "bumbling-partner"
     use_interests: str = "yes"
-    instructive: int = Field(default=3, ge=1, le=5)
-    struggle_window: str = "standard"
-    stay_on_course: str = "yes"
-    anti_spoiler: str = "yes"
-    one_question: str = "yes"
-    misconception_policy: str = "retry_once"
-    enrichment: str = "on_request"
-    growth_praise: str = "yes"
-    self_explanation: str = "yes"
+    orient_framing: str = "elaborate_outline"
+    stay_on_course: str = "brief_answer_then_return"
+    misconception_policy: str = "explain_and_retry_once"
+    encouragement_style: str = "process_praise"
+    close_summary_depth: str = "diagnostic_strengths_and_gaps"
+    kc_tutor_config: dict | None = None
     reveals: int = Field(default=0, ge=0)
     off_course_count: int = Field(default=0, ge=0)
     rubric_met: list[str] = Field(default_factory=list)
@@ -100,7 +105,7 @@ class PromptTesterIn(BaseModel):
     def closed_sets(self) -> "PromptTesterIn":
         _one(self.audience, AUDIENCES, "Audience")
         _one(self.kind, KINDS, "Kind")
-        _one(self.kc_type, ("", *KC_TYPES), "Type")
+        _one(self.active_block_type, ("", *ALL_BLOCK_TYPES), "Active block type")
         _one(self.choice_on_screen, YES_NO, "Choice widget")
         _one(self.hint_tier, HINTS, "Hint tier")
         _one(self.component_status, COMPONENT_STATUSES, "Component status")
@@ -110,19 +115,22 @@ class PromptTesterIn(BaseModel):
         _one(self.metaphors, ids(METAPHORS), "Metaphors")
         _one(self.sidekick, ids(SIDEKICKS), "Sidekick")
         _one(self.use_interests, YES_NO, "Use interests")
-        _one(self.struggle_window, ids(STRUGGLE_WINDOWS), "Struggle window")
-        _one(self.stay_on_course, YES_NO, "Stay on course")
-        _one(self.anti_spoiler, YES_NO, "Anti-spoiler")
-        _one(self.one_question, YES_NO, "One question")
-        _one(self.misconception_policy, ("retry_once",), "Misconception policy")
-        _one(self.enrichment, ENRICHMENTS, "Enrichment")
-        _one(self.growth_praise, YES_NO, "Growth-mindset praise")
-        _one(self.self_explanation, YES_NO, "Self-explanation")
+        _one(self.orient_framing, OVERARCHING_ENUMS["orient_framing"], "Orient framing")
+        if self.stay_on_course in {"yes", "no"}:
+            self.stay_on_course = "brief_answer_then_return" if self.stay_on_course == "yes" else "exploratory"
+        _one(self.stay_on_course, OVERARCHING_ENUMS["stay_on_course"], "Stay on course")
+        if self.misconception_policy == "retry_once":
+            self.misconception_policy = "explain_and_retry_once"
+        _one(self.misconception_policy, OVERARCHING_ENUMS["misconception_policy"], "Misconception policy")
+        _one(self.encouragement_style, OVERARCHING_ENUMS["encouragement_style"], "Encouragement style")
+        _one(self.close_summary_depth, OVERARCHING_ENUMS["close_summary_depth"], "Close summary depth")
         _one(self.affect, ("", *AFFECTS), "Affect")
         _one(self.help_requested, YES_NO, "Help requested")
         _one(self.redirect_pending, YES_NO, "Redirect pending")
         _one(self.unit_close, YES_NO, "Unit close")
         _one(self.course_outro, YES_NO, "Course outro")
+        if self.active_substep and self.active_substep not in SUBSTEP_LABELS:
+            raise ValueError(f"Active substep must be one of: {', '.join(sorted(k for k in SUBSTEP_LABELS if k))}")
         return self
 
 
@@ -145,17 +153,67 @@ def _opening(last_messages: str) -> bool:
     return True
 
 
-def _fragment(node: KcNode, last_answer: str) -> bool:
-    if node.kc_type != "factual":
-        return False
-    fact = str((node.type_fields or {}).get("fact") or node.core_truth or "")
-    return is_fragment(last_answer, fact)
+def _effective_blocks(body: PromptTesterIn) -> list[dict]:
+    blocks: list[dict] = []
+    for idx, raw in enumerate(body.blocks or [], start=1):
+        if not isinstance(raw, dict):
+            continue
+        btype = str(raw.get("type") or "topic_goal").strip()
+        if btype not in ALL_BLOCK_TYPES:
+            btype = "topic_goal"
+        bid = str(raw.get("id") or f"blk_{idx}").strip() or f"blk_{idx}"
+        data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+        blocks.append({"id": bid, "type": btype, "data": dict(data)})
+    if not blocks:
+        btype = body.active_block_type or "topic_goal"
+        data = dict(body.active_block_data or {})
+        if btype == "topic_goal" and not data:
+            data = {
+                "topic": body.component_title or "Concept",
+                "goal": body.core_truth or f"Explain {body.component_title or 'this idea'}.",
+            }
+        blocks = [{"id": "blk_1", "type": btype, "data": data}]
+    elif body.active_block_data:
+        idx = min(max((body.move_index or body.block_index) - 1, 0), len(blocks) - 1)
+        btype = body.active_block_type or blocks[idx]["type"]
+        blocks[idx] = {
+            "id": blocks[idx]["id"],
+            "type": btype if btype in ALL_BLOCK_TYPES else blocks[idx]["type"],
+            "data": dict(body.active_block_data),
+        }
+    return blocks
 
 
-def _rows(body: PromptTesterIn) -> tuple[Student, TutorProfile, KcNode, KcGoal]:
-    fields = dict(body.type_fields or {})
-    fields["transfer_case"] = body.transfer_case
-    fields["counterfactual"] = body.counterfactual
+def _effective_config(body: PromptTesterIn) -> dict:
+    raw = dict(body.kc_tutor_config or default_kc_tutor_config())
+    over = dict(raw.get("overarching") or {})
+    if body.kc_tutor_config is None or "overarching" not in body.kc_tutor_config:
+        over.update(
+            {
+                "orient_framing": body.orient_framing,
+                "stay_on_course": body.stay_on_course,
+                "misconception_policy": body.misconception_policy,
+                "encouragement_style": body.encouragement_style,
+                "close_summary_depth": body.close_summary_depth,
+            }
+        )
+    else:
+        for k, v in (
+            ("orient_framing", body.orient_framing),
+            ("stay_on_course", body.stay_on_course),
+            ("misconception_policy", body.misconception_policy),
+            ("encouragement_style", body.encouragement_style),
+            ("close_summary_depth", body.close_summary_depth),
+        ):
+            over.setdefault(k, v)
+    raw["overarching"] = over
+    return normalize_kc_tutor_config(raw, strict=True)
+
+
+def _rows(body: PromptTesterIn) -> tuple[Student, TutorProfile, KcNode, KcGoal, dict]:
+    cfg = _effective_config(body)
+    blocks = _effective_blocks(body)
+    rubric = list(body.rubric) or derive_rubric_from_blocks(blocks)
     student = Student(
         slug="prompt-tester",
         display_name=body.display_name,
@@ -166,30 +224,31 @@ def _rows(body: PromptTesterIn) -> tuple[Student, TutorProfile, KcNode, KcGoal]:
     )
     profile = TutorProfile(
         id="prompt-tester",
-        instructive=body.instructive,
+        instructive=3,
         persona=body.persona,
         lexicon=body.lexicon,
         voice_override=False,
         metaphors=body.metaphors,
         sidekick=body.sidekick,
-        struggle_window=body.struggle_window,
-        anti_spoiler=_yes(body.anti_spoiler),
-        one_question=_yes(body.one_question),
+        struggle_window="standard",
+        anti_spoiler=True,
+        one_question=True,
         use_interests=_yes(body.use_interests),
-        stay_on_course=_yes(body.stay_on_course),
-        growth_praise=_yes(body.growth_praise),
-        misconception_policy=body.misconception_policy,
-        self_explanation=_yes(body.self_explanation),
-        enrichment=body.enrichment,
+        stay_on_course=cfg["overarching"]["stay_on_course"] != "exploratory",
+        growth_praise=cfg["overarching"]["encouragement_style"] == "process_praise",
+        misconception_policy=cfg["overarching"]["misconception_policy"],
+        self_explanation=True,
+        enrichment="on_request",
+        kc_tutor_config=cfg,
     )
     node = KcNode(
         code=body.component_code,
         title=body.component_title,
         description=body.component_description,
-        kc_type=body.kc_type or None,
+        outline=body.component_outline or body.component_description,
+        blocks=blocks,
         core_truth=body.core_truth,
-        type_fields=fields,
-        rubric=list(body.rubric),
+        rubric=rubric,
         misconceptions=[
             {"wrong_move": item.wrong_move, "broken_kc": item.broken_kc} for item in body.misconceptions
         ],
@@ -204,25 +263,39 @@ def _rows(body: PromptTesterIn) -> tuple[Student, TutorProfile, KcNode, KcGoal]:
         kind=body.kind,
         minutes=body.minutes,
         target_kc_ids=[],
+        allowed_block_types=list(ALL_BLOCK_TYPES),
         ready=False,
     )
-    return student, profile, node, goal
+    return student, profile, node, goal, cfg
 
 
 def preview_kc_prompt(body: PromptTesterIn) -> dict:
-    """The system prompt and the values the generator computes itself."""
-    student, profile, node, goal = _rows(body)
-    fragment = _fragment(node, body.last_answer)
-    moves = moves_for(node, profile, goal, fragment=fragment) or [Move("this", "This step", (), False)]
+    """The system prompt and the active block/substep metadata computed by the generator."""
+    student, profile, node, goal, cfg = _rows(body)
+    blocks = stored_blocks(node)
+    chosen_index = (body.move_index if body.move_index is not None else body.block_index) - 1
+    index = min(max(chosen_index, 0), len(blocks) - 1)
+    active_block = blocks[index]
+    btype = str(active_block.get("type") or "topic_goal")
+    data = active_block.get("data") if isinstance(active_block.get("data"), dict) else {}
+    substeps = substeps_for_block(active_block, cfg)
+    substep = body.active_substep.strip() or default_substep_for_block(active_block, cfg)
+    target_text = str(data.get("goal") or data.get("expected_fact") or node.core_truth or "")
+    fragment = bool(btype == "topic_goal" and is_fragment(body.last_answer, target_text))
+    active_state = {
+        "substep": substep,
+        "dialogue_turns": body.dialogue_turns,
+        "mcq": {"eliminated_indices": list(body.eliminated_indices)} if body.eliminated_indices else {},
+    }
+    widget_on = _yes(body.choice_on_screen) or block_uses_choice_widget(active_block, substep)
     bundle = build_kc_prompt(
         student=student,
         profile=profile,
         node=node,
         goal=goal,
-        step=body.move_index - 1,
-        moves=moves,
+        step=index,
         opening=_opening(body.last_messages),
-        choice_on_screen=_yes(body.choice_on_screen),
+        choice_on_screen=widget_on,
         prerequisite_status=body.prerequisite_status,
         support_band=body.support_band,
         course_position=body.course_position,
@@ -245,15 +318,22 @@ def preview_kc_prompt(body: PromptTesterIn) -> dict:
         redirect_pending=_yes(body.redirect_pending),
         fragment=fragment,
         others_known=False,
+        active_block_state=active_state,
     )
-    index = min(max(body.move_index - 1, 0), len(moves) - 1)
-    move = moves[index]
-    window_name = effective_window_name(profile, goal)
+    ev_id = block_evidence_id(active_block, index, substep)
+    step_label = block_step_label(active_block, index, len(blocks), substep)
+    substep_label = format_active_substep_label(active_block, substep, cfg)
+    max_retries = max_retries_for_block(active_block, cfg, goal)
     return {
         "system_prompt": bundle["system_prompt"],
-        "move_name": move.name,
-        "evidence": ", ".join(move.evidence),
-        "effective_struggle_window": f"{window_name} ({struggle_tries(window_name)} tries)",
-        "effective_enrichment": effective_enrichment(profile, goal),
-        "asks_why": "yes" if asks_why(profile, move) else "no",
+        "move_name": step_label,
+        "active_block_label": step_label,
+        "active_block_type": btype,
+        "active_block_type_label": BLOCK_LABELS.get(btype, btype),
+        "active_substep": substep,
+        "active_substep_label": substep_label,
+        "substeps": substeps,
+        "evidence": ev_id,
+        "max_retries": max_retries,
+        "uses_choice_widget": "yes" if widget_on else "no",
     }
