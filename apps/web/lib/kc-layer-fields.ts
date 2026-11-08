@@ -87,8 +87,8 @@ export const LAYER_FIELDS: LayerField[] = [
   {
     layer: "Layer 1, Component",
     name: "Component description",
-    hover: "Outline, topics, and goals. The intro uses it as the brief. Edit it on the component.",
-    role: "The brief the intro draws on.",
+    hover: "A short summary of the component. The walk does not read it. Edit it on the component.",
+    role: "A short summary. Orient and the topic turns do not read it.",
     kind: "Configured",
     where: "KC Creator, /kc-creator",
   },

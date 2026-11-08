@@ -233,6 +233,14 @@ export async function saveKcComponent(formData: FormData) {
       body: JSON.stringify({
         title: String(formData.get("title") || ""),
         description: String(formData.get("description") || ""),
+        outline: String(formData.get("outline") || ""),
+        topics: formData
+          .getAll("topic")
+          .map((topic, index) => ({
+            topic: String(topic).trim(),
+            goal: String(formData.getAll("goal")[index] || "").trim(),
+          }))
+          .filter((item) => item.topic && item.goal),
         kc_type: kcType,
         core_truth: String(formData.get("core_truth") || ""),
         rubric: formData

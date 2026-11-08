@@ -23,8 +23,8 @@ export default function KcCreatorDocsPage() {
           The selected row is the component on screen. A patch can be opened here. It is still not a target.
         </p>
         <p>
-          The middle pane is the manual editor. Description sits with the other fields and can be edited:
-          the outline, topics, and goals saved from the course draft. Save this component writes the fields, including that description, and clears the course ready flag.
+          The middle pane is the manual editor. Description is a short summary. Under the title, Outline and the topic rows
+          hold the outline and each topic with its goal. Save this component writes the fields, including that description, and clears the course ready flag.
           Each enterable field has a short mouse-over tooltip that says what the tutor uses it for.
           Mark complete sits next to Save. It can be used only when the saved component has no gaps: a type, a core truth,
           at least one rubric check, and prerequisite and encompasses codes that exist. There is no extra gap rule.
@@ -65,8 +65,10 @@ export default function KcCreatorDocsPage() {
         <h2>Settings you can change</h2>
         <p>Every component has:</p>
         <ul>
-          <li>Description. The outline, the key topics, and the key goals. Save and Push keep it.</li>
+          <li>Description. A short summary. The walk does not read it. Save and Push keep it.</li>
           <li>Title.</li>
+          <li>Outline. Orient elaborates it.</li>
+          <li>Topics. Each row is a topic and its goal. Add and remove rows. A topic does not exist without its goal.</li>
           <li>Type: Factual, Procedural, Conceptual principle, Causal or historical, or Synthesis.</li>
           <li>Core truth.</li>
           <li>Rubric checks, one to three. More than three is rejected.</li>

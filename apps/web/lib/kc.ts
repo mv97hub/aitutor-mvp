@@ -2,11 +2,15 @@ export type KcType = "factual" | "procedural" | "conceptual" | "causal" | "synth
 
 export type KcMisconception = { wrong_move: string; broken_kc: string };
 
+export type KcTopicPair = { topic: string; goal: string };
+
 export type KcComponent = {
   id: string;
   code: string;
   title: string;
   description: string;
+  outline: string;
+  topics: KcTopicPair[];
   kc_type: KcType | null;
   target: boolean;
   core_truth: string;
@@ -59,6 +63,8 @@ export type KcComponentDraft = {
   code: string;
   title: string;
   description?: string;
+  outline?: string;
+  topics?: KcTopicPair[];
   kc_type: KcType;
   core_truth: string;
   rubric: string[];
@@ -69,7 +75,10 @@ export type KcComponentDraft = {
 };
 
 export type KcDraft =
-  | { kind: "course"; components: { code: string; title: string; description?: string }[] }
+  | {
+      kind: "course";
+      components: { code: string; title: string; description?: string; outline?: string; topics?: KcTopicPair[] }[];
+    }
   | KcComponentDraft;
 
 export type KcCard = {

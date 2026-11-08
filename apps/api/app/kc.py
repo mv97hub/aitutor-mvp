@@ -34,14 +34,14 @@ from app.kc_prompt import (
     Move,
     move_material,
     moves_for,
-    read_brief,
     recipe_name,
     self_explanation_on,
     step_labels,
     stored_enrichment,
+    topic_goal,
     struggle_tries,
 )
-from app.kc_syllabus import component_brief, planning_context
+from app.kc_syllabus import component_fields, planning_context
 from app.models import (
     KcCreatorMessage,
     KcEdge,
@@ -393,10 +393,14 @@ def _summary(node: KcNode, *, target: bool) -> dict:
 
 
 def _detail(node: KcNode, *, target: bool, codes: set[str]) -> dict:
+    from app.kc_model import clean_pairs
+
     body = _summary(node, target=target)
     body.update(
         {
             "description": node.description or "",
+            "outline": node.outline or "",
+            "topics": clean_pairs(node.topics),
             "core_truth": node.core_truth or "",
             "rubric": list(node.rubric or []),
             "misconceptions": list(node.misconceptions or []),
@@ -557,7 +561,7 @@ def draft_course(goal: KcGoal, message: str) -> dict:
             {
                 "code": code,
                 "title": title,
-                "description": component_brief(str(ctx["subject"]), title, str(ctx["kind"])),
+                **component_fields(str(ctx["subject"]), title, str(ctx["kind"])),
             }
         )
     return {
@@ -587,7 +591,13 @@ def finish_model_course(goal: KcGoal, message: str, proposal: dict) -> dict:
         code = slug_code(str(item["title"]), taken)
         taken.add(code)
         components.append(
-            {"code": code, "title": item["title"], "description": item["description"]}
+            {
+                "code": code,
+                "title": item["title"],
+                "description": item.get("description") or "",
+                "outline": item.get("outline") or "",
+                "topics": item.get("topics") or [],
+            }
         )
     return {
         "reply": assembled["reply"],
@@ -657,9 +667,15 @@ def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
         if node is not None and str(node.id) not in on_course and (node.kc_type or (node.core_truth or "").strip()):
             code = slug_code(title, set(by_code))
             node = None
-        description = str(item.get("description") or "").strip()
+        description, outline, topics, write_fields = _course_topic_fields(item)
         if node is None:
-            node = KcNode(code=code, title=title, description=description)
+            node = KcNode(
+                code=code,
+                title=title,
+                description=description,
+                outline=outline,
+                topics=topics,
+            )
             db.add(node)
             db.flush()
             by_code[code] = node
@@ -667,6 +683,9 @@ def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
             node.title = title
             if description:
                 node.description = description
+            if write_fields:
+                node.outline = outline
+                node.topics = topics
             node.updated_at = _now()
         if str(node.id) not in ordered:
             ordered.append(str(node.id))
@@ -798,8 +817,7 @@ def apply_component(db: Session, node: KcNode, body: dict) -> KcNode:
         raise HTTPException(status_code=422, detail="Type is factual, procedural, conceptual, causal, or synthesis.")
     if "title" in body and str(body.get("title") or "").strip():
         node.title = str(body["title"]).strip()
-    if "description" in body and body.get("description") is not None:
-        node.description = str(body.get("description") or "").strip()
+    _assign_topic_fields(node, body)
     node.kc_type = kc_type
     node.core_truth = str(body.get("core_truth") or "").strip()
     node.rubric = _clean_rubric(body.get("rubric") or [])
@@ -892,12 +910,15 @@ def draft_component(goal: KcGoal, node: KcNode, ordered: list[KcNode], message: 
                 "broken_kc": previous.code,
             }
         )
+    summary, outline, pairs = _topic_fields(goal, node)
     draft = {
         "kind": "component",
         "id": str(node.id),
         "code": node.code,
         "title": node.title,
-        "description": _recommended_description(goal, node),
+        "description": summary,
+        "outline": outline,
+        "topics": pairs,
         "kc_type": kc_type,
         "core_truth": _first_sentence(goal.description) or f"The core idea of {node.title}.",
         "rubric": [f"States the idea of {node.title}"],
@@ -1862,9 +1883,9 @@ def _point_label(node: KcNode, point_id: str) -> str:
             index = int(point_id.split("-", 1)[1]) - 1
         except ValueError:
             return point_id
-        _outline, _topics, goals = read_brief(node.description or "")
-        if 0 <= index < len(goals):
-            return goals[index]
+        goal_text = topic_goal(node, index)
+        if goal_text:
+            return goal_text
     return point_id
 
 
@@ -2245,18 +2266,63 @@ def mirror_text(node: KcNode) -> str:
     )
 
 
-def _recommended_description(goal: KcGoal, node: KcNode) -> str:
-    """The brief already on the component, or a short outline, topics, and goals."""
-    from app.kc_model import format_description
+def _course_topic_fields(item: dict) -> tuple[str, str, list, bool]:
+    """Summary, outline, pairs, and whether this payload names the new fields."""
+    from app.kc_model import clean_pairs, split_brief
 
-    current = (node.description or "").strip()
-    if current:
-        return current
-    return format_description(
-        f"How {node.title} fits {goal.title}.",
-        [node.title],
-        [f"Use {node.title}."],
-    )
+    description = str(item.get("description") or "").strip()
+    sent_outline = "outline" in item and item.get("outline") is not None
+    sent_topics = "topics" in item and item.get("topics") is not None
+    if not sent_outline and not sent_topics:
+        split = split_brief(description)
+        if split is not None:
+            return split["description"], split["outline"], split["topics"], True
+        return description, "", [], False
+    outline = str(item.get("outline") or "").strip() if sent_outline else ""
+    topics = clean_pairs(item.get("topics")) if sent_topics else []
+    return description, outline, topics, True
+
+
+def _assign_topic_fields(node: KcNode, body: dict) -> None:
+    """Store the summary, the outline, and the pairs.
+
+    A three-line description is split once when the new fields were not sent.
+    A description that does not match stays the summary.
+    """
+    from app.kc_model import clean_pairs, split_brief
+
+    sent_outline = "outline" in body and body.get("outline") is not None
+    sent_topics = "topics" in body and body.get("topics") is not None
+    if "description" in body and body.get("description") is not None:
+        node.description = str(body.get("description") or "").strip()
+    if sent_outline:
+        node.outline = str(body.get("outline") or "").strip()
+    if sent_topics:
+        node.topics = clean_pairs(body.get("topics"))
+    if sent_outline or sent_topics:
+        return
+    split = split_brief(node.description or "")
+    if split is None:
+        return
+    node.description = split["description"]
+    node.outline = split["outline"]
+    node.topics = split["topics"]
+
+
+def _topic_fields(goal: KcGoal, node: KcNode) -> tuple[str, str, list]:
+    """Summary, outline, and pairs already stored, or a short fallback."""
+    from app.kc_model import clean_pairs, split_brief
+
+    description = (node.description or "").strip()
+    outline = (node.outline or "").strip()
+    pairs = clean_pairs(node.topics)
+    if outline or pairs:
+        return description or outline, outline, pairs
+    split = split_brief(description)
+    if split is not None:
+        return split["description"], split["outline"], split["topics"]
+    summary = description or f"How {node.title} fits {goal.title}."
+    return summary, summary, [{"topic": node.title, "goal": f"Use {node.title}."}]
 
 
 def _draft_reply(draft: dict) -> str:
@@ -2272,10 +2338,19 @@ def _draft_reply(draft: dict) -> str:
     )
     title = draft.get("title") or "this component"
     description = str(draft.get("description") or "").strip()
+    outline = str(draft.get("outline") or "").strip()
+    pairs = draft.get("topics") or []
+    shown = []
+    if isinstance(pairs, list):
+        for item in pairs:
+            if isinstance(item, dict) and str(item.get("topic") or "").strip():
+                shown.append(f"{item.get('topic')} ({item.get('goal') or ''})".strip())
     brief = f"Description: {description}\n" if description else ""
     return (
         f"Draft for {title} only. Other components stay as they are.\n"
         f"{brief}"
+        f"Outline: {outline or 'none'}\n"
+        f"Topics: {'; '.join(shown) if shown else 'none'}\n"
         f"{body}\n"
         "Nothing is saved until you push it."
     )
@@ -2382,6 +2457,8 @@ def _revise_draft(previous: dict, message: str, goal: KcGoal, node: KcNode) -> d
         "code": previous.get("code") or node.code,
         "title": previous.get("title") or node.title,
         "description": str(previous.get("description") or node.description or ""),
+        "outline": str(previous.get("outline") or node.outline or ""),
+        "topics": list(previous.get("topics") if previous.get("topics") is not None else (node.topics or [])),
         "kc_type": previous.get("kc_type") or "conceptual",
         "core_truth": previous.get("core_truth") or "",
         "rubric": list(previous.get("rubric") or []),
@@ -2555,6 +2632,8 @@ def creator_prompt_for(db: Session, node: KcNode, message: str, model: str) -> d
             node_title=node.title,
             node_code=node.code,
             node_description=node.description or "",
+            node_outline=node.outline or "",
+            node_topics=list(node.topics or []),
             other_codes=others,
             previous=previous,
             message=message,
@@ -2787,6 +2866,8 @@ def clean_model_component(
         }
     else:
         fields = {key: raw.get(key) for key in TYPE_KEYS[kc_type]}
+    from app.kc_model import clean_pairs
+
     stored = node.type_fields or {}
     for key in ("transfer_case", "counterfactual"):
         if not str(fields.get(key) or "").strip() and str(stored.get(key) or "").strip():
@@ -2797,6 +2878,8 @@ def clean_model_component(
         "code": node.code,
         "title": title,
         "description": str(raw.get("description") or "").strip(),
+        "outline": str(raw.get("outline") or "").strip(),
+        "topics": clean_pairs(raw.get("topics")),
         "kc_type": kc_type,
         "core_truth": str(raw.get("core_truth") or "").strip(),
         "rubric": _clean_rubric(raw.get("rubric") or []),
@@ -2842,13 +2925,15 @@ def _require_recommendation(
     submitted_mix: tuple[str, str] | None = None,
 ) -> None:
     """A model draft names every field the editor can enter."""
-    description = str(draft.get("description") or "")
-    lowered = description.lower()
-    if not all(label in lowered for label in ("outline:", "topics:", "goals:")):
+    from app.kc_model import clean_pairs
+
+    if not str(draft.get("outline") or "").strip() or not clean_pairs(draft.get("topics")):
         raise HTTPException(
             status_code=422,
-            detail="Recommend a description with Outline, Topics, and Goals.",
+            detail="Recommend an outline and a topic with its goal.",
         )
+    if not str(draft.get("description") or "").strip():
+        raise HTTPException(status_code=422, detail="Recommend a short summary.")
     if not str(draft.get("core_truth") or "").strip():
         raise HTTPException(status_code=422, detail="Recommend a core truth.")
     if not draft.get("rubric"):

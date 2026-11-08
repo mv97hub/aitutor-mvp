@@ -1,7 +1,8 @@
 """Prompts for the KC Course Creator and KC Creator model calls.
 
 The syllabus still chooses a careful title list. The model names the subject
-and the major ideas, then writes each component's outline, topics, and goals.
+and the major ideas, then writes each component's summary, outline, and
+topic-goal pairs.
 A long list is titles first, then descriptions in slices. A pasted title list
 stays as written. Scoring is not part of this module.
 """
@@ -43,13 +44,14 @@ COURSE_RULES = (
     '"10 components" means 10 distinct components. '
     "A pasted title list is used as written. "
     "Only after the subject and the major ideas, return the component list. "
-    "Each component description has a short outline, the key topics, and the key goals."
+    "Each component has a short summary, a short outline, the key topics, and the key goals. "
+    "Each topic is one pair with its goal."
 )
 
 CREATOR_RULES = (
     "You are an expert curriculum maker for this knowledge component and the course kind. "
-    "The description is the brief: the outline, the key topics, and the key goals. "
-    "Use that brief. Recommend every field that can be entered: "
+    "The description is a short summary of the component. "
+    "Use that summary. Recommend every field that can be entered: "
     "description, title, type, the fields for that type, core truth, rubric checks, "
     "misconceptions, prerequisites, and encompasses. "
     "Use the course kind. Mastery is the fuller rigorous breakdown. "
@@ -59,16 +61,26 @@ CREATOR_RULES = (
     "Other components stay as they are."
 )
 
+_TOPIC_PAIR = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "topic": {"type": "string"},
+        "goal": {"type": "string"},
+    },
+    "required": ["topic", "goal"],
+}
+
 _COMPONENT_FIELDS = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
         "title": {"type": "string"},
+        "description": {"type": "string"},
         "outline": {"type": "string"},
-        "topics": {"type": "array", "items": {"type": "string"}},
-        "goals": {"type": "array", "items": {"type": "string"}},
+        "topics": {"type": "array", "items": _TOPIC_PAIR},
     },
-    "required": ["title", "outline", "topics", "goals"],
+    "required": ["title", "description", "outline", "topics"],
 }
 
 COURSE_SCHEMA = {
@@ -118,7 +130,12 @@ CREATOR_SCHEMA = {
     "properties": {
         "discussion": {"type": "string"},
         "title": {"type": "string"},
-        "description": {"type": "string"},
+        "description": {
+            "type": "string",
+            "description": "A short summary of the component. Not the outline and not the topic list.",
+        },
+        "outline": {"type": "string"},
+        "topics": {"type": "array", "items": _TOPIC_PAIR},
         "kc_type": {
             "type": "string",
             "enum": ["factual", "procedural", "conceptual", "causal", "synthesis"],
@@ -149,6 +166,8 @@ CREATOR_SCHEMA = {
         "discussion",
         "title",
         "description",
+        "outline",
+        "topics",
         "kc_type",
         "core_truth",
         "rubric",
@@ -203,20 +222,49 @@ def titles_are_sliced(description: str, titles: list[str]) -> bool:
     return hits == len(titles)
 
 
-def format_description(outline: object, topics: object, goals: object) -> str:
-    def parts(value: object) -> list[str]:
-        if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
-        if isinstance(value, str):
-            return [part.strip() for part in re.split(r"[;\n]", value) if part.strip()]
-        return []
+_BRIEF = re.compile(
+    r"^Outline:\s*(.*?)\nTopics:\s*(.*?)\nGoals:\s*(.*)\s*\Z",
+    re.DOTALL | re.IGNORECASE,
+)
 
-    outline_text = str(outline or "").strip()
-    topic_line = "; ".join(parts(topics))
-    goal_line = "; ".join(parts(goals))
-    if not outline_text or not topic_line or not goal_line:
-        return ""
-    return f"Outline: {outline_text}\nTopics: {topic_line}\nGoals: {goal_line}"
+
+def clean_pairs(value: object) -> list[dict]:
+    """Keep pairs that have both a topic and a goal. Drop the rest."""
+    if not isinstance(value, list):
+        return []
+    pairs: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        topic = str(item.get("topic") or "").strip()
+        goal = str(item.get("goal") or "").strip()
+        if topic and goal:
+            pairs.append({"topic": topic, "goal": goal})
+    return pairs
+
+
+def split_brief(description: str) -> dict | None:
+    """Split a stored three-line description once.
+
+    A description that is not that form stays a summary, with no pairs.
+    A topic without a goal, or a goal without a topic, is dropped.
+    The outline sentence becomes the summary.
+    """
+    match = _BRIEF.match((description or "").strip())
+    if match is None:
+        return None
+    outline = match.group(1).strip()
+    topics = [part.strip() for part in match.group(2).split(";") if part.strip()]
+    goals = [part.strip() for part in match.group(3).split(";") if part.strip()]
+    pairs: list[dict] = []
+    for index in range(max(len(topics), len(goals))):
+        topic = topics[index] if index < len(topics) else ""
+        goal = goals[index] if index < len(goals) else ""
+        if topic and goal:
+            pairs.append({"topic": topic, "goal": goal})
+    if not outline or not pairs:
+        return None
+    return {"description": outline, "outline": outline, "topics": pairs}
 
 
 def _kind_line(ctx: dict) -> str:
@@ -319,7 +367,8 @@ def course_bundle(
     else:
         lines.append(
             "Return the subject, the major ideas, and then the components. "
-            "Each component has a title, a short outline, key topics, and key goals."
+            "Each component has a title, a short summary, a short outline, key topics, and key goals. "
+            "Each topic is paired with its goal."
         )
         schema = COURSE_SCHEMA
         phase = "full"
@@ -370,7 +419,8 @@ def _description_bundle(
             _count_line(ctx),
             f"Subject: {subject}",
             f"Major ideas: {ideas}",
-            "These titles are already chosen. Write a short outline, the key topics, and the key goals for each one.",
+            "These titles are already chosen. Write a short summary, a short outline, the key topics, and the key goals for each one. "
+            "Each topic keeps the goal that belongs to it.",
             "Do not add a title, drop a title, or rename a title. Keep this order.",
             "Titles:",
             listed,
@@ -437,21 +487,24 @@ def _model_rows(proposal: dict) -> list[dict]:
     return [row for row in rows if isinstance(row, dict)]
 
 
-def _descriptions_for(rows: list[dict], titles: list[str]) -> list[str]:
+def _brief_fields(rows: list[dict], titles: list[str]) -> list[tuple[str, str, list[dict]]]:
     by_title: dict[str, dict] = {}
     for row in rows:
         key = str(row.get("title") or "").strip().lower()
         if key and key not in by_title:
             by_title[key] = row
-    written: list[str] = []
+    written: list[tuple[str, str, list[dict]]] = []
     for index, title in enumerate(titles):
         row = by_title.get(title.lower())
         if row is None and index < len(rows):
             row = rows[index]
         if row is None:
-            written.append("")
+            written.append(("", "", []))
             continue
-        written.append(format_description(row.get("outline"), row.get("topics"), row.get("goals")))
+        outline = str(row.get("outline") or "").strip()
+        pairs = clean_pairs(row.get("topics"))
+        summary = str(row.get("description") or "").strip() or outline
+        written.append((summary, outline, pairs))
     return written
 
 
@@ -529,8 +582,8 @@ def assemble_course(
     else:
         titles = _model_titles(rows)
     _check_titles(description, titles, ctx)
-    descriptions = _descriptions_for(rows, titles)
-    if any(not item for item in descriptions):
+    fields = _brief_fields(rows, titles)
+    if any(not outline or not pairs for _summary, outline, pairs in fields):
         raise ValueError("Each component needs a short outline, the key topics, and the key goals.")
     subject = str(proposal.get("subject") or "").strip() or str(ctx["subject"])
     if description and subject.lower() == description.strip().lower():
@@ -549,8 +602,13 @@ def assemble_course(
     return {
         "reply": reply,
         "components": [
-            {"title": component_title, "description": text}
-            for component_title, text in zip(titles, descriptions, strict=True)
+            {
+                "title": component_title,
+                "description": summary,
+                "outline": outline,
+                "topics": pairs,
+            }
+            for component_title, (summary, outline, pairs) in zip(titles, fields, strict=True)
         ],
     }
 
@@ -658,6 +716,8 @@ def creator_bundle(
     node_title: str,
     node_code: str,
     node_description: str,
+    node_outline: str = "",
+    node_topics: list | None = None,
     other_codes: list[str],
     previous: dict | None,
     message: str,
@@ -673,6 +733,8 @@ def creator_bundle(
     else:
         kind_line = "Kind: Mastery. Give the fuller rigorous treatment of this component."
     brief = (node_description or "").strip() or "This component has no description yet. Use the title and the course."
+    pair_lines = [f"- {item['topic']}: {item['goal']}" for item in clean_pairs(node_topics or [])]
+    stored_topics = "\n".join(pair_lines) if pair_lines else "- None yet."
     previous_line = "There is no draft yet. Go into the topic, then fill the fields."
     if previous:
         previous_line = (
@@ -690,11 +752,21 @@ def creator_bundle(
             f"Component: {node_title} ({node_code})",
             "Brief:",
             brief,
+            f"Outline: {(node_outline or '').strip() or 'None yet.'}",
+            "Stored topics:",
+            stored_topics,
             f"Other component codes: {codes}",
             previous_line,
             "The discussion comes first and goes into the topic. "
             "Then recommend every enterable field from the brief. "
-            "Write description as three lines: Outline, Topics, and Goals. "
+            "The description is a short summary. Do not fold the outline or the topic pairs into it. "
+            "Return the outline in the outline field. "
+            "Return each topic with the goal that belongs to it. "
+            "A topic does not exist without its goal, and a goal does not exist without its topic. "
+            "Check each goal against the topic, the curriculum, and ordinary knowledge of the subject. "
+            "Rewrite a goal that does not belong to its topic. "
+            "You may add a topic and goal the description left out. "
+            "Do not copy the description's topic list as written. "
             "Fill title, one type, the fields for that type, the core truth, "
             "one rubric line for each topic goal, then the practice checks, "
             "misconceptions, prerequisites, and encompasses. "

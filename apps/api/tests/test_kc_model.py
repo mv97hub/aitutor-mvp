@@ -33,10 +33,31 @@ GEOMETRY = (
 def _row(title: str) -> dict:
     return {
         "title": title,
+        "description": f"A short look at {title}.",
         "outline": f"How {title} works.",
-        "topics": [title, "a worked case"],
-        "goals": [f"Explain {title}", f"Use {title}"],
+        "topics": [
+            {"topic": title, "goal": f"Explain {title}"},
+            {"topic": "a worked case", "goal": f"Use {title}"},
+        ],
     }
+
+
+def test_a_three_line_description_splits_once_and_a_summary_stays() -> None:
+    from app.kc_model import split_brief
+
+    split = split_brief("Outline: The river is blue.\nTopics: color; banks\nGoals: Recall the color; Name a bank")
+    assert split == {
+        "description": "The river is blue.",
+        "outline": "The river is blue.",
+        "topics": [
+            {"topic": "color", "goal": "Recall the color"},
+            {"topic": "banks", "goal": "Name a bank"},
+        ],
+    }
+    assert split_brief("The river is blue.") is None
+    uneven = split_brief("Outline: Setup.\nTopics: color; banks\nGoals: Recall the color")
+    assert uneven is not None
+    assert uneven["topics"] == [{"topic": "color", "goal": "Recall the color"}]
 
 
 def test_menu_keeps_the_original_models_and_names_a_stronger_default() -> None:
@@ -127,9 +148,10 @@ def test_pasted_titles_stay_and_gain_descriptions() -> None:
     assert "Major ideas a strong course" in drafted["reply"]
     assert "from the titles you listed" in drafted["reply"]
     for item in drafted["components"]:
-        assert item["description"].startswith("Outline:")
-        assert "Topics:" in item["description"]
-        assert "Goals:" in item["description"]
+        assert item["description"].startswith("A short look at ")
+        assert item["outline"].startswith("How ")
+        assert item["topics"][0]["goal"].startswith("Explain ")
+        assert "Topics:" not in item["description"]
 
 
 def test_sliced_description_titles_are_rejected() -> None:
@@ -276,6 +298,10 @@ def test_creator_prompt_goes_deep_before_the_fields() -> None:
     assert "Mastery is the fuller rigorous breakdown" in prompt
     assert "description" in bundle["schema"]["required"]
     assert "Outline: The interior angles." in prompt
+    assert "Check each goal against the topic, the curriculum, and ordinary knowledge of the subject." in prompt
+    assert "Do not copy the description's topic list as written." in prompt
+    assert "outline" in bundle["schema"]["required"]
+    assert "topics" in bundle["schema"]["required"]
     assert "Go into the topic before you fill the type" in prompt
     assert "Do not change how an answer is scored" in prompt
     assert CREATOR_RULES.split(".")[0] in prompt
@@ -347,7 +373,9 @@ def test_an_unrepaired_broken_kc_names_the_rejected_code_and_the_allowed_codes()
     from app.kc import _require_recommendation
 
     draft = {
-        "description": "Outline: The river.\nTopics: color\nGoals: Recall it",
+        "description": "The river is blue.",
+        "outline": "The river.",
+        "topics": [{"topic": "color", "goal": "Recall it"}],
         "core_truth": "The river is blue.",
         "rubric": ["States the color"],
         "prerequisite_codes": ["zz-ok"],
@@ -477,7 +505,9 @@ def test_an_unrepaired_mix_names_the_rejected_strings_and_the_allowed_codes(capl
 
     caplog.set_level("WARNING", logger="app.kc")
     draft = {
-        "description": "Outline: The river.\nTopics: color\nGoals: Recall it",
+        "description": "The river is blue.",
+        "outline": "The river.",
+        "topics": [{"topic": "color", "goal": "Recall it"}],
         "core_truth": "The river is blue.",
         "rubric": ["States the color"],
         "prerequisite_codes": ["angles"],

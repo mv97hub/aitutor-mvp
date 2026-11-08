@@ -156,22 +156,27 @@ def is_fragment(answer: str, fact: str) -> bool:
     return 0 < len(answer_words) <= 3
 
 
-_BRIEF = re.compile(
-    r"^Outline:\s*(.*?)\nTopics:\s*(.*?)\nGoals:\s*(.*)\s*\Z",
-    re.DOTALL | re.IGNORECASE,
-)
 _LINK_SPLIT = re.compile(r"\s*(?:\n+|;|(?<=[.!?])\s+|\s+so\s+)\s*", re.IGNORECASE)
 
 
-def read_brief(description: str) -> tuple[str, list[str], list[str]]:
-    """Outline, topics, and goals from the three-line component description."""
-    match = _BRIEF.match((description or "").strip())
-    if match is None:
-        return "", [], []
-    outline = match.group(1).strip()
-    topics = [part.strip() for part in match.group(2).split(";") if part.strip()]
-    goals = [part.strip() for part in match.group(3).split(";") if part.strip()]
-    return outline, topics, goals
+def stored_outline(node: KcNode) -> str:
+    return str(getattr(node, "outline", "") or "").strip()
+
+
+def stored_pairs(node: KcNode) -> list[tuple[str, str]]:
+    """Topic and goal pairs. A pair missing either side is skipped."""
+    raw = getattr(node, "topics", None)
+    pairs: list[tuple[str, str]] = []
+    if not isinstance(raw, list):
+        return pairs
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        topic = str(item.get("topic") or "").strip()
+        goal = str(item.get("goal") or "").strip()
+        if topic and goal:
+            pairs.append((topic, goal))
+    return pairs
 
 
 def _has_text(value: object) -> bool:
@@ -198,24 +203,45 @@ def _chain_links(chain: str) -> list[str]:
     return [part for part in parts if part] or [text]
 
 
-def _discussions(topics: list[str], goals: list[str], fallback: list[str]) -> list[tuple[str, str]]:
-    """Topics in stored order, then any fallback field that is not already a topic."""
-    source = list(topics)
-    seen = {_norm_text(topic) for topic in topics}
+def _with_fallback(pairs: list[tuple[str, str]], fallback: list[str]) -> list[tuple[str, str]]:
+    """Stored pairs, then any fallback field that is not already a topic."""
+    source = list(pairs)
+    seen = {_norm_text(topic) for topic, _goal in pairs}
     for item in fallback:
         key = _norm_text(item)
         if key and key not in seen:
-            source.append(item)
+            source.append((item, ""))
             seen.add(key)
-    pairs: list[tuple[str, str]] = []
-    for index, text in enumerate(source):
-        pairs.append((text, goals[index] if index < len(goals) else ""))
-    return pairs
+    return source
 
 
-def _topic_moves(topics: list[str], goals: list[str], fallback: list[str]) -> list[Move]:
+def _walk_pairs(node: KcNode) -> list[tuple[str, str]]:
+    """The topic turns for this type. The description is not read."""
+    kind = node.kc_type or ""
+    fields = node.type_fields or {}
+    pairs = stored_pairs(node)
+    named = [topic for topic, _goal in pairs]
+    if kind == "procedural":
+        fallback = _string_list(fields.get("steps"))
+    elif kind == "causal":
+        fallback = [] if named else _chain_links(str(fields.get("causal_chain") or ""))
+    elif kind == "synthesis":
+        fallback = [] if named else _string_list(fields.get("mixes"))
+    else:
+        fallback = []
+    return _with_fallback(pairs, fallback)
+
+
+def topic_goal(node: KcNode, index: int) -> str:
+    pairs = _walk_pairs(node)
+    if 0 <= index < len(pairs):
+        return pairs[index][1]
+    return ""
+
+
+def _topic_moves(pairs: list[tuple[str, str]]) -> list[Move]:
     moves: list[Move] = []
-    for index, (text, goal) in enumerate(_discussions(topics, goals, fallback), start=1):
+    for index, (text, goal) in enumerate(pairs, start=1):
         evidence = (f"goal-{index}",) if goal else ()
         moves.append(Move(f"topic-{index}", text, evidence, False))
     return moves
@@ -232,7 +258,8 @@ def moves_for(
     kind = node.kc_type or ""
     fields = node.type_fields or {}
     explain = self_explanation_on(profile)
-    outline, topics, goals = read_brief(node.description or "")
+    outline = stored_outline(node)
+    topic_moves = _topic_moves(_walk_pairs(node))
     steps = _string_list(fields.get("steps"))
     mixes = _string_list(fields.get("mixes"))
     chain = str(fields.get("causal_chain") or "").strip()
@@ -240,7 +267,7 @@ def moves_for(
     if outline or (kind == "synthesis" and mixes):
         sequence.append(Move("orient", "Orient", (), False))
     if kind == "factual":
-        sequence.extend(_topic_moves(topics, goals, []))
+        sequence.extend(topic_moves)
         fact = str(fields.get("fact") or "").strip()
         question = str(fields.get("retrieval_question") or "").strip()
         if fact or question:
@@ -248,7 +275,7 @@ def moves_for(
             if explain and fragment:
                 sequence.append(Move("restate", "Restate", ("restatement",), False))
     elif kind == "procedural":
-        discussed = _topic_moves(topics, goals, steps)
+        discussed = topic_moves
         sequence.extend(discussed)
         if discussed:
             sequence.append(Move("decide", "Decision point", (), False))
@@ -261,7 +288,7 @@ def moves_for(
         if explain and discussed:
             sequence.append(Move("why_order", "Why this order", ("why_order",), False))
     elif kind == "conceptual":
-        sequence.extend(_topic_moves(topics, goals, []))
+        sequence.extend(topic_moves)
         case_a = str(fields.get("case_a") or "").strip()
         case_b = str(fields.get("case_b") or "").strip()
         prediction = str(fields.get("prediction") or "").strip()
@@ -280,8 +307,7 @@ def moves_for(
         if transfer:
             sequence.append(Move("transfer", "Transfer", ("transfer",), False))
     elif kind == "causal":
-        links = [] if topics else _chain_links(chain)
-        sequence.extend(_topic_moves(topics, goals, links))
+        sequence.extend(topic_moves)
         if _has_text(fields.get("decision_point")):
             sequence.append(Move("stake", "What is at stake", (), False))
         if _has_text(fields.get("flawed_claim")):
@@ -291,7 +317,7 @@ def moves_for(
         if explain and _has_text(fields.get("counterfactual")):
             sequence.append(Move("counterfactual", "Counterfactual", ("counterfactual",), False))
     elif kind == "synthesis":
-        sequence.extend(_topic_moves(topics, goals, [] if topics else mixes))
+        sequence.extend(topic_moves)
         if _has_text(fields.get("faulty_plan")):
             sequence.append(Move("faulty", "Faulty plan", (), False))
         if _has_text(node.core_truth):
@@ -336,10 +362,7 @@ def _goal_text(node: KcNode, move: Move) -> str:
         index = int(move.key.split("-", 1)[1]) - 1
     except ValueError:
         return ""
-    _outline, _topics, goals = read_brief(node.description or "")
-    if 0 <= index < len(goals):
-        return goals[index]
-    return ""
+    return topic_goal(node, index)
 
 
 def _topic_count(moves: list[Move]) -> int:
@@ -359,7 +382,7 @@ def _topic_number(moves: list[Move], move: Move) -> int:
 def move_material(node: KcNode, move: Move) -> str:
     fields = node.type_fields or {}
     if move.key == "orient":
-        outline, _topics, _goals = read_brief(node.description or "")
+        outline = stored_outline(node)
         if outline:
             return f"Outline: {outline}"
         mixes = _string_list(fields.get("mixes"))
@@ -900,7 +923,7 @@ def _what_to_teach(
             lines.append(f"The goal is {goal_text}.")
         return lines
     if move.key == "orient":
-        outline, _topics, _goals = read_brief(node.description or "")
+        outline = stored_outline(node)
         if outline:
             return [f"The outline is {outline}."]
         mixes = _string_list((node.type_fields or {}).get("mixes"))

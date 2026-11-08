@@ -387,7 +387,8 @@ def test_draft_is_not_written_until_push() -> None:
         assert pushed.status_code == 200, pushed.text
         titles = [item["title"] for item in pushed.json()["components"]]
         assert titles == ["Angle sum", "Missing angle", "SAS versus SSA", "Congruence"]
-        assert all(item["description"].startswith("Outline:") for item in pushed.json()["components"])
+        assert all(item["outline"] and item["topics"] for item in pushed.json()["components"])
+        assert all(not item["description"].startswith("Outline:") for item in pushed.json()["components"])
         structure = client.get(f"/kc/courses/{course['id']}/structure").json()
         shown = [row["description"] for group in structure["groups"] for row in group["components"]]
         assert shown == [item["description"] for item in pushed.json()["components"]]
@@ -1220,7 +1221,9 @@ def _model_fields(**overrides: object) -> dict:
             "River fact is the claim that this river is blue, which is why a kid has to recall the color "
             "before any later step in the course."
         ),
-        "description": "Outline: The river is blue.\nTopics: color\nGoals: Recall the color",
+        "description": "The river is blue.",
+        "outline": "How the river looks.",
+        "topics": [{"topic": "color", "goal": "Recall the color"}],
         "title": "River fact",
         "kc_type": "factual",
         "core_truth": "The river in this course is blue.",
@@ -1271,18 +1274,20 @@ def test_model_draft_recommends_every_field_and_push_keeps_the_description() -> 
             json=_component("River fact", description="Outline: Edited by hand.\nTopics: color\nGoals: Recall it"),
         )
         assert saved.status_code == 200, saved.text
-        assert saved.json()["description"].startswith("Outline: Edited by hand.")
+        assert saved.json()["description"] == "Edited by hand."
+        assert saved.json()["outline"] == "Edited by hand."
+        assert saved.json()["topics"] == [{"topic": "color", "goal": "Recall it"}]
 
         thin = client.post(
             f"/kc/nodes/{river['id']}/model-turn",
             json={
                 "message": "Draft this.",
                 "discussion": _model_fields()["discussion"],
-                "draft": _model_fields(description=""),
+                "draft": _model_fields(outline="", topics=[]),
             },
         )
         assert thin.status_code == 422
-        assert "Outline" in thin.json()["detail"]
+        assert "outline" in thin.json()["detail"].lower()
 
         full = client.post(
             f"/kc/nodes/{river['id']}/model-turn",
@@ -1290,7 +1295,9 @@ def test_model_draft_recommends_every_field_and_push_keeps_the_description() -> 
         )
         assert full.status_code == 200, full.text
         draft = full.json()["draft"]
-        assert draft["description"].startswith("Outline:")
+        assert draft["description"] == "The river is blue."
+        assert draft["outline"] == "How the river looks."
+        assert draft["topics"] == [{"topic": "color", "goal": "Recall the color"}]
         assert draft["kc_type"] == "factual"
         assert draft["type_fields"]["fact"] == "The river is blue."
         assert draft["type_fields"]["retrieval_question"] == "What color is the river?"
@@ -1301,7 +1308,9 @@ def test_model_draft_recommends_every_field_and_push_keeps_the_description() -> 
 
         written = client.post(f"/kc/nodes/{river['id']}/push", json=draft)
         assert written.status_code == 200, written.text
-        assert written.json()["description"].startswith("Outline:")
+        assert written.json()["description"] == "The river is blue."
+        assert written.json()["outline"] == "How the river looks."
+        assert written.json()["topics"] == [{"topic": "color", "goal": "Recall the color"}]
         assert written.json()["core_truth"] == "The river in this course is blue."
         assert written.json()["type_fields"]["fact"] == "The river is blue."
         assert written.json()["prerequisite_codes"] == ["zz-fields-b"]

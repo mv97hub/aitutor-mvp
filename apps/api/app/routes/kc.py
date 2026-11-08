@@ -124,6 +124,8 @@ class DeleteIn(BaseModel):
 class ComponentIn(BaseModel):
     title: str | None = None
     description: str | None = None
+    outline: str | None = None
+    topics: list | None = None
     kc_type: str
     core_truth: str = ""
     rubric: list[str] = Field(default_factory=list)
