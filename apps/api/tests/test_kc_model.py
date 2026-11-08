@@ -391,14 +391,11 @@ def test_an_unrepaired_broken_kc_names_the_rejected_code_and_the_allowed_codes()
     draft = {
         "description": "The river is blue.",
         "outline": "The river.",
-        "topics": [{"topic": "color", "goal": "Recall it"}],
         "core_truth": "The river is blue.",
-        "rubric": ["States the color"],
+        "blocks": [{"id": "blk_1", "type": "topic_goal", "data": {"topic": "color", "goal": "Recall it"}}],
         "prerequisite_codes": ["zz-ok"],
         "encompasses_codes": [],
         "misconceptions": [{"wrong_move": "It is red", "broken_kc": "not-a-code"}],
-        "kc_type": "factual",
-        "type_fields": {"fact": "The river is blue.", "retrieval_question": "What color?"},
     }
     with pytest.raises(HTTPException) as caught:
         _require_recommendation(draft, ["zz-ok", "zz-other"])
@@ -509,23 +506,17 @@ def test_fewer_than_two_other_codes_keep_a_named_code_and_drop_a_title() -> None
 
 
 def test_an_unrepaired_mix_names_the_rejected_strings_and_the_allowed_codes(caplog) -> None:
-    from app.kc import _require_recommendation
+    from app.kc import _require_type_fields
 
     caplog.set_level("WARNING", logger="app.kc")
-    draft = {
-        "description": "The river is blue.",
-        "outline": "The river.",
-        "topics": [{"topic": "color", "goal": "Recall it"}],
-        "core_truth": "The river is blue.",
-        "rubric": ["States the color"],
-        "prerequisite_codes": ["angles"],
-        "encompasses_codes": [],
-        "misconceptions": [{"wrong_move": "It is red", "broken_kc": "angles"}],
-        "kc_type": "synthesis",
-        "type_fields": {"mixes": ["angles", "angles"], "faulty_plan": "The rookie swaps them."},
-    }
     with pytest.raises(HTTPException) as caught:
-        _require_recommendation(draft, ["angles", "lines"], node_id="15370df9-8e61-4e84-89d8-2d1af8651463")
+        _require_type_fields(
+            "synthesis",
+            {"mixes": ["angles", "angles"], "faulty_plan": "The rookie swaps them."},
+            {"angles", "lines"},
+            other_codes=["angles", "lines"],
+            node_id="15370df9-8e61-4e84-89d8-2d1af8651463",
+        )
     assert caught.value.status_code == 422
     detail = str(caught.value.detail)
     assert 'Rejected: "angles" and "angles".' in detail

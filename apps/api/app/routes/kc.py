@@ -136,7 +136,7 @@ class ComponentIn(BaseModel):
     kc_type: str | None = None
     type_fields: dict = Field(default_factory=dict)
     core_truth: str = ""
-    rubric: list[str] = Field(default_factory=list)
+    rubric: list[str] | None = None
     misconceptions: list[dict] = Field(default_factory=list)
     prerequisite_codes: list[str] = Field(default_factory=list)
     encompasses_codes: list[str] = Field(default_factory=list)

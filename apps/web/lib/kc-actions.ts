@@ -226,18 +226,7 @@ export async function saveKcComponent(formData: FormData) {
         title: String(formData.get("title") || ""),
         description: String(formData.get("description") || ""),
         outline: String(formData.get("outline") || ""),
-        topics: formData
-          .getAll("topic")
-          .map((topic, index) => ({
-            topic: String(topic).trim(),
-            goal: String(formData.getAll("goal")[index] || "").trim(),
-          }))
-          .filter((item) => item.topic && item.goal),
         core_truth: String(formData.get("core_truth") || ""),
-        rubric: formData
-          .getAll("rubric")
-          .map((item) => String(item).trim())
-          .filter(Boolean),
         misconceptions,
         prerequisite_codes: formData.getAll("prerequisite_codes").map(String),
         encompasses_codes: formData.getAll("encompasses_codes").map(String),

@@ -351,11 +351,9 @@ function CreatorChat({
 const TIPS = {
   description: "A short summary of this component. The walk does not read it.",
   outline: "The outline Orient elaborates. It is not a topic.",
-  topic: "One topic the walk discusses, with the goal that belongs to it.",
-  goal: "The goal that belongs to this topic. The topic turn looks for it.",
   title: "The name the kid sees on the card and during the lesson.",
   core_truth: "The idea the tutor says back after a miss, and the line several steps accept.",
-  rubric: "A check the tutor is told a good answer has to meet.",
+  rubric: "Derived from the blocks, in block order. It is not typed here.",
   wrong_move: "If the kid's answer matches this, the tutor names the mistake once and opens the broken component.",
   broken_kc: "The component the tutor opens after that wrong move.",
   prerequisite: "A component the kid should already know. The tutor offers this one once those are known.",
@@ -376,7 +374,6 @@ function ComponentEditor({
   const codes = [...course.components, ...course.patches]
     .map((item) => item.code)
     .filter((code) => code !== component.code);
-  const rubric = [...component.rubric, "", "", ""].slice(0, 3);
   const misconceptions: KcMisconception[] =
     component.misconceptions.length > 0 ? component.misconceptions : [{ wrong_move: "", broken_kc: "" }];
   const canComplete = component.missing.length === 0 && !component.marked_complete;
@@ -414,7 +411,6 @@ function ComponentEditor({
           rows={3}
         />
       </label>
-      <TopicRows initial={component.topics ?? []} />
       {component.recommended_blocks?.length ? (
         <p className="ds-quiet">
           Recommended blocks: {component.recommended_blocks.map((item) => BLOCK_LABELS[item.type] ?? item.type).join(", ")}
@@ -431,18 +427,16 @@ function ComponentEditor({
           rows={2}
         />
       </label>
-      <fieldset>
-        <legend>Rubric checks, one to three</legend>
-        {rubric.map((check, index) => (
-          <input
-            key={index}
-            aria-label={`Rubric check ${index + 1}`}
-            name="rubric"
-            title={TIPS.rubric}
-            defaultValue={check}
-          />
-        ))}
-      </fieldset>
+      {component.rubric.length ? (
+        <fieldset>
+          <legend title={TIPS.rubric}>Rubric checks, from the blocks</legend>
+          <ul aria-label="Rubric checks">
+            {component.rubric.map((check, index) => (
+              <li key={`${index}-${check}`}>{check}</li>
+            ))}
+          </ul>
+        </fieldset>
+      ) : null}
       <fieldset>
         <legend>Misconceptions</legend>
         {misconceptions.map((item, index) => (
@@ -519,54 +513,6 @@ function ComponentEditor({
       <HistoryLog label="Component history" text={component.history ?? ""} />
       <HistoryLog label="Course history" text={course.history ?? ""} />
     </>
-  );
-}
-
-function TopicRows({ initial }: { initial: { topic: string; goal: string }[] }) {
-  const [rows, setRows] = useState(initial.length ? initial : [{ topic: "", goal: "" }]);
-  return (
-    <fieldset>
-      <legend>Topics</legend>
-      {rows.map((row, index) => (
-        <div className="kc-topic-row" key={index}>
-          <input
-            aria-label={`Topic ${index + 1}`}
-            name="topic"
-            title={TIPS.topic}
-            value={row.topic}
-            placeholder="Topic"
-            onChange={(event) => {
-              const next = rows.slice();
-              next[index] = { ...row, topic: event.target.value };
-              setRows(next);
-            }}
-          />
-          <input
-            aria-label={`Goal ${index + 1}`}
-            name="goal"
-            title={TIPS.goal}
-            value={row.goal}
-            placeholder="Goal"
-            onChange={(event) => {
-              const next = rows.slice();
-              next[index] = { ...row, goal: event.target.value };
-              setRows(next);
-            }}
-          />
-          <button
-            className="ghost"
-            type="button"
-            aria-label={`Remove topic ${index + 1}`}
-            onClick={() => setRows(rows.filter((_, item) => item !== index))}
-          >
-            Remove
-          </button>
-        </div>
-      ))}
-      <button className="ghost kc-topic-add" type="button" onClick={() => setRows([...rows, { topic: "", goal: "" }])}>
-        Add topic
-      </button>
-    </fieldset>
   );
 }
 
