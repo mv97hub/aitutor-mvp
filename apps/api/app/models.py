@@ -549,6 +549,7 @@ class KcNode(Base):
     marked_complete: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    history: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
@@ -609,6 +610,7 @@ class KcGoal(Base):
     minutes: Mapped[int | None] = mapped_column(Integer)
     target_kc_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    history: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )

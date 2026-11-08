@@ -409,7 +409,9 @@ function ComponentEditor({
   const canComplete = component.missing.length === 0 && !component.marked_complete;
 
   return (
-    <form className="kc-editor" action={saveKcComponent}>
+    <>
+      <HistoryLog label="Course history" text={course.history ?? ""} />
+      <form className="kc-editor" action={saveKcComponent}>
       <input type="hidden" name="course_id" value={course.id} />
       <input type="hidden" name="node_id" value={component.id} />
       <input type="hidden" name="model" value={model} />
@@ -542,7 +544,18 @@ function ComponentEditor({
           {component.marked_complete ? "Marked complete" : "Mark complete"}
         </button>
       </div>
-    </form>
+      </form>
+      <HistoryLog label="Component history" text={component.history ?? ""} />
+    </>
+  );
+}
+
+function HistoryLog({ label, text }: { label: string; text: string }) {
+  return (
+    <section className="kc-history">
+      <h3>{label}</h3>
+      <pre aria-label={label}>{text.trim() ? text : "No history yet."}</pre>
+    </section>
   );
 }
 

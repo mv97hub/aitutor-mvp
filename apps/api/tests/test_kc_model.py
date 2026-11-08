@@ -289,6 +289,82 @@ def test_creator_prompt_goes_deep_before_the_fields() -> None:
     assert kept.startswith("Triangle angle sum")
 
 
+def test_creator_schema_limits_broken_kc_to_the_other_codes() -> None:
+    bundle = creator_bundle(
+        course_title="Euclidean geometry",
+        course_description=GEOMETRY,
+        audience="12-14",
+        kind="mastery",
+        minutes=None,
+        node_title="Triangle angle sum",
+        node_code="angle-sum",
+        node_description="Outline: The interior angles.\nTopics: 180 degrees\nGoals: State the sum",
+        other_codes=["missing-angle", "congruence"],
+        previous=None,
+        message="Draft this component.",
+        model="gpt-4.1",
+    )
+    broken = bundle["schema"]["properties"]["misconceptions"]["items"]["properties"]["broken_kc"]
+    assert broken["enum"] == ["missing-angle", "congruence"]
+    assert "angle-sum" not in broken["enum"]
+    prompt = bundle["system_prompt"]
+    assert "Copy one code from the other component codes into broken_kc." in prompt
+    assert "It is not a description and not this component's code." in prompt
+    assert "Use an empty list when none of those links fit." not in prompt
+    assert "empty misconception" not in prompt.lower()
+    for sentence in prompt.replace("\n", " ").split("."):
+        if "empty" in sentence.lower() and "list" in sentence.lower():
+            assert "misconception" not in sentence.lower()
+    assert "history" not in bundle["schema"]["properties"]
+
+
+def test_creator_schema_asks_for_no_broken_kc_without_a_sibling() -> None:
+    bundle = creator_bundle(
+        course_title="Euclidean geometry",
+        course_description=GEOMETRY,
+        audience="12-14",
+        kind="mastery",
+        minutes=None,
+        node_title="Triangle angle sum",
+        node_code="angle-sum",
+        node_description="Outline: The interior angles.\nTopics: 180 degrees\nGoals: State the sum",
+        other_codes=[],
+        previous=None,
+        message="Draft this component.",
+        model="gpt-4.1",
+    )
+    misconceptions = bundle["schema"]["properties"]["misconceptions"]
+    assert misconceptions["maxItems"] == 0
+    assert "broken_kc" not in misconceptions["items"].get("properties", {})
+    prompt = bundle["system_prompt"]
+    assert "Return an empty misconceptions array." in prompt
+    assert "Do not ask for a broken_kc." in prompt
+    assert "Copy one code from the other component codes" not in prompt
+    assert "history" not in bundle["schema"]["properties"]
+
+
+def test_an_unrepaired_broken_kc_names_the_rejected_code_and_the_allowed_codes() -> None:
+    from app.kc import _require_recommendation
+
+    draft = {
+        "description": "Outline: The river.\nTopics: color\nGoals: Recall it",
+        "core_truth": "The river is blue.",
+        "rubric": ["States the color"],
+        "prerequisite_codes": ["zz-ok"],
+        "encompasses_codes": [],
+        "misconceptions": [{"wrong_move": "It is red", "broken_kc": "not-a-code"}],
+        "kc_type": "factual",
+        "type_fields": {"fact": "The river is blue.", "retrieval_question": "What color?"},
+    }
+    with pytest.raises(HTTPException) as caught:
+        _require_recommendation(draft, ["zz-ok", "zz-other"])
+    assert caught.value.status_code == 422
+    detail = str(caught.value.detail)
+    assert "not-a-code" in detail
+    assert "zz-ok" in detail
+    assert "zz-other" in detail
+
+
 def test_finish_route_keeps_pasted_titles_and_does_not_write() -> None:
     created = client.post(
         "/kc/courses",

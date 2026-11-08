@@ -10,7 +10,9 @@ from __future__ import annotations
 import math
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import and_, delete, func, or_, select
@@ -261,7 +263,7 @@ def _clean_misconceptions(values: object) -> list[dict]:
         broken = str(item.get("broken_kc") or "").strip()
         if not wrong and not broken:
             continue
-        if not wrong or not broken:
+        if not wrong:
             raise HTTPException(
                 status_code=422,
                 detail="A misconception needs a wrong move and the component that is broken.",
@@ -400,6 +402,7 @@ def _detail(node: KcNode, *, target: bool, codes: set[str]) -> dict:
             "type_fields": dict(node.type_fields or {}),
             "marked_complete": bool(node.marked_complete),
             "missing": gaps_for(node, codes),
+            "history": node.history or "",
         }
     )
     return body
@@ -422,6 +425,7 @@ def course_out(db: Session, goal: KcGoal) -> dict:
         "kind": goal.kind,
         "minutes": goal.minutes,
         "ready": goal.ready,
+        "history": goal.history or "",
         "updated_at": goal.updated_at.isoformat(),
         "components": [_detail(node, target=True, codes=codes) for node in targets],
         "patches": [_detail(node, target=False, codes=codes) for node in patches],
@@ -2562,7 +2566,100 @@ def _other_codes(db: Session, node: KcNode, ordered: list[KcNode]) -> list[str]:
     return [item.code for item in [*ordered, *patches] if item.id != node.id]
 
 
-def clean_model_component(node: KcNode, raw: dict, other_codes: list[str] | None = None) -> dict:
+@dataclass(frozen=True)
+class BrokenKcRepair:
+    """One misconception whose broken_kc was not a code on this course."""
+
+    rejected: str
+    allowed: tuple[str, ...]
+    dropped: bool
+
+
+def _et_stamp(moment: datetime | None = None) -> str:
+    """A clock time in America/New_York, labeled ET."""
+    current = moment or _now()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M:%S ET")
+
+
+def append_history(record: KcNode | KcGoal, line: str) -> None:
+    """Add one line. Earlier lines stay."""
+    text = line.strip()
+    if not text:
+        return
+    current = str(record.history or "").strip()
+    record.history = f"{current}\n{text}" if current else text
+
+
+def _repair_line(repair: BrokenKcRepair, stamp: str) -> str:
+    allowed = ", ".join(repair.allowed) if repair.allowed else "none"
+    issue = (
+        f'broken_kc "{repair.rejected}" is not another component on this course. '
+        f"Allowed codes: {allowed}."
+    )
+    if repair.dropped:
+        change = (
+            f'Changed broken_kc from "{repair.rejected}" to removed '
+            "(that misconception was dropped because a code is required)"
+        )
+    else:
+        change = f'Changed broken_kc from "{repair.rejected}" to ""'
+    return f"{stamp} Warning: {issue} {change} so creation could continue."
+
+
+def record_repairs(node: KcNode, goal: KcGoal, repairs: list[BrokenKcRepair]) -> None:
+    if not repairs:
+        return
+    stamp = _et_stamp()
+    for repair in repairs:
+        line = _repair_line(repair, stamp)
+        append_history(node, line)
+        append_history(goal, line)
+
+
+def record_ai_push(db: Session, node: KcNode) -> None:
+    """The creator push wrote an AI draft onto this component."""
+    goal, _ordered = course_of_node(db, node)
+    line = f"{_et_stamp()} Push from AI."
+    append_history(node, line)
+    append_history(goal, line)
+
+
+def _repair_broken_kc(
+    items: list[dict], other_codes: list[str]
+) -> tuple[list[dict], list[BrokenKcRepair]]:
+    """Keep a code the model chose. Clear or drop one it did not.
+
+    A required code (the course has other components) cannot be stored blank,
+    so that misconception is dropped. Otherwise broken_kc is cleared to "".
+    A sibling code is never substituted.
+    """
+    allowed = set(other_codes)
+    requires_code = bool(other_codes)
+    kept: list[dict] = []
+    repairs: list[BrokenKcRepair] = []
+    for item in items:
+        broken = str(item.get("broken_kc") or "")
+        wrong = str(item.get("wrong_move") or "")
+        if broken in allowed:
+            kept.append({"wrong_move": wrong, "broken_kc": broken})
+            continue
+        if not broken and not requires_code:
+            kept.append({"wrong_move": wrong, "broken_kc": ""})
+            continue
+        repairs.append(
+            BrokenKcRepair(rejected=broken, allowed=tuple(other_codes), dropped=requires_code)
+        )
+        if requires_code:
+            continue
+        kept.append({"wrong_move": wrong, "broken_kc": ""})
+    return kept, repairs
+
+
+def clean_model_component(
+    node: KcNode, raw: dict, other_codes: list[str] | None = None
+) -> tuple[dict, list[BrokenKcRepair]]:
     if not isinstance(raw, dict):
         raise HTTPException(status_code=422, detail="The model reply could not be read.")
     kc_type = str(raw.get("kc_type") or "").strip()
@@ -2594,16 +2691,21 @@ def clean_model_component(node: KcNode, raw: dict, other_codes: list[str] | None
         "kc_type": kc_type,
         "core_truth": str(raw.get("core_truth") or "").strip(),
         "rubric": _clean_rubric(raw.get("rubric") or []),
-        "misconceptions": _clean_misconceptions(raw.get("misconceptions") or []),
         "prerequisite_codes": _clean_codes(raw.get("prerequisite_codes") or []),
         "encompasses_codes": _clean_codes(raw.get("encompasses_codes") or []),
         "type_fields": _clean_type_fields(kc_type, fields),
     }
-    _require_recommendation(shaped, list(other_codes or []))
-    return shaped
+    codes = list(other_codes or [])
+    misconceptions, repairs = _repair_broken_kc(
+        _clean_misconceptions(raw.get("misconceptions") or []),
+        codes,
+    )
+    shaped["misconceptions"] = misconceptions
+    _require_recommendation(shaped, codes, repaired=bool(repairs))
+    return shaped, repairs
 
 
-def _require_recommendation(draft: dict, other_codes: list[str]) -> None:
+def _require_recommendation(draft: dict, other_codes: list[str], *, repaired: bool = False) -> None:
     """A model draft names every field the editor can enter."""
     description = str(draft.get("description") or "")
     lowered = description.lower()
@@ -2627,12 +2729,22 @@ def _require_recommendation(draft: dict, other_codes: list[str]) -> None:
             detail="Prerequisite and encompasses codes have to be other components on this course.",
         )
     misconceptions = list(draft["misconceptions"])
-    if any(item["broken_kc"] not in allowed for item in misconceptions):
+    rejected = [
+        str(item["broken_kc"])
+        for item in misconceptions
+        if str(item["broken_kc"]) and str(item["broken_kc"]) not in allowed
+    ]
+    if rejected:
+        codes = ", ".join(other_codes) if other_codes else "none"
+        shown = ", ".join(repr(item) for item in rejected)
         raise HTTPException(
             status_code=422,
-            detail="A misconception names another component on this course.",
+            detail=(
+                "A misconception names another component on this course. "
+                f"Rejected: {shown}. Allowed codes: {codes}."
+            ),
         )
-    if allowed and not misconceptions:
+    if allowed and not misconceptions and not repaired:
         raise HTTPException(
             status_code=422,
             detail="Recommend a misconception: a wrong move and the component that is broken.",
@@ -2700,8 +2812,9 @@ def accept_model_turn(db: Session, node: KcNode, message: str, discussion: str, 
         depth = checked_discussion(discussion, node.title)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _goal, ordered = course_of_node(db, node)
-    shaped = clean_model_component(node, draft, _other_codes(db, node, ordered))
+    goal, ordered = course_of_node(db, node)
+    shaped, repairs = clean_model_component(node, draft, _other_codes(db, node, ordered))
+    record_repairs(node, goal, repairs)
     _add_creator_message(db, node, "user", cleaned)
     _add_creator_message(
         db,

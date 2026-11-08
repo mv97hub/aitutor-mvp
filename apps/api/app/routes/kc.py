@@ -34,6 +34,7 @@ from app.kc import (
     network,
     node_out,
     note_component_saved,
+    record_ai_push,
     open_session,
     post_creator_turn,
     progress,
@@ -326,6 +327,7 @@ def post_node_draft(node_id: uuid.UUID, body: DraftIn, db: Session = Depends(get
 def post_node_push(node_id: uuid.UUID, body: ComponentIn, db: Session = Depends(get_db)) -> dict:
     node = apply_component(db, _node_or_404(db, node_id), body.model_dump())
     note_component_saved(db, node)
+    record_ai_push(db, node)
     return node_out(db, node)
 
 
