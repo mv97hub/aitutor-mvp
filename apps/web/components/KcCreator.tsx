@@ -26,6 +26,7 @@ import {
   type FastAction,
   type FastRecord,
 } from "@/lib/kc-fast-create";
+import { creatorPushPayload } from "@/lib/kc-creator-push";
 import { kcModel } from "@/lib/kc-models";
 
 const acted = new Set<string>();
@@ -320,19 +321,7 @@ function CreatorChat({
           <input
             type="hidden"
             name="payload"
-            value={JSON.stringify({
-              description: draft.description ?? component.description,
-              outline: draft.outline ?? component.outline,
-              topics: draft.topics ?? component.topics,
-              title: draft.title,
-              kc_type: draft.kc_type,
-              core_truth: draft.core_truth,
-              rubric: draft.rubric,
-              misconceptions: draft.misconceptions,
-              prerequisite_codes: draft.prerequisite_codes,
-              encompasses_codes: draft.encompasses_codes,
-              type_fields: draft.type_fields,
-            })}
+            value={JSON.stringify(creatorPushPayload(draft, component))}
           />
           <button className="button studio-push" type="submit">
             Push draft

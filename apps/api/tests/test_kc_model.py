@@ -58,6 +58,21 @@ def test_a_three_line_description_splits_once_and_a_summary_stays() -> None:
     uneven = split_brief("Outline: Setup.\nTopics: color; banks\nGoals: Recall the color")
     assert uneven is not None
     assert uneven["topics"] == [{"topic": "color", "goal": "Recall the color"}]
+    four = split_brief(
+        "Outline: The river.\n"
+        "Topics: color; banks; current; source\n"
+        "Goals: Recall the color; Name a bank; Say the flow; Name the source"
+    )
+    assert four is not None
+    assert four["topics"] == [
+        {"topic": "color", "goal": "Recall the color"},
+        {"topic": "banks", "goal": "Name a bank"},
+        {"topic": "current", "goal": "Say the flow"},
+        {"topic": "source", "goal": "Name the source"},
+    ]
+    from app.kc_model import clean_pairs
+
+    assert clean_pairs(four["topics"]) == four["topics"]
 
 
 def test_menu_keeps_the_original_models_and_names_a_stronger_default() -> None:
@@ -302,6 +317,10 @@ def test_creator_prompt_goes_deep_before_the_fields() -> None:
     assert "Do not copy the description's topic list as written." in prompt
     assert "outline" in bundle["schema"]["required"]
     assert "topics" in bundle["schema"]["required"]
+    topics = bundle["schema"]["properties"]["topics"]
+    assert topics["type"] == "array"
+    assert "maxItems" not in topics
+    assert "maxItems" not in topics["items"]
     assert "Go into the topic before you fill the type" in prompt
     assert "Do not change how an answer is scored" in prompt
     assert CREATOR_RULES.split(".")[0] in prompt
