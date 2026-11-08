@@ -880,6 +880,7 @@ def _authored_blocks(raw: object) -> list[dict]:
 
 def apply_component(db: Session, node: KcNode, body: dict) -> KcNode:
     """Replace this component and the edges it owns. Other components stay."""
+    from app.kc_model import derive_rubric_from_blocks
     from app.models import ALL_BLOCK_TYPES
 
     kc_type = body.get("kc_type")
@@ -893,11 +894,13 @@ def apply_component(db: Session, node: KcNode, body: dict) -> KcNode:
     _assign_topic_fields(node, body)
     if real_blocks:
         node.blocks = real_blocks
+        node.rubric = _clean_rubric(derive_rubric_from_blocks(real_blocks))
+    elif body.get("rubric") is not None:
+        node.rubric = _clean_rubric(body.get("rubric") or [])
     if kc_type in KC_TYPES:
         node.kc_type = kc_type
         node.type_fields = _clean_type_fields(kc_type, body.get("type_fields") or {})
     node.core_truth = str(body.get("core_truth") or "").strip()
-    node.rubric = _clean_rubric(body.get("rubric") or [])
     node.misconceptions = _clean_misconceptions(body.get("misconceptions") or [])
     node.prerequisite_codes = _clean_codes(body.get("prerequisite_codes") or [])
     node.encompasses_codes = _clean_codes(body.get("encompasses_codes") or [])
@@ -2484,10 +2487,17 @@ def _draft_reply(draft: dict) -> str:
             if isinstance(item, dict) and str(item.get("topic") or "").strip():
                 shown.append(f"{item.get('topic')} ({item.get('goal') or ''})".strip())
     brief = f"Description: {description}\n" if description else ""
+    block_names = []
+    raw_blocks = draft.get("blocks") or []
+    if isinstance(raw_blocks, list):
+        for item in raw_blocks:
+            if isinstance(item, dict) and str(item.get("type") or "").strip():
+                block_names.append(str(item.get("type")).strip())
     return (
         f"Draft for {title} only. Other components stay as they are.\n"
         f"{brief}"
         f"Outline: {outline or 'none'}\n"
+        f"Blocks: {', '.join(block_names) if block_names else 'none'}\n"
         f"Topics: {'; '.join(shown) if shown else 'none'}\n"
         f"{body}\n"
         "Nothing is saved until you push it."
@@ -2995,33 +3005,46 @@ def _repair_mixes(
     )
 
 
+def _clean_model_blocks(raw: object, allowed: list[str]) -> list[dict]:
+    """Copy creator blocks whose type is in the course scope. Reject anything else."""
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(status_code=422, detail="Recommend at least one block.")
+    allowed_set = set(allowed)
+    kept: list[dict] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=422, detail="Recommend at least one block.")
+        kind = str(item.get("type") or "").strip()
+        if kind not in allowed_set:
+            names = ", ".join(allowed) if allowed else "none"
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Recommend at least one block whose type is allowed for this course. "
+                    f"Allowed: {names}."
+                ),
+            )
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        block_id = str(item.get("id") or "").strip() or f"blk_{index}"
+        kept.append({"id": block_id, "type": kind, "data": dict(data)})
+    return kept
+
+
 def clean_model_component(
-    node: KcNode, raw: dict, other_codes: list[str] | None = None
+    node: KcNode,
+    raw: dict,
+    other_codes: list[str] | None = None,
+    allowed_block_types: list[str] | None = None,
 ) -> tuple[dict, list[BrokenKcRepair], MixRepair | None]:
     if not isinstance(raw, dict):
         raise HTTPException(status_code=422, detail="The model reply could not be read.")
-    kc_type = str(raw.get("kc_type") or "").strip()
-    if kc_type not in KC_TYPES:
-        raise HTTPException(
-            status_code=422,
-            detail="Type is factual, procedural, conceptual, causal, or synthesis.",
-        )
+    from app.kc_model import clean_allowed_block_types, derive_rubric_from_blocks
+
     title = str(raw.get("title") or "").strip()
     if not title:
         raise HTTPException(status_code=422, detail="Recommend a title.")
-    if kc_type == "synthesis":
-        fields = {
-            "mixes": [raw.get("mix_a") or "", raw.get("mix_b") or ""],
-            "faulty_plan": raw.get("faulty_plan") or "",
-        }
-    else:
-        fields = {key: raw.get(key) for key in TYPE_KEYS[kc_type]}
-    from app.kc_model import clean_pairs
-
-    stored = node.type_fields or {}
-    for key in ("transfer_case", "counterfactual"):
-        if not str(fields.get(key) or "").strip() and str(stored.get(key) or "").strip():
-            fields[key] = stored.get(key)
+    allowed = clean_allowed_block_types(allowed_block_types)
+    blocks = _clean_model_blocks(raw.get("blocks"), allowed)
     shaped = {
         "kind": "component",
         "id": str(node.id),
@@ -3029,13 +3052,11 @@ def clean_model_component(
         "title": title,
         "description": str(raw.get("description") or "").strip(),
         "outline": str(raw.get("outline") or "").strip(),
-        "topics": clean_pairs(raw.get("topics")),
-        "kc_type": kc_type,
         "core_truth": str(raw.get("core_truth") or "").strip(),
-        "rubric": _clean_rubric(raw.get("rubric") or []),
+        "blocks": blocks,
+        "rubric": derive_rubric_from_blocks(blocks),
         "prerequisite_codes": _clean_codes(raw.get("prerequisite_codes") or []),
         "encompasses_codes": _clean_codes(raw.get("encompasses_codes") or []),
-        "type_fields": _clean_type_fields(kc_type, fields),
     }
     codes = list(other_codes or [])
     misconceptions, repairs = _repair_broken_kc(
@@ -3043,26 +3064,13 @@ def clean_model_component(
         codes,
     )
     shaped["misconceptions"] = misconceptions
-    mix_repair = None
-    submitted_mix = None
-    if kc_type == "synthesis":
-        submitted_mix = (
-            str(raw.get("mix_a") or "").strip(),
-            str(raw.get("mix_b") or "").strip(),
-        )
-        kept, mix_repair = _repair_mixes(submitted_mix[0], submitted_mix[1], codes)
-        shaped["type_fields"]["mixes"] = kept
     _require_recommendation(
         shaped,
         codes,
         repaired=bool(repairs),
-        node_id=str(node.id),
-        mix_repaired=mix_repair is not None,
-        submitted_mix=submitted_mix,
+        allowed_block_types=allowed,
     )
-    if mix_repair is not None:
-        _log_mix("repaired", str(node.id), mix_repair.mix_a, mix_repair.mix_b, codes)
-    return shaped, repairs, mix_repair
+    return shaped, repairs, None
 
 
 def _require_recommendation(
@@ -3070,30 +3078,32 @@ def _require_recommendation(
     other_codes: list[str],
     *,
     repaired: bool = False,
-    node_id: str = "",
-    mix_repaired: bool = False,
-    submitted_mix: tuple[str, str] | None = None,
+    allowed_block_types: list[str] | None = None,
 ) -> None:
-    """A model draft names every field the editor can enter."""
-    from app.kc_model import clean_pairs
+    """A creator draft needs a summary, an outline, a core truth, and allowed blocks."""
+    from app.kc_model import clean_allowed_block_types
 
-    if not str(draft.get("outline") or "").strip() or not clean_pairs(draft.get("topics")):
-        raise HTTPException(
-            status_code=422,
-            detail="Recommend an outline and a topic with its goal.",
-        )
+    if not str(draft.get("outline") or "").strip():
+        raise HTTPException(status_code=422, detail="Recommend an outline.")
     if not str(draft.get("description") or "").strip():
         raise HTTPException(status_code=422, detail="Recommend a short summary.")
     if not str(draft.get("core_truth") or "").strip():
         raise HTTPException(status_code=422, detail="Recommend a core truth.")
-    if not draft.get("rubric"):
+    allowed = clean_allowed_block_types(allowed_block_types)
+    allowed_set = set(allowed)
+    blocks = [item for item in (draft.get("blocks") or []) if isinstance(item, dict)]
+    if not blocks or any(str(item.get("type") or "") not in allowed_set for item in blocks):
+        names = ", ".join(allowed) if allowed else "none"
         raise HTTPException(
             status_code=422,
-            detail="Recommend one rubric line for each topic goal, then the practice checks.",
+            detail=(
+                "Recommend at least one block whose type is allowed for this course. "
+                f"Allowed: {names}."
+            ),
         )
-    allowed = set(other_codes)
+    linked_codes = set(other_codes)
     linked = list(draft["prerequisite_codes"]) + list(draft["encompasses_codes"])
-    if any(code not in allowed for code in linked):
+    if any(code not in linked_codes for code in linked):
         raise HTTPException(
             status_code=422,
             detail="Prerequisite and encompasses codes have to be other components on this course.",
@@ -3102,7 +3112,7 @@ def _require_recommendation(
     rejected = [
         str(item["broken_kc"])
         for item in misconceptions
-        if str(item["broken_kc"]) and str(item["broken_kc"]) not in allowed
+        if str(item["broken_kc"]) and str(item["broken_kc"]) not in linked_codes
     ]
     if rejected:
         codes = ", ".join(other_codes) if other_codes else "none"
@@ -3114,20 +3124,11 @@ def _require_recommendation(
                 f"Rejected: {shown}. Allowed codes: {codes}."
             ),
         )
-    if allowed and not misconceptions and not repaired:
+    if linked_codes and not misconceptions and not repaired:
         raise HTTPException(
             status_code=422,
             detail="Recommend a misconception: a wrong move and the component that is broken.",
         )
-    _require_type_fields(
-        str(draft["kc_type"]),
-        dict(draft["type_fields"]),
-        allowed,
-        other_codes=other_codes,
-        node_id=node_id,
-        mix_repaired=mix_repaired,
-        submitted_mix=submitted_mix,
-    )
 
 
 def _require_type_fields(
@@ -3208,8 +3209,16 @@ def accept_model_turn(
         depth = checked_discussion(discussion, node.title)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from app.kc_model import clean_allowed_block_types
+
     goal, ordered = course_of_node(db, node)
-    shaped, repairs, mix_repair = clean_model_component(node, draft, _other_codes(db, node, ordered))
+    scope = allowed_block_types if allowed_block_types is not None else goal.allowed_block_types
+    shaped, repairs, mix_repair = clean_model_component(
+        node,
+        draft,
+        _other_codes(db, node, ordered),
+        clean_allowed_block_types(scope),
+    )
     record_repairs(node, goal, repairs, mix_repair)
     _add_creator_message(db, node, "user", cleaned)
     _add_creator_message(

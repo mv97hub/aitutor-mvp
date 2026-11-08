@@ -1215,6 +1215,10 @@ def test_tutor_speech_is_separate_from_the_score_and_two_steps_are_choices() -> 
         _wipe_zz()
 
 
+def _block(block_id: str, block_type: str, **data: object) -> dict:
+    return {"id": block_id, "type": block_type, "data": data}
+
+
 def _model_fields(**overrides: object) -> dict:
     body: dict = {
         "discussion": (
@@ -1223,30 +1227,12 @@ def _model_fields(**overrides: object) -> dict:
         ),
         "description": "The river is blue.",
         "outline": "How the river looks.",
-        "topics": [{"topic": "color", "goal": "Recall the color"}],
         "title": "River fact",
-        "kc_type": "factual",
         "core_truth": "The river in this course is blue.",
-        "rubric": ["States that the river is blue"],
+        "blocks": [_block("blk_color", "topic_goal", topic="color", goal="Recall the color")],
         "misconceptions": [{"wrong_move": "The river is red", "broken_kc": "zz-fields-b"}],
         "prerequisite_codes": ["zz-fields-b"],
         "encompasses_codes": [],
-        "fact": "The river is blue.",
-        "retrieval_question": "What color is the river?",
-        "steps": [],
-        "blanked_step": 0,
-        "solo_problem": "",
-        "solo_check": "",
-        "case_a": "",
-        "case_b": "",
-        "prediction": "",
-        "rule": "",
-        "decision_point": "",
-        "flawed_claim": "",
-        "causal_chain": "",
-        "mix_a": "",
-        "mix_b": "",
-        "faulty_plan": "",
     }
     body.update(overrides)
     return body
@@ -1283,11 +1269,34 @@ def test_model_draft_recommends_every_field_and_push_keeps_the_description() -> 
             json={
                 "message": "Draft this.",
                 "discussion": _model_fields()["discussion"],
-                "draft": _model_fields(outline="", topics=[]),
+                "draft": _model_fields(outline=""),
             },
         )
         assert thin.status_code == 422
         assert "outline" in thin.json()["detail"].lower()
+
+        missing_blocks = client.post(
+            f"/kc/nodes/{river['id']}/model-turn",
+            json={
+                "message": "Draft this.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(blocks=[]),
+            },
+        )
+        assert missing_blocks.status_code == 422
+        assert "block" in missing_blocks.json()["detail"].lower()
+
+        off_scope = client.post(
+            f"/kc/nodes/{river['id']}/model-turn",
+            json={
+                "message": "Draft this.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(blocks=[_block("blk_s", "socratic", target_synthesis="No")]),
+                "allowed_block_types": ["topic_goal"],
+            },
+        )
+        assert off_scope.status_code == 422
+        assert "allowed" in off_scope.json()["detail"].lower()
 
         full = client.post(
             f"/kc/nodes/{river['id']}/model-turn",
@@ -1297,10 +1306,11 @@ def test_model_draft_recommends_every_field_and_push_keeps_the_description() -> 
         draft = full.json()["draft"]
         assert draft["description"] == "The river is blue."
         assert draft["outline"] == "How the river looks."
-        assert draft["topics"] == [{"topic": "color", "goal": "Recall the color"}]
-        assert draft["kc_type"] == "factual"
-        assert draft["type_fields"]["fact"] == "The river is blue."
-        assert draft["type_fields"]["retrieval_question"] == "What color is the river?"
+        assert "topics" not in draft
+        assert "kc_type" not in draft
+        assert "type_fields" not in draft
+        assert draft["blocks"] == [_block("blk_color", "topic_goal", topic="color", goal="Recall the color")]
+        assert draft["rubric"] == ["Recall the color"]
         assert draft["misconceptions"][0]["broken_kc"] == "zz-fields-b"
         assert draft["prerequisite_codes"] == ["zz-fields-b"]
         assert "Recommend" not in full.json()["messages"][-1]["content"]
@@ -1310,9 +1320,9 @@ def test_model_draft_recommends_every_field_and_push_keeps_the_description() -> 
         assert written.status_code == 200, written.text
         assert written.json()["description"] == "The river is blue."
         assert written.json()["outline"] == "How the river looks."
-        assert written.json()["topics"] == [{"topic": "color", "goal": "Recall the color"}]
+        assert written.json()["blocks"] == draft["blocks"]
+        assert written.json()["rubric"] == ["Recall the color"]
         assert written.json()["core_truth"] == "The river in this course is blue."
-        assert written.json()["type_fields"]["fact"] == "The river is blue."
         assert written.json()["prerequisite_codes"] == ["zz-fields-b"]
         other = client.get(f"/kc/nodes/{pushed[1]['id']}").json()
         assert other["title"] == "Other"
@@ -1321,12 +1331,18 @@ def test_model_draft_recommends_every_field_and_push_keeps_the_description() -> 
         _wipe_zz()
 
 
-def test_push_keeps_every_topic_goal_pair_from_the_model_reply() -> None:
-    pairs = [
-        {"topic": "color", "goal": "Recall the color"},
-        {"topic": "banks", "goal": "Name a bank"},
-        {"topic": "current", "goal": "Say which way it flows"},
-        {"topic": "source", "goal": "Name where it starts"},
+def test_push_keeps_every_block_from_the_model_reply() -> None:
+    blocks = [
+        _block("blk_1", "topic_goal", topic="color", goal="Recall the color"),
+        _block("blk_2", "topic_goal", topic="banks", goal="Name a bank"),
+        _block("blk_3", "retrieval_check", recall_prompt="What color?", expected_fact="The river is blue."),
+        _block(
+            "blk_4",
+            "curiosity",
+            phenomenon_hook="A blue river",
+            prediction_question="Why blue?",
+            bridge_to_unit="Light scatters.",
+        ),
     ]
     course = _make("zz-pairs", description="The river in this course is blue.")
     try:
@@ -1346,7 +1362,7 @@ def test_push_keeps_every_topic_goal_pair_from_the_model_reply() -> None:
                 "message": "Draft this component.",
                 "discussion": _model_fields()["discussion"],
                 "draft": _model_fields(
-                    topics=pairs,
+                    blocks=blocks,
                     prerequisite_codes=["zz-pairs-b"],
                     misconceptions=[{"wrong_move": "The river is red", "broken_kc": "zz-pairs-b"}],
                 ),
@@ -1354,14 +1370,21 @@ def test_push_keeps_every_topic_goal_pair_from_the_model_reply() -> None:
         )
         assert full.status_code == 200, full.text
         draft = full.json()["draft"]
-        assert draft["topics"] == pairs
+        assert draft["blocks"] == blocks
+        assert "topics" not in draft
 
         written = client.post(f"/kc/nodes/{river['id']}/push", json=draft)
         assert written.status_code == 200, written.text
-        assert written.json()["topics"] == pairs
+        assert written.json()["blocks"] == blocks
+        assert written.json()["rubric"] == [
+            "Recall the color",
+            "Name a bank",
+            "The river is blue.",
+            "Light scatters.",
+        ]
         stored = client.get(f"/kc/nodes/{river['id']}").json()
-        assert stored["topics"] == pairs
-        assert len(stored["topics"]) == 4
+        assert stored["blocks"] == blocks
+        assert len(stored["blocks"]) == 4
     finally:
         _wipe_zz()
 
@@ -2401,18 +2424,6 @@ def test_a_course_with_no_sibling_clears_a_bad_broken_kc() -> None:
         _wipe_zz()
 
 
-def _synthesis_fields(**overrides: object) -> dict:
-    body = {
-        "kc_type": "synthesis",
-        "faulty_plan": "A rookie swaps the two earlier facts.",
-        "mix_a": "zz-mix-b",
-        "mix_b": "zz-mix-c",
-        "misconceptions": [{"wrong_move": "The river is red", "broken_kc": "zz-mix-b"}],
-        "prerequisite_codes": ["zz-mix-b"],
-    }
-    body.update(overrides)
-    return _model_fields(**body)
-
 
 def _model_turn(node_id: str, draft: dict):
     return client.post(
@@ -2425,11 +2436,7 @@ def _model_turn(node_id: str, draft: dict):
     )
 
 
-def _mix_logs(caplog, action: str) -> list[str]:
-    return [record.getMessage() for record in caplog.records if f"kc mix {action}" in record.getMessage()]
-
-
-def test_a_repeated_mix_is_repaired_and_creation_continues(caplog) -> None:
+def test_creator_drafts_store_blocks_instead_of_synthesis_mixes() -> None:
     course = _make("zz-mix", description="The river in this course is blue.")
     try:
         pushed = client.post(
@@ -2443,9 +2450,6 @@ def test_a_repeated_mix_is_repaired_and_creation_continues(caplog) -> None:
             },
         ).json()
         river = pushed["components"][0]
-        assert river["history"] == ""
-        assert pushed["history"] == ""
-
         prompt = client.post(
             f"/kc/nodes/{river['id']}/creator-prompt",
             json={"message": "Draft this component.", "model": "gpt-4.1"},
@@ -2458,88 +2462,61 @@ def test_a_repeated_mix_is_repaired_and_creation_continues(caplog) -> None:
         assert "ordered blocks[] array" in prompt.json()["system_prompt"]
         assert "history" not in schema
 
-        caplog.set_level("WARNING", logger="app.kc")
-        caplog.clear()
-        kept = _model_turn(river["id"], _synthesis_fields())
-        assert kept.status_code == 200, kept.text
-        assert kept.json()["draft"]["type_fields"]["mixes"] == ["zz-mix-b", "zz-mix-c"]
-        assert client.get(f"/kc/nodes/{river['id']}").json()["history"] == ""
-        assert _mix_logs(caplog, "repaired") == []
-        assert _mix_logs(caplog, "rejected") == []
-
-        caplog.clear()
-        repeated = _model_turn(river["id"], _synthesis_fields(mix_a="zz-mix-b", mix_b="zz-mix-b"))
-        assert repeated.status_code == 200, repeated.text
-        assert repeated.json()["draft"]["type_fields"]["mixes"] == []
-        assert "zz-mix-c" not in repeated.json()["draft"]["type_fields"]["mixes"]
-        node = client.get(f"/kc/nodes/{river['id']}").json()
-        stored = client.get(f"/kc/courses/{course['id']}").json()
-        lines = _history_lines(node["history"])
-        assert lines == _history_lines(stored["history"])
-        assert len(lines) == 1
-        assert lines[0].split(" Warning: ", 1)[1] == (
-            'mix_a "zz-mix-b" and mix_b "zz-mix-b" are not two different other components. '
-            "Allowed codes: zz-mix-b, zz-mix-c. "
-            'Changed mixes from "zz-mix-b" and "zz-mix-b" to cleared (kept nothing) '
-            "so creation could continue."
+        blocks = [
+            _block("blk_1", "topic_goal", topic="color", goal="Recall the color"),
+            _block(
+                "blk_2",
+                "spot_the_flaw",
+                rookie_work="The river is red.",
+                flaw_description="It is blue.",
+                underlying_misconception="Color swap",
+                corrected_version="The river is blue.",
+            ),
+        ]
+        turned = _model_turn(
+            river["id"],
+            _model_fields(
+                blocks=blocks,
+                misconceptions=[{"wrong_move": "The river is red", "broken_kc": "zz-mix-b"}],
+                prerequisite_codes=["zz-mix-b"],
+            ),
         )
-        _assert_et_stamp(lines[0])
-        repaired = _mix_logs(caplog, "repaired")
-        assert len(repaired) == 1
-        assert f"node_id={river['id']}" in repaired[0]
-        assert "mix_a='zz-mix-b'" in repaired[0]
-        assert "mix_b='zz-mix-b'" in repaired[0]
-        assert "allowed=zz-mix-b, zz-mix-c" in repaired[0]
-        assert "MIX-LOG-SECRET" not in repaired[0]
-        assert "A rookie swaps" not in repaired[0]
+        assert turned.status_code == 200, turned.text
+        draft = turned.json()["draft"]
+        assert "kc_type" not in draft
+        assert "type_fields" not in draft
+        assert draft["blocks"] == blocks
+        assert draft["rubric"] == ["Recall the color", "The river is blue."]
 
-        written = client.post(f"/kc/nodes/{river['id']}/push", json=repeated.json()["draft"])
+        written = client.post(f"/kc/nodes/{river['id']}/push", json=draft)
         assert written.status_code == 200, written.text
-        assert written.json()["type_fields"]["mixes"] == []
-        pushed_lines = _history_lines(written.json()["history"])
-        assert pushed_lines[0] == lines[0]
-        assert pushed_lines[1].split(" ET ", 1)[1] == "Push from AI."
-        assert client.get(f"/kc/courses/{course['id']}").json()["history"] == written.json()["history"]
+        assert written.json()["blocks"] == blocks
+        assert written.json()["rubric"] == ["Recall the color", "The river is blue."]
+        assert "mixes" not in written.json()["type_fields"]
 
-        titled = _model_turn(river["id"], _synthesis_fields(mix_a="zz-mix-b", mix_b="River fact"))
-        assert titled.status_code == 200, titled.text
-        assert titled.json()["draft"]["type_fields"]["mixes"] == []
-        own = _model_turn(river["id"], _synthesis_fields(mix_a="zz-mix-a", mix_b="zz-mix-c"))
-        assert own.status_code == 200, own.text
-        assert own.json()["draft"]["type_fields"]["mixes"] == []
-        single = _model_turn(river["id"], _synthesis_fields(mix_a="zz-mix-b", mix_b=""))
-        assert single.status_code == 200, single.text
-        assert single.json()["draft"]["type_fields"]["mixes"] == []
-        fresh = _history_lines(client.get(f"/kc/nodes/{river['id']}").json()["history"])
-        assert len(fresh) == 5
-        assert 'mix_b "River fact"' in fresh[2]
-        assert 'mix_a "zz-mix-a"' in fresh[3]
-        assert 'mix_b ""' in fresh[4]
-        assert all("to cleared (kept nothing)" in line for line in fresh[2:])
-        assert 'to "zz-mix-c"' not in "\n".join(fresh[2:])
-        assert client.get(f"/kc/courses/{course['id']}").json()["history"] == "\n".join(fresh)
-
-        before = client.get(f"/kc/nodes/{river['id']}").json()["history"]
-        caplog.clear()
-        empty = _model_turn(river["id"], _synthesis_fields(mix_a="", mix_b=""))
-        assert empty.status_code == 422
-        detail = empty.json()["detail"]
-        assert detail.startswith("Recommend two different components for the mix.")
-        assert 'Rejected: "" and "".' in detail
-        assert "Allowed codes: zz-mix-b, zz-mix-c." in detail
-        assert client.get(f"/kc/nodes/{river['id']}").json()["history"] == before
-        rejected = _mix_logs(caplog, "rejected")
-        assert len(rejected) == 1
-        assert f"node_id={river['id']}" in rejected[0]
-        assert "mix_a=''" in rejected[0]
-        assert "mix_b=''" in rejected[0]
-        assert "allowed=zz-mix-b, zz-mix-c" in rejected[0]
-        assert "MIX-LOG-SECRET" not in rejected[0]
+        refused = _model_turn(
+            river["id"],
+            {
+                "description": "The river is blue.",
+                "outline": "How the river looks.",
+                "title": "River fact",
+                "kc_type": "synthesis",
+                "core_truth": "The river in this course is blue.",
+                "rubric": ["States that the river is blue"],
+                "misconceptions": [{"wrong_move": "The river is red", "broken_kc": "zz-mix-b"}],
+                "prerequisite_codes": ["zz-mix-b"],
+                "mix_a": "zz-mix-b",
+                "mix_b": "zz-mix-c",
+                "faulty_plan": "A rookie swaps the two earlier facts.",
+            },
+        )
+        assert refused.status_code == 422
+        assert "block" in refused.json()["detail"].lower()
     finally:
         _wipe_zz()
 
 
-def test_fewer_than_two_other_components_allow_empty_mixes(caplog) -> None:
+def test_a_block_draft_is_valid_without_mixes() -> None:
     course = _make("zz-mixone", description="The river in this course is blue.")
     try:
         alone = client.post(
@@ -2555,34 +2532,14 @@ def test_fewer_than_two_other_components_allow_empty_mixes(caplog) -> None:
         assert "mix_b" not in prompt.json()["schema"]["properties"]
         assert "This course has no other component." in prompt.json()["system_prompt"]
 
-        caplog.set_level("WARNING", logger="app.kc")
-        caplog.clear()
         empty = _model_turn(
             alone["id"],
-            _synthesis_fields(mix_a="", mix_b="", misconceptions=[], prerequisite_codes=[]),
+            _model_fields(blocks=[_block("blk_1", "topic_goal", topic="color", goal="Recall the color")], misconceptions=[], prerequisite_codes=[]),
         )
         assert empty.status_code == 200, empty.text
-        assert empty.json()["draft"]["type_fields"]["mixes"] == []
-        assert client.get(f"/kc/nodes/{alone['id']}").json()["history"] == ""
-        assert _mix_logs(caplog, "repaired") == []
-
-        titled = _model_turn(
-            alone["id"],
-            _synthesis_fields(
-                mix_a="River fact",
-                mix_b="",
-                misconceptions=[],
-                prerequisite_codes=[],
-            ),
-        )
-        assert titled.status_code == 200, titled.text
-        assert titled.json()["draft"]["type_fields"]["mixes"] == []
-        line = _history_lines(client.get(f"/kc/nodes/{alone['id']}").json()["history"])[0]
-        assert 'mix_a "River fact" and mix_b ""' in line
-        assert "Allowed codes: none." in line
-        assert "to cleared (kept nothing)" in line
-        _assert_et_stamp(line)
-        assert client.get(f"/kc/courses/{course['id']}").json()["history"] == line
+        assert empty.json()["draft"]["blocks"][0]["type"] == "topic_goal"
+        assert "type_fields" not in empty.json()["draft"]
+        assert empty.json()["draft"]["misconceptions"] == []
 
         added = client.post(
             f"/kc/courses/{course['id']}/push",
@@ -2601,38 +2558,24 @@ def test_fewer_than_two_other_components_allow_empty_mixes(caplog) -> None:
         )
         assert prompt.status_code == 200, prompt.text
         assert "mix_a" not in prompt.json()["schema"]["properties"]
-        assert "mix_b" not in prompt.json()["schema"]["properties"]
         assert prompt.json()["schema"]["properties"]["misconceptions"]["items"]["properties"]["broken_kc"]["enum"] == [
             "zz-mixone-b"
         ]
         assert "Do not ask for two mixes." not in prompt.json()["system_prompt"]
 
-        empty_pair = _model_turn(
-            pair["zz-mixone-a"]["id"],
-            _synthesis_fields(
-                mix_a="",
-                mix_b="",
-                misconceptions=[{"wrong_move": "The river is red", "broken_kc": "zz-mixone-b"}],
-                prerequisite_codes=["zz-mixone-b"],
-            ),
-        )
-        assert empty_pair.status_code == 200, empty_pair.text
-        assert empty_pair.json()["draft"]["type_fields"]["mixes"] == []
-
         named = _model_turn(
             pair["zz-mixone-a"]["id"],
-            _synthesis_fields(
-                mix_a="zz-mixone-b",
-                mix_b="River fact",
+            _model_fields(
+                blocks=[_block("blk_1", "topic_goal", topic="color", goal="Recall the color")],
                 misconceptions=[{"wrong_move": "The river is red", "broken_kc": "zz-mixone-b"}],
                 prerequisite_codes=["zz-mixone-b"],
             ),
         )
         assert named.status_code == 200, named.text
-        assert named.json()["draft"]["type_fields"]["mixes"] == ["zz-mixone-b"]
-        kept_line = _history_lines(client.get(f"/kc/nodes/{pair['zz-mixone-a']['id']}").json()["history"])[-1]
-        assert 'Changed mixes from "zz-mixone-b" and "River fact" to "zz-mixone-b"' in kept_line
-        assert "zz-mixone-c" not in kept_line
-        assert client.get(f"/kc/courses/{course['id']}").json()["history"].endswith(kept_line)
+        assert named.json()["draft"]["blocks"][0]["data"]["goal"] == "Recall the color"
+        assert named.json()["draft"]["misconceptions"] == [
+            {"wrong_move": "The river is red", "broken_kc": "zz-mixone-b"}
+        ]
+        assert "type_fields" not in named.json()["draft"]
     finally:
         _wipe_zz()

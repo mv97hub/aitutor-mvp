@@ -104,13 +104,13 @@ export type KcComponentDraft = {
   description?: string;
   outline?: string;
   topics?: KcTopicPair[];
-  kc_type: KcType;
+  kc_type?: KcType | null;
   core_truth: string;
-  rubric: string[];
+  rubric?: string[];
   misconceptions: KcMisconception[];
   prerequisite_codes: string[];
   encompasses_codes: string[];
-  type_fields: Record<string, unknown>;
+  type_fields?: Record<string, unknown>;
   blocks?: KcBlock[];
   recommended_blocks?: KcRecommendedBlock[];
 };

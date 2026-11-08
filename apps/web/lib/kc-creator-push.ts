@@ -1,19 +1,35 @@
 import type { KcComponent, KcComponentDraft } from "./kc";
 
-/** The body Push draft sends. Every topic-goal pair on the draft is kept. */
+/** The body Push draft sends. Topic pairs are not required. The draft's blocks are. */
 export function creatorPushPayload(draft: KcComponentDraft, component: KcComponent) {
-  return {
+  const payload: {
+    description: string;
+    outline: string;
+    title: string;
+    core_truth: string;
+    misconceptions: KcComponentDraft["misconceptions"];
+    prerequisite_codes: string[];
+    encompasses_codes: string[];
+    blocks: NonNullable<KcComponentDraft["blocks"]>;
+    kc_type?: KcComponentDraft["kc_type"];
+    type_fields?: KcComponentDraft["type_fields"];
+    rubric?: string[];
+  } = {
     description: draft.description ?? component.description,
     outline: draft.outline ?? component.outline,
-    topics: draft.topics ?? component.topics,
     title: draft.title,
-    kc_type: draft.kc_type,
     core_truth: draft.core_truth,
-    rubric: draft.rubric,
     misconceptions: draft.misconceptions,
     prerequisite_codes: draft.prerequisite_codes,
     encompasses_codes: draft.encompasses_codes,
-    type_fields: draft.type_fields,
-    blocks: draft.blocks ?? component.blocks ?? [],
+    blocks: draft.blocks ?? [],
   };
+  if (draft.kc_type) {
+    payload.kc_type = draft.kc_type;
+    payload.type_fields = draft.type_fields ?? {};
+  }
+  if (!draft.blocks?.length && draft.rubric) {
+    payload.rubric = draft.rubric;
+  }
+  return payload;
 }
