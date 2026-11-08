@@ -555,11 +555,38 @@ def assemble_course(
     }
 
 
+def _empty_mix_field() -> dict:
+    return {
+        "type": "string",
+        "enum": [""],
+        "description": "Leave empty. Do not ask for two mixes.",
+    }
+
+
+def _apply_mix_schema(schema: dict, other_codes: list[str]) -> None:
+    """Each mix is an enum of the other component codes, and the two values must differ.
+
+    Fewer than two other components cannot name two different mixes, so both
+    fields stay empty. OpenAI strict structured outputs reject if/then, so the
+    difference is required in the field text and checked again when the reply is saved.
+    """
+    if len(other_codes) < 2:
+        schema["properties"]["mix_a"] = _empty_mix_field()
+        schema["properties"]["mix_b"] = _empty_mix_field()
+        return
+    codes = list(other_codes)
+    description = "Each value is one of the other component codes, and the two values must differ."
+    schema["properties"]["mix_a"] = {"type": "string", "enum": list(codes), "description": description}
+    schema["properties"]["mix_b"] = {"type": "string", "enum": list(codes), "description": description}
+
+
 def _creator_schema(other_codes: list[str]) -> dict:
     """The creator schema for this call.
 
     When the course has other components, broken_kc is one of those codes.
     When it has none, the misconceptions array is empty and broken_kc is not a field.
+    When at least two other components exist, mix_a and mix_b are an enum of those
+    codes and the two values must differ. Otherwise both mixes stay empty.
     History is not a field on this schema.
     """
     schema = copy.deepcopy(CREATOR_SCHEMA)
@@ -583,12 +610,13 @@ def _creator_schema(other_codes: list[str]) -> dict:
                 "required": ["wrong_move", "broken_kc"],
             },
         }
-        return schema
-    schema["properties"]["misconceptions"] = {
-        "type": "array",
-        "maxItems": 0,
-        "items": {"type": "string"},
-    }
+    else:
+        schema["properties"]["misconceptions"] = {
+            "type": "array",
+            "maxItems": 0,
+            "items": {"type": "string"},
+        }
+    _apply_mix_schema(schema, other_codes)
     return schema
 
 
@@ -597,15 +625,27 @@ def _creator_links(other_codes: list[str]) -> str:
         return (
             "This course has no other component. Return an empty misconceptions array. "
             "Do not ask for a broken_kc. "
-            "Prerequisite codes, encompasses codes, and synthesis mixes stay empty."
+            "Do not ask for two mixes. Leave mix_a and mix_b empty. "
+            "Prerequisite codes and encompasses codes stay empty."
         )
-    return (
+    broken = (
         "Copy one code from the other component codes into broken_kc. "
         "It is not a description and not this component's code. "
-        "Prerequisite codes, encompasses codes, and synthesis mixes "
-        "have to be chosen from the other component codes. "
-        "Use an empty list for prerequisites, encompasses, or mixes when none of those links fit."
     )
+    if len(other_codes) < 2:
+        mixes = "Do not ask for two mixes. Leave mix_a and mix_b empty. "
+    else:
+        mixes = (
+            "For a synthesis component, mix_a and mix_b must be two different codes "
+            "from the other component codes. "
+            "A mix is not a title and not this component's code. "
+        )
+    links = (
+        "Prerequisite codes and encompasses codes "
+        "have to be chosen from the other component codes. "
+        "Use an empty list for prerequisites or encompasses when none of those links fit."
+    )
+    return broken + mixes + links
 
 
 def creator_bundle(
