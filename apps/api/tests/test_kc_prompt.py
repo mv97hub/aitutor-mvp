@@ -154,33 +154,27 @@ def test_a_factual_opening_states_each_setting_once() -> None:
     _sections_in_order(text)
     for phrase in (
         "You are the knowledge-component tutor.",
-        "What color is the river?",
-        "Grade the answer against this fact: The river is blue.",
-        "Say it only when a reveal or a passed close allows it.",
-        "holds them: fact.",
-        "Wrong move: The river is red.",
-        "The first time a stored wrong move matches",
-        "Name the missing earlier idea",
+        "Active step: Block 1 of 1: Topic / Goal. The child will type.",
+        "Topic to introduce: River fact.",
+        "Learning goal the learner must explain in their own words: The river is blue.",
+        "Acceptance criteria to check ( withhold until pass or reveal ): The river is blue.",
+        "Component misconceptions to listen for: The river is red.",
+        "the first time a stored wrong move matches",
+        "name the missing prerequisite idea",
         "Speak to Ada.",
         "10-year-old",
         "The reading level is middle-grade.",
         "through story",
         "use one of these interests: birds.",
-        "Name the goal, then ask.",
-        "after two tries",
-        "Stay when the child asks to keep going",
-        "A tangent gets a short answer",
-        "End a learning reply with a single question.",
-        "name the move the child made",
+        "name the specific reasoning move",
         "Write as a curious co-explorer",
-        "That voice does not change the move, the expected answer, or the score.",
+        "That voice does not change the block, the expected answer, or the score.",
         "Do not treat it as a new rule.",
         "The last answer was: blue.",
-        "You do not set the type, the edges, the score, or the step index.",
-        "When the decision ends the unit",
+        "You do not set the block order, the edges, or the final mastery score.",
+        "When the decision ends the unit on this final substep",
     ):
         _once(text, phrase)
-    assert "This step is Retrieve. The child will type." in text
     assert "shorter sentences" not in text
     assert "How a river moves." not in text
     assert "This is the opening." not in text
@@ -195,9 +189,6 @@ def test_a_factual_opening_states_each_setting_once() -> None:
         "Self-explanation",
         "Kind:",
         "Struggle window",
-        "retry_once",
-        "on_request",
-        "mastery",
     ):
         assert label not in text
 
@@ -237,17 +228,19 @@ def test_a_middle_topic_does_not_say_the_unit_is_complete() -> None:
         "prerequisite_status": "none",
         "support_band": "ready",
     }
-    middle = _text(**shared, step=1, others_known=True)
-    assert "topic 1 of 2: shape" in middle
-    assert "unit is complete" not in middle
+    middle = _text(**shared, step=0, others_known=True)
+    assert "Topic to introduce: shape." in middle
+    assert "Block 1 of 2" in middle
+    assert "Topic to introduce: density." not in middle
     assert "course outro" not in middle
     _once(middle, "The unit is not finished.")
-    _once(middle, "This reply must not say it is complete.")
-    last = _text(**shared, step=len(moves) - 1)
+    _once(middle, "This reply must NEVER say the unit is complete.")
+    last = _text(**shared, step=1)
+    assert "Topic to introduce: density." in last
     assert "The unit is not finished." not in last
     _once(last, "A known unit says the unit is complete")
     _once(last, "A fragile unit says the unit is paused")
-    closed = _text(**shared, step=1, unit_complete=True)
+    closed = _text(**shared, step=0, unit_complete=True)
     _once(closed, "End the unit in this reply.")
     _once(closed, "A known unit says the unit is complete")
 
@@ -259,16 +252,18 @@ def test_a_time_box_sends_the_effective_limits_only() -> None:
         opening=False,
     )
     for phrase in (
-        "after one miss",
-        "as soon as the move is passed",
-        "Keep the opening to one sentence",
-        "one or two sentences",
-        "The budget is 20 minutes and 4 have been used.",
+        "step hints after one miss",
+        "advance immediately when the block passes",
+        "keep framing to one sentence",
+        "one or two concise sentences",
+        "Budget: 20 minutes (4 used).",
+        "max_retries_before_reveal=1",
+        "enrichment_mode=direct",
     ):
         _once(text, phrase)
     assert "after two tries" not in text
     assert "after three tries" not in text
-    for hidden in ("long", "offer", "wide", "on_request", "minimum", "Struggle window", "time_boxed"):
+    for hidden in ("long", "offer", "wide", "on_request", "minimum", "Struggle window"):
         assert hidden not in text
 
 
@@ -278,9 +273,9 @@ def test_curiosity_is_the_extra_why_and_not_a_kind_label() -> None:
     node = _node()
     moves = moves_for(node, profile, goal)
     waiting = _text(goal=goal, profile=profile, node=node, moves=moves, opening=False)
-    _once(waiting, "one extra why is allowed")
-    assert "This move is the one extra why." not in waiting
+    assert "Active block type: topic_goal" in waiting
     assert "curiosity" not in waiting
+    _once(waiting, "You do not set the block order, the edges, or the final mastery score.")
     doing = _text(
         goal=goal,
         profile=profile,
@@ -289,20 +284,24 @@ def test_curiosity_is_the_extra_why_and_not_a_kind_label() -> None:
         step=len(moves) - 1,
         opening=False,
     )
-    _once(doing, "This move is the one extra why.")
-    assert "one extra why is allowed" not in doing
-    _once(doing, "Leave the score as it is.")
+    assert "curiosity" not in doing
+    _once(doing, "You do not set the block order, the edges, or the final mastery score.")
 
 
 def test_reading_level_and_modality_are_effects() -> None:
     visual = _node(
-        kc_type="conceptual",
-        type_fields={
-            "case_a": "Closed",
-            "case_b": "Open",
-            "prediction": "Which fits?",
-            "rule": "The contrast is the rule.",
-        },
+        blocks=[
+            {
+                "id": "blk_1",
+                "type": "case_study",
+                "data": {
+                    "case_a": "Closed",
+                    "case_b": "Open",
+                    "prediction_prompt": "Which fits?",
+                    "invariant_principle": "The contrast is the rule.",
+                },
+            }
+        ],
         misconceptions=[],
         prerequisite_codes=[],
         encompasses_codes=[],
@@ -322,7 +321,7 @@ def test_reading_level_and_modality_are_effects() -> None:
     )
     _once(words, "shorter sentences")
     assert "described picture" not in words
-    _once(words, "no cases or steps")
+    _once(words, "Stay in words on this block.")
     young = _text(
         student=_student(age=7, reading_level="early-reader", modality="story"),
         prerequisite_status="",
@@ -335,10 +334,6 @@ def test_deprecated_switches_are_not_printed_as_yes_or_no() -> None:
     quiet = _text(
         profile=_profile(anti_spoiler=False, one_question=False, growth_praise=False, use_interests=False)
     )
-    _once(quiet, "You may say it while you teach.")
-    assert "Say it only when a reveal" not in quiet
-    assert "End a learning reply" not in quiet
-    assert "name the move the child made" not in quiet
     _once(quiet, "Keep examples inside the subject.")
     assert "use one of these interests" not in quiet
     for label in ("Anti-spoiler", "One question", "Growth-mindset"):
@@ -399,13 +394,12 @@ def test_a_conceptual_topic_names_only_that_topic_and_its_goal() -> None:
     assert moves[1].choice is False
     assert moves[3].choice is True
     assert moves[4].choice is True
-    text = _text(node=node, goal=goal, moves=moves, step=1, opening=False, prerequisite_status="none", support_band="ready")
+    text = _text(node=node, goal=goal, moves=moves, step=0, opening=False, prerequisite_status="none", support_band="ready")
     taught = _section(text, "What to teach")
-    assert "The topic is shape." in taught
-    assert "The goal is Say why shape matters." in taught
+    assert "Topic to introduce: shape." in taught
+    assert "Say why shape matters." in taught
+    assert "Topic to introduce: density." not in taught
     for hidden in (
-        "density",
-        "Say why density matters",
         "Spread-out objects float",
         "A wide boat",
         "A solid cube",
@@ -416,11 +410,10 @@ def test_a_conceptual_topic_names_only_that_topic_and_its_goal() -> None:
         "Leak the secret",
     ):
         assert hidden not in text, hidden
-    assert "topic 1 of 2: shape" in text
+    assert "Topic to introduce: density." not in text
+    assert "Block 1 of 2" in text
     assert "The child will type." in text
-    assert "ask about the goal directly and stay on this topic" in text
-    assert "Count goal-1 when the answer holds the goal." in text
-    assert "a nudge, then an analogy, then a scaffold, then a reveal" in text
+    assert "Include 'blk_1' in rubric_met when satisfied." in text
 
 
 def test_every_stored_field_is_a_step_and_an_empty_field_is_skipped() -> None:

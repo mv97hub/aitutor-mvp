@@ -88,6 +88,7 @@ class PromptTesterIn(BaseModel):
     misconception_policy: str = "explain_and_retry_once"
     encouragement_style: str = "process_praise"
     close_summary_depth: str = "diagnostic_strengths_and_gaps"
+    instructive: int | None = Field(default=None, ge=1, le=5)
     kc_tutor_config: dict | None = None
     reveals: int = Field(default=0, ge=0)
     off_course_count: int = Field(default=0, ge=0)
@@ -207,6 +208,12 @@ def _effective_config(body: PromptTesterIn) -> dict:
         ):
             over.setdefault(k, v)
     raw["overarching"] = over
+    if body.instructive is not None:
+        blocks_cfg = {key: dict(value) for key, value in (raw.get("blocks") or {}).items() if isinstance(value, dict)}
+        topic = dict(blocks_cfg.get("topic_goal") or {})
+        topic["explanation_depth"] = int(body.instructive)
+        blocks_cfg["topic_goal"] = topic
+        raw["blocks"] = blocks_cfg
     return normalize_kc_tutor_config(raw, strict=True)
 
 

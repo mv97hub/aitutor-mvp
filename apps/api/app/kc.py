@@ -21,11 +21,11 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, VOICES
 from app.kc_loop import resolve_decision
+from app.kc_moves import build_kc_prompt
 from app.kc_prompt import (
     AFFECTS,
     DECISIONS,
     asks_why,
-    build_kc_prompt,
     effective_enrichment,
     effective_window_name,
     instructive_value,
@@ -441,7 +441,7 @@ def course_out(db: Session, goal: KcGoal) -> dict:
 
 def gaps_for(node: KcNode, codes: set[str]) -> list[str]:
     missing: list[str] = []
-    if not node.kc_type:
+    if not node.kc_type and not _authored_blocks(node.blocks):
         missing.append("no type")
     if not (node.core_truth or "").strip():
         missing.append("no truth")
@@ -500,7 +500,10 @@ def create_course(
     kind: str,
     minutes: int | None,
     code: str | None,
+    allowed_block_types: list[str] | None = None,
 ) -> KcGoal:
+    from app.kc_model import clean_allowed_block_types
+
     _validate_course_fields(title=title, audience=audience, kind=kind, minutes=minutes)
     taken = set(_nodes_by_code(db)) | {goal.code for goal in db.scalars(select(KcGoal))}
     chosen = (code or "").strip() or slug_code(title, taken)
@@ -515,6 +518,7 @@ def create_course(
         minutes=minutes,
         target_kc_ids=[],
         ready=False,
+        allowed_block_types=clean_allowed_block_types(allowed_block_types),
     )
     db.add(goal)
     db.flush()
@@ -535,6 +539,10 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
     goal.audience = audience
     goal.kind = kind
     goal.minutes = minutes
+    if "allowed_block_types" in body:
+        from app.kc_model import clean_allowed_block_types
+
+        goal.allowed_block_types = clean_allowed_block_types(body.get("allowed_block_types"))
     goal.updated_at = _now()
     db.flush()
     return goal
@@ -570,7 +578,9 @@ def draft_course(goal: KcGoal, message: str) -> dict:
     }
 
 
-def finish_model_course(goal: KcGoal, message: str, proposal: dict) -> dict:
+def finish_model_course(
+    goal: KcGoal, message: str, proposal: dict, allowed_block_types: list[str] | None = None
+) -> dict:
     """Shape a model object into a draft. This does not write."""
     from app.kc_model import assemble_course
 
@@ -582,6 +592,7 @@ def finish_model_course(goal: KcGoal, message: str, proposal: dict) -> dict:
             minutes=goal.minutes,
             message=message or "",
             proposal=proposal,
+            allowed_block_types=allowed_block_types,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -605,7 +616,9 @@ def finish_model_course(goal: KcGoal, message: str, proposal: dict) -> dict:
     }
 
 
-def course_prompt_for(goal: KcGoal, message: str, model: str) -> dict:
+def course_prompt_for(
+    goal: KcGoal, message: str, model: str, allowed_block_types: list[str] | None = None
+) -> dict:
     from app.kc_model import course_bundle
 
     try:
@@ -617,6 +630,7 @@ def course_prompt_for(goal: KcGoal, message: str, model: str) -> dict:
             minutes=goal.minutes,
             message=message or "",
             model=model,
+            allowed_block_types=allowed_block_types,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -629,6 +643,7 @@ def description_prompts_for(
     titles: list[str],
     subject: str = "",
     major_ideas: list[str] | None = None,
+    allowed_block_types: list[str] | None = None,
 ) -> dict:
     from app.kc_model import description_plan
 
@@ -644,6 +659,7 @@ def description_prompts_for(
             titles=titles,
             subject=subject,
             major_ideas=major_ideas,
+            allowed_block_types=allowed_block_types,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -810,21 +826,42 @@ def _sync_edges(db: Session, node: KcNode) -> None:
     db.flush()
 
 
+def _authored_blocks(raw: object) -> list[dict]:
+    if not isinstance(raw, list):
+        return []
+    kept: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("type") or "") in ("", "_legacy"):
+            continue
+        kept.append(item)
+    return kept
+
+
 def apply_component(db: Session, node: KcNode, body: dict) -> KcNode:
     """Replace this component and the edges it owns. Other components stay."""
+    from app.models import ALL_BLOCK_TYPES
+
     kc_type = body.get("kc_type")
-    if kc_type not in KC_TYPES:
+    real_blocks = [
+        item for item in _authored_blocks(body.get("blocks")) if str(item.get("type") or "") in ALL_BLOCK_TYPES
+    ]
+    if kc_type not in KC_TYPES and not real_blocks:
         raise HTTPException(status_code=422, detail="Type is factual, procedural, conceptual, causal, or synthesis.")
     if "title" in body and str(body.get("title") or "").strip():
         node.title = str(body["title"]).strip()
     _assign_topic_fields(node, body)
-    node.kc_type = kc_type
+    if real_blocks:
+        node.blocks = real_blocks
+    if kc_type in KC_TYPES:
+        node.kc_type = kc_type
+        node.type_fields = _clean_type_fields(kc_type, body.get("type_fields") or {})
     node.core_truth = str(body.get("core_truth") or "").strip()
     node.rubric = _clean_rubric(body.get("rubric") or [])
     node.misconceptions = _clean_misconceptions(body.get("misconceptions") or [])
     node.prerequisite_codes = _clean_codes(body.get("prerequisite_codes") or [])
     node.encompasses_codes = _clean_codes(body.get("encompasses_codes") or [])
-    node.type_fields = _clean_type_fields(kc_type, body.get("type_fields") or {})
     node.marked_complete = False
     node.updated_at = _now()
     _sync_edges(db, node)
@@ -2175,13 +2212,19 @@ def append_kc_model_prompt(
     return row
 
 
-def record_speech(db: Session, session: KcSession, content: str) -> dict:
+def record_speech(
+    db: Session, session: KcSession, content: str, generated_mcq: dict | None = None
+) -> dict:
     """Store the model's wording of the current step. Scoring stays in turn."""
     if session.status != "in_progress":
         raise HTTPException(status_code=422, detail="This component session is already finished.")
     text = content.strip()
     if not text:
         raise HTTPException(status_code=422, detail="The tutor did not say this step.")
+    if isinstance(generated_mcq, dict) and generated_mcq:
+        state = dict(session.active_block_state or {})
+        state["generated_mcq"] = generated_mcq
+        session.active_block_state = state
     messages = _session_messages(db, session)
     if not _needs_speech(session, messages):
         return session_out(db, session)
@@ -2616,7 +2659,13 @@ def post_creator_turn(db: Session, node: KcNode, message: str) -> dict:
     return creator_thread(db, node)
 
 
-def creator_prompt_for(db: Session, node: KcNode, message: str, model: str) -> dict:
+def creator_prompt_for(
+    db: Session,
+    node: KcNode,
+    message: str,
+    model: str,
+    allowed_block_types: list[str] | None = None,
+) -> dict:
     from app.kc_model import creator_bundle
 
     goal, ordered = course_of_node(db, node)
@@ -2634,6 +2683,12 @@ def creator_prompt_for(db: Session, node: KcNode, message: str, model: str) -> d
             node_description=node.description or "",
             node_outline=node.outline or "",
             node_topics=list(node.topics or []),
+            node_blocks=[
+                block
+                for block in (node.blocks or [])
+                if not (isinstance(block, dict) and block.get("type") == "_legacy")
+            ],
+            allowed_block_types=allowed_block_types,
             other_codes=others,
             previous=previous,
             message=message,
@@ -3040,7 +3095,14 @@ def _require_type_fields(
         raise HTTPException(status_code=422, detail="Recommend the rookie's faulty plan.")
 
 
-def accept_model_turn(db: Session, node: KcNode, message: str, discussion: str, draft: dict) -> dict:
+def accept_model_turn(
+    db: Session,
+    node: KcNode,
+    message: str,
+    discussion: str,
+    draft: dict,
+    allowed_block_types: list[str] | None = None,
+) -> dict:
     """Store a model draft. This does not write the component until push."""
     from app.kc_model import checked_discussion
 

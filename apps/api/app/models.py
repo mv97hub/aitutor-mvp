@@ -16,6 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -615,6 +616,32 @@ class StudioSettings(Base):
     model: Mapped[str] = mapped_column(String(64), nullable=False, default="gpt-4o-mini")
 
 
+def _legacy_block_data(blocks: object) -> dict:
+    if not isinstance(blocks, list):
+        return {}
+    for item in blocks:
+        if isinstance(item, dict) and item.get("type") == "_legacy":
+            data = item.get("data")
+            return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _blocks_with_legacy(blocks: object, key: str, value: object) -> list:
+    """Keep the five-type fields on the row after those columns were removed."""
+    items: list = []
+    data: dict = {}
+    for item in blocks or []:
+        if isinstance(item, dict) and item.get("type") == "_legacy":
+            raw = item.get("data")
+            if isinstance(raw, dict):
+                data = dict(raw)
+            continue
+        items.append(item)
+    data[key] = value
+    items.append({"id": "_legacy", "type": "_legacy", "data": data})
+    return items
+
+
 class KcNode(Base):
     """One knowledge component. The kid chat and the course catalog do not read this table."""
 
@@ -642,6 +669,25 @@ class KcNode(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
+
+    @hybrid_property
+    def kc_type(self) -> str | None:
+        value = _legacy_block_data(self.blocks).get("kc_type")
+        text = str(value).strip() if value else ""
+        return text or None
+
+    @kc_type.setter
+    def kc_type(self, value: str | None) -> None:
+        self.blocks = _blocks_with_legacy(self.blocks, "kc_type", value)
+
+    @hybrid_property
+    def type_fields(self) -> dict:
+        raw = _legacy_block_data(self.blocks).get("type_fields")
+        return raw if isinstance(raw, dict) else {}
+
+    @type_fields.setter
+    def type_fields(self, value: dict | None) -> None:
+        self.blocks = _blocks_with_legacy(self.blocks, "type_fields", dict(value or {}))
 
 
 class KcEdge(Base):

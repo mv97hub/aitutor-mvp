@@ -1137,9 +1137,11 @@ def build_kc_prompt(
     others_known: bool,
     active_block_state: dict | None = None,
     transition_from_block: dict | None = None,
+    moves: object | None = None,
 ) -> dict:
     """Assemble the 7-section prompt for the active block (`node.blocks[step]`)."""
     del stability
+    del moves
     del course_position
     cfg = effective_kc_tutor_config(profile)
     over = cfg.get("overarching") or {}
@@ -1266,3 +1268,19 @@ def build_kc_prompt(
         "response_schema": RESPONSE_SCHEMA,
         "temperature": TEMPERATURE,
     }
+
+
+from app.kc_moves import (  # noqa: E402  (move recipes the session loop still calls)
+    Move,
+    asks_why,
+    effective_enrichment,
+    effective_window_name,
+    move_material,
+    moves_for,
+    recipe_name,
+    self_explanation_on,
+    step_labels,
+    stored_enrichment,
+    struggle_tries,
+    topic_goal,
+)

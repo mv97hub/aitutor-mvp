@@ -309,19 +309,16 @@ def test_creator_prompt_goes_deep_before_the_fields() -> None:
     prompt = bundle["system_prompt"]
     assert "You are an expert curriculum maker for this knowledge component and the course kind." in prompt
     assert "Recommend every field that can be entered" in prompt
-    assert "description, title, type" in prompt
+    assert "description, title, outline, core_truth, an ordered blocks[] sequence" in prompt
     assert "Mastery is the fuller rigorous breakdown" in prompt
     assert "description" in bundle["schema"]["required"]
     assert "Outline: The interior angles." in prompt
-    assert "Check each goal against the topic, the curriculum, and ordinary knowledge of the subject." in prompt
-    assert "Do not copy the description's topic list as written." in prompt
     assert "outline" in bundle["schema"]["required"]
-    assert "topics" in bundle["schema"]["required"]
-    topics = bundle["schema"]["properties"]["topics"]
-    assert topics["type"] == "array"
-    assert "maxItems" not in topics
-    assert "maxItems" not in topics["items"]
-    assert "Go into the topic before you fill the type" in prompt
+    assert "blocks" in bundle["schema"]["required"]
+    blocks = bundle["schema"]["properties"]["blocks"]
+    assert blocks["type"] == "array"
+    assert "topics" not in bundle["schema"]["properties"]
+    assert "Go into the topic before you fill the outline, the core truth, the blocks, and the links." in prompt
     assert "Do not change how an answer is scored" in prompt
     assert CREATOR_RULES.split(".")[0] in prompt
     with pytest.raises(ValueError, match="before you fill"):
@@ -431,37 +428,29 @@ def _creator(other_codes: list[str]):
 
 def test_creator_schema_limits_each_mix_to_a_different_other_code() -> None:
     bundle = _creator(["missing-angle", "congruence"])
-    mix_a = bundle["schema"]["properties"]["mix_a"]
-    mix_b = bundle["schema"]["properties"]["mix_b"]
-    assert mix_a["enum"] == ["missing-angle", "congruence"]
-    assert mix_b["enum"] == ["missing-angle", "congruence"]
-    assert mix_a["enum"] is not mix_b["enum"]
-    assert "angle-sum" not in mix_a["enum"]
-    assert "the two values must differ" in mix_a["description"]
-    assert "the two values must differ" in mix_b["description"]
+    props = bundle["schema"]["properties"]
+    assert "mix_a" not in props
+    assert "mix_b" not in props
+    assert props["blocks"]["type"] == "array"
+    assert "topic_goal" in props["blocks"]["items"]["properties"]["type"]["enum"]
     assert "allOf" not in bundle["schema"]
-    assert "if" not in mix_a
-    assert "if" not in mix_b
     prompt = bundle["system_prompt"]
-    assert "mix_a and mix_b must be two different codes" in prompt
-    assert "A mix is not a title and not this component's code." in prompt
+    assert "ordered blocks[] array" in prompt
     assert "Do not ask for two mixes." not in prompt
-    assert "history" not in bundle["schema"]["properties"]
+    assert "history" not in props
 
 
 def test_creator_schema_does_not_ask_for_two_mixes_without_two_siblings() -> None:
     one = _creator(["missing-angle"])
-    assert one["schema"]["properties"]["mix_a"]["enum"] == [""]
-    assert one["schema"]["properties"]["mix_b"]["enum"] == [""]
-    assert "Do not ask for two mixes." in one["system_prompt"]
-    assert "Leave mix_a and mix_b empty." in one["system_prompt"]
+    assert "mix_a" not in one["schema"]["properties"]
+    assert "mix_b" not in one["schema"]["properties"]
     assert one["schema"]["properties"]["misconceptions"]["items"]["properties"]["broken_kc"]["enum"] == [
         "missing-angle"
     ]
     none = _creator([])
-    assert none["schema"]["properties"]["mix_a"]["enum"] == [""]
-    assert none["schema"]["properties"]["mix_b"]["enum"] == [""]
-    assert "Do not ask for two mixes." in none["system_prompt"]
+    assert "mix_a" not in none["schema"]["properties"]
+    assert none["schema"]["properties"]["misconceptions"]["maxItems"] == 0
+    assert "This course has no other component." in none["system_prompt"]
     assert "Copy one code from the other component codes" not in none["system_prompt"]
     assert "history" not in none["schema"]["properties"]
 

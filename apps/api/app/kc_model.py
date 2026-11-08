@@ -150,6 +150,18 @@ _RECOMMENDED_BLOCK = {
 }
 
 
+def clean_allowed_block_types(values: object) -> list[str]:
+    """Validate and normalize the course's allowed AI block types. At least 1 remains."""
+    if not isinstance(values, list):
+        return list(ALL_BLOCK_TYPES)
+    chosen: list[str] = []
+    for item in values:
+        btype = str(item or "").strip()
+        if btype in ALL_BLOCK_TYPES and btype not in chosen:
+            chosen.append(btype)
+    return chosen or ["topic_goal"]
+
+
 def _recommended_block_schema(allowed_types: list[str] | None = None) -> dict:
     allowed = clean_allowed_block_types(allowed_types)
     return {
@@ -335,18 +347,6 @@ _BLOCK_TYPE_PROPERTIES: dict[str, dict[str, dict]] = {
         "expected_why_rationale": {"type": "string"},
     },
 }
-
-
-def clean_allowed_block_types(values: object) -> list[str]:
-    """Validate and normalize the course's allowed AI block types. At least 1 remains."""
-    if not isinstance(values, list):
-        return list(ALL_BLOCK_TYPES)
-    chosen: list[str] = []
-    for item in values:
-        btype = str(item or "").strip()
-        if btype in ALL_BLOCK_TYPES and btype not in chosen:
-            chosen.append(btype)
-    return chosen or ["topic_goal"]
 
 
 def _block_data_schema(allowed_types: list[str]) -> dict:
