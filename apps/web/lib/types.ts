@@ -1,3 +1,5 @@
+import type { KcTutorConfig } from "./kc-tutor-config";
+
 export type Student = {
   id: string;
   slug: string;
@@ -33,6 +35,7 @@ export type TutorProfile = {
   misconception_policy: string;
   self_explanation: boolean;
   enrichment: string;
+  kc_tutor_config?: KcTutorConfig;
   updated_at?: string;
 };
 

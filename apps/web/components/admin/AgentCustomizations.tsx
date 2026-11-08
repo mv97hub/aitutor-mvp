@@ -3,8 +3,10 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { AdminFrame } from "@/components/admin/AdminFrame";
+import { KcTutorConfigFields } from "@/components/admin/KcTutorConfigFields";
 import { api } from "@/lib/api";
 import { hoverFor } from "@/lib/kc-layer-fields";
+import { kcTutorConfigFrom } from "@/lib/kc-tutor-config";
 import type { TutorProfile } from "@/lib/types";
 
 const PERSONAS = [
@@ -122,7 +124,7 @@ export function AgentCustomizations() {
     api<TutorProfile>("/tutor-profile")
       .then((profile) => {
         if (!cancelled) {
-          setDraft(profile);
+          setDraft({ ...profile, kc_tutor_config: kcTutorConfigFrom(profile.kc_tutor_config) });
           setError(null);
         }
       })
@@ -183,9 +185,10 @@ export function AgentCustomizations() {
           misconception_policy: draft.misconception_policy || "retry_once",
           self_explanation: draft.self_explanation !== false,
           enrichment: draft.enrichment || "on_request",
+          kc_tutor_config: kcTutorConfigFrom(draft.kc_tutor_config),
         }),
       });
-      setDraft(savedProfile);
+      setDraft({ ...savedProfile, kc_tutor_config: kcTutorConfigFrom(savedProfile.kc_tutor_config) });
       setSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the tutor profile.");
@@ -262,6 +265,13 @@ export function AgentCustomizations() {
                 <span className="help">{hoverFor("Use interests")}</span>
               </span>
             </label>
+            <KcTutorConfigFields
+              config={kcTutorConfigFrom(draft.kc_tutor_config)}
+              onChange={(kc_tutor_config) => {
+                setSaved(false);
+                setDraft({ ...draft, kc_tutor_config });
+              }}
+            />
             <h3 className="agent-layer">Layer 4, Guidance</h3>
             <label title={hoverFor("Instructive")}>
               How instructive
@@ -339,28 +349,6 @@ export function AgentCustomizations() {
                 setDraft({ ...draft, enrichment });
               }}
             />
-            <label className="check" title={hoverFor("Anti-spoiler")}>
-              <input type="checkbox" checked={draft.anti_spoiler} disabled title={hoverFor("Anti-spoiler")} />
-              <span>
-                Anti-spoiler <span className="deprecated">Deprecated</span>
-                <span className="help">{hoverFor("Anti-spoiler")}</span>
-              </span>
-            </label>
-            <label className="check" title={hoverFor("One question")}>
-              <input type="checkbox" checked={draft.one_question} disabled title={hoverFor("One question")} />
-              <span>
-                One question <span className="deprecated">Deprecated</span>
-                <span className="help">{hoverFor("One question")}</span>
-              </span>
-            </label>
-            <h3 className="agent-layer">Layer 5, Encouragement</h3>
-            <label className="check" title={hoverFor("Growth-mindset praise")}>
-              <input type="checkbox" checked={draft.growth_praise} disabled title={hoverFor("Growth-mindset praise")} />
-              <span>
-                Growth-mindset praise only <span className="deprecated">Deprecated</span>
-                <span className="help">{hoverFor("Growth-mindset praise")}</span>
-              </span>
-            </label>
             <h3 className="agent-layer">Layer 6, Metacognition</h3>
             <label className="check" title={hoverFor("Self-explanation")}>
               <input
