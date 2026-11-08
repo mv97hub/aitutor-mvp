@@ -16,7 +16,7 @@ const view = (patch: Partial<FastView> = {}): FastView => ({
   componentId: "a",
   messageCount: 0,
   hasDraft: false,
-  missing: ["no type"],
+  missing: ["no blocks"],
   markedComplete: false,
   error: null,
   ...patch,
@@ -26,13 +26,13 @@ test("empty components are the ones with no blocks, in list order", () => {
   assert.equal(CREATE_DRAFT_MESSAGE, "Create Draft");
   assert.deepEqual(
     emptyComponentIds([
-      { id: "typed", kc_type: "factual" },
-      { id: "filled", kc_type: null, blocks: [{ id: "b", type: "topic_goal" }] },
-      { id: "first", kc_type: null },
+      { id: "typed", blocks: [] },
+      { id: "filled", blocks: [{ id: "b", type: "topic_goal" }] },
+      { id: "first" },
       { id: "bare", blocks: [] },
-      { id: "second", kc_type: null },
+      { id: "second" },
     ]),
-    ["first", "bare", "second"],
+    ["typed", "first", "bare", "second"],
   );
 });
 
@@ -86,7 +86,7 @@ test("a push that leaves a gap stops on that component and does not mark it comp
     phase: "push-sent",
     baseline: 0,
   };
-  const waiting = stepFastCreate(drafted, view({ messageCount: 2, hasDraft: true, missing: ["no type"] }));
+  const waiting = stepFastCreate(drafted, view({ messageCount: 2, hasDraft: true, missing: ["no blocks"] }));
   assert.equal(waiting.action.type, "none");
   assert.equal(waiting.record.active, true);
 

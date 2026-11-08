@@ -15,11 +15,10 @@ import {
   removeKcComponent,
   saveKcCourse,
 } from "@/lib/kc-actions";
-import { recommendedChips, type RecommendedChip } from "@/lib/kc-blocks";
+import { blockSummary, recommendedChips, type RecommendedChip } from "@/lib/kc-blocks";
 import {
   AUDIENCES,
   KINDS,
-  TYPE_LABELS,
   type KcComponent,
   type KcCourse,
   type KcDraft,
@@ -245,17 +244,14 @@ function StructureView({
   return (
     <div className="kc-structure">
       <h2>Course structure</h2>
-      {structure?.groups.map((group) => (
-        <section key={group.kc_type}>
-          <h3>{TYPE_LABELS[group.kc_type] ?? group.kc_type}</h3>
-          <ul>
-            {group.components.map((row) => (
+      <ul>
+        {structure?.groups.flatMap((group) => group.components).map((row) => (
               <li key={row.id}>
                 <a href={`/kc-creator?course=${courseId}&kc=${row.id}`}>
                   <strong>{row.title}</strong>
                   {row.description ? <p className="kc-brief">{row.description}</p> : null}
                   <BlockChips chips={recommendedChips(row.description, row.recommended_blocks, row.blocks)} />
-                  <span>{TYPE_LABELS[row.kc_type ?? "unset"]}</span>
+                  <span>{row.blocks?.length ? blockSummary(row.blocks) : "No blocks yet"}</span>
                   <em>{rowStatus(row)}</em>
                 </a>
                 <span className="kc-row-actions">
@@ -290,10 +286,8 @@ function StructureView({
                   </form>
                 </span>
               </li>
-            ))}
-          </ul>
-        </section>
-      ))}
+        ))}
+      </ul>
       {patches.length ? (
         <section>
           <h3>Patches</h3>
@@ -304,7 +298,7 @@ function StructureView({
                   <strong>{patch.title}</strong>
                   {patch.description ? <p className="kc-brief">{patch.description}</p> : null}
                   <BlockChips chips={recommendedChips(patch.description, patch.recommended_blocks, patch.blocks)} />
-                  <span>{TYPE_LABELS[patch.kc_type ?? "unset"]}</span>
+                  <span>{patch.blocks?.length ? blockSummary(patch.blocks) : "No blocks yet"}</span>
                   <em>Not a target</em>
                 </a>
               </li>

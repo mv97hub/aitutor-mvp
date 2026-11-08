@@ -28,8 +28,8 @@ export default function KcCreatorDocsPage() {
         </p>
         <p>
           The middle pane is the manual editor. Description is a short summary. When the component has a recommended
-          sequence, that sentence stays in the description and the editor also lists it above the canvas. Outline and
-          the topic rows stay beside the blocks. Save this component writes the fields, including the ordered blocks,
+          sequence, that sentence stays in the description and the editor also lists it above the canvas. Outline
+          stays beside the blocks. Topic and goal live on a Topic + Goal block. Save this component writes the fields, including the ordered blocks,
           and clears the course ready flag. Mark complete sits next to Save. It can be used only when the saved
           component has no gaps. Mark complete records that flag. Save and Push clear it, and they clear course ready.
         </p>

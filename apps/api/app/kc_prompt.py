@@ -193,28 +193,6 @@ def stored_blocks(node: KcNode | None) -> list[dict]:
             valid.append({"id": bid, "type": btype, "data": dict(data)})
         if valid:
             return valid
-    raw_topics = getattr(node, "topics", None)
-    if isinstance(raw_topics, list) and raw_topics:
-        fallback: list[dict] = []
-        for idx, item in enumerate(raw_topics, start=1):
-            if isinstance(item, dict):
-                topic = str(item.get("topic") or "").strip()
-                goal = str(item.get("goal") or "").strip()
-                if topic and goal:
-                    fallback.append(
-                        {
-                            "id": f"blk_{idx}",
-                            "type": "topic_goal",
-                            "data": {
-                                "topic": topic,
-                                "goal": goal,
-                                "acceptance_criteria": "",
-                                "teaching_notes": "",
-                            },
-                        }
-                    )
-        if fallback:
-            return fallback
     return []
 
 
