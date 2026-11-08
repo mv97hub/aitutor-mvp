@@ -92,10 +92,11 @@ export default function KcPromptLayersPage() {
 
         <h2>Layer 1, the active block</h2>
         <p>
-          A component stores an ordered list of blocks. Each block is an id, a type, and that type&apos;s fields. The
-          nine field sets are listed on <Link href="/documentation/kc-creator">KC Creator</Link>. The prompt receives
-          the active block&apos;s type, its index, its fields, and the current substep. It does not receive the later
-          blocks.
+          A component stores an ordered list of blocks. Each block is an id, a type, and that type&apos;s fields. Every
+          field, whether it is required or optional, and how the tutor uses it, is the{" "}
+          <Link href="/documentation/kc-creator#field-catalog">field catalog</Link> on KC Creator. Outline, core truth,
+          misconceptions, and the rubric derived from blocks are in that catalog too. The prompt receives the active
+          block&apos;s type, its index, its fields, and the current substep. It does not receive the later blocks.
         </p>
 
         <h2>Layer 7, block state</h2>
