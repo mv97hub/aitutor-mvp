@@ -211,6 +211,47 @@ def test_a_unit_close_is_the_job_of_that_turn() -> None:
     assert "Do not write a course outro." not in text
 
 
+def test_a_middle_topic_does_not_say_the_unit_is_complete() -> None:
+    node = _node(
+        title="Floating",
+        outline="A principle about floating.",
+        topics=[
+            {"topic": "shape", "goal": "Say why shape matters"},
+            {"topic": "density", "goal": "Say why density matters"},
+        ],
+        kc_type="conceptual",
+        core_truth="Spread-out objects float.",
+        type_fields={"rule": "Spread-out objects float."},
+        misconceptions=[],
+        prerequisite_codes=[],
+        encompasses_codes=[],
+    )
+    goal = _goal()
+    moves = moves_for(node, _profile(), goal)
+    assert [move.key for move in moves] == ["orient", "topic-1", "topic-2", "rule"]
+    shared = {
+        "node": node,
+        "goal": goal,
+        "moves": moves,
+        "opening": False,
+        "prerequisite_status": "none",
+        "support_band": "ready",
+    }
+    middle = _text(**shared, step=1, others_known=True)
+    assert "topic 1 of 2: shape" in middle
+    assert "unit is complete" not in middle
+    assert "course outro" not in middle
+    _once(middle, "The unit is not finished.")
+    _once(middle, "This reply must not say it is complete.")
+    last = _text(**shared, step=len(moves) - 1)
+    assert "The unit is not finished." not in last
+    _once(last, "A known unit says the unit is complete")
+    _once(last, "A fragile unit says the unit is paused")
+    closed = _text(**shared, step=1, unit_complete=True)
+    _once(closed, "End the unit in this reply.")
+    _once(closed, "A known unit says the unit is complete")
+
+
 def test_a_time_box_sends_the_effective_limits_only() -> None:
     text = _text(
         profile=_profile(struggle_window="long", enrichment="offer"),
