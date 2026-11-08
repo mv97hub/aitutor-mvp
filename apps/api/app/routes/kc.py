@@ -10,49 +10,49 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.kc import (
+    _course_or_404,
+    _node_or_404,
+    _student_or_404,
+    accept_model_turn,
     add_component,
     append_kc_model_prompt,
     apply_component,
+    apply_decision,
     course_of_node,
     course_out,
+    course_prompt_for,
     create_course,
+    creator_prompt_for,
     creator_thread,
     delete_kc_course,
     delete_node,
-    kc_chat_detail,
-    kc_chat_summaries,
-    kc_prompt_out,
-    accept_model_turn,
-    apply_decision,
-    course_prompt_for,
-    creator_prompt_for,
     description_prompts_for,
     draft_course,
     finish_model_course,
+    kc_chat_detail,
+    kc_chat_summaries,
+    kc_prompt_out,
     mark_node_complete,
     mark_ready,
     network,
     node_out,
     note_component_saved,
-    record_ai_push,
     open_session,
     post_creator_turn,
     progress,
     prompt_for,
-    restart_course,
     push_course,
-    tutor_variables,
+    record_ai_push,
     record_speech,
     rename_component,
     reorder_course,
+    restart_course,
     session_out,
     structure,
-    tutor_courses,
     turn,
+    tutor_courses,
+    tutor_variables,
     update_course,
-    _course_or_404,
-    _node_or_404,
-    _student_or_404,
 )
 from app.kc_prompt_tester import PromptTesterIn, preview_kc_prompt
 from app.schemas import KcChatDetail, KcChatSummary, ModelPromptIn, ModelPromptOut
@@ -67,6 +67,7 @@ class CourseIn(BaseModel):
     kind: str = "mastery"
     minutes: int | None = None
     code: str | None = None
+    allowed_block_types: list[str] | None = None
 
 
 class CoursePatch(BaseModel):
@@ -75,16 +76,19 @@ class CoursePatch(BaseModel):
     audience: str | None = None
     kind: str | None = None
     minutes: int | None = None
+    allowed_block_types: list[str] | None = None
 
 
 class DraftIn(BaseModel):
     message: str = ""
     model: str = ""
+    allowed_block_types: list[str] | None = None
 
 
 class FinishDraftIn(BaseModel):
     message: str = ""
     proposal: dict
+    allowed_block_types: list[str] | None = None
 
 
 class SliceDraftIn(BaseModel):
@@ -93,12 +97,14 @@ class SliceDraftIn(BaseModel):
     titles: list[str] = Field(default_factory=list)
     subject: str = ""
     major_ideas: list[str] = Field(default_factory=list)
+    allowed_block_types: list[str] | None = None
 
 
 class ModelTurnIn(BaseModel):
     message: str
     discussion: str = ""
     draft: dict
+    allowed_block_types: list[str] | None = None
 
 
 class PushCourseIn(BaseModel):
@@ -126,13 +132,14 @@ class ComponentIn(BaseModel):
     description: str | None = None
     outline: str | None = None
     topics: list | None = None
-    kc_type: str
+    blocks: list[dict] = Field(default_factory=list)
+    kc_type: str | None = None
+    type_fields: dict = Field(default_factory=dict)
     core_truth: str = ""
     rubric: list[str] = Field(default_factory=list)
     misconceptions: list[dict] = Field(default_factory=list)
     prerequisite_codes: list[str] = Field(default_factory=list)
     encompasses_codes: list[str] = Field(default_factory=list)
-    type_fields: dict = Field(default_factory=dict)
 
 
 class OpenSessionIn(BaseModel):
@@ -152,6 +159,9 @@ class TurnIn(BaseModel):
 class DecisionIn(BaseModel):
     reply: str
     decision: str
+    substep_passed: bool = False
+    block_complete: bool = False
+    generated_mcq: dict | None = None
     rubric_met: list[str] = Field(default_factory=list)
     misconception: str | None = None
     hint_tier: str = "nudge"
@@ -159,10 +169,17 @@ class DecisionIn(BaseModel):
     off_course: bool = False
     affect: str = "engaged"
     confidence: str = "ok"
+    score_justification: str = ""
+    what_was_strong: str = ""
+    what_to_work_on: str = ""
+    justification: str = ""
+    strong: str = ""
+    work_on: str = ""
 
 
 class SpeechIn(BaseModel):
     content: str
+    generated_mcq: dict | None = None
 
 
 @router.get("/kc/courses")
@@ -185,6 +202,7 @@ def post_course(body: CourseIn, db: Session = Depends(get_db)) -> dict:
         kind=body.kind,
         minutes=body.minutes,
         code=body.code,
+        allowed_block_types=body.allowed_block_types,
     )
     return course_out(db, goal)
 
@@ -210,7 +228,7 @@ def post_course_draft(course_id: uuid.UUID, body: DraftIn, db: Session = Depends
 @router.post("/kc/courses/{course_id}/draft-prompt")
 def post_course_draft_prompt(course_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
     goal = _course_or_404(db, course_id)
-    return course_prompt_for(goal, body.message, body.model)
+    return course_prompt_for(goal, body.message, body.model, body.allowed_block_types)
 
 
 @router.post("/kc/courses/{course_id}/draft-slices")
@@ -223,13 +241,14 @@ def post_course_draft_slices(course_id: uuid.UUID, body: SliceDraftIn, db: Sessi
         body.titles,
         body.subject,
         body.major_ideas,
+        body.allowed_block_types,
     )
 
 
 @router.post("/kc/courses/{course_id}/draft-finish")
 def post_course_draft_finish(course_id: uuid.UUID, body: FinishDraftIn, db: Session = Depends(get_db)) -> dict:
     goal = _course_or_404(db, course_id)
-    return finish_model_course(goal, body.message, body.proposal)
+    return finish_model_course(goal, body.message, body.proposal, body.allowed_block_types)
 
 
 @router.post("/kc/courses/{course_id}/push")
@@ -308,12 +327,25 @@ def post_node_thread(node_id: uuid.UUID, body: DraftIn, db: Session = Depends(ge
 
 @router.post("/kc/nodes/{node_id}/creator-prompt")
 def post_creator_prompt(node_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
-    return creator_prompt_for(db, _node_or_404(db, node_id), body.message, body.model)
+    return creator_prompt_for(
+        db,
+        _node_or_404(db, node_id),
+        body.message,
+        body.model,
+        body.allowed_block_types,
+    )
 
 
 @router.post("/kc/nodes/{node_id}/model-turn")
 def post_model_turn(node_id: uuid.UUID, body: ModelTurnIn, db: Session = Depends(get_db)) -> dict:
-    return accept_model_turn(db, _node_or_404(db, node_id), body.message, body.discussion, body.draft)
+    return accept_model_turn(
+        db,
+        _node_or_404(db, node_id),
+        body.message,
+        body.discussion,
+        body.draft,
+        body.allowed_block_types,
+    )
 
 
 @router.post("/kc/nodes/{node_id}/draft")
@@ -405,7 +437,7 @@ def get_tutor_prompt(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
 
 @router.post("/kc/tutor/sessions/{session_id}/speech")
 def post_tutor_speech(session_id: uuid.UUID, body: SpeechIn, db: Session = Depends(get_db)) -> dict:
-    return record_speech(db, _session_or_404(db, session_id), body.content)
+    return record_speech(db, _session_or_404(db, session_id), body.content, body.generated_mcq)
 
 
 @router.post("/kc/tutor/sessions/{session_id}/turn")

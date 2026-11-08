@@ -22,15 +22,17 @@ const view = (patch: Partial<FastView> = {}): FastView => ({
   ...patch,
 });
 
-test("empty components are the ones with no type, in list order", () => {
+test("empty components are the ones with no blocks, in list order", () => {
   assert.equal(CREATE_DRAFT_MESSAGE, "Create Draft");
   assert.deepEqual(
     emptyComponentIds([
       { id: "typed", kc_type: "factual" },
+      { id: "filled", kc_type: null, blocks: [{ id: "b", type: "topic_goal" }] },
       { id: "first", kc_type: null },
+      { id: "bare", blocks: [] },
       { id: "second", kc_type: null },
     ]),
-    ["first", "second"],
+    ["first", "bare", "second"],
   );
 });
 

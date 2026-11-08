@@ -1,6 +1,6 @@
 /**
  * Fast Create All walks the selected course's empty components.
- * An empty component has no type. The cycle selects one, sends Create Draft,
+ * An empty component has no blocks. When the block list is missing, a component with no legacy type is empty. The cycle selects one, sends Create Draft,
  * pushes the reply, then marks it complete when the gaps are empty.
  */
 
@@ -40,8 +40,12 @@ export type FastAction =
 
 const PHASES: readonly FastPhase[] = ["draft", "draft-sent", "push-sent", "complete-sent"];
 
-export function emptyComponentIds(components: { id: string; kc_type: string | null }[]): string[] {
-  return components.filter((item) => item.kc_type == null).map((item) => item.id);
+export function emptyComponentIds(
+  components: { id: string; kc_type?: string | null; blocks?: unknown[] | null }[],
+): string[] {
+  return components
+    .filter((item) => (Array.isArray(item.blocks) ? item.blocks.length === 0 : item.kc_type == null))
+    .map((item) => item.id);
 }
 
 /** Same gap line the structure row shows: the missing strings, joined. */

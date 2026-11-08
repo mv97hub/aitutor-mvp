@@ -121,7 +121,7 @@ test("choosing a unit fills layer 1 from that course and component", () => {
   assert.equal(values["Component title"], "Angle sum");
   assert.equal(values["Component code"], "angles");
   assert.equal(values["Component description"], "Why a triangle's angles add up.");
-  assert.equal(values.Type, "conceptual");
+  assert.equal(values.Type, "case_study");
   assert.equal(values["Core truth"], "The angles add to 180.");
   assert.equal(values["Rubric lines"], "States 180.");
   assert.equal(values.Misconceptions, "They add to 90. -> right-angle");
@@ -137,8 +137,9 @@ test("choosing a unit fills layer 1 from that course and component", () => {
   assert.equal(values["Unit close"], "no");
   const second = picked.components[1];
   assert.ok(second);
-  assert.equal(choiceForMove("factual", 1), "no");
-  assert.equal(choiceForMove("causal", 2), "yes");
+  assert.equal(choiceForMove("retrieval_check", 1), "no");
+  assert.equal(choiceForMove("mcq", 1), "yes");
+  assert.equal(choiceForMove("case_study", 1), "yes");
   assert.equal(coursePosition(picked, "patch-1"), "Patch");
   assert.equal(prerequisiteStatus(["lines", ""]), "lines: unknown");
 });

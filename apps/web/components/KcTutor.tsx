@@ -6,7 +6,7 @@ import { KcBanner } from "@/components/KcBanner";
 import { KcDebugPanel } from "@/components/KcDebugPanel";
 import { ChoiceWidget } from "@/components/LessonBlocks";
 import { api } from "@/lib/api";
-import type { KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
+import type { KcBlockProgress, KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
 import type { KcDebugTurn } from "@/lib/kc-debug";
 import { hoverFor } from "@/lib/kc-layer-fields";
 import { KC_MODELS, kcModel, type KcModel } from "@/lib/kc-models";
@@ -424,6 +424,7 @@ export function KcTutor({
       <section className="ds-stage">
         {session ? (
           <header className="ds-header">
+            <BlockProgressBanner session={session} />
             <p className="kc-step">
               {session.title} · {session.recipe} · {session.step_label}
               {session.status === "completed" ? ` · score ${session.score ?? 0}` : ""}
@@ -439,6 +440,52 @@ export function KcTutor({
       {debugOpen ? <KcDebugPanel variables={variables} turns={turns} /> : null}
     </main>
   );
+}
+
+function BlockProgressBanner({ session }: { session: KcTutorSession }) {
+  if (typeof session.total_blocks !== "number") return null;
+  const total = session.total_blocks;
+  const completed = session.completed_blocks ?? 0;
+  const pct = Math.max(0, Math.min(100, session.completion_pct ?? 0));
+  const active = session.block_progress?.find((item) => item.status === "active");
+  const index = session.active_block_index ?? active?.index ?? session.step;
+  const typeLabel = active?.type_label ?? "";
+  return (
+    <div className="kc-block-progress" aria-label="Component block progress">
+      <p>
+        {completed} / {total} Blocks Complete · {pct}%
+      </p>
+      {total > 0 && typeLabel ? (
+        <p>
+          Block {index + 1} of {total}: {typeLabel}
+          {session.active_substep_label ? <span className="kc-substep">{session.active_substep_label}</span> : null}
+        </p>
+      ) : null}
+      <div className="kc-block-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Blocks complete">
+        <span style={{ width: `${pct}%` }} />
+      </div>
+      {session.block_progress?.length ? (
+        <ol className="kc-block-pills">
+          {session.block_progress.map((item, position) => (
+            <li key={item.id || position} className={`is-${item.status}`} title={pillTitle(item)}>
+              <strong>{(item.index ?? position) + 1}</strong>
+              <span>{item.type_label}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </div>
+  );
+}
+
+function pillTitle(item: KcBlockProgress): string {
+  if (item.status === "upcoming") return "Upcoming";
+  if (item.status === "active") {
+    const attempts = item.attempts ? `${item.attempts} ${item.attempts === 1 ? "attempt" : "attempts"}` : "";
+    return ["Active", item.outcome, attempts].filter(Boolean).join(" · ");
+  }
+  const attempts = item.attempts ? `${item.attempts} ${item.attempts === 1 ? "attempt" : "attempts"}` : "";
+  return [item.outcome || "Completed", attempts].filter(Boolean).join(" · ");
 }
 
 function KcLesson({

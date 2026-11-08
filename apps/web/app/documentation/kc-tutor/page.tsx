@@ -1,6 +1,47 @@
 import Link from "next/link";
 
+import { BLOCK_CONFIG_TITLES } from "@/lib/kc-tutor-config";
+
 export const metadata = { title: "KC Tutor · Documentation · AI Tutor" };
+
+const LEARNER: { type: keyof typeof BLOCK_CONFIG_TITLES; text: string }[] = [
+  {
+    type: "topic_goal",
+    text: "The tutor teaches one topic toward its goal, then asks the learner to say it. A thin fragment can be asked again as a full sentence.",
+  },
+  {
+    type: "mcq",
+    text: "A static item uses the four stored options. A dynamic item is written for this learner when the block opens. The app grades the picked index. A wrong option can be explained and retried. The right option can ask for a one-sentence why.",
+  },
+  {
+    type: "case_study",
+    text: "The learner meets a scenario, chooses at the decision point, and then states what the cases have in common. A transfer question can follow.",
+  },
+  {
+    type: "socratic",
+    text: "The tutor probes with a short dialogue, then asks for the target insight.",
+  },
+  {
+    type: "curiosity",
+    text: "The learner ventures a hunch about a hook. A bold guess does not, by itself, mark the component fragile unless that block is set to count toward mastery.",
+  },
+  {
+    type: "worked_example",
+    text: "The tutor walks a worked solution, hides one or more steps, and then gives a solo problem.",
+  },
+  {
+    type: "spot_the_flaw",
+    text: "The learner finds what is wrong in an artifact and, when the setting asks for it, corrects it.",
+  },
+  {
+    type: "teach_back",
+    text: "The learner explains the idea to a confused peer and answers the follow-up questions.",
+  },
+  {
+    type: "retrieval_check",
+    text: "The learner recalls the point with little or no cue, and can be asked why it is so.",
+  },
+];
 
 export default function KcTutorDocsPage() {
   return (
@@ -11,86 +52,75 @@ export default function KcTutorDocsPage() {
         </p>
         <h1>KC Tutor</h1>
         <p>
-          KC Tutor, at <Link href="/kc-tutor">/kc-tutor</Link>, practices one component at a time.
-          The lesson is a chat. Questions and single-choice answers live in the thread.
-          Settings is a button in the side column, separate from the lesson chat.
-          It chooses the model from the same list as KC Course Creator. gpt-4.1 is the default.
-          ~deepseek/deepseek-flash-latest calls OpenRouter with OPENROUTER_API_KEY. The OpenAI models stay on OPENAI_API_KEY.
-          The same settings surface edits the child fields the prompt already includes: age, reading level, modality, and interests.
-          Persona, lexicon, metaphors, sidekick, instructive, struggle window, stay on course, use interests,
-          misconception policy, enrichment, and self-explanation stay on Agent customizations.
-          The field catalog is <Link href="/documentation/kc-prompt-layers">KC prompt layers</Link>.
+          KC Tutor, at <Link href="/kc-tutor">/kc-tutor</Link>, practices one component at a time by walking that
+          component&apos;s blocks in order. The lesson is a chat. Questions and on-screen choices live in the thread.
+          Settings is a button in the side column, separate from the lesson chat. It chooses the model from the same
+          list as KC Course Creator. gpt-4.1 is the default. The same settings surface edits the child fields the
+          prompt already includes: age, reading level, modality, and interests. How a block is taught stays on{" "}
+          <Link href="/admin/agent-customizations">Agent customizations</Link>. The field catalog is{" "}
+          <Link href="/documentation/kc-prompt-layers">KC prompt layers</Link>.
         </p>
         <p>
-          The child menu lists Add New Child first. Choosing it opens a dialog for a name, an age, a reading level,
-          a modality, and interests. Save creates the child, closes the dialog, and selects that child. A blank
-          reading level or modality keeps the default for that age. Persona and the other tutor settings stay on
-          Agent customizations.
+          The child menu lists Add New Child first. Choosing it opens a dialog for a name, an age, a reading level, a
+          modality, and interests. Save creates the child, closes the dialog, and selects that child.
         </p>
 
         <h2>How it works</h2>
         <p>
           Open asks for a child and a ready course. The course list is only courses KC Course Creator has marked ready.
-          The ring counts target components that are known, out of all target components. A segment is known, fragile, or not started.
-          The caption says how many are known, and adds &quot;some fragile&quot; when any segment is fragile.
-          A time-boxed course also shows its minutes. Mastery and curiosity do not.
+          The ring counts target components that are known, out of all target components. A segment is known, fragile,
+          or not started. A time-boxed course also shows its minutes. Mastery and curiosity do not.
         </p>
         <p>
-          Start Course Over is on the left. It clears the selected child&apos;s progress on the open course&apos;s
-          components and starts that course again from the first component.
-          TEST KC Selection is at the bottom left. It lists the components of the current course.
-          Choosing one opens that component without waiting for the card order.
+          Start Course Over clears the selected child&apos;s progress on the open course and starts that course again
+          from the first component. TEST KC Selection lists the components of the current course and opens one without
+          waiting for the card order.
         </p>
         <p>Up to three cards offer the next work:</p>
         <ul>
           <li>Fastest path is the next target component whose prerequisites are known.</li>
-          <li>
-            Foundation patch is a component that is not a target, when a target is waiting on it.
-            If the last answer matched a misconception, this card is the component that is actually broken.
-          </li>
-          <li>
-            Stretch is a later component whose prerequisites are known. A synthesis component is offered only after 2 conceptual components are known.
-          </li>
+          <li>Foundation patch is a component that is not a target, when a target is waiting on it.</li>
+          <li>Stretch is a later component whose prerequisites are known.</li>
         </ul>
         <p>
-          A card opens that one component. The stage header keeps the title, the recipe name, the step label, and the score once the session is completed.
-          A redirect still reads &quot;Next card: &quot; and the title. The tutor&apos;s question is an assistant bubble. A typed answer is a user bubble.
-          Enter sends. Two steps are single-choice bubbles in the thread. Every other step is typed in the same thread.
-          While a choice is unanswered, the composer says &quot;Choose an answer above&quot; and does not send. After Check, the widget settles on &quot;Your choice&quot;
-          and the chosen text is the answer. The model writes the reply and a structured decision. It does not set the type, the edges, or the score.
-          The app checks that decision, then writes known, fragile, redirect, the unit close, and the course outro.
-          If the selected model is an OpenAI model and OPENAI_API_KEY is unset, the page shows the same missing-key error as the kid tutor.
-          If the selected model is ~deepseek/deepseek-flash-latest and OPENROUTER_API_KEY is unset, the page shows a missing-key error for that key.
-          An OpenAI model does not read the OpenRouter key.
+          A card opens that one component. The stage header shows the block progress banner when the session includes
+          it: completed blocks out of the total, the percentage, a fill bar, and one pill per block. A finished block
+          shows its outcome and attempt count when you hover the pill. The active block shows its type and, when the
+          block has more than one part, the active substep, such as Contrast &amp; Rule · Substep 2 of 2. The header
+          still names the component. A redirect still reads &quot;Next card: &quot; and the title.
         </p>
         <p>
-          Each type runs a fixed move sequence. The sequences, the intro, the unit close, the course outro, and every field
-          are on <Link href="/documentation/kc-prompt-layers">KC prompt layers</Link>.
-          Choice widgets stay only for conceptual predict and the causal flawed claim. Every other move is typed.
-          Phrase matching is not the pass rule. A stored wrong move is still a backstop when the model misses it.
-          The first hit explains that move and asks it again. A second hit redirects and leaves the unit fragile.
-          Known requires the final move with no reveal. Stability still rises to at least 1.0, and each encompassed component gains 0.25.
+          The tutor asks about the active block only. A multiple-choice block and a case-study choice use the choice
+          widget. Every other block is typed in the same thread. While a choice is unanswered, the composer says
+          &quot;Choose an answer above&quot; and does not send. The model writes the reply and a structured decision.
+          The app checks that decision. A block can finish known, fragile, or engaged. The component is known when the
+          walk finishes without a reveal that leaves it fragile. A fragile block pauses the component and can point at
+          the broken component. Known still raises stability, and each encompassed component gains 0.25.
+        </p>
+        <p>What the learner does on each block:</p>
+        <ul>
+          {LEARNER.map((item) => (
+            <li key={item.type}>
+              {BLOCK_CONFIG_TITLES[item.type]}: {item.text}
+            </li>
+          ))}
+        </ul>
+        <p>
+          When the learner finishes a block, the same reply can affirm that block and open the next one. The unit close
+          is reserved for the last block. The course outro follows only when every target component is known.
         </p>
         <p>
-          The tutor profile changes how a step is said. It does not change the component type, the links between components, or the score.
-        </p>
-        <p>
-          Debug, on the right, opens a panel beside the lesson. The chat stays usable while the panel is open.
-          Variables groups every layer field under seven headings. An empty value stays visible.
-          Prompts lists each request and response for this session, oldest first.
+          Debug, on the right, opens a panel beside the lesson. Variables groups the stored settings under the seven
+          layer headings. Prompts lists each request and response for this session, oldest first.
         </p>
 
         <h2>Settings you can change</h2>
         <p>
-          This page does not edit the course. The choices on the page are which child, which ready course, Start Course Over, which card to open, TEST KC Selection, and Settings.
-          Settings sits in the side column. It is not part of the lesson chat.
-          The model list is gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and ~deepseek/deepseek-flash-latest.
-          gpt-4.1 is the default. Saving a model keeps it on this page. The next spoken step uses it.
-          Age, reading level, modality, and interests save on the child. The next step&apos;s prompt uses the saved values.
-          Those fields do not change the component type, the links, or the score.
-          Component content is set in KC Creator, including transfer case and counterfactual.
-          How the tutor speaks is the shared profile on Agent customizations, grouped by layer.
-          The same hover text is the field description on <Link href="/documentation/kc-prompt-layers">KC prompt layers</Link>.
+          This page does not edit the course. The choices on the page are which child, which ready course, Start Course
+          Over, which card to open, TEST KC Selection, and Settings. The model list is gpt-4o-mini, gpt-4o,
+          gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and ~deepseek/deepseek-flash-latest. Age, reading level, modality, and
+          interests save on the child. Component blocks are set in KC Creator. How the tutor speaks, and how each block
+          type is taught, is the shared profile on Agent customizations.
         </p>
 
         <h2>What to know when using it</h2>
@@ -102,7 +132,7 @@ export default function KcTutorDocsPage() {
           <li>With no card open, the page says a card opens one component.</li>
           <li>When every target component is known, the page says so and offers no cards.</li>
           <li>A finished component hides the composer and shows the score in the header.</li>
-          <li>The wording of a question comes from the model. The score does not.</li>
+          <li>The wording of a question comes from the model. The score does not. A multiple-choice grade is the picked index.</li>
         </ul>
       </article>
     </main>

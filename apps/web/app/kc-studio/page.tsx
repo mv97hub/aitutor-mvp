@@ -33,7 +33,12 @@ export default async function KcStudioPage({
       const message = (params.message || "").trim();
       if (message) {
         try {
-          const result = await draftKcCourse({ courseId: params.course, message, model });
+          const result = await draftKcCourse({
+            courseId: params.course,
+            message,
+            model,
+            allowedBlockTypes: selected.allowed_block_types,
+          });
           draft = result.draft;
           reply = result.reply;
         } catch (err) {

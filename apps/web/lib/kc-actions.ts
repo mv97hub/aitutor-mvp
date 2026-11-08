@@ -108,10 +108,15 @@ export async function postKcCreatorMessage(formData: FormData) {
   const model = kcModel(String(formData.get("model") || ""));
   const back = `/kc-creator?course=${courseId}&kc=${nodeId}&model=${encodeURIComponent(model)}`;
   try {
+    const allowed = String(formData.get("allowed_block_types") || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
     await draftKcComponent({
       nodeId,
       message: String(formData.get("message") || ""),
       model,
+      allowedBlockTypes: allowed,
     });
   } catch (error) {
     bounce(back, error);
@@ -178,50 +183,37 @@ export async function removeKcComponent(formData: FormData) {
   redirect(`/kc-studio?course=${courseId}`);
 }
 
-function typeFields(kcType: string, formData: FormData): Record<string, unknown> {
-  const text = (key: string) => String(formData.get(key) || "");
-  if (kcType === "procedural") {
-    return {
-      steps: text("steps")
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean),
-      blanked_step: Number(text("blanked_step") || 0),
-      solo_problem: text("solo_problem"),
-      solo_check: text("solo_check"),
-    };
+function blocksOf(formData: FormData): unknown[] {
+  const raw = String(formData.get("blocks") || "").trim();
+  if (!raw) return [];
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) throw new Error("Blocks must be a list.");
+  return parsed;
+}
+
+export async function saveKcBlockScope(formData: FormData) {
+  const courseId = String(formData.get("course_id") || "");
+  const nodeId = String(formData.get("node_id") || "");
+  const back =
+    String(formData.get("return_to") || "") === "studio"
+      ? `/kc-studio?course=${courseId}${formData.get("model") ? `&model=${encodeURIComponent(String(formData.get("model")))}` : ""}`
+      : creatorBack(courseId, nodeId, formData);
+  const allowed = formData.getAll("allowed_block_types").map(String);
+  try {
+    await api(`/kc/courses/${courseId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ allowed_block_types: allowed.length ? allowed : ["topic_goal"] }),
+    });
+  } catch (error) {
+    bounce(back, error);
   }
-  if (kcType === "synthesis") {
-    return {
-      mixes: [text("mix_a"), text("mix_b")].filter(Boolean),
-      faulty_plan: text("faulty_plan"),
-    };
-  }
-  if (kcType === "conceptual") {
-    return {
-      case_a: text("case_a"),
-      case_b: text("case_b"),
-      prediction: text("prediction"),
-      rule: text("rule"),
-      transfer_case: text("transfer_case"),
-    };
-  }
-  if (kcType === "causal") {
-    return {
-      decision_point: text("decision_point"),
-      flawed_claim: text("flawed_claim"),
-      causal_chain: text("causal_chain"),
-      counterfactual: text("counterfactual"),
-    };
-  }
-  return { fact: text("fact"), retrieval_question: text("retrieval_question") };
+  redirect(back);
 }
 
 export async function saveKcComponent(formData: FormData) {
   const courseId = String(formData.get("course_id") || "");
   const nodeId = String(formData.get("node_id") || "");
   const back = creatorBack(courseId, nodeId, formData);
-  const kcType = String(formData.get("kc_type") || "factual");
   const wrong = formData.getAll("wrong_move").map(String);
   const broken = formData.getAll("broken_kc").map(String);
   const misconceptions = wrong
@@ -241,7 +233,6 @@ export async function saveKcComponent(formData: FormData) {
             goal: String(formData.getAll("goal")[index] || "").trim(),
           }))
           .filter((item) => item.topic && item.goal),
-        kc_type: kcType,
         core_truth: String(formData.get("core_truth") || ""),
         rubric: formData
           .getAll("rubric")
@@ -250,7 +241,7 @@ export async function saveKcComponent(formData: FormData) {
         misconceptions,
         prerequisite_codes: formData.getAll("prerequisite_codes").map(String),
         encompasses_codes: formData.getAll("encompasses_codes").map(String),
-        type_fields: typeFields(kcType, formData),
+        blocks: blocksOf(formData),
       }),
     });
   } catch (error) {

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import TutorProfile
 from app.schemas import TutorProfileIn, TutorProfileOut
-from app.tutor_profile import ensure_default_profile, save_profile
+from app.tutor_profile import effective_kc_tutor_config, ensure_default_profile, save_profile
 
 router = APIRouter()
 
@@ -26,6 +26,7 @@ def _out(row: TutorProfile) -> TutorProfileOut:
         misconception_policy=row.misconception_policy,
         self_explanation=row.self_explanation,
         enrichment=row.enrichment,
+        kc_tutor_config=effective_kc_tutor_config(row),
         updated_at=row.updated_at,
     )
 
@@ -54,5 +55,6 @@ def put_tutor_profile(body: TutorProfileIn, db: Session = Depends(get_db)) -> Tu
         misconception_policy=body.misconception_policy,
         self_explanation=body.self_explanation,
         enrichment=body.enrichment,
+        kc_tutor_config=body.kc_tutor_config,
     )
     return _out(row)

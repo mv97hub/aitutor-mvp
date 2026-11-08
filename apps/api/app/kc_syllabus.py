@@ -1430,21 +1430,42 @@ def planned_reply(
     return _prefix(subject, ideas) + body
 
 
-def component_fields(subject: str, title: str, kind: str) -> dict:
-    """Summary, outline, and topic pairs when no model has written them."""
+def component_fields(
+    subject: str,
+    title: str,
+    kind: str,
+    allowed_block_types: list[str] | None = None,
+) -> dict:
+    """Summary, outline, topic pairs, and recommended_blocks when no model has written them."""
+    from app.kc_model import (
+        clean_allowed_block_types,
+        clean_recommended_blocks,
+        ensure_description_with_recommended_blocks,
+    )
+
     if kind == "curiosity":
         outline = f"{title} is a step on the path through {subject}."
     elif kind == "time_boxed":
         outline = f"{title} is a step that fits the time on {subject}."
     else:
         outline = f"{title} is part of the rigorous breakdown of {subject}."
+    topics = [
+        {"topic": title, "goal": f"Explain {title}"},
+        {"topic": subject, "goal": f"Apply {title} in {subject}"},
+    ]
+    allowed = clean_allowed_block_types(allowed_block_types)
+    recs = clean_recommended_blocks(
+        None,
+        allowed_block_types=allowed,
+        fallback_pairs=topics,
+        title=title,
+    )
+    description = ensure_description_with_recommended_blocks(outline, recs)
     return {
-        "description": outline,
+        "description": description,
         "outline": outline,
-        "topics": [
-            {"topic": title, "goal": f"Explain {title}"},
-            {"topic": subject, "goal": f"Apply {title} in {subject}"},
-        ],
+        "topics": topics,
+        "recommended_blocks": recs,
     }
 
 

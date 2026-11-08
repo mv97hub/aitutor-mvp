@@ -1,8 +1,51 @@
 import Link from "next/link";
 
-import { LAYER_FIELDS, LAYER_HEADINGS, MOVE_SEQUENCES } from "@/lib/kc-layer-fields";
+import { BLOCK_TYPES } from "@/lib/kc-blocks";
+import {
+  BLOCK_CONFIG_FIELDS,
+  BLOCK_CONFIG_TITLES,
+  OVERARCHING_FIELDS,
+  type ConfigField,
+} from "@/lib/kc-tutor-config";
 
 export const metadata = { title: "KC prompt layers · Documentation · AI Tutor" };
+
+function optionLine(field: ConfigField): string {
+  if (field.kind === "enum") return field.options.map(([, label]) => label).join(", ");
+  if (field.kind === "int") return `${field.min} to ${field.max}`;
+  return "On or off";
+}
+
+const ASSEMBLER = [
+  {
+    title: "This turn",
+    text: "Who is speaking, which block and substep this is, and the one job of the reply. The opening, the unit close, and the course outro are here only when they change that job. The unit close is the last block. The course outro follows only when every target is known.",
+  },
+  {
+    title: "What to teach",
+    text: "Only the active block and its current substep. Later blocks are not included, so the reply cannot jump ahead or close the component early. A withheld answer is said only when a reveal or a passed close allows it.",
+  },
+  {
+    title: "Who you are talking to",
+    text: "One short profile: name, age, reading level, modality, and interests, each with its effect. An early reading level means shorter sentences. Interests are an example only when that switch is on.",
+  },
+  {
+    title: "How to teach",
+    text: "The overarching rules, plus only the active block type's configuration. A multiple-choice turn uses that type's retry count, wrong-answer depth, and whether a correct retry must explain why. A Socratic turn uses that type's dialogue depth and challenge. Settings for the other eight types are not printed.",
+  },
+  {
+    title: "How to sound",
+    text: "Persona, lexicon, metaphors, and sidekick collapse into one voice paragraph. That voice does not change the block, the expected answer, or the score.",
+  },
+  {
+    title: "What just happened",
+    text: "Attempts on this block, the last answer, the hint already given, affect, whether help was requested, and the last few messages. This is state. The model is told not to treat it as a new rule.",
+  },
+  {
+    title: "What to return",
+    text: "A structured decision: reply, decision, substep_passed, block_complete, generated_mcq when the next block is a dynamic multiple choice, misconception, hint_tier, affect, and confidence. The unit close also returns score_justification, what_was_strong, and what_to_work_on.",
+  },
+];
 
 export default function KcPromptLayersPage() {
   return (
@@ -13,106 +56,70 @@ export default function KcPromptLayersPage() {
         </p>
         <h1>KC prompt layers</h1>
         <p>
-          The KC tutor prompt is seven layers. The model writes the reply. The app sets the type, the edges, the score,
-          the unit close, and the course outro. Temperature is 0.4. The same names and the same hover text appear on
-          Agent customizations, on KC Tutor settings, on KC Creator, and in the debug Variables panel.
+          The tutor prompt is built for the active block only. The model writes the reply. The app sets the blocks, the
+          edges, the score, the unit close, and the course outro. The same overarching settings and the nine block-type
+          settings are edited on <Link href="/admin/agent-customizations">Agent customizations</Link>. The debug
+          Variables panel still groups stored values under seven layer headings. The text sent to the model is the seven
+          sections at the end of this page.
         </p>
 
-        <h2>Moves</h2>
-        <p>Every sequence starts with the intro and ends with the unit close. The course outro follows the unit close only on the turn the course is finished.</p>
+        <h2>Overarching tutor configurations</h2>
+        <p>These apply on every block.</p>
         <ul>
-          {MOVE_SEQUENCES.map((line) => (
-            <li key={line}>{line}</li>
+          {OVERARCHING_FIELDS.map((field) => (
+            <li key={field.key}>
+              <strong>{field.label}.</strong> {field.help} Choices: {optionLine(field)}.
+            </li>
           ))}
         </ul>
-
-        <h2>Intro</h2>
         <p>
-          Orient is the first turn when an outline is stored. It elaborates that outline and does not open the topics
-          or the goals. It reads the outline field. It does not parse the component description, and it does not use the course description. Instructive still sets how much is said before the
-          question. A time-boxed course keeps that opening to one sentence.
+          Voice and persona stay beside those settings: persona, lexicon, metaphors, sidekick, and use interests.
         </p>
 
-        <h2>Unit close</h2>
-        <p>
-          The unit close is in the same reply that ends the component. A known unit names the component and what the
-          child can now do. A fragile unit says the unit is paused and still needs another look, and names the patch
-          when there is one. It does not call a fragile unit finished work. Levels 1 and 2, and every time-boxed course,
-          use one or two sentences. Levels 3 to 5 restate the idea in the child&apos;s words, then the status line.
-        </p>
-
-        <h2>Course outro</h2>
-        <p>
-          The course outro is appended after the unit close only when every target component is known. It names the
-          course and recaps the ideas. If any target is unknown or fragile, there is no course outro, and the unit close
-          points at the next card.
-        </p>
-
-        {LAYER_HEADINGS.map((heading) => (
-          <section key={heading}>
-            <h2>{heading}</h2>
-            {LAYER_FIELDS.filter((field) => field.layer === heading).map((field) => (
-              <section key={field.name}>
-                <h3>{field.name}</h3>
-                <p>{field.hover}</p>
-                <p>{field.role}</p>
-                <p>
-                  {field.kind}. {field.where}.
-                </p>
-              </section>
-            ))}
+        <h2>Per-block-type configurations</h2>
+        {BLOCK_TYPES.map((type) => (
+          <section key={type}>
+            <h3>{BLOCK_CONFIG_TITLES[type]}</h3>
+            <ul>
+              {BLOCK_CONFIG_FIELDS[type].map((field) => (
+                <li key={field.key}>
+                  <strong>{field.label}.</strong> {field.help} {optionLine(field)}.
+                </li>
+              ))}
+            </ul>
           </section>
         ))}
 
+        <h2>Layer 1, the active block</h2>
+        <p>
+          A component stores an ordered list of blocks. Each block is an id, a type, and that type&apos;s fields. The
+          nine field sets are listed on <Link href="/documentation/kc-creator">KC Creator</Link>. The prompt receives
+          the active block&apos;s type, its index, its fields, and the current substep. It does not receive the later
+          blocks.
+        </p>
+
+        <h2>Layer 7, block state</h2>
+        <ul>
+          <li>The session step is the active block index, starting at 0.</li>
+          <li>The active substep names the part of a multi-part block, and where that part sits, such as Substep 2 of 2.</li>
+          <li>Dialogue turns count the exchanges already used on a Socratic or curiosity block.</li>
+          <li>Eliminated indexes are the wrong multiple-choice options already picked.</li>
+          <li>Block results store each finished block&apos;s outcome and attempts. The outcomes are known, fragile, and engaged.</li>
+          <li>Completed blocks, the total, and the percentage include partial credit for the active substep. A finished component is 100 percent.</li>
+        </ul>
+
         <h2>How the prompt is written</h2>
         <p>
-          The debug Variables panel still groups the stored settings under the seven layers above. The text
-          sent to the model does not. That text is seven instruction sections. A setting is written once, as
-          the behavior it asks for, in the section where that behavior changes the reply. A stored struggle
-          window or enrichment that this turn replaces is not sent. Prerequisite codes and encompass codes
-          stay in the panel and stay out of the prompt.
+          When a block&apos;s last substep passes, the app records that block, advances to the next one, and builds one
+          reply that affirms the finished block and opens the next. If the next block is a dynamic multiple choice, the
+          decision includes the generated item. Only the last block&apos;s final substep adds the unit close.
         </p>
-        <h3>This turn</h3>
-        <p>
-          Who is speaking, which move this is, and the one job of the reply. The opening, the unit close, and
-          the course outro are here because they change that job.
-        </p>
-        <h3>What to teach</h3>
-        <p>
-          Only this step&apos;s field. A topic turn names that topic and its goal. The outline is included on
-          Orient and not on a later topic. The course description is not used. A practice step shows the field
-          for that step. A withheld fact or rule is said only when a reveal or a passed close allows it.
-        </p>
-        <h3>Who you are talking to</h3>
-        <p>
-          One short profile: name, age, reading level, modality, and interests, each with its effect. An early
-          reading level means shorter sentences. A visual modality means a described picture only on a move
-          that already has cases or steps. Interests are an example only when that switch is on.
-        </p>
-        <h3>How to teach</h3>
-        <p>
-          Instructive level, struggle window, enrichment, stay on course, the response to a wrong move,
-          support band, and course kind, as the behavior for this turn. Time boxed and curiosity appear as
-          the limits they impose. Anti-spoiler, one question, and growth-mindset praise are not printed as
-          yes or no. Anti-spoiler is the sentence that says when the core truth may be spoken. When one
-          question or growth-mindset praise still changes the reply, that effect is one line here.
-        </p>
-        <h3>How to sound</h3>
-        <p>
-          Persona, lexicon, metaphors, and sidekick collapse into one voice paragraph. That voice does not
-          change the move, the expected answer, or the score.
-        </p>
-        <h3>What just happened</h3>
-        <p>
-          Attempts, the last answer, the hint already given, affect, whether help was requested, the
-          off-course count, and the last few messages. This is state. The model is told not to treat it as a
-          new rule.
-        </p>
-        <h3>What to return</h3>
-        <p>
-          The decision fields and what each value means, kept short and last. The response schema and the
-          temperature stay as they are.
-        </p>
+        {ASSEMBLER.map((section) => (
+          <section key={section.title}>
+            <h3>{section.title}</h3>
+            <p>{section.text}</p>
+          </section>
+        ))}
       </article>
     </main>
   );

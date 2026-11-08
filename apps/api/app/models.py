@@ -16,6 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -60,6 +61,94 @@ class Student(Base):
     sessions: Mapped[list[Session]] = relationship(back_populates="student")
 
 
+ALL_BLOCK_TYPES = (
+    "topic_goal",
+    "mcq",
+    "case_study",
+    "socratic",
+    "curiosity",
+    "worked_example",
+    "spot_the_flaw",
+    "teach_back",
+    "retrieval_check",
+)
+
+
+def default_allowed_block_types() -> list[str]:
+    return list(ALL_BLOCK_TYPES)
+
+
+def default_kc_tutor_config() -> dict:
+    return {
+        "overarching": {
+            "orient_framing": "elaborate_outline",
+            "stay_on_course": "brief_answer_then_return",
+            "misconception_policy": "explain_and_retry_once",
+            "encouragement_style": "process_praise",
+            "close_summary_depth": "diagnostic_strengths_and_gaps",
+        },
+        "blocks": {
+            "topic_goal": {
+                "explanation_depth": 3,
+                "max_retries_before_reveal": 3,
+                "hint_ladder_style": "progressive_nudge_analogy_scaffold",
+                "goal_evaluation_strictness": "conceptual_gist",
+                "fragment_self_explanation": True,
+                "enrichment_mode": "on_request",
+            },
+            "mcq": {
+                "max_retry_attempts": 2,
+                "wrong_answer_explanation_depth": 2,
+                "disable_eliminated_choices": True,
+                "confirm_why_on_correct": "on_retry_only",
+                "correct_pass_explanation_depth": "reinforce_why",
+            },
+            "case_study": {
+                "case_presentation": "sequential_predict_then_contrast",
+                "explanation_depth": 3,
+                "max_retries_before_reveal": 3,
+                "require_transfer_application": True,
+            },
+            "socratic": {
+                "dialogue_depth_turns": 2,
+                "challenge_intensity": "counterexample_entrapment",
+                "max_retries_before_reveal": 3,
+                "hint_when_stuck": "highlight_contradiction",
+            },
+            "curiosity": {
+                "max_wonder_turns": 2,
+                "require_initial_prediction": True,
+                "counts_toward_mastery_score": False,
+                "hook_framing_style": "mystery_paradox",
+            },
+            "worked_example": {
+                "fading_level": "single_blanked_step",
+                "require_step_self_explanation": True,
+                "max_retries_before_reveal": 2,
+                "wrong_step_explanation_depth": 2,
+            },
+            "spot_the_flaw": {
+                "critique_depth": "identify_and_correct",
+                "wrong_answer_explanation_depth": 2,
+                "max_retries_before_reveal": 2,
+                "show_misconception_why": True,
+            },
+            "teach_back": {
+                "peer_confusion_level": "curious_beginner",
+                "follow_up_questions_count": 1,
+                "max_retries_before_reveal": 2,
+                "evaluation_strictness": "plain_language_clarity",
+            },
+            "retrieval_check": {
+                "cue_scaffolding": "cued_hint_on_first_miss",
+                "require_elaborative_why": True,
+                "max_retries_before_reveal": 2,
+                "accept_paraphrase": True,
+            },
+        },
+    }
+
+
 class TutorProfile(Base):
     """One default tutor profile, applied to every student."""
 
@@ -93,6 +182,9 @@ class TutorProfile(Base):
     )
     enrichment: Mapped[str] = mapped_column(
         String(16), nullable=False, default="on_request", server_default="on_request"
+    )
+    kc_tutor_config: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=default_kc_tutor_config, server_default="{}"
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -524,16 +616,36 @@ class StudioSettings(Base):
     model: Mapped[str] = mapped_column(String(64), nullable=False, default="gpt-4o-mini")
 
 
+def _legacy_block_data(blocks: object) -> dict:
+    if not isinstance(blocks, list):
+        return {}
+    for item in blocks:
+        if isinstance(item, dict) and item.get("type") == "_legacy":
+            data = item.get("data")
+            return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _blocks_with_legacy(blocks: object, key: str, value: object) -> list:
+    """Keep the five-type fields on the row after those columns were removed."""
+    items: list = []
+    data: dict = {}
+    for item in blocks or []:
+        if isinstance(item, dict) and item.get("type") == "_legacy":
+            raw = item.get("data")
+            if isinstance(raw, dict):
+                data = dict(raw)
+            continue
+        items.append(item)
+    data[key] = value
+    items.append({"id": "_legacy", "type": "_legacy", "data": data})
+    return items
+
+
 class KcNode(Base):
     """One knowledge component. The kid chat and the course catalog do not read this table."""
 
     __tablename__ = "kc_nodes"
-    __table_args__ = (
-        CheckConstraint(
-            "kc_type IS NULL OR kc_type IN ('factual', 'procedural', 'conceptual', 'causal', 'synthesis')",
-            name="ck_kc_nodes_type",
-        ),
-    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
@@ -541,9 +653,8 @@ class KcNode(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     outline: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     topics: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
-    kc_type: Mapped[str | None] = mapped_column(String(32))
+    blocks: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     core_truth: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    type_fields: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     rubric: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     misconceptions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     prerequisite_codes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
@@ -558,6 +669,25 @@ class KcNode(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
+
+    @hybrid_property
+    def kc_type(self) -> str | None:
+        value = _legacy_block_data(self.blocks).get("kc_type")
+        text = str(value).strip() if value else ""
+        return text or None
+
+    @kc_type.setter
+    def kc_type(self, value: str | None) -> None:
+        self.blocks = _blocks_with_legacy(self.blocks, "kc_type", value)
+
+    @hybrid_property
+    def type_fields(self) -> dict:
+        raw = _legacy_block_data(self.blocks).get("type_fields")
+        return raw if isinstance(raw, dict) else {}
+
+    @type_fields.setter
+    def type_fields(self, value: dict | None) -> None:
+        self.blocks = _blocks_with_legacy(self.blocks, "type_fields", dict(value or {}))
 
 
 class KcEdge(Base):
@@ -611,6 +741,9 @@ class KcGoal(Base):
     kind: Mapped[str] = mapped_column(String(16), nullable=False, default="mastery")
     minutes: Mapped[int | None] = mapped_column(Integer)
     target_kc_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    allowed_block_types: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=default_allowed_block_types, server_default="[]"
+    )
     ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     history: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(
@@ -667,8 +800,11 @@ class KcSession(Base):
     kc_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("kc_nodes.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    recipe: Mapped[str] = mapped_column(String(40), nullable=False)
+    recipe: Mapped[str] = mapped_column(String(40), nullable=False, default="block_walk", server_default="block_walk")
     step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_block_id: Mapped[str | None] = mapped_column(String(80))
+    active_block_state: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    block_results: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     score: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

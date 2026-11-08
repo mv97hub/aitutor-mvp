@@ -1,5 +1,39 @@
 export type KcType = "factual" | "procedural" | "conceptual" | "causal" | "synthesis";
 
+export type KcBlockType =
+  | "topic_goal"
+  | "mcq"
+  | "case_study"
+  | "socratic"
+  | "curiosity"
+  | "worked_example"
+  | "spot_the_flaw"
+  | "teach_back"
+  | "retrieval_check";
+
+export type KcBlock = {
+  id: string;
+  type: KcBlockType;
+  data: Record<string, unknown>;
+};
+
+export type KcRecommendedBlock = {
+  type: KcBlockType;
+  reason?: string;
+  focus?: string;
+};
+
+export type KcBlockProgress = {
+  id: string;
+  index: number;
+  type: string;
+  type_label: string;
+  title: string;
+  status: "completed" | "active" | "upcoming";
+  outcome?: string | null;
+  attempts?: number;
+};
+
 export type KcMisconception = { wrong_move: string; broken_kc: string };
 
 export type KcTopicPair = { topic: string; goal: string };
@@ -19,6 +53,8 @@ export type KcComponent = {
   prerequisite_codes: string[];
   encompasses_codes: string[];
   type_fields: Record<string, unknown>;
+  blocks?: KcBlock[];
+  recommended_blocks?: KcRecommendedBlock[];
   marked_complete: boolean;
   missing: string[];
   history: string;
@@ -33,6 +69,7 @@ export type KcCourse = {
   kind: "mastery" | "time_boxed" | "curiosity";
   minutes: number | null;
   ready: boolean;
+  allowed_block_types?: KcBlockType[];
   history: string;
   components: KcComponent[];
   patches: KcComponent[];
@@ -47,6 +84,8 @@ export type KcStructure = {
       title: string;
       description: string;
       kc_type: string | null;
+      recommended_blocks?: KcRecommendedBlock[];
+      blocks?: { type: string }[];
       missing: string[];
       marked_complete: boolean;
     }[];
@@ -72,12 +111,21 @@ export type KcComponentDraft = {
   prerequisite_codes: string[];
   encompasses_codes: string[];
   type_fields: Record<string, unknown>;
+  blocks?: KcBlock[];
+  recommended_blocks?: KcRecommendedBlock[];
 };
 
 export type KcDraft =
   | {
       kind: "course";
-      components: { code: string; title: string; description?: string; outline?: string; topics?: KcTopicPair[] }[];
+      components: {
+        code: string;
+        title: string;
+        description?: string;
+        outline?: string;
+        topics?: KcTopicPair[];
+        recommended_blocks?: KcRecommendedBlock[];
+      }[];
     }
   | KcComponentDraft;
 
@@ -198,6 +246,12 @@ export type KcTutorSession = {
   score: number | null;
   needs_speech: boolean;
   choice: { prompt: string; choices: { id: string; text: string }[] } | null;
+  total_blocks?: number;
+  completed_blocks?: number;
+  completion_pct?: number;
+  active_block_index?: number;
+  active_substep_label?: string;
+  block_progress?: KcBlockProgress[];
   reply?: string;
   passed?: boolean;
   redirect: { id: string; code: string; title: string } | null;

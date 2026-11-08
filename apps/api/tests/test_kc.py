@@ -2452,11 +2452,10 @@ def test_a_repeated_mix_is_repaired_and_creation_continues(caplog) -> None:
         )
         assert prompt.status_code == 200, prompt.text
         schema = prompt.json()["schema"]["properties"]
-        assert schema["mix_a"]["enum"] == ["zz-mix-b", "zz-mix-c"]
-        assert schema["mix_b"]["enum"] == ["zz-mix-b", "zz-mix-c"]
-        assert "the two values must differ" in schema["mix_a"]["description"]
-        assert "zz-mix-a" not in schema["mix_a"]["enum"]
-        assert "mix_a and mix_b must be two different codes" in prompt.json()["system_prompt"]
+        assert "mix_a" not in schema
+        assert "mix_b" not in schema
+        assert schema["blocks"]["type"] == "array"
+        assert "ordered blocks[] array" in prompt.json()["system_prompt"]
         assert "history" not in schema
 
         caplog.set_level("WARNING", logger="app.kc")
@@ -2552,9 +2551,9 @@ def test_fewer_than_two_other_components_allow_empty_mixes(caplog) -> None:
             json={"message": "Draft this component.", "model": "gpt-4.1"},
         )
         assert prompt.status_code == 200, prompt.text
-        assert prompt.json()["schema"]["properties"]["mix_a"]["enum"] == [""]
-        assert prompt.json()["schema"]["properties"]["mix_b"]["enum"] == [""]
-        assert "Do not ask for two mixes." in prompt.json()["system_prompt"]
+        assert "mix_a" not in prompt.json()["schema"]["properties"]
+        assert "mix_b" not in prompt.json()["schema"]["properties"]
+        assert "This course has no other component." in prompt.json()["system_prompt"]
 
         caplog.set_level("WARNING", logger="app.kc")
         caplog.clear()
@@ -2601,11 +2600,12 @@ def test_fewer_than_two_other_components_allow_empty_mixes(caplog) -> None:
             json={"message": "Draft this component.", "model": "gpt-4.1"},
         )
         assert prompt.status_code == 200, prompt.text
-        assert prompt.json()["schema"]["properties"]["mix_a"]["enum"] == [""]
+        assert "mix_a" not in prompt.json()["schema"]["properties"]
+        assert "mix_b" not in prompt.json()["schema"]["properties"]
         assert prompt.json()["schema"]["properties"]["misconceptions"]["items"]["properties"]["broken_kc"]["enum"] == [
             "zz-mixone-b"
         ]
-        assert "Do not ask for two mixes." in prompt.json()["system_prompt"]
+        assert "Do not ask for two mixes." not in prompt.json()["system_prompt"]
 
         empty_pair = _model_turn(
             pair["zz-mixone-a"]["id"],

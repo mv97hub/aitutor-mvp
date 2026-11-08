@@ -1,19 +1,25 @@
-"""Prompt for one knowledge-component move.
+"""Modular Block Prompt Assembler for KC Tutor.
 
-The bundle is the system prompt, the response schema, and the temperature.
-The prompt is seven instruction sections. Each setting is one behavior.
-The debug panel, not this text, groups the stored settings into seven layers.
-The model writes the reply. The app owns the type, the edges, and the score.
-The quest prompt builder is a different module and is not imported here.
+Assembles the seven instruction sections strictly for the currently active
+block (`node.blocks[step]`) and its active `substep`:
+1. This turn
+2. What to teach
+3. Who you are talking to
+4. How to teach
+5. How to sound
+6. What just happened
+7. What to return
+
+Later blocks in `node.blocks` are never included in middle-turn prompts so the
+model cannot bundle topics, jump ahead, or close the unit early.
 """
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
-
 from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, VOICES
-from app.models import KcGoal, KcNode, Student, TutorProfile
+from app.kc_model import BLOCK_LABELS
+from app.models import ALL_BLOCK_TYPES, KcGoal, KcNode, Student, TutorProfile
+from app.tutor_profile import effective_kc_tutor_config
 
 TEMPERATURE = 0.4
 HINTS = ("nudge", "analogy", "scaffold", "reveal")
@@ -21,20 +27,49 @@ DECISIONS = ("stay", "advance", "complete", "redirect")
 AFFECTS = ("engaged", "stuck", "guessing", "frustrated")
 CONFIDENCE = ("low", "ok", "high")
 
-RECIPE_NAME = {
-    "factual": "retrieval",
-    "procedural": "worked-example",
-    "conceptual": "contrasting-cases",
-    "causal": "decision-point",
-    "synthesis": "rookie-correction",
+SUBSTEP_LABELS: dict[str, str] = {
+    "main": "",
+    "choice": "Choose Option",
+    "awaiting_why": "Explain Why",
+    "predict": "Predict",
+    "contrast_and_rule": "Contrast & Rule",
+    "transfer": "Transfer",
+    "initial_thesis": "Initial Position",
+    "counterexample_probe": "Counterexample Probe",
+    "hook_and_predict": "Wonder & Predict",
+    "faded_step": "Faded Step",
+    "solo_solve": "Solo Problem",
+    "critique": "Identify & Fix",
+    "initial_explanation": "Peer Explanation",
+    "peer_follow_up": "Peer Follow-Up",
+    "recall": "Cued Recall",
+    "elaborate_why": "Elaborative Why",
 }
 
-_EXPLAIN = {
-    1: "Open on the question. Almost no explanation first.",
-    2: "Give one short line, then the question.",
-    3: "Name the goal, then ask.",
-    4: "Explain the idea, then ask one question.",
-    5: "Teach a little more first, then ask one question.",
+_GENERATED_MCQ_SCHEMA = {
+    "type": ["object", "null"],
+    "additionalProperties": False,
+    "properties": {
+        "question_stem": {"type": "string"},
+        "choices": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+                "required": ["id", "text"],
+            },
+        },
+        "correct_index": {"type": "integer"},
+        "distractor_rationales": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    },
+    "required": ["question_stem", "choices", "correct_index", "distractor_rationales"],
 }
 
 RESPONSE_SCHEMA = {
@@ -46,10 +81,19 @@ RESPONSE_SCHEMA = {
             "description": "The only text the child sees. Include the unit close and the course outro when this turn ends the unit.",
         },
         "decision": {"type": "string", "enum": list(DECISIONS)},
+        "substep_passed": {
+            "type": "boolean",
+            "description": "True when the learner's answer satisfies the active substep's acceptance criteria.",
+        },
+        "block_complete": {
+            "type": "boolean",
+            "description": "True when the active block's final substep is satisfied and ready to advance.",
+        },
+        "generated_mcq": _GENERATED_MCQ_SCHEMA,
         "rubric_met": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Ids of the evidence points this move listed. Empty when the move is not checked.",
+            "description": "Ids of the evidence points met on this block.",
         },
         "misconception": {
             "type": ["string", "null"],
@@ -60,10 +104,16 @@ RESPONSE_SCHEMA = {
         "off_course": {"type": "boolean"},
         "affect": {"type": "string", "enum": list(AFFECTS)},
         "confidence": {"type": "string", "enum": list(CONFIDENCE)},
+        "score_justification": {"type": "string"},
+        "what_was_strong": {"type": "string"},
+        "what_to_work_on": {"type": "string"},
     },
     "required": [
         "reply",
         "decision",
+        "substep_passed",
+        "block_complete",
+        "generated_mcq",
         "rubric_met",
         "misconception",
         "hint_tier",
@@ -71,20 +121,19 @@ RESPONSE_SCHEMA = {
         "off_course",
         "affect",
         "confidence",
+        "score_justification",
+        "what_was_strong",
+        "what_to_work_on",
     ],
 }
 
-
-@dataclass(frozen=True)
-class Move:
-    key: str
-    name: str
-    evidence: tuple[str, ...]
-    choice: bool
-
-
-def recipe_name(kc_type: str | None) -> str:
-    return RECIPE_NAME.get(kc_type or "", "unset")
+_EXPLAIN = {
+    1: "Ask the question first with almost no preliminary explanation (Socratic).",
+    2: "Give one short framing sentence, then ask the question.",
+    3: "Give a balanced 2-3 sentence explanation with an example, then ask the question.",
+    4: "Explain the concept and why it matters with a concrete example, then ask.",
+    5: "Teach thoroughly with step-by-step scaffolding and an example before asking the question.",
+}
 
 
 def _label(options: tuple[tuple[str, str], ...], value: str) -> str:
@@ -110,341 +159,227 @@ def instructive_value(level: int) -> str:
     return f"{bounded}. {_EXPLAIN[bounded]}"
 
 
-def self_explanation_on(profile: TutorProfile) -> bool:
-    value = getattr(profile, "self_explanation", True)
-    return True if value is None else bool(value)
-
-
-def stored_enrichment(profile: TutorProfile) -> str:
-    value = str(getattr(profile, "enrichment", "") or "on_request")
-    if value not in {"direct", "on_request", "offer"}:
-        return "on_request"
-    return value
-
-
-def effective_window_name(profile: TutorProfile, goal: KcGoal | None) -> str:
-    if goal is not None and goal.kind == "time_boxed":
-        return "minimum"
-    stored = (profile.struggle_window or "standard").strip().lower()
-    if stored in {"short", "minimum"}:
-        return "minimum"
-    if stored in {"long", "wide"}:
-        return "wide"
-    return "standard"
-
-
-def struggle_tries(name: str) -> int:
-    if name in {"short", "minimum"}:
-        return 1
-    if name in {"long", "wide"}:
-        return 3
-    return 2
-
-
-def effective_enrichment(profile: TutorProfile, goal: KcGoal | None) -> str:
-    if goal is not None and goal.kind == "time_boxed":
-        return "direct"
-    return stored_enrichment(profile)
-
-
-def is_fragment(answer: str, fact: str) -> bool:
-    """A short retrieval against a longer fact. Not a pass rule."""
-    fact_words = [word for word in (fact or "").split() if word.strip()]
+def is_fragment(answer: str, target_text: str = "") -> bool:
+    """True when the learner answered with a bare 1-2 word fragment."""
     answer_words = [word for word in (answer or "").split() if word.strip()]
-    if len(fact_words) <= 3:
+    if not answer_words:
         return False
-    return 0 < len(answer_words) <= 3
-
-
-_LINK_SPLIT = re.compile(r"\s*(?:\n+|;|(?<=[.!?])\s+|\s+so\s+)\s*", re.IGNORECASE)
+    if target_text:
+        target_words = [word for word in target_text.split() if word.strip()]
+        if len(target_words) <= 2:
+            return False
+    return 0 < len(answer_words) <= 2
 
 
 def stored_outline(node: KcNode) -> str:
     return str(getattr(node, "outline", "") or "").strip()
 
 
-def stored_pairs(node: KcNode) -> list[tuple[str, str]]:
-    """Topic and goal pairs. A pair missing either side is skipped."""
-    raw = getattr(node, "topics", None)
-    pairs: list[tuple[str, str]] = []
-    if not isinstance(raw, list):
-        return pairs
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        topic = str(item.get("topic") or "").strip()
-        goal = str(item.get("goal") or "").strip()
-        if topic and goal:
-            pairs.append((topic, goal))
-    return pairs
-
-
-def _has_text(value: object) -> bool:
-    return bool(str(value or "").strip())
-
-
-def _norm_text(value: str) -> str:
-    return " ".join(value.lower().split())
-
-
-def _string_list(value: object) -> list[str]:
-    if isinstance(value, str):
-        return [value.strip()] if value.strip() else []
-    if isinstance(value, (list, tuple)):
-        return [str(item).strip() for item in value if str(item).strip()]
+def stored_blocks(node: KcNode | None) -> list[dict]:
+    """Return normalized blocks for a component."""
+    if node is None:
+        return []
+    raw = getattr(node, "blocks", None)
+    if isinstance(raw, list) and raw:
+        valid: list[dict] = []
+        for idx, item in enumerate(raw, start=1):
+            if not isinstance(item, dict):
+                continue
+            btype = str(item.get("type") or "").strip()
+            if btype not in ALL_BLOCK_TYPES:
+                continue
+            bid = str(item.get("id") or f"blk_{idx}").strip() or f"blk_{idx}"
+            data = item.get("data") if isinstance(item.get("data"), dict) else {}
+            valid.append({"id": bid, "type": btype, "data": dict(data)})
+        if valid:
+            return valid
+    raw_topics = getattr(node, "topics", None)
+    if isinstance(raw_topics, list) and raw_topics:
+        fallback: list[dict] = []
+        for idx, item in enumerate(raw_topics, start=1):
+            if isinstance(item, dict):
+                topic = str(item.get("topic") or "").strip()
+                goal = str(item.get("goal") or "").strip()
+                if topic and goal:
+                    fallback.append(
+                        {
+                            "id": f"blk_{idx}",
+                            "type": "topic_goal",
+                            "data": {
+                                "topic": topic,
+                                "goal": goal,
+                                "acceptance_criteria": "",
+                                "teaching_notes": "",
+                            },
+                        }
+                    )
+        if fallback:
+            return fallback
     return []
 
 
-def _chain_links(chain: str) -> list[str]:
-    text = (chain or "").strip()
-    if not text:
-        return []
-    parts = [part.strip(" \t.;,") for part in _LINK_SPLIT.split(text)]
-    return [part for part in parts if part] or [text]
+def default_substep_for_block(block: dict, cfg: dict | None = None) -> str:
+    """Return the initial substep when entering a block."""
+    btype = str(block.get("type") or "topic_goal").strip()
+    bcfg = ((cfg or {}).get("blocks") or {}).get(btype) or {}
+    if btype == "topic_goal":
+        return "main"
+    if btype == "mcq":
+        return "choice"
+    if btype == "case_study":
+        pres = str(bcfg.get("case_presentation") or "sequential_predict_then_contrast")
+        if pres == "side_by_side_single_turn":
+            return "contrast_and_rule"
+        return "predict"
+    if btype == "socratic":
+        return "initial_thesis"
+    if btype == "curiosity":
+        return "hook_and_predict"
+    if btype == "worked_example":
+        return "faded_step"
+    if btype == "spot_the_flaw":
+        return "critique"
+    if btype == "teach_back":
+        return "initial_explanation"
+    if btype == "retrieval_check":
+        return "recall"
+    return "main"
 
 
-def _with_fallback(pairs: list[tuple[str, str]], fallback: list[str]) -> list[tuple[str, str]]:
-    """Stored pairs, then any fallback field that is not already a topic."""
-    source = list(pairs)
-    seen = {_norm_text(topic) for topic, _goal in pairs}
-    for item in fallback:
-        key = _norm_text(item)
-        if key and key not in seen:
-            source.append((item, ""))
-            seen.add(key)
-    return source
+def substeps_for_block(block: dict, cfg: dict | None = None) -> list[str]:
+    """Ordered substeps for a block under the active tutor configuration."""
+    btype = str(block.get("type") or "topic_goal").strip()
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    bcfg = ((cfg or {}).get("blocks") or {}).get(btype) or {}
+    if btype == "topic_goal":
+        return ["main"]
+    if btype == "mcq":
+        confirm = str(bcfg.get("confirm_why_on_correct") or "on_retry_only")
+        if confirm == "always":
+            return ["choice", "awaiting_why"]
+        return ["choice"]
+    if btype == "case_study":
+        pres = str(bcfg.get("case_presentation") or "sequential_predict_then_contrast")
+        has_transfer = bool(str(data.get("transfer_prompt") or "").strip()) and bool(
+            bcfg.get("require_transfer_application", True)
+        )
+        steps = ["contrast_and_rule"] if pres == "side_by_side_single_turn" else ["predict", "contrast_and_rule"]
+        if has_transfer:
+            steps.append("transfer")
+        return steps
+    if btype == "socratic":
+        return ["initial_thesis", "counterexample_probe"]
+    if btype == "curiosity":
+        return ["hook_and_predict"]
+    if btype == "worked_example":
+        return ["faded_step", "solo_solve"]
+    if btype == "spot_the_flaw":
+        return ["critique"]
+    if btype == "teach_back":
+        follow_ups = int(bcfg.get("follow_up_questions_count", 1) or 0)
+        if follow_ups > 0:
+            return ["initial_explanation", "peer_follow_up"]
+        return ["initial_explanation"]
+    if btype == "retrieval_check":
+        if bool(bcfg.get("require_elaborative_why", True)):
+            return ["recall", "elaborate_why"]
+        return ["recall"]
+    return ["main"]
 
 
-def _walk_pairs(node: KcNode) -> list[tuple[str, str]]:
-    """The topic turns for this type. The description is not read."""
-    kind = node.kc_type or ""
-    fields = node.type_fields or {}
-    pairs = stored_pairs(node)
-    named = [topic for topic, _goal in pairs]
-    if kind == "procedural":
-        fallback = _string_list(fields.get("steps"))
-    elif kind == "causal":
-        fallback = [] if named else _chain_links(str(fields.get("causal_chain") or ""))
-    elif kind == "synthesis":
-        fallback = [] if named else _string_list(fields.get("mixes"))
-    else:
-        fallback = []
-    return _with_fallback(pairs, fallback)
-
-
-def topic_goal(node: KcNode, index: int) -> str:
-    pairs = _walk_pairs(node)
-    if 0 <= index < len(pairs):
-        return pairs[index][1]
-    return ""
-
-
-def _topic_moves(pairs: list[tuple[str, str]]) -> list[Move]:
-    moves: list[Move] = []
-    for index, (text, goal) in enumerate(pairs, start=1):
-        evidence = (f"goal-{index}",) if goal else ()
-        moves.append(Move(f"topic-{index}", text, evidence, False))
-    return moves
-
-
-def moves_for(
-    node: KcNode,
-    profile: TutorProfile,
-    goal: KcGoal | None,
-    *,
-    fragment: bool = False,
-) -> list[Move]:
-    """One step per stored field that has a value. An empty field is skipped."""
-    kind = node.kc_type or ""
-    fields = node.type_fields or {}
-    explain = self_explanation_on(profile)
-    outline = stored_outline(node)
-    topic_moves = _topic_moves(_walk_pairs(node))
-    steps = _string_list(fields.get("steps"))
-    mixes = _string_list(fields.get("mixes"))
-    chain = str(fields.get("causal_chain") or "").strip()
-    sequence: list[Move] = []
-    if outline or (kind == "synthesis" and mixes):
-        sequence.append(Move("orient", "Orient", (), False))
-    if kind == "factual":
-        sequence.extend(topic_moves)
-        fact = str(fields.get("fact") or "").strip()
-        question = str(fields.get("retrieval_question") or "").strip()
-        if fact or question:
-            sequence.append(Move("retrieve", "Retrieve", ("fact",) if fact else (), False))
-            if explain and fragment:
-                sequence.append(Move("restate", "Restate", ("restatement",), False))
-    elif kind == "procedural":
-        discussed = topic_moves
-        sequence.extend(discussed)
-        if discussed:
-            sequence.append(Move("decide", "Decision point", (), False))
-        if steps:
-            sequence.append(Move("faded", "Faded step", ("blanked_step",), False))
-        problem = str(fields.get("solo_problem") or "").strip()
-        check = str(fields.get("solo_check") or "").strip()
-        if problem or check:
-            sequence.append(Move("solo", "Solo", ("solo_check",) if check else (), False))
-        if explain and discussed:
-            sequence.append(Move("why_order", "Why this order", ("why_order",), False))
-    elif kind == "conceptual":
-        sequence.extend(topic_moves)
-        case_a = str(fields.get("case_a") or "").strip()
-        case_b = str(fields.get("case_b") or "").strip()
-        prediction = str(fields.get("prediction") or "").strip()
-        rule = str(fields.get("rule") or "").strip()
-        transfer = str(fields.get("transfer_case") or "").strip()
-        if case_a:
-            sequence.append(Move("predict_a", "Predict case one", (), True))
-        if case_b:
-            sequence.append(Move("predict_b", "Predict case two", (), True))
-        if case_a and case_b:
-            sequence.append(Move("contrast", "Contrast", (), False))
-        elif prediction and not case_a and not case_b:
-            sequence.append(Move("predict", "Predict", (), False))
-        if rule:
-            sequence.append(Move("rule", "State the rule", ("rule",), False))
-        if transfer:
-            sequence.append(Move("transfer", "Transfer", ("transfer",), False))
-    elif kind == "causal":
-        sequence.extend(topic_moves)
-        if _has_text(fields.get("decision_point")):
-            sequence.append(Move("stake", "What is at stake", (), False))
-        if _has_text(fields.get("flawed_claim")):
-            sequence.append(Move("mark", "Mark the claim", ("mark",), True))
-        if chain:
-            sequence.append(Move("defend", "Defend the chain", ("causal_chain",), False))
-        if explain and _has_text(fields.get("counterfactual")):
-            sequence.append(Move("counterfactual", "Counterfactual", ("counterfactual",), False))
-    elif kind == "synthesis":
-        sequence.extend(topic_moves)
-        if _has_text(fields.get("faulty_plan")):
-            sequence.append(Move("faulty", "Faulty plan", (), False))
-        if _has_text(node.core_truth):
-            sequence.append(Move("correct", "Correct the plan", ("core_truth",), False))
-        if mixes:
-            sequence.append(Move("which_job", "Which job", ("which_job",), False))
-    else:
-        sequence.append(Move("this", "This step", (), False))
-    if goal is not None and goal.kind == "curiosity":
-        sequence.append(Move("extra_why", "Extra why", (), False))
-    return sequence
-
-
-def step_labels(kc_type: str | None) -> list[str]:
-    """Default names for a type, before optional fields and a fragment are known."""
-    node = KcNode(code="label", title="Label", kc_type=kc_type)
-    profile = TutorProfile(
-        id="default",
-        instructive=3,
-        persona="curious-co-explorer",
-        lexicon="middle-grade-vivid",
-        metaphors="playground-sports",
-        sidekick="bumbling-partner",
-        self_explanation=True,
-        enrichment="on_request",
-        misconception_policy="retry_once",
-    )
-    names = [move.name for move in moves_for(node, profile, None)]
-    return names or ["This step"]
-
-
-def asks_why(profile: TutorProfile, move: Move) -> bool:
-    if not self_explanation_on(profile):
-        return False
-    return move.key in {"restate", "why_order", "counterfactual", "extra_why", "which_job"}
-
-
-def _goal_text(node: KcNode, move: Move) -> str:
-    if not move.key.startswith("topic-"):
+def format_active_substep_label(block: dict, substep: str, cfg: dict | None = None) -> str:
+    """Human-readable label for multi-step blocks (e.g. 'Contrast & Rule · Substep 2 of 2')."""
+    if not block or not isinstance(block, dict):
         return ""
-    try:
-        index = int(move.key.split("-", 1)[1]) - 1
-    except ValueError:
+    substeps = substeps_for_block(block, cfg)
+    btype = str(block.get("type") or "topic_goal").strip()
+    if btype == "mcq" and substep == "awaiting_why" and "awaiting_why" not in substeps:
+        eff_substeps = ["choice", "awaiting_why"]
+    else:
+        eff_substeps = substeps
+    if len(eff_substeps) <= 1:
         return ""
-    return topic_goal(node, index)
+    sub_name = SUBSTEP_LABELS.get(substep or "", substep or "")
+    pos = eff_substeps.index(substep) + 1 if substep in eff_substeps else 1
+    total_sub = len(eff_substeps)
+    if sub_name:
+        return f"{sub_name} · Substep {pos} of {total_sub}"
+    return f"Substep {pos} of {total_sub}"
 
 
-def _topic_count(moves: list[Move]) -> int:
-    return sum(1 for item in moves if item.key.startswith("topic-"))
+def block_step_label(block: dict, step_index: int, total_blocks: int, substep: str = "") -> str:
+    """Format 'Block {k} of {N}: {Block Type Label}' (with substep label when multi-part)."""
+    btype = str(block.get("type") or "topic_goal").strip()
+    type_label = BLOCK_LABELS.get(btype, btype)
+    sub_label = SUBSTEP_LABELS.get(substep or "", "")
+    base = f"Block {step_index + 1} of {max(1, total_blocks)}: {type_label}"
+    if sub_label:
+        return f"{base} · {sub_label}"
+    return base
 
 
-def _topic_number(moves: list[Move], move: Move) -> int:
-    number = 0
-    for item in moves:
-        if item.key.startswith("topic-"):
-            number += 1
-            if item.key == move.key:
-                return number
-    return 0
+def block_uses_choice_widget(block: dict, substep: str) -> bool:
+    btype = str(block.get("type") or "").strip()
+    if btype == "mcq" and substep in {"", "choice"}:
+        return True
+    if btype == "case_study" and substep == "predict":
+        return True
+    return False
 
 
-def move_material(node: KcNode, move: Move) -> str:
-    fields = node.type_fields or {}
-    if move.key == "orient":
-        outline = stored_outline(node)
-        if outline:
-            return f"Outline: {outline}"
-        mixes = _string_list(fields.get("mixes"))
-        if mixes:
-            return "The two earlier components are " + " and ".join(mixes) + "."
-        return "Outline: "
-    if move.key.startswith("topic-"):
-        goal = _goal_text(node, move)
-        if goal:
-            return f"Topic: {move.name}. Goal: {goal}"
-        return f"Topic: {move.name}"
-    if move.key == "retrieve":
-        return str(fields.get("retrieval_question") or "What is the fact?")
-    if move.key == "restate":
-        return "Ask for the fact in a full sentence. The earlier answer was only a fragment."
-    if move.key == "decide":
-        return "Ask the child what to do next. Do not show the remaining steps."
-    if move.key == "faded":
-        steps = [str(item) for item in (fields.get("steps") or [])]
-        blank = int(fields.get("blanked_step") or 0)
-        shown = []
-        for index, text in enumerate(steps):
-            shown.append(f"{index + 1}. ___" if index == blank else f"{index + 1}. {text}")
-        return "Faded steps: " + " ".join(shown)
-    if move.key == "solo":
-        return str(fields.get("solo_problem") or "Solve it on your own.")
-    if move.key == "why_order":
-        return "Ask why the steps go in this order."
-    if move.key == "predict_a":
-        return f"Case one: {fields.get('case_a') or ''}. {fields.get('prediction') or ''}".strip()
-    if move.key == "predict_b":
-        return f"Case two: {fields.get('case_b') or ''}. {fields.get('prediction') or ''}".strip()
-    if move.key == "predict":
-        return str(fields.get("prediction") or "What do you predict?")
-    if move.key == "contrast":
-        return f"Case one: {fields.get('case_a') or ''} Case two: {fields.get('case_b') or ''}".strip()
-    if move.key == "rule":
-        return "Ask the child to state the rule."
-    if move.key == "transfer":
-        return f"Transfer case: {fields.get('transfer_case') or ''}".strip()
-    if move.key == "stake":
-        return f"Decision point: {fields.get('decision_point') or ''}".strip()
-    if move.key == "mark":
-        return f"Flawed claim: {fields.get('flawed_claim') or ''}".strip()
-    if move.key == "defend":
-        return f"Causal chain: {fields.get('causal_chain') or ''}".strip()
-    if move.key == "counterfactual":
-        return f"Counterfactual: {fields.get('counterfactual') or ''}".strip()
-    if move.key == "faulty":
-        return f"Faulty plan: {fields.get('faulty_plan') or ''}".strip()
-    if move.key == "correct":
-        return "Ask the child to correct the plan."
-    if move.key == "which_job":
-        return "Ask which component does which job."
-    if move.key == "extra_why":
-        return "One extra why. The unit is already known. This does not change the score."
-    return node.core_truth or node.title
+def block_evidence_id(block: dict, step_index: int, substep: str = "") -> str:
+    bid = str(block.get("id") or f"blk_{step_index + 1}").strip()
+    btype = str(block.get("type") or "topic_goal").strip()
+    if btype == "curiosity":
+        return f"{bid}:engaged"
+    if substep and substep not in {"main", "choice", "critique"}:
+        return f"{bid}:{substep}"
+    return bid
 
 
-_POSITION = re.compile(r"^(\d+) of (\d+); previous: (.*); next: (.*)$")
+def max_retries_for_block(block: dict, cfg: dict, goal: KcGoal | None = None) -> int:
+    if goal is not None and goal.kind == "time_boxed":
+        return 1
+    btype = str(block.get("type") or "topic_goal").strip()
+    bcfg = ((cfg or {}).get("blocks") or {}).get(btype) or {}
+    if btype == "mcq":
+        return max(1, int(bcfg.get("max_retry_attempts", 2) or 2))
+    if btype == "curiosity":
+        return max(1, int(bcfg.get("max_wonder_turns", 2) or 2))
+    return max(1, int(bcfg.get("max_retries_before_reveal", 2) or 2))
 
-_PICTURE_MOVES = {"predict", "predict_a", "predict_b", "contrast", "faded"}
+
+def block_material_summary(block: dict, substep: str = "") -> str:
+    """Readable summary of the active block's content for debug panel & preview."""
+    btype = str(block.get("type") or "topic_goal").strip()
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    if btype == "topic_goal":
+        topic = str(data.get("topic") or "").strip()
+        goal = str(data.get("goal") or "").strip()
+        return f"Topic: {topic} | Goal: {goal}".strip(" |")
+    if btype == "mcq":
+        mode = str(data.get("mode") or "static").strip()
+        if mode == "dynamic":
+            return f"Dynamic MCQ: {data.get('target_skill') or ''} ({data.get('difficulty') or 'standard'})"
+        return f"Static MCQ: {data.get('question_stem') or ''}"
+    if btype == "case_study":
+        return (
+            f"Case A: {data.get('case_a') or ''} | Case B: {data.get('case_b') or ''} | "
+            f"Principle: {data.get('invariant_principle') or ''}"
+        )
+    if btype == "socratic":
+        return f"Dilemma: {data.get('central_dilemma') or ''} | Synthesis: {data.get('target_synthesis') or ''}"
+    if btype == "curiosity":
+        return f"Hook: {data.get('phenomenon_hook') or ''} | Bridge: {data.get('bridge_to_unit') or ''}"
+    if btype == "worked_example":
+        return f"Problem: {data.get('problem_statement') or ''} | Solo: {data.get('solo_problem') or ''}"
+    if btype == "spot_the_flaw":
+        return f"Rookie work: {data.get('rookie_work') or ''} | Correction: {data.get('corrected_version') or ''}"
+    if btype == "teach_back":
+        return f"Peer prompt: {data.get('peer_persona_prompt') or ''}"
+    if btype == "retrieval_check":
+        return f"Recall: {data.get('recall_prompt') or ''} | Fact: {data.get('expected_fact') or ''}"
+    return str(data)
 
 
 def _early_reading(level: str) -> bool:
@@ -481,21 +416,6 @@ def _wrong_moves(node: KcNode) -> list[str]:
     return found
 
 
-def _prompt_material(node: KcNode, move: Move) -> str:
-    """Move content for the model. Component codes stay in the debug panel."""
-    fields = node.type_fields or {}
-    if move.key == "faulty":
-        plan = str(fields.get("faulty_plan") or "").strip()
-        return f"A rookie mixes earlier pieces and says: {plan}".strip()
-    if move.key == "transfer":
-        case = str(fields.get("transfer_case") or "").strip()
-        return f"Ask the child to use this third case: {case}".strip()
-    if move.key == "counterfactual":
-        case = str(fields.get("counterfactual") or "").strip()
-        return f"Ask what would change: {case}".strip()
-    return move_material(node, move)
-
-
 def _finish(text: str) -> str:
     cleaned = (text or "").strip()
     if not cleaned:
@@ -505,116 +425,28 @@ def _finish(text: str) -> str:
     return f"{cleaned}."
 
 
-def _core_sentence(core: str, anti_spoiler: bool) -> str:
-    truth = _finish(core) or "Nothing is stored yet."
-    if anti_spoiler:
-        return (
-            f"Grade the answer against this core truth: {truth} "
-            "Say it only when a reveal or a passed close allows it."
-        )
-    return f"Grade the answer against this core truth: {truth} You may say it while you teach."
-
-
-def _position_sentence(course_position: str) -> str:
-    text = (course_position or "").strip()
-    if not text:
-        return ""
-    if text == "Patch":
-        return "This piece is a patch beside the course, not one of the targets."
-    match = _POSITION.match(text)
-    if match is None:
-        return ""
-    index, total, previous, nxt = (part.strip() for part in match.groups())
-    sentence = f"This is piece {index} of {total} in the course."
-    if previous == "none":
-        sentence += " Nothing in this course comes before it."
+def _voice_paragraph(profile: TutorProfile) -> str:
+    persona = _a(_label(PERSONAS, profile.persona or ""))
+    lexicon = _lower_first(_label(VOICES, profile.lexicon or "")) or "plain"
+    if (profile.metaphors or "").strip() == "none":
+        images = "plain language and no borrowed image"
     else:
-        sentence += f" The child has already come through {previous}."
-    if nxt == "none":
-        sentence += " Nothing in this course comes after it."
+        metaphor = _lower_first(_label(METAPHORS, profile.metaphors or ""))
+        images = f"{metaphor} images" if metaphor else "plain language"
+    if (profile.sidekick or "").strip() in {"", "off"}:
+        company = ""
     else:
-        sentence += f" {nxt} comes next."
-    return sentence
-
-
-def _prereq_sentence(prerequisite_status: str) -> str:
-    text = (prerequisite_status or "").strip()
-    if not text or text == "none":
-        return "This piece does not depend on an earlier component."
-    states: list[str] = []
-    for part in text.split(";"):
-        piece = part.strip()
-        if not piece:
-            continue
-        states.append(piece.split(":", 1)[1].strip().lower() if ":" in piece else piece.lower())
-    if not states:
-        return "This piece does not depend on an earlier component."
-    bits: list[str] = []
-    known = states.count("known")
-    fragile = states.count("fragile")
-    unknown = states.count("unknown")
-    if known:
-        bits.append(
-            "The child already knows the earlier idea this piece needs."
-            if known == 1
-            else "The child already knows the earlier ideas this piece needs."
-        )
-    if fragile:
-        bits.append(
-            "An earlier idea this piece needs is still shaky."
-            if fragile == 1
-            else "Some earlier ideas this piece needs are still shaky."
-        )
-    if unknown:
-        bits.append(
-            "An earlier idea this piece needs is still unknown."
-            if unknown == 1
-            else "Some earlier ideas this piece needs are still unknown."
-        )
-    return " ".join(bits)
-
-
-def _path_sentence(node: KcNode) -> str:
-    kind = node.kc_type or ""
-    if kind == "factual":
-        return "The path is the opening, then the retrieval, then the close."
-    if kind == "procedural":
-        return "The path is the opening, a worked example, a faded step, then the solo."
-    if kind == "conceptual":
-        return (
-            "The path is the opening, a prediction, a contrast, then the rule. "
-            "The opening does not name the rule."
-        )
-    if kind == "causal":
-        return "The path is the opening, what is at stake, the flawed claim, then the chain."
-    if kind == "synthesis":
-        return "The path is the opening, the rookie's faulty plan, the correction, then which piece does which job."
-    return "This component has no move sequence yet."
-
-
-def _later_case(node: KcNode, move: Move) -> str:
-    fields = node.type_fields or {}
-    if move.key != "transfer":
-        transfer = str(fields.get("transfer_case") or "").strip()
-        if transfer:
-            return (
-                "A later move asks the child to use this third case. "
-                f"Do not invent a different one: {transfer}."
-            )
-    if move.key != "counterfactual":
-        counter = str(fields.get("counterfactual") or "").strip()
-        if counter:
-            return (
-                "A later move asks what would change. "
-                f"Do not invent a different one: {counter}."
-            )
-    return ""
+        company = f", and with {_a(_label(SIDEKICKS, profile.sidekick))}"
+    return (
+        f"Write as {persona}, in {lexicon} words, with {images}{company}. "
+        "That voice does not change the block, the expected answer, or the score."
+    )
 
 
 def _learner_sentence(
     student: Student,
     profile: TutorProfile,
-    move: Move,
+    block: dict,
     interests: str,
 ) -> str:
     parts = [f"Speak to {student.display_name}."]
@@ -637,10 +469,11 @@ def _learner_sentence(
     elif not level:
         parts.append("No reading level is set.")
     modality = (student.modality or "").strip()
-    if modality.lower() == "visual" and move.key in _PICTURE_MOVES:
-        parts.append("You may ask for a described picture on this move, because it already has cases or steps.")
+    btype = str(block.get("type") or "").strip()
+    if modality.lower() == "visual" and btype in {"case_study", "worked_example", "spot_the_flaw"}:
+        parts.append("You may ask for a described picture on this block because it already has cases or steps.")
     elif modality.lower() == "visual":
-        parts.append("Stay in words on this move. It has no cases or steps to picture.")
+        parts.append("Stay in words on this block.")
     elif modality:
         parts.append(f"This child takes an example in through {modality}, so stay in words.")
     else:
@@ -655,56 +488,20 @@ def _learner_sentence(
     return " ".join(parts)
 
 
-def _window_sentence(name: str) -> str:
-    tries = struggle_tries(name)
-    if tries == 1:
-        return "Give the next hint after one miss."
-    if tries == 3:
-        return "Give the next hint after three tries."
-    return "Give the next hint after two tries."
-
-
-def _enrichment_sentence(enrichment: str) -> str:
-    if enrichment == "direct":
-        return "Move on as soon as the move is passed."
-    if enrichment == "offer":
-        return (
-            "After a passed move, you may ask once whether the child wants one more look. "
-            "Two turns is the cap. A stay is still this component and does not change the score."
-        )
+def _close_summary_sentence(close_depth: str, kind: str) -> str:
+    if kind == "time_boxed" or close_depth == "concise":
+        return "Keep the unit close to one or two concise sentences."
+    if close_depth == "restate_in_learner_words":
+        return "Restate the takeaway in the learner's own words, then state where the unit stands."
     return (
-        "Stay when the child asks to keep going on this component. "
-        "Two turns is the cap. A stay is still this component and does not change the score."
+        "Restate the takeaway in the learner's words, name what was strong and what to work on next, "
+        "and fill score_justification, what_was_strong, and what_to_work_on."
     )
-
-
-def _voice_paragraph(profile: TutorProfile) -> str:
-    persona = _a(_label(PERSONAS, profile.persona or ""))
-    lexicon = _lower_first(_label(VOICES, profile.lexicon or "")) or "plain"
-    if (profile.metaphors or "").strip() == "none":
-        images = "plain language and no borrowed image"
-    else:
-        metaphor = _lower_first(_label(METAPHORS, profile.metaphors or ""))
-        images = f"{metaphor} images" if metaphor else "plain language"
-    if (profile.sidekick or "").strip() in {"", "off"}:
-        company = ""
-    else:
-        company = f", and with {_a(_label(SIDEKICKS, profile.sidekick))}"
-    return (
-        f"Write as {persona}, in {lexicon} words, with {images}{company}. "
-        "That voice does not change the move, the expected answer, or the score."
-    )
-
-
-def _close_length_sentence(level: int) -> str:
-    if level <= 2:
-        return "Keep the close to one or two sentences."
-    return "Restate the idea in the child's words, then say where the unit stands."
 
 
 def _close_body() -> str:
     return (
-        "A known unit says the unit is complete, names this piece, and says what the child can now do. "
+        "A known unit says the unit is complete, names this component, and says what the child can now do. "
         "A fragile unit says the unit is paused and still needs another look, and names the patch when there is one. "
         "Do not call a fragile unit finished work."
     )
@@ -727,399 +524,502 @@ def _outro_sentence(others_known: bool, course_title: str, *, required: bool) ->
 
 def _ending(
     *,
-    level: int,
+    close_depth: str,
     kind: str,
     unit_complete: bool,
     course_complete: bool,
     others_known: bool,
     course_title: str,
-    last_move: bool,
+    is_final_block_and_substep: bool,
 ) -> str:
-    if not last_move and not unit_complete and not course_complete:
-        return "The unit is not finished. This reply must not say it is complete."
-    length = "" if kind == "time_boxed" else _close_length_sentence(level)
+    if not is_final_block_and_substep and not unit_complete and not course_complete:
+        return (
+            "Mid-Unit Contract: Advance substep or next block when satisfied. "
+            "The unit is not finished. This reply must NEVER say the unit is complete."
+        )
+    length = _close_summary_sentence(close_depth, kind)
     close = _close_body()
     if course_complete:
-        lead = "End the unit and the course in this reply."
+        lead = "Close Contract: End the unit and the course in this reply."
     elif unit_complete:
-        lead = "End the unit in this reply."
+        lead = "Close Contract: End the unit in this reply."
     else:
-        lead = "When the decision ends the unit, the reply includes the close."
+        lead = "Close Contract: When the decision ends the unit on this final substep, include the unit close."
     outro = _outro_sentence(others_known, course_title, required=course_complete)
     return " ".join(part for part in (lead, length, close, outro) if part)
-
-
-def _step_intro(move: Move, moves: list[Move]) -> str:
-    if move.key.startswith("topic-"):
-        number = _topic_number(moves, move)
-        total = _topic_count(moves)
-        return f"This step is topic {number} of {total}: {move.name}. The child will type."
-    if move.choice:
-        return f"This step is {move.name}. The child will pick on screen."
-    return f"This step is {move.name}. The child will type."
 
 
 def _this_turn(
     *,
     node: KcNode,
-    move: Move,
-    moves: list[Move],
-    index: int,
-    total: int,
+    block: dict,
+    step_index: int,
+    total_blocks: int,
+    substep: str,
     opening: bool,
+    orient_framing: str,
     unit_complete: bool,
     course_complete: bool,
     choice_on_screen: bool,
     fragment: bool,
-    explain: bool,
-    level: int,
+    fragment_self_explanation: bool,
+    close_depth: str,
     kind: str,
     others_known: bool,
     course_title: str,
+    is_final_block_and_substep: bool,
+    transition_from_block: dict | None = None,
+    needs_dynamic_mcq: bool = False,
 ) -> list[str]:
-    # The orient move replaced the old opening script. The flag stays for callers.
-    del opening
-    del node
+    label = block_step_label(block, step_index, total_blocks, substep)
+    mode_note = "The child will pick on screen." if choice_on_screen else "The child will type."
     lines = [
         "You are the knowledge-component tutor.",
-        _step_intro(move, moves),
+        f"Active step: {label}. {mode_note}",
     ]
-    closing = unit_complete or course_complete
-    last_move = index >= total - 1
-    include_close = last_move or closing
-    if fragment and explain and move.key == "retrieve" and not closing:
+    outline = stored_outline(node)
+    if opening and step_index == 0:
+        eff_orient = "brief_hook" if kind == "time_boxed" else orient_framing
+        if outline and eff_orient == "elaborate_outline":
+            lines.append(
+                f"Turn 1 Zero Dead Turns: Begin with a 2-sentence elaboration of the component outline ({_finish(outline)}), "
+                "and immediately open Block 1 in the same reply so Turn 1 ends with Block 1's question or choice prompt."
+            )
+        elif outline and eff_orient == "brief_hook":
+            lines.append(
+                f"Turn 1 Zero Dead Turns: Begin with a 1-sentence hook from the component outline ({_finish(outline)}), "
+                "and immediately open Block 1 in the same reply."
+            )
+        else:
+            lines.append("Turn 1 Zero Dead Turns: Open Block 1 directly with its question or choice prompt.")
+    if transition_from_block is not None:
+        prev_type = BLOCK_LABELS.get(str(transition_from_block.get("type") or ""), "previous block")
         lines.append(
-            "The retrieval was only a fragment. Advance, and ask for the fact in a full sentence. "
-            "Do not complete the unit on that fragment."
+            f"Block Transition: The learner just completed Block {step_index} ({prev_type}). "
+            f"Briefly affirm their work on that block and immediately introduce {label} in this same reply."
         )
-    elif move.key == "extra_why" and not closing:
-        lines.append("This move is the one extra why. The unit is already known. Leave the score as it is.")
-    if move.choice or choice_on_screen:
-        pick = "The child picks the choice on screen. Do not add a question beside it."
-        if include_close:
-            pick += " A unit close or a course outro asks no new question."
+    if needs_dynamic_mcq:
+        lines.append(
+            "Dynamic MCQ Generation Required: Populate `generated_mcq` with a fresh question_stem, choices (a, b, c, ...), "
+            "correct_index, and distractor_rationales matching the active MCQ block's target_skill and distractor_guidance."
+        )
+    if fragment and fragment_self_explanation and str(block.get("type")) == "topic_goal" and not (unit_complete or course_complete):
+        lines.append(
+            "The learner answered with a 1-2 word fragment. Ask one follow-up to state the idea in a complete sentence before completing this block."
+        )
+    if choice_on_screen:
+        pick = "The child picks the choice on screen. Do not add a separate question beside it."
+        if is_final_block_and_substep or unit_complete or course_complete:
+            pick += " A unit close or course outro asks no new question."
         lines.append(pick)
     lines.append(
         _ending(
-            level=level,
+            close_depth=close_depth,
             kind=kind,
             unit_complete=unit_complete,
             course_complete=course_complete,
             others_known=others_known,
             course_title=course_title,
-            last_move=last_move,
+            is_final_block_and_substep=is_final_block_and_substep,
         )
     )
     return lines
-
-
-def _withheld(label: str, text: str, anti_spoiler: bool) -> str:
-    sentence = _finish(text)
-    if anti_spoiler:
-        return (
-            f"Grade the answer against this {label}: {sentence} "
-            "Say it only when a reveal or a passed close allows it."
-        )
-    return f"The {label} is: {sentence} You may say it while you teach."
-
-
-def _practice_lines(node: KcNode, move: Move, anti_spoiler: bool) -> list[str]:
-    """The one field this practice step walks. Other fields stay out."""
-    fields = node.type_fields or {}
-    if move.key == "retrieve":
-        lines = [f"The retrieval question is: {fields.get('retrieval_question') or 'What is the fact?'}"]
-        fact = str(fields.get("fact") or "").strip()
-        if fact:
-            lines.append(_withheld("fact", fact, anti_spoiler))
-        return lines
-    if move.key == "restate":
-        fact = str(fields.get("fact") or node.core_truth or "").strip()
-        lines = ["Ask for the fact in a full sentence."]
-        if fact:
-            lines.append(_withheld("fact", fact, anti_spoiler))
-        return lines
-    if move.key == "decide":
-        return ["Ask the child what to do next. Do not show the remaining steps."]
-    if move.key == "faded":
-        return [move_material(node, move)]
-    if move.key == "solo":
-        lines = [f"The solo problem is: {fields.get('solo_problem') or 'Solve it on your own.'}"]
-        check = str(fields.get("solo_check") or "").strip()
-        if check:
-            lines.append(_withheld("solo check", check, True))
-        return lines
-    if move.key == "why_order":
-        return ["Ask why the steps go in this order."]
-    if move.key == "predict_a":
-        lines = [f"Case one: {fields.get('case_a') or ''}"]
-        prediction = str(fields.get("prediction") or "").strip()
-        if prediction:
-            lines.append(f"Prediction: {prediction}")
-        return lines
-    if move.key == "predict_b":
-        lines = [f"Case two: {fields.get('case_b') or ''}"]
-        prediction = str(fields.get("prediction") or "").strip()
-        if prediction:
-            lines.append(f"Prediction: {prediction}")
-        return lines
-    if move.key == "predict":
-        return [f"Prediction: {fields.get('prediction') or 'What do you predict?'}"]
-    if move.key == "contrast":
-        return [
-            f"Case one: {fields.get('case_a') or ''}",
-            f"Case two: {fields.get('case_b') or ''}",
-        ]
-    if move.key == "rule":
-        rule = str(fields.get("rule") or "").strip()
-        lines = ["Ask the child to state the rule."]
-        if rule:
-            lines.append(_withheld("rule", rule, True))
-        return lines
-    if move.key == "transfer":
-        return [f"Transfer case: {fields.get('transfer_case') or ''}"]
-    if move.key == "stake":
-        return [f"Decision point: {fields.get('decision_point') or ''}"]
-    if move.key == "mark":
-        return [f"Flawed claim: {fields.get('flawed_claim') or ''}"]
-    if move.key == "defend":
-        chain = str(fields.get("causal_chain") or "").strip()
-        lines = ["Ask the child to defend the causal chain."]
-        if chain:
-            lines.append(_withheld("causal chain", chain, anti_spoiler))
-        return lines
-    if move.key == "counterfactual":
-        return [f"Counterfactual: {fields.get('counterfactual') or ''}"]
-    if move.key == "faulty":
-        return [f"Faulty plan: {fields.get('faulty_plan') or ''}"]
-    if move.key == "correct":
-        truth = str(node.core_truth or "").strip()
-        lines = ["Ask the child to correct the plan."]
-        if truth:
-            lines.append(_withheld("core truth", truth, True))
-        return lines
-    if move.key == "which_job":
-        mixes = _string_list(fields.get("mixes"))
-        if mixes:
-            return ["Ask which component does which job: " + " and ".join(mixes) + "."]
-        return ["Ask which component does which job."]
-    if move.key == "extra_why":
-        return ["One extra why. The unit is already known. This does not change the score."]
-    return [move_material(node, move)]
 
 
 def _what_to_teach(
     *,
     node: KcNode,
-    goal: KcGoal,
-    move: Move,
-    anti_spoiler: bool,
-    prerequisite_status: str,
-    course_position: str,
+    block: dict,
+    step_index: int,
+    substep: str,
+    active_block_state: dict,
+    next_block: dict | None = None,
 ) -> list[str]:
-    # Course description, position, and prerequisites stay off this section.
-    del goal
-    del prerequisite_status
-    del course_position
-    if move.key.startswith("topic-"):
-        lines = [f"The topic is {move.name}."]
-        goal_text = _goal_text(node, move)
-        if goal_text:
-            lines.append(f"The goal is {goal_text}.")
-        return lines
-    if move.key == "orient":
-        outline = stored_outline(node)
-        if outline:
-            return [f"The outline is {outline}."]
-        mixes = _string_list((node.type_fields or {}).get("mixes"))
-        if mixes:
-            return ["The two earlier components are " + " and ".join(mixes) + "."]
-        return ["No outline is stored."]
-    lines = _practice_lines(node, move, anti_spoiler)
-    if move.evidence:
+    """Strict block isolation: injects ONLY the currently active block and its active substep."""
+    btype = str(block.get("type") or "topic_goal").strip()
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    ev_id = block_evidence_id(block, step_index, substep)
+    lines: list[str] = [f"Active block type: {btype} ({BLOCK_LABELS.get(btype, btype)})."]
+
+    if btype == "topic_goal":
+        topic = str(data.get("topic") or node.title).strip()
+        goal = str(data.get("goal") or node.core_truth).strip()
+        criteria = str(data.get("acceptance_criteria") or goal).strip()
+        notes = str(data.get("teaching_notes") or "").strip()
+        lines.append(f"Topic to introduce: {_finish(topic)}")
+        lines.append(f"Learning goal the learner must explain in their own words: {_finish(goal)}")
+        lines.append(f"Acceptance criteria to check ( withhold until pass or reveal ): {_finish(criteria)}")
+        if notes:
+            lines.append(f"Teaching notes: {_finish(notes)}")
+
+    elif btype == "mcq":
+        mode = str(data.get("mode") or "static").strip()
+        cached_mcq = active_block_state.get("mcq") if isinstance(active_block_state, dict) else None
+        if mode == "static":
+            stem = str(data.get("question_stem") or "").strip()
+            choices = data.get("choices") if isinstance(data.get("choices"), list) else []
+            lines.append(f"Static MCQ stem: {_finish(stem)}")
+            for idx, ch in enumerate(choices):
+                if isinstance(ch, dict):
+                    cid = ch.get("id") or chr(ord("a") + idx)
+                    ctext = ch.get("text") or ""
+                    corr = " (CORRECT - withhold until solved or max retries)" if ch.get("is_correct") else ""
+                    rat = f" [Trap rationale: {ch.get('distractor_rationale')}]" if ch.get("distractor_rationale") else ""
+                    lines.append(f"Option {cid}: {ctext}{corr}{rat}")
+            if data.get("correct_explanation"):
+                lines.append(f"Correct explanation takeaway: {_finish(str(data.get('correct_explanation')))}")
+        else:
+            skill = str(data.get("target_skill") or "").strip()
+            diff = str(data.get("difficulty") or "standard").strip()
+            n_choices = int(data.get("num_choices") or 4)
+            guidance = str(data.get("distractor_guidance") or "").strip()
+            constraints = str(data.get("stem_constraints") or "").strip()
+            lines.append(f"Dynamic MCQ target skill: {_finish(skill)}")
+            lines.append(f"Difficulty: {diff}. Number of choices: {n_choices}.")
+            lines.append(f"Distractor guidance: {_finish(guidance)}")
+            if constraints:
+                lines.append(f"Stem constraints: {_finish(constraints)}")
+            if isinstance(cached_mcq, dict) and cached_mcq.get("question_stem"):
+                lines.append(f"Active generated stem: {_finish(str(cached_mcq.get('question_stem')))}")
+        if substep == "awaiting_why":
+            lines.append(
+                "Active substep: awaiting_why. The learner picked the right option on a retry; "
+                "ask them to explain in one sentence WHY that option works."
+            )
+
+    elif btype == "case_study":
+        case_a = str(data.get("case_a") or "").strip()
+        case_b = str(data.get("case_b") or "").strip()
+        pred = str(data.get("prediction_prompt") or "").strip()
+        principle = str(data.get("invariant_principle") or "").strip()
+        t_prompt = str(data.get("transfer_prompt") or "").strip()
+        t_exp = str(data.get("transfer_expected") or "").strip()
+        lines.append(f"Case A: {_finish(case_a)}")
+        lines.append(f"Case B: {_finish(case_b)}")
+        if substep == "predict":
+            lines.append(f"Active substep (predict): Present Case A and Case B with prediction prompt: {_finish(pred)}")
+            lines.append(
+                "Do not reveal the invariant principle yet. Once the learner predicts (substep_passed=true), "
+                "ask them to contrast the two cases and state the underlying invariant principle."
+            )
+        elif substep == "transfer":
+            lines.append(f"Active substep (transfer): Present transfer scenario: {_finish(t_prompt)}")
+            lines.append(f"Expected transfer application: {_finish(t_exp or principle)}")
+        else:
+            lines.append(f"Prediction / comparison prompt: {_finish(pred)}")
+            lines.append(
+                f"Active substep (contrast_and_rule): Ask the learner to contrast the cases and articulate the invariant principle. "
+                f"Target invariant principle (withhold until pass or reveal): {_finish(principle)}"
+            )
+            if t_prompt:
+                lines.append(
+                    f"If the learner satisfies the invariant principle on this turn (substep_passed=true) and transfer is enabled, "
+                    f"introduce the transfer prompt: {_finish(t_prompt)}"
+                )
+
+    elif btype == "socratic":
+        dilemma = str(data.get("central_dilemma") or "").strip()
+        probe = str(data.get("initial_probe") or "").strip()
+        counters = [str(c).strip() for c in (data.get("counterexamples") or []) if str(c).strip()]
+        synthesis = str(data.get("target_synthesis") or "").strip()
+        lines.append(f"Central dilemma: {_finish(dilemma)}")
+        if substep == "initial_thesis":
+            lines.append(f"Active substep (initial_thesis): Frame the dilemma and ask opening probe: {_finish(probe)}")
+            lines.append(
+                "Any substantive initial hypothesis passes this substep (substep_passed=true); "
+                "in your reply, introduce the first counterexample from: " + "; ".join(counters)
+            )
+        else:
+            lines.append(
+                "Active substep (counterexample_probe): Pressure-test the learner's position using counterexample(s): "
+                + "; ".join(counters)
+            )
+            lines.append(f"Target synthesis resolution (withhold until pass or reveal): {_finish(synthesis)}")
+
+    elif btype == "curiosity":
+        hook = str(data.get("phenomenon_hook") or "").strip()
+        q = str(data.get("prediction_question") or "").strip()
+        bridge = str(data.get("bridge_to_unit") or "").strip()
+        branches = [str(b).strip() for b in (data.get("wonder_branches") or []) if str(b).strip()]
+        lines.append(f"Phenomenon / mystery hook: {_finish(hook)}")
+        lines.append(f"Initial prediction question: {_finish(q)}")
+        lines.append(f"Bridge to unit insight (share after learner engages/guesses): {_finish(bridge)}")
+        if branches:
+            lines.append("Optional wonder branches: " + "; ".join(branches))
+
+    elif btype == "worked_example":
+        prob = str(data.get("problem_statement") or "").strip()
+        steps = data.get("steps") if isinstance(data.get("steps"), list) else []
+        faded_idx = int(data.get("faded_step_index") or 0)
+        solo_prob = str(data.get("solo_problem") or "").strip()
+        solo_ans = str(data.get("solo_expected_answer") or "").strip()
+        lines.append(f"Worked example problem: {_finish(prob)}")
+        if substep == "faded_step":
+            shown: list[str] = []
+            target_step = ""
+            for idx, st in enumerate(steps):
+                st_text = st.get("step_text") if isinstance(st, dict) else str(st)
+                st_rat = st.get("rationale") if isinstance(st, dict) else ""
+                if idx == faded_idx:
+                    shown.append(f"Step {idx + 1}: ___ (FADED)")
+                    target_step = f"{st_text} (Rationale: {st_rat})" if st_rat else str(st_text)
+                else:
+                    shown.append(f"Step {idx + 1}: {st_text}" + (f" ({st_rat})" if st_rat else ""))
+            lines.append("Worked steps: " + " | ".join(shown))
+            lines.append(
+                f"Active substep (faded_step): Ask the learner to supply the missing Step {faded_idx + 1}. "
+                f"Expected missing step (withhold until pass or reveal): {_finish(target_step)}"
+            )
+            if solo_prob:
+                lines.append(
+                    f"When the faded step is solved (substep_passed=true) or revealed, present the solo problem in your reply: {_finish(solo_prob)}"
+                )
+        else:
+            lines.append(f"Active substep (solo_solve): Ask the learner to solve solo problem: {_finish(solo_prob)}")
+            lines.append(f"Expected solo answer (withhold until pass or reveal): {_finish(solo_ans)}")
+
+    elif btype == "spot_the_flaw":
+        rookie = str(data.get("rookie_work") or "").strip()
+        flaw = str(data.get("flaw_description") or "").strip()
+        misc = str(data.get("underlying_misconception") or "").strip()
+        corr = str(data.get("corrected_version") or "").strip()
+        lines.append(f"Rookie's flawed work / claim: {_finish(rookie)}")
+        lines.append(f"Flaw description to identify (withhold until pass or reveal): {_finish(flaw)}")
+        lines.append(f"Underlying misconception: {_finish(misc)}")
+        lines.append(f"Corrected version (withhold until pass or reveal): {_finish(corr)}")
+
+    elif btype == "teach_back":
+        persona_prompt = str(data.get("peer_persona_prompt") or "").strip()
+        reqs = [str(r).strip() for r in (data.get("required_concepts") or []) if str(r).strip()]
+        follow = str(data.get("peer_follow_up_question") or "").strip()
+        lines.append(f"Naive peer persona & confusion prompt: {_finish(persona_prompt)}")
+        lines.append("Required concepts the learner must weave into their explanation: " + "; ".join(reqs))
+        if substep == "peer_follow_up":
+            lines.append(
+                f"Active substep (peer_follow_up): Ask peer follow-up question or probe missing concepts: {_finish(follow)}"
+            )
+        else:
+            lines.append(
+                "Active substep (initial_explanation): Roleplay the confused peer and invite the learner's explanation. "
+                f"If follow-up is needed after their first explanation, ask: {_finish(follow)}"
+            )
+
+    elif btype == "retrieval_check":
+        recall_p = str(data.get("recall_prompt") or "").strip()
+        exp_fact = str(data.get("expected_fact") or "").strip()
+        why_p = str(data.get("elaborative_why_prompt") or "").strip()
+        why_rat = str(data.get("expected_why_rationale") or "").strip()
+        if substep == "elaborate_why":
+            lines.append(f"Recalled fact already established: {_finish(exp_fact)}")
+            lines.append(f"Active substep (elaborate_why): Ask elaborative why prompt: {_finish(why_p)}")
+            lines.append(f"Expected why rationale (withhold until pass or reveal): {_finish(why_rat)}")
+        else:
+            lines.append(f"Active substep (recall): Ask cued-recall question: {_finish(recall_p)}")
+            lines.append(f"Expected fact (withhold until pass or reveal): {_finish(exp_fact)}")
+            if why_p:
+                lines.append(
+                    f"When the learner recalls the fact (substep_passed=true) and elaborative why is enabled, "
+                    f"affirm the fact and ask: {_finish(why_p)}"
+                )
+
+    lines.append(f"Evidence id for this active step: {ev_id}. Include '{ev_id}' in rubric_met when satisfied.")
+    if next_block is not None and isinstance(next_block, dict):
+        nb_type = str(next_block.get("type") or "topic_goal").strip()
+        nb_data = next_block.get("data") if isinstance(next_block.get("data"), dict) else {}
         lines.append(
-            "On this move, count these ids only when the answer holds them: "
-            + ", ".join(move.evidence)
-            + "."
+            f"If the learner's response completes Block {step_index + 1} (block_complete=true), "
+            f"affirm Block {step_index + 1} and open Block {step_index + 2} ({BLOCK_LABELS.get(nb_type, nb_type)}): "
+            f"{block_material_summary(next_block)}."
         )
-    else:
-        lines.append("This move is not checked. Advance when the child has done what the move asked.")
+        if nb_type == "mcq" and str(nb_data.get("mode") or "static") == "dynamic":
+            lines.append(
+                f"For Block {step_index + 2} (dynamic MCQ), populate generated_mcq for target_skill="
+                f"{_finish(str(nb_data.get('target_skill') or ''))} and distractor_guidance="
+                f"{_finish(str(nb_data.get('distractor_guidance') or ''))}"
+            )
+    wrongs = _wrong_moves(node)
+    if wrongs:
+        lines.append("Component misconceptions to listen for: " + " | ".join(_finish(w) for w in wrongs))
     return lines
 
 
-def _step_rule(
-    node: KcNode,
-    move: Move,
-    moves: list[Move],
-    *,
-    anti_spoiler: bool,
-) -> str:
-    fields = node.type_fields or {}
-    kind = node.kc_type or ""
-    if move.choice:
-        return (
-            f"This step is {move.name}. The child picks on screen. "
-            "Do not add a second question."
+def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> list[str]:
+    """Return ONLY the active block type's configuration rules."""
+    btype = str(block.get("type") or "topic_goal").strip()
+    bcfg = ((cfg.get("blocks") or {}).get(btype)) or {}
+    lines: list[str] = []
+
+    if btype == "topic_goal":
+        depth = int(bcfg.get("explanation_depth", 3) or 3)
+        retries = 1 if goal.kind == "time_boxed" else int(bcfg.get("max_retries_before_reveal", 3) or 3)
+        ladder = str(bcfg.get("hint_ladder_style") or "progressive_nudge_analogy_scaffold")
+        strictness = str(bcfg.get("goal_evaluation_strictness") or "conceptual_gist")
+        frag_exp = bool(bcfg.get("fragment_self_explanation", True))
+        enrich = "direct" if goal.kind == "time_boxed" else str(bcfg.get("enrichment_mode") or "on_request")
+        lines.append(f"Topic/Goal explanation_depth={depth}: {_EXPLAIN.get(depth, _EXPLAIN[3])}")
+        lines.append(
+            f"Topic/Goal hint_ladder_style={ladder}, max_retries_before_reveal={retries}, "
+            f"goal_evaluation_strictness={strictness}, fragment_self_explanation={frag_exp}, enrichment_mode={enrich}."
         )
-    if move.key == "orient":
-        if kind == "procedural":
-            rule = (
-                "This step is Orient. The child will type. "
-                "Elaborate the outline and name the goal of the procedure. "
-                "Do not show the steps or the goals."
-            )
-        elif kind == "conceptual":
-            rule = (
-                "This step is Orient. The child will type. "
-                "Elaborate the outline. Do not name the rule, and do not open the topics."
-            )
-        elif kind == "causal":
-            decision = str(fields.get("decision_point") or "").strip()
-            named = f" Name this decision: {decision}." if decision else ""
-            rule = (
-                "This step is Orient. The child will type. "
-                "Elaborate the outline and name the decision as the situation."
-                f"{named} Do not give the chain, the topics, or the goals."
-            )
-        elif kind == "synthesis":
-            mixes = _string_list(fields.get("mixes"))
-            named = " and ".join(mixes) if mixes else "the two earlier components"
-            rule = (
-                "This step is Orient. The child will type. "
-                f"Name the job of this piece and the two earlier components it mixes: {named}. "
-                "Do not open the topics or correct the rookie."
-            )
-        else:
-            withheld = " Do not state the fact." if anti_spoiler else ""
-            rule = (
-                "This step is Orient. The child will type. "
-                "Elaborate the outline and say where this piece sits. "
-                f"Do not open the topics or the goals.{withheld}"
-            )
-        return rule
-    if move.key.startswith("topic-"):
-        number = _topic_number(moves, move)
-        total = _topic_count(moves)
-        goal_text = _goal_text(node, move)
-        sentence = (
-            f"This turn is topic {number} of {total}: {move.name}. "
+
+    elif btype == "mcq":
+        retries = int(bcfg.get("max_retry_attempts", 2) or 2)
+        w_depth = int(bcfg.get("wrong_answer_explanation_depth", 2) or 2)
+        disable_elim = bool(bcfg.get("disable_eliminated_choices", True))
+        confirm_why = str(bcfg.get("confirm_why_on_correct") or "on_retry_only")
+        pass_depth = str(bcfg.get("correct_pass_explanation_depth") or "reinforce_why")
+        w_desc = {
+            1: "Give a brief nudge pointing out what to re-check without explaining why the chosen option is wrong.",
+            2: "Give a diagnostic breakdown of why the chosen distractor is a trap without giving away the right option.",
+            3: "Contrast the chosen distractor against the concept with a mini-example before retry.",
+        }.get(w_depth, "")
+        lines.append(
+            f"MCQ config: max_retry_attempts={retries}, wrong_answer_explanation_depth={w_depth} ({w_desc}), "
+            f"disable_eliminated_choices={disable_elim}, confirm_why_on_correct={confirm_why}, "
+            f"correct_pass_explanation_depth={pass_depth}."
         )
-        if goal_text:
-            point = move.evidence[0] if move.evidence else ""
-            count = f" Count {point} when the answer holds the goal." if point else ""
-            sentence += (
-                f"The goal that belongs to it is {goal_text}. "
-                "Discuss that topic and look for the goal inside the discussion. "
-                "If the goal was not met, ask about the goal directly and stay on this topic."
-                f"{count}"
-            )
-        else:
-            sentence += "Discuss that topic. Do not open a later topic."
-        if kind == "procedural":
-            sentence += " The child says what that step did. Do not show a later step."
-        return sentence
-    if move.key == "extra_why":
-        return "This step is Extra why. The child will type."
-    rules = {
-        "retrieve": "Ask the retrieval question.",
-        "restate": "Ask for the fact in a full sentence.",
-        "decide": "Ask what to do next. Do not show the remaining steps.",
-        "faded": "Ask for the blanked step.",
-        "solo": "Ask the child to solve the solo problem.",
-        "why_order": "Ask why the steps go in this order.",
-        "predict": "Ask for the prediction.",
-        "contrast": "Ask the child to contrast the two cases.",
-        "rule": "Ask the child to state the rule. Do not say the rule first.",
-        "transfer": "Ask the child to use the transfer case.",
-        "stake": "Ask what is at stake.",
-        "defend": "Ask the child to defend the causal chain.",
-        "counterfactual": "Ask what would change.",
-        "faulty": "Show the rookie's faulty plan.",
-        "correct": "Ask the child to correct the plan.",
-        "which_job": "Ask which component does which job.",
-    }
-    detail = rules.get(move.key, "Do this step.")
-    return f"This step is {move.name}. The child will type. {detail}"
+
+    elif btype == "case_study":
+        pres = str(bcfg.get("case_presentation") or "sequential_predict_then_contrast")
+        depth = int(bcfg.get("explanation_depth", 3) or 3)
+        retries = int(bcfg.get("max_retries_before_reveal", 3) or 3)
+        req_trans = bool(bcfg.get("require_transfer_application", True))
+        lines.append(
+            f"Case Study config: case_presentation={pres}, explanation_depth={depth} ({_EXPLAIN.get(depth, _EXPLAIN[3])}), "
+            f"max_retries_before_reveal={retries}, require_transfer_application={req_trans} (active substep: {substep})."
+        )
+
+    elif btype == "socratic":
+        turns = int(bcfg.get("dialogue_depth_turns", 2) or 2)
+        intensity = str(bcfg.get("challenge_intensity") or "counterexample_entrapment")
+        retries = int(bcfg.get("max_retries_before_reveal", 3) or 3)
+        hint_mode = str(bcfg.get("hint_when_stuck") or "highlight_contradiction")
+        lines.append(
+            f"Socratic config: dialogue_depth_turns={turns}, challenge_intensity={intensity}, "
+            f"max_retries_before_reveal={retries}, hint_when_stuck={hint_mode}."
+        )
+
+    elif btype == "curiosity":
+        w_turns = int(bcfg.get("max_wonder_turns", 2) or 2)
+        req_pred = bool(bcfg.get("require_initial_prediction", True))
+        counts = bool(bcfg.get("counts_toward_mastery_score", False))
+        framing = str(bcfg.get("hook_framing_style") or "mystery_paradox")
+        lines.append(
+            f"Curiosity config: hook_framing_style={framing}, max_wonder_turns={w_turns}, "
+            f"require_initial_prediction={req_pred}, counts_toward_mastery_score={counts}. "
+            "Validate curiosity and share bridge_to_unit without penalizing wild guesses."
+        )
+
+    elif btype == "worked_example":
+        fading = str(bcfg.get("fading_level") or "single_blanked_step")
+        req_why = bool(bcfg.get("require_step_self_explanation", True))
+        retries = int(bcfg.get("max_retries_before_reveal", 2) or 2)
+        w_depth = int(bcfg.get("wrong_step_explanation_depth", 2) or 2)
+        lines.append(
+            f"Worked Example config: fading_level={fading}, require_step_self_explanation={req_why}, "
+            f"max_retries_before_reveal={retries}, wrong_step_explanation_depth={w_depth}."
+        )
+
+    elif btype == "spot_the_flaw":
+        c_depth = str(bcfg.get("critique_depth") or "identify_and_correct")
+        w_depth = int(bcfg.get("wrong_answer_explanation_depth", 2) or 2)
+        retries = int(bcfg.get("max_retries_before_reveal", 2) or 2)
+        show_why = bool(bcfg.get("show_misconception_why", True))
+        lines.append(
+            f"Spot the Flaw config: critique_depth={c_depth}, wrong_answer_explanation_depth={w_depth}, "
+            f"max_retries_before_reveal={retries}, show_misconception_why={show_why}."
+        )
+
+    elif btype == "teach_back":
+        confusion = str(bcfg.get("peer_confusion_level") or "curious_beginner")
+        f_count = int(bcfg.get("follow_up_questions_count", 1) or 0)
+        retries = int(bcfg.get("max_retries_before_reveal", 2) or 2)
+        strictness = str(bcfg.get("evaluation_strictness") or "plain_language_clarity")
+        lines.append(
+            f"Teach-Back config: peer_confusion_level={confusion}, follow_up_questions_count={f_count}, "
+            f"max_retries_before_reveal={retries}, evaluation_strictness={strictness}."
+        )
+
+    elif btype == "retrieval_check":
+        scaff = str(bcfg.get("cue_scaffolding") or "cued_hint_on_first_miss")
+        req_why = bool(bcfg.get("require_elaborative_why", True))
+        retries = int(bcfg.get("max_retries_before_reveal", 2) or 2)
+        paraphrase = bool(bcfg.get("accept_paraphrase", True))
+        lines.append(
+            f"Retrieval Check config: cue_scaffolding={scaff}, require_elaborative_why={req_why}, "
+            f"max_retries_before_reveal={retries}, accept_paraphrase={paraphrase}."
+        )
+
+    return lines
 
 
 def _how_to_teach(
     *,
-    profile: TutorProfile,
     node: KcNode,
     goal: KcGoal,
-    move: Move,
-    moves: list[Move],
-    level: int,
-    window_name: str,
-    enrichment: str,
+    block: dict,
+    substep: str,
+    cfg: dict,
     support_band: str,
     prerequisite_status: str,
     choice_on_screen: bool,
     minutes_used: int,
     has_misconceptions: bool,
-    anti_spoiler: bool,
     include_close: bool,
 ) -> list[str]:
-    lines = [
-        _step_rule(node, move, moves, anti_spoiler=anti_spoiler),
-        _EXPLAIN[level],
-    ]
-    wrongs = _wrong_moves(node) if has_misconceptions else []
-    kind = goal.kind or "mastery"
-    if kind == "time_boxed":
-        budget = ""
-        if goal.minutes is not None:
-            budget = (
-                f" The budget is {goal.minutes} minutes and {minutes_used} have been used. "
-                "Stay inside what is left."
-            )
+    over = cfg.get("overarching") or {}
+    stay_mode = str(over.get("stay_on_course") or "brief_answer_then_return")
+    misc_policy = str(over.get("misconception_policy") or "explain_and_retry_once")
+    praise_style = str(over.get("encouragement_style") or "process_praise")
+
+    lines = _block_config_rules(block, substep, cfg, goal)
+
+    if goal.kind == "time_boxed":
+        budget = f" Budget: {goal.minutes} minutes ({minutes_used} used)." if goal.minutes is not None else ""
         lines.append(
-            "This course is short on time. Keep the opening to one sentence, "
-            "give the next hint after one miss, move on as soon as the move is passed, "
-            "and keep the close to one or two sentences."
-            + budget
+            "Course kind is time_boxed: keep framing to one sentence, step hints after one miss, "
+            "and advance immediately when the block passes." + budget
         )
+
+    if stay_mode == "strict":
+        lines.append("Stay on course (strict): redirect any off-topic question immediately back to the active block.")
+    elif stay_mode == "exploratory":
+        lines.append("Stay on course (exploratory): you may briefly explore a curiosity tangent before returning to the active block.")
     else:
-        lines.append(_window_sentence(window_name))
-        lines.append(_enrichment_sentence(enrichment))
-        if kind == "curiosity" and move.key != "extra_why":
-            lines.append("After the unit is known, one extra why is allowed. Leave the score as it is.")
-    lines.append(
-        "Help in this order: a nudge, then an analogy, then a scaffold, then a reveal. "
-        "A reveal states the expected point, marks the unit fragile, and the reply includes the fragile close."
-    )
-    if profile.stay_on_course:
-        lines.append("A tangent gets a short answer, then come back to this move.")
-    else:
-        lines.append("You may follow a tangent. The score still comes only from this component.")
+        lines.append("Stay on course (brief_answer_then_return): answer a tangent in one brief sentence, then return to this block.")
+
     if has_misconceptions:
-        lines.append(
-            "The first time a stored wrong move matches, explain that mistake and ask the same move again. "
-            "The second time, redirect, and this unit ends fragile."
-        )
-        if wrongs:
-            lines.append(" ".join(f"Wrong move: {_finish(wrong)}" for wrong in wrongs))
+        if misc_policy == "immediate_redirect":
+            lines.append(
+                "Misconception policy (immediate_redirect): if a stored wrong move matches, immediately name it and set decision='redirect'."
+            )
+        else:
+            lines.append(
+                "Misconception policy (explain_and_retry_once): the first time a stored wrong move matches, explain the trap and retry this block; the second time, redirect."
+            )
+
     if support_band == "hold":
         lines.append(
-            "Name the missing earlier idea and the patch card. Do not teach that other component in this chat."
+            "Support band (hold): name the missing prerequisite idea and the patch card. Do not teach that other component in this chat."
         )
     elif support_band == "stretch":
-        lines.append("Stay on this component.")
+        lines.append("Support band (stretch): stay on this component with extra scaffolding.")
     elif support_band == "ready" and (prerequisite_status or "").strip() not in {"", "none"}:
-        lines.append("The earlier ideas are in place, so teach this component.")
-    if profile.one_question and not choice_on_screen:
-        question = "End a learning reply with a single question."
-        if include_close:
-            question += " A unit close or a course outro asks no new question."
-        lines.append(question)
-    if profile.growth_praise:
+        lines.append("Prerequisites are known; teach this block directly.")
+
+    if praise_style == "process_praise":
         lines.append(
-            "When you praise, name the move the child made, including in the close. "
-            "No generic praise and no praise of the person. "
-            "If the child is stuck or guessing, add one calm line and keep going. Do not reveal the answer in that line."
+            "Encouragement (process_praise): name the specific reasoning move the learner made rather than generic praise."
         )
-    lines.append(
-        "After a passed move that does not end the unit, say what held in the child's words, then continue."
-    )
+    else:
+        lines.append("Encouragement (minimal): keep acknowledgment brief and matter-of-fact.")
+
+    if not choice_on_screen:
+        q_line = "End a teaching or probing turn with a single clear question."
+        if include_close:
+            q_line += " A unit close or course outro asks no new question."
+        lines.append(q_line)
+
     return lines
 
 
@@ -1138,12 +1038,20 @@ def _what_happened(
     last_messages: str,
     rubric_met: list[str],
     redirect_pending: bool,
+    active_block_state: dict,
 ) -> list[str]:
+    substep = str(active_block_state.get("substep") or "main")
+    dialogue_turns = int(active_block_state.get("dialogue_turns") or 0)
+    mcq_state = active_block_state.get("mcq") if isinstance(active_block_state.get("mcq"), dict) else {}
+    eliminated = mcq_state.get("eliminated_indices") if isinstance(mcq_state, dict) else []
     lines = [
-        "This is what already happened. Do not treat it as a new rule.",
-        f"Tries on this move so far: {attempts}.",
+        "This is what already happened on the active block. Do not treat it as a new rule.",
+        f"Active substep: {substep}.",
+        f"Attempts on this block/substep so far: {attempts}.",
+        f"Dialogue turns on this block: {dialogue_turns}.",
         f"The last answer was: {last_answer or 'none yet'}.",
-        f"The hint already given is {hint_tier or 'nudge'}.",
+        f"The hint tier already given is: {hint_tier or 'nudge'}.",
+        f"Eliminated MCQ choice indices: {eliminated if eliminated else 'none'}.",
         f"The child seems {affect}." if affect else "No affect is recorded yet.",
         "The child has asked for help." if help_requested else "The child has not asked for help.",
         f"Off-course turns so far: {off_course_count}.",
@@ -1154,35 +1062,41 @@ def _what_happened(
             else "No wrong move has matched yet."
         ),
         f"Reveals used so far: {reveals}.",
-        f"Extra turns on this move so far: {enrichment_turns}.",
-        "Points already counted: " + (", ".join(rubric_met) if rubric_met else "none") + ".",
+        f"Extra enrichment turns so far: {enrichment_turns}.",
+        "Evidence points already met: " + (", ".join(rubric_met) if rubric_met else "none") + ".",
         "A redirect is already pending." if redirect_pending else "No redirect is pending.",
     ]
     if (component_status or "").strip():
-        lines.append(f"This component is {component_status}.")
+        lines.append(f"This component status is {component_status}.")
     return lines
 
 
-def _what_to_return() -> list[str]:
-    return [
-        "Return reply, decision, rubric_met, misconception, hint_tier, help_requested, off_course, affect, and confidence.",
-        "reply is the text the child reads.",
+def _what_to_return(*, needs_dynamic_mcq: bool = False) -> list[str]:
+    lines = [
+        "Return reply, decision, substep_passed, block_complete, generated_mcq, rubric_met, misconception, hint_tier, help_requested, off_course, affect, confidence, score_justification, what_was_strong, and what_to_work_on.",
+        "reply is the only text the child reads.",
         (
             "decision is stay, advance, complete, or redirect. "
-            "stay keeps this component, including when the child talks further after a pass. "
-            "advance goes to the next move. complete ends the unit. "
-            "redirect only names a stored wrong move. The app decides whether a redirect is allowed."
+            "Set substep_passed=true when the learner's answer satisfies the active substep. "
+            "Set block_complete=true when the active block's final substep is satisfied."
         ),
-        "rubric_met lists the point ids named above, and only the ones the answer holds. Leave it empty when this move is not checked.",
+        "rubric_met lists the active block evidence id when the learner's response satisfies the criteria.",
         "misconception is the stored wrong move that matched, or null.",
-        "hint_tier is the hint this reply used: nudge, analogy, scaffold, or reveal.",
-        "help_requested is true when the child asked for help. off_course is true when the answer left this component.",
+        "hint_tier is nudge, analogy, scaffold, or reveal.",
         "affect is engaged, stuck, guessing, or frustrated. confidence is low, ok, or high.",
-        "You do not set the type, the edges, the score, or the step index.",
+        "On unit close, populate score_justification, what_was_strong, and what_to_work_on; otherwise return empty strings for those three fields.",
+        "You do not set the block order, the edges, or the final mastery score.",
     ]
+    if needs_dynamic_mcq:
+        lines.append(
+            "Because the active block is a dynamic MCQ without a cached question, you MUST populate generated_mcq with question_stem, choices, correct_index, and distractor_rationales."
+        )
+    else:
+        lines.append("Set generated_mcq to null when not generating a new dynamic MCQ.")
+    return lines
 
 
-def _blocks(sections: list[tuple[str, list[str]]]) -> str:
+def _blocks_text(sections: list[tuple[str, list[str]]]) -> str:
     chunks: list[str] = []
     for title, lines in sections:
         body = [line.strip() for line in lines if line and line.strip()]
@@ -1197,7 +1111,6 @@ def build_kc_prompt(
     node: KcNode,
     goal: KcGoal,
     step: int,
-    moves: list[Move],
     opening: bool,
     choice_on_screen: bool,
     prerequisite_status: str,
@@ -1222,70 +1135,108 @@ def build_kc_prompt(
     redirect_pending: bool,
     fragment: bool,
     others_known: bool,
+    active_block_state: dict | None = None,
+    transition_from_block: dict | None = None,
+    moves: object | None = None,
 ) -> dict:
-    """The bundle for this turn: prompt, schema, and temperature."""
-    # Stability stays on the debug panel. It is not a rule for this reply.
+    """Assemble the 7-section prompt for the active block (`node.blocks[step]`)."""
     del stability
-    labels = moves or [Move("this", "This step", (), False)]
-    index = min(max(step, 0), len(labels) - 1)
-    move = labels[index]
-    include_close = index >= len(labels) - 1 or unit_complete or course_complete
-    level = min(5, max(1, int(profile.instructive)))
-    window_name = effective_window_name(profile, goal)
-    enrichment = effective_enrichment(profile, goal)
-    explain = self_explanation_on(profile)
+    del moves
+    del course_position
+    cfg = effective_kc_tutor_config(profile)
+    over = cfg.get("overarching") or {}
+    blocks = stored_blocks(node)
+    if not blocks:
+        blocks = [
+            {
+                "id": "blk_1",
+                "type": "topic_goal",
+                "data": {
+                    "topic": node.title or "Concept",
+                    "goal": node.core_truth or f"Explain {node.title}.",
+                },
+            }
+        ]
+    index = min(max(int(step or 0), 0), len(blocks) - 1)
+    active_block = blocks[index]
+    btype = str(active_block.get("type") or "topic_goal").strip()
+    state_dict = dict(active_block_state or {})
+    substep = str(state_dict.get("substep") or default_substep_for_block(active_block, cfg))
+    state_dict["substep"] = substep
+    substeps = substeps_for_block(active_block, cfg)
+    is_last_block = index >= len(blocks) - 1
+    is_last_substep = substep == substeps[-1] if substeps else True
+    is_final_block_and_substep = is_last_block and is_last_substep
+
+    data = active_block.get("data") if isinstance(active_block.get("data"), dict) else {}
+    needs_dynamic_mcq = (
+        btype == "mcq"
+        and str(data.get("mode") or "static") == "dynamic"
+        and not (isinstance(state_dict.get("mcq"), dict) and state_dict["mcq"].get("question_stem"))
+    )
+    if (
+        not needs_dynamic_mcq
+        and index + 1 < len(blocks)
+        and str(blocks[index + 1].get("type") or "") == "mcq"
+        and str((blocks[index + 1].get("data") or {}).get("mode") or "static") == "dynamic"
+    ):
+        needs_dynamic_mcq = True
+    widget_on = choice_on_screen or block_uses_choice_widget(active_block, substep)
+    include_close = is_final_block_and_substep or unit_complete or course_complete
+    frag_self_exp = bool(((cfg.get("blocks") or {}).get("topic_goal") or {}).get("fragment_self_explanation", True))
     interests = ", ".join(str(item) for item in (student.interests or []) if str(item).strip()) or "none named"
-    prompt = _blocks(
+
+    prompt = _blocks_text(
         [
             (
                 "This turn",
                 _this_turn(
                     node=node,
-                    move=move,
-                    moves=labels,
-                    index=index,
-                    total=len(labels),
+                    block=active_block,
+                    step_index=index,
+                    total_blocks=len(blocks),
+                    substep=substep,
                     opening=opening,
+                    orient_framing=str(over.get("orient_framing") or "elaborate_outline"),
                     unit_complete=unit_complete,
                     course_complete=course_complete,
-                    choice_on_screen=choice_on_screen or move.choice,
+                    choice_on_screen=widget_on,
                     fragment=fragment,
-                    explain=explain,
-                    level=level,
+                    fragment_self_explanation=frag_self_exp,
+                    close_depth=str(over.get("close_summary_depth") or "diagnostic_strengths_and_gaps"),
                     kind=goal.kind or "mastery",
                     others_known=others_known,
                     course_title=goal.title,
+                    is_final_block_and_substep=is_final_block_and_substep,
+                    transition_from_block=transition_from_block,
+                    needs_dynamic_mcq=needs_dynamic_mcq,
                 ),
             ),
             (
-                "What to teach",
-                _what_to_teach(
-                    node=node,
-                    goal=goal,
-                    move=move,
-                    anti_spoiler=bool(profile.anti_spoiler),
-                    prerequisite_status=prerequisite_status,
-                    course_position=course_position,
-                ),
+            "What to teach",
+            _what_to_teach(
+                node=node,
+                block=active_block,
+                step_index=index,
+                substep=substep,
+                active_block_state=state_dict,
+                next_block=blocks[index + 1] if (is_last_substep and index + 1 < len(blocks)) else None,
             ),
-            ("Who you are talking to", [_learner_sentence(student, profile, move, interests)]),
+            ),
+            ("Who you are talking to", [_learner_sentence(student, profile, active_block, interests)]),
             (
                 "How to teach",
                 _how_to_teach(
-                    profile=profile,
                     node=node,
                     goal=goal,
-                    move=move,
-                    moves=labels,
-                    level=level,
-                    window_name=window_name,
-                    enrichment=enrichment,
+                    block=active_block,
+                    substep=substep,
+                    cfg=cfg,
                     support_band=support_band,
                     prerequisite_status=prerequisite_status,
-                    choice_on_screen=choice_on_screen or move.choice,
+                    choice_on_screen=widget_on,
                     minutes_used=minutes_used,
                     has_misconceptions=bool(_wrong_moves(node)),
-                    anti_spoiler=bool(profile.anti_spoiler),
                     include_close=include_close,
                 ),
             ),
@@ -1306,9 +1257,10 @@ def build_kc_prompt(
                     last_messages=last_messages,
                     rubric_met=rubric_met,
                     redirect_pending=redirect_pending,
+                    active_block_state=state_dict,
                 ),
             ),
-            ("What to return", _what_to_return()),
+            ("What to return", _what_to_return(needs_dynamic_mcq=needs_dynamic_mcq)),
         ]
     )
     return {
@@ -1317,3 +1269,18 @@ def build_kc_prompt(
         "temperature": TEMPERATURE,
     }
 
+
+from app.kc_moves import (  # noqa: E402  (move recipes the session loop still calls)
+    Move,
+    asks_why,
+    effective_enrichment,
+    effective_window_name,
+    move_material,
+    moves_for,
+    recipe_name,
+    self_explanation_on,
+    step_labels,
+    stored_enrichment,
+    struggle_tries,
+    topic_goal,
+)

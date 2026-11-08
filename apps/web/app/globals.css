@@ -2651,6 +2651,145 @@ a.ds-row { text-decoration: none; }
   white-space: nowrap;
 }
 
+.kc-scope {
+  position: relative;
+}
+
+.kc-scope-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 260px;
+  padding: 12px;
+  background: #fff;
+  color: rgb(15, 17, 21);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+.kc-scope-menu label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+  color: rgb(15, 17, 21);
+}
+
+.kc-scope-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.kc-block-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kc-block-list,
+.kc-block-body,
+.kc-block-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kc-block-card {
+  border: 1px solid rgba(15, 17, 21, 0.12);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.kc-block-head,
+.kc-block-tools,
+.kc-block-gap {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.kc-block-head select {
+  flex: 1;
+  min-width: 140px;
+}
+
+.kc-block-gap {
+  justify-content: flex-start;
+}
+
+.kc-block-chips,
+.kc-block-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.kc-block-chips li,
+.kc-block-pills li {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 17, 21, 0.06);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.kc-block-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.kc-block-progress p {
+  margin: 0;
+}
+
+.kc-block-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(15, 17, 21, 0.08);
+}
+
+.kc-block-bar span {
+  display: block;
+  height: 100%;
+  background: rgb(20, 110, 70);
+}
+
+.kc-block-pills li.is-completed {
+  background: rgb(226, 244, 232);
+}
+
+.kc-block-pills li.is-active {
+  background: rgb(255, 244, 214);
+  box-shadow: inset 0 0 0 1px rgb(180, 130, 20);
+}
+
+.kc-block-pills li.is-upcoming {
+  color: rgb(97, 102, 107);
+}
+
+.kc-substep {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 17, 21, 0.06);
+  font-size: 12px;
+}
+
 .kc-course-stage,
 .kc-creator-stage {
   display: flex;

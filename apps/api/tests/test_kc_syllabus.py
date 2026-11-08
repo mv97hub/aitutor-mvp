@@ -70,8 +70,10 @@ def test_pasted_titles_stay_a_list_and_do_not_write_fields() -> None:
         "congruence",
     ]
     for item in drafted["draft"]["components"]:
-        assert set(item) == {"code", "title", "description", "outline", "topics"}
-        assert item["description"] == item["outline"]
+        assert set(item) == {"code", "title", "description", "outline", "topics", "recommended_blocks"}
+        assert item["description"].startswith(item["outline"])
+        assert "Recommended blocks:" in item["description"]
+        assert item["recommended_blocks"]
         assert "Outline:" not in item["description"]
         assert item["topics"][0]["topic"] == item["title"]
         assert item["topics"][0]["goal"] == f"Explain {item['title']}"

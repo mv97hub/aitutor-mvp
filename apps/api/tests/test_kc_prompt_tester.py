@@ -8,17 +8,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from app.database import SessionLocal
-from app.kc_prompt import (
-    asks_why,
-    build_kc_prompt,
-    effective_enrichment,
-    effective_window_name,
-    is_fragment,
-    moves_for,
-    struggle_tries,
-)
+from app.kc_prompt_tester import PromptTesterIn, preview_kc_prompt
 from app.main import app
-from app.models import KcGoal, KcNode, KcSession, Student, TutorProfile
+from app.models import KcGoal, KcSession
 from app.routes.kc import post_prompt_tester
 from app.studio import DELETE_PASSWORD
 
@@ -100,97 +92,8 @@ def _body(**overrides) -> dict:
     return body
 
 
-def _direct(body: dict) -> tuple[dict, TutorProfile, KcGoal, object]:
-    fields = dict(body["type_fields"])
-    fields["transfer_case"] = body["transfer_case"]
-    fields["counterfactual"] = body["counterfactual"]
-    student = Student(
-        slug="prompt-tester",
-        display_name=body["display_name"],
-        age=body["age"],
-        reading_level=body["reading_level"],
-        modality=body["modality"],
-        interests=list(body["interests"]),
-    )
-    profile = TutorProfile(
-        id="prompt-tester",
-        instructive=body["instructive"],
-        persona=body["persona"],
-        lexicon=body["lexicon"],
-        voice_override=False,
-        metaphors=body["metaphors"],
-        sidekick=body["sidekick"],
-        struggle_window=body["struggle_window"],
-        anti_spoiler=body["anti_spoiler"] == "yes",
-        one_question=body["one_question"] == "yes",
-        use_interests=body["use_interests"] == "yes",
-        stay_on_course=body["stay_on_course"] == "yes",
-        growth_praise=body["growth_praise"] == "yes",
-        misconception_policy=body["misconception_policy"],
-        self_explanation=body["self_explanation"] == "yes",
-        enrichment=body["enrichment"],
-    )
-    node = KcNode(
-        code=body["component_code"],
-        title=body["component_title"],
-        description=body["component_description"],
-        kc_type=body["kc_type"] or None,
-        core_truth=body["core_truth"],
-        type_fields=fields,
-        rubric=list(body["rubric"]),
-        misconceptions=list(body["misconceptions"]),
-        prerequisite_codes=list(body["prerequisite_codes"]),
-        encompasses_codes=list(body["encompasses_codes"]),
-    )
-    goal = KcGoal(
-        code="prompt-tester",
-        title=body["course_title"],
-        description=body["course_description"],
-        audience=body["audience"],
-        kind=body["kind"],
-        minutes=body["minutes"],
-        target_kc_ids=[],
-        ready=False,
-    )
-    fact = str(fields.get("fact") or body["core_truth"] or "")
-    fragment = bool(node.kc_type == "factual" and is_fragment(body["last_answer"], fact))
-    opening = not any(
-        part.strip().lower().startswith("assistant:") for part in body["last_messages"].split(" | ")
-    )
-    moves = moves_for(node, profile, goal, fragment=fragment)
-    prompt = build_kc_prompt(
-        student=student,
-        profile=profile,
-        node=node,
-        goal=goal,
-        step=body["move_index"] - 1,
-        moves=moves,
-        opening=opening,
-        choice_on_screen=body["choice_on_screen"] == "yes",
-        prerequisite_status=body["prerequisite_status"],
-        support_band=body["support_band"],
-        course_position=body["course_position"],
-        unit_complete=body["unit_close"] == "yes",
-        course_complete=body["course_outro"] == "yes",
-        attempts=body["attempts"],
-        hint_tier=body["hint_tier"],
-        reveals=body["reveals"],
-        off_course_count=body["off_course_count"],
-        affect=body["affect"],
-        enrichment_turns=body["enrichment_turns"],
-        help_requested=body["help_requested"] == "yes",
-        minutes_used=body["minutes_used"],
-        component_status=body["component_status"],
-        stability=body["stability"],
-        last_answer=body["last_answer"],
-        last_misconception=body["last_misconception"],
-        last_messages=body["last_messages"],
-        rubric_met=list(body["rubric_met"]),
-        redirect_pending=body["redirect_pending"] == "yes",
-        fragment=fragment,
-        others_known=False,
-    )
-    return prompt, profile, goal, moves
+def _direct(body: dict) -> dict:
+    return preview_kc_prompt(PromptTesterIn.model_validate(body))
 
 
 def test_prompt_tester_matches_build_kc_prompt_and_writes_nothing() -> None:
@@ -219,35 +122,31 @@ def test_prompt_tester_matches_build_kc_prompt_and_writes_nothing() -> None:
         taught = _body(instructive=5, unit_close="no")
         second = client.post("/kc/prompt-tester", json=taught)
         assert second.status_code == 200, second.text
-        direct, profile, goal, moves = _direct(taught)
+        direct = _direct(taught)
         assert second.json()["system_prompt"] == direct["system_prompt"]
         assert second.json()["system_prompt"] != first.json()["system_prompt"]
-        assert "Teach a little more first, then ask one question." in second.json()["system_prompt"]
-        assert "Open on the question. Almost no explanation first." not in second.json()["system_prompt"]
+        assert "explanation_depth=5" in second.json()["system_prompt"]
+        assert "Teach thoroughly with step-by-step scaffolding" in second.json()["system_prompt"]
+        assert "Ask the question first with almost no preliminary explanation" not in second.json()["system_prompt"]
         closed = _body(instructive=5, unit_close="yes")
         third = client.post("/kc/prompt-tester", json=closed)
         assert third.status_code == 200, third.text
-        closed_direct, _, _, closed_moves = _direct(closed)
+        closed_direct = _direct(closed)
         assert third.json()["system_prompt"] == closed_direct["system_prompt"]
         assert third.json()["system_prompt"] != second.json()["system_prompt"]
         assert "End the unit in this reply." in third.json()["system_prompt"]
-        index = min(max(taught["move_index"] - 1, 0), len(moves) - 1)
-        move = moves[index]
-        window = effective_window_name(profile, goal)
-        assert second.json()["move_name"] == move.name
-        assert second.json()["evidence"] == ", ".join(move.evidence)
-        assert second.json()["effective_struggle_window"] == f"{window} ({struggle_tries(window)} tries)"
-        assert second.json()["effective_enrichment"] == effective_enrichment(profile, goal)
-        assert second.json()["asks_why"] == ("yes" if asks_why(profile, move) else "no")
+        assert second.json()["active_block_type"] == "topic_goal"
+        assert "Topic / Goal" in second.json()["move_name"]
+        assert second.json()["evidence"] == "blk_1"
+        assert second.json()["active_substep"] == "main"
         boxed = _body(kind="time_boxed", minutes=20, struggle_window="long", enrichment="offer")
         timed = client.post("/kc/prompt-tester", json=boxed)
         assert timed.status_code == 200, timed.text
-        timed_direct, timed_profile, timed_goal, _ = _direct(boxed)
+        timed_direct = _direct(boxed)
         assert timed.json()["system_prompt"] == timed_direct["system_prompt"]
-        assert timed.json()["effective_struggle_window"].startswith("minimum")
-        assert timed.json()["effective_enrichment"] == "direct"
-        assert effective_window_name(timed_profile, timed_goal) == "minimum"
-        assert effective_enrichment(timed_profile, timed_goal) == "direct"
+        assert "max_retries_before_reveal=1" in timed.json()["system_prompt"]
+        assert "enrichment_mode=direct" in timed.json()["system_prompt"]
+        assert "Course kind is time_boxed" in timed.json()["system_prompt"]
         unknown = _body(persona="wizard")
         rejected = client.post("/kc/prompt-tester", json=unknown)
         assert rejected.status_code == 422, rejected.text
@@ -267,7 +166,7 @@ def test_prompt_tester_matches_build_kc_prompt_and_writes_nothing() -> None:
             assert stored.title == "Draft preview"
         finally:
             goal_row.close()
-        assert closed_moves
+        assert closed_direct["active_block_type"] == "topic_goal"
     finally:
         deleted = client.post(f"/kc/courses/{course_id}/delete", json={"password": DELETE_PASSWORD})
         assert deleted.status_code == 200, deleted.text

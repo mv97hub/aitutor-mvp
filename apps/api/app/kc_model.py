@@ -1,10 +1,9 @@
-"""Prompts for the KC Course Creator and KC Creator model calls.
+"""Prompts and block schemas for the KC Course Creator and KC Creator model calls.
 
-The syllabus still chooses a careful title list. The model names the subject
-and the major ideas, then writes each component's summary, outline, and
-topic-goal pairs.
-A long list is titles first, then descriptions in slices. A pasted title list
-stays as written. Scoring is not part of this module.
+The course creator plans the subject, major ideas, and component list with
+summaries, outlines, and initial topic-goal pairs.
+The component creator drafts an ordered sequence of pedagogical blocks
+restricted to the course's selected AI Block Scope (allowed_block_types).
 """
 
 from __future__ import annotations
@@ -13,11 +12,8 @@ import copy
 import re
 
 from app.kc_syllabus import MAX_COMPONENTS, planned_reply, planning_context
+from app.models import ALL_BLOCK_TYPES
 
-# The original CreateCourse menu, then a capable default, then the strongest
-# chat model id the app's OpenAI client accepts (openai(), @ai-sdk/openai 4.0.106).
-# DeepSeek Flash is last. OpenRouter's alias has a leading tilde. The web app
-# calls that alias. A saved deepseek/deepseek-flash-latest id is sent as it.
 DEEPSEEK_FLASH_MODEL = "~deepseek/deepseek-flash-latest"
 LEGACY_DEEPSEEK_FLASH_MODEL = "deepseek/deepseek-flash-latest"
 KC_CHAT_MODELS = (
@@ -30,6 +26,73 @@ KC_CHAT_MODELS = (
 )
 DEFAULT_KC_CHAT_MODEL = "gpt-4.1"
 DESCRIPTION_SLICE = 25
+
+BLOCK_LABELS: dict[str, str] = {
+    "topic_goal": "Topic / Goal",
+    "mcq": "Multiple Choice Question",
+    "case_study": "Case Study / Contrasting Cases",
+    "socratic": "Socratic Discussion",
+    "curiosity": "Curiosity / Wonder Hook",
+    "worked_example": "Worked Example + Faded Step",
+    "spot_the_flaw": "Spot the Flaw / Buggy Rule",
+    "teach_back": "Teach-Back / Feynman",
+    "retrieval_check": "Retrieval & Elaborative Interrogation",
+}
+
+BLOCK_SHORT_LABELS: dict[str, str] = {
+    "topic_goal": "Topic",
+    "mcq": "MCQ",
+    "case_study": "Case Study",
+    "socratic": "Socratic",
+    "curiosity": "Curiosity",
+    "worked_example": "Worked Example",
+    "spot_the_flaw": "Spot the Flaw",
+    "teach_back": "Teach-Back",
+    "retrieval_check": "Retrieval Check",
+}
+
+BLOCK_AUTHORING_RULES: dict[str, str] = {
+    "topic_goal": (
+        "- topic_goal (Topic / Goal): Provide topic (the single concept, step, or causal link to introduce), "
+        "goal (what the learner must explain or justify in their own words), optional acceptance_criteria, "
+        "and optional teaching_notes."
+    ),
+    "mcq": (
+        "- mcq (Multiple Choice Question): Set mode to 'static' or 'dynamic'. "
+        "When mode is 'static', provide question_stem, 2-5 choices ({ id, text, is_correct, distractor_rationale, misconception_code } "
+        "with exactly one is_correct=true), and correct_explanation. "
+        "When mode is 'dynamic', provide target_skill, difficulty ('foundation' | 'standard' | 'stretch'), "
+        "num_choices (3-5), distractor_guidance, and stem_constraints."
+    ),
+    "case_study": (
+        "- case_study (Case Study / Contrasting Cases): Provide case_a, contrasting case_b, "
+        "prediction_prompt, invariant_principle (the underlying rule), and optional transfer_prompt with transfer_expected."
+    ),
+    "socratic": (
+        "- socratic (Socratic Discussion): Provide central_dilemma, initial_probe, "
+        "1-3 counterexamples, and target_synthesis."
+    ),
+    "curiosity": (
+        "- curiosity (Curiosity / Wonder Hook): Provide phenomenon_hook, prediction_question, "
+        "bridge_to_unit, and optional wonder_branches."
+    ),
+    "worked_example": (
+        "- worked_example (Worked Example + Faded Step): Provide problem_statement, "
+        "2-6 steps ({ step_text, rationale }), 0-based faded_step_index, solo_problem, and solo_expected_answer."
+    ),
+    "spot_the_flaw": (
+        "- spot_the_flaw (Spot the Flaw / Buggy Rule): Provide rookie_work, flaw_description, "
+        "underlying_misconception, and corrected_version."
+    ),
+    "teach_back": (
+        "- teach_back (Teach-Back / Feynman Explanation): Provide peer_persona_prompt, "
+        "1-4 required_concepts, and peer_follow_up_question."
+    ),
+    "retrieval_check": (
+        "- retrieval_check (Retrieval & Elaborative Interrogation): Provide recall_prompt, "
+        "expected_fact, elaborative_why_prompt, and expected_why_rationale."
+    ),
+}
 
 COURSE_RULES = (
     "You are an expert curriculum maker. "
@@ -44,19 +107,24 @@ COURSE_RULES = (
     '"10 components" means 10 distinct components. '
     "A pasted title list is used as written. "
     "Only after the subject and the major ideas, return the component list. "
-    "Each component has a short summary, a short outline, the key topics, and the key goals. "
+    "Each component has a short summary, a short outline, the key topics, the key goals, "
+    "and recommended_blocks (2-5 ordered blocks with type and focus, using only the allowed block types). "
+    "Include the recommended block sequence and block types in the component description "
+    "(for example: 'Explains why free-fall acceleration is independent of mass. "
+    "Recommended blocks: 1. Curiosity Hook (Apollo hammer vs. feather) -> 2. Case Study (vacuum vs. air) -> 3. Topic / Goal (force-to-mass ratio) -> 4. MCQ (heavier-falls-faster check).'). "
     "Each topic is one pair with its goal."
 )
+STUDIO_RULES = COURSE_RULES
 
 CREATOR_RULES = (
     "You are an expert curriculum maker for this knowledge component and the course kind. "
     "The description is a short summary of the component. "
     "Use that summary. Recommend every field that can be entered: "
-    "description, title, type, the fields for that type, core truth, rubric checks, "
+    "description, title, outline, core_truth, an ordered blocks[] sequence, "
     "misconceptions, prerequisites, and encompasses. "
     "Use the course kind. Mastery is the fuller rigorous breakdown. "
     "Time boxed fits the minutes. Curiosity is a path through the subject. "
-    "Go into the topic before you fill the type, the core truth, the rubric, and the checks. "
+    "Go into the topic before you fill the outline, the core truth, the blocks, and the links. "
     "Do not change how an answer is scored. "
     "Other components stay as they are."
 )
@@ -71,17 +139,61 @@ _TOPIC_PAIR = {
     "required": ["topic", "goal"],
 }
 
-_COMPONENT_FIELDS = {
+_RECOMMENDED_BLOCK = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "title": {"type": "string"},
-        "description": {"type": "string"},
-        "outline": {"type": "string"},
-        "topics": {"type": "array", "items": _TOPIC_PAIR},
+        "type": {"type": "string", "enum": list(ALL_BLOCK_TYPES)},
+        "focus": {"type": "string"},
     },
-    "required": ["title", "description", "outline", "topics"],
+    "required": ["type", "focus"],
 }
+
+
+def clean_allowed_block_types(values: object) -> list[str]:
+    """Validate and normalize the course's allowed AI block types. At least 1 remains."""
+    if not isinstance(values, list):
+        return list(ALL_BLOCK_TYPES)
+    chosen: list[str] = []
+    for item in values:
+        btype = str(item or "").strip()
+        if btype in ALL_BLOCK_TYPES and btype not in chosen:
+            chosen.append(btype)
+    return chosen or ["topic_goal"]
+
+
+def _recommended_block_schema(allowed_types: list[str] | None = None) -> dict:
+    allowed = clean_allowed_block_types(allowed_types)
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "type": {"type": "string", "enum": list(allowed)},
+            "focus": {"type": "string"},
+        },
+        "required": ["type", "focus"],
+    }
+
+
+def _component_fields_schema(allowed_types: list[str] | None = None) -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "title": {"type": "string"},
+            "description": {"type": "string"},
+            "outline": {"type": "string"},
+            "topics": {"type": "array", "items": _TOPIC_PAIR},
+            "recommended_blocks": {
+                "type": "array",
+                "items": _recommended_block_schema(allowed_types),
+            },
+        },
+        "required": ["title", "description", "outline", "topics", "recommended_blocks"],
+    }
+
+
+_COMPONENT_FIELDS = _component_fields_schema(list(ALL_BLOCK_TYPES))
 
 COURSE_SCHEMA = {
     "type": "object",
@@ -93,6 +205,7 @@ COURSE_SCHEMA = {
     },
     "required": ["subject", "major_ideas", "components"],
 }
+_STUDIO_SCHEMA = COURSE_SCHEMA
 
 TITLES_SCHEMA = {
     "type": "object",
@@ -114,6 +227,30 @@ SLICE_SCHEMA = {
     "required": ["components"],
 }
 
+
+def _course_schema(allowed_types: list[str] | None = None) -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "subject": {"type": "string"},
+            "major_ideas": {"type": "array", "items": {"type": "string"}},
+            "components": {"type": "array", "items": _component_fields_schema(allowed_types)},
+        },
+        "required": ["subject", "major_ideas", "components"],
+    }
+
+
+def _slice_schema(allowed_types: list[str] | None = None) -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "components": {"type": "array", "items": _component_fields_schema(allowed_types)},
+        },
+        "required": ["components"],
+    }
+
 _MISCONCEPTION = {
     "type": "object",
     "additionalProperties": False,
@@ -124,6 +261,121 @@ _MISCONCEPTION = {
     "required": ["wrong_move", "broken_kc"],
 }
 
+_MCQ_CHOICE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "id": {"type": "string"},
+        "text": {"type": "string"},
+        "is_correct": {"type": "boolean"},
+        "distractor_rationale": {"type": "string"},
+        "misconception_code": {"type": "string"},
+    },
+    "required": ["id", "text", "is_correct", "distractor_rationale", "misconception_code"],
+}
+
+_WORKED_STEP_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "step_text": {"type": "string"},
+        "rationale": {"type": "string"},
+    },
+    "required": ["step_text", "rationale"],
+}
+
+_BLOCK_TYPE_PROPERTIES: dict[str, dict[str, dict]] = {
+    "topic_goal": {
+        "topic": {"type": "string"},
+        "goal": {"type": "string"},
+        "acceptance_criteria": {"type": "string"},
+        "teaching_notes": {"type": "string"},
+    },
+    "mcq": {
+        "mode": {"type": "string", "enum": ["static", "dynamic"]},
+        "question_stem": {"type": "string"},
+        "choices": {"type": "array", "items": _MCQ_CHOICE_SCHEMA},
+        "correct_explanation": {"type": "string"},
+        "target_skill": {"type": "string"},
+        "difficulty": {"type": "string", "enum": ["foundation", "standard", "stretch"]},
+        "num_choices": {"type": "integer"},
+        "distractor_guidance": {"type": "string"},
+        "stem_constraints": {"type": "string"},
+    },
+    "case_study": {
+        "case_a": {"type": "string"},
+        "case_b": {"type": "string"},
+        "prediction_prompt": {"type": "string"},
+        "invariant_principle": {"type": "string"},
+        "transfer_prompt": {"type": "string"},
+        "transfer_expected": {"type": "string"},
+    },
+    "socratic": {
+        "central_dilemma": {"type": "string"},
+        "initial_probe": {"type": "string"},
+        "counterexamples": {"type": "array", "items": {"type": "string"}},
+        "target_synthesis": {"type": "string"},
+    },
+    "curiosity": {
+        "phenomenon_hook": {"type": "string"},
+        "prediction_question": {"type": "string"},
+        "bridge_to_unit": {"type": "string"},
+        "wonder_branches": {"type": "array", "items": {"type": "string"}},
+    },
+    "worked_example": {
+        "problem_statement": {"type": "string"},
+        "steps": {"type": "array", "items": _WORKED_STEP_SCHEMA},
+        "faded_step_index": {"type": "integer"},
+        "solo_problem": {"type": "string"},
+        "solo_expected_answer": {"type": "string"},
+    },
+    "spot_the_flaw": {
+        "rookie_work": {"type": "string"},
+        "flaw_description": {"type": "string"},
+        "underlying_misconception": {"type": "string"},
+        "corrected_version": {"type": "string"},
+    },
+    "teach_back": {
+        "peer_persona_prompt": {"type": "string"},
+        "required_concepts": {"type": "array", "items": {"type": "string"}},
+        "peer_follow_up_question": {"type": "string"},
+    },
+    "retrieval_check": {
+        "recall_prompt": {"type": "string"},
+        "expected_fact": {"type": "string"},
+        "elaborative_why_prompt": {"type": "string"},
+        "expected_why_rationale": {"type": "string"},
+    },
+}
+
+
+def _block_data_schema(allowed_types: list[str]) -> dict:
+    props: dict[str, dict] = {}
+    for btype in allowed_types:
+        for key, spec in _BLOCK_TYPE_PROPERTIES.get(btype, {}).items():
+            props[key] = copy.deepcopy(spec)
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": props,
+        "required": list(props.keys()),
+    }
+
+
+def _block_item_schema(allowed_types: list[str]) -> dict:
+    allowed = clean_allowed_block_types(allowed_types)
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "id": {"type": "string"},
+            "type": {"type": "string", "enum": list(allowed)},
+            "data": _block_data_schema(allowed),
+        },
+        "required": ["id", "type", "data"],
+    }
+
+
 CREATOR_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -132,66 +384,69 @@ CREATOR_SCHEMA = {
         "title": {"type": "string"},
         "description": {
             "type": "string",
-            "description": "A short summary of the component. Not the outline and not the topic list.",
+            "description": "A short summary of the component. Not the outline and not the block list.",
         },
         "outline": {"type": "string"},
-        "topics": {"type": "array", "items": _TOPIC_PAIR},
-        "kc_type": {
-            "type": "string",
-            "enum": ["factual", "procedural", "conceptual", "causal", "synthesis"],
-        },
         "core_truth": {"type": "string"},
-        "rubric": {"type": "array", "items": {"type": "string"}},
+        "blocks": {
+            "type": "array",
+            "items": _block_item_schema(list(ALL_BLOCK_TYPES)),
+        },
         "misconceptions": {"type": "array", "items": _MISCONCEPTION},
         "prerequisite_codes": {"type": "array", "items": {"type": "string"}},
         "encompasses_codes": {"type": "array", "items": {"type": "string"}},
-        "fact": {"type": "string"},
-        "retrieval_question": {"type": "string"},
-        "steps": {"type": "array", "items": {"type": "string"}},
-        "blanked_step": {"type": "integer"},
-        "solo_problem": {"type": "string"},
-        "solo_check": {"type": "string"},
-        "case_a": {"type": "string"},
-        "case_b": {"type": "string"},
-        "prediction": {"type": "string"},
-        "rule": {"type": "string"},
-        "decision_point": {"type": "string"},
-        "flawed_claim": {"type": "string"},
-        "causal_chain": {"type": "string"},
-        "mix_a": {"type": "string"},
-        "mix_b": {"type": "string"},
-        "faulty_plan": {"type": "string"},
     },
     "required": [
         "discussion",
         "title",
         "description",
         "outline",
-        "topics",
-        "kc_type",
         "core_truth",
-        "rubric",
+        "blocks",
         "misconceptions",
         "prerequisite_codes",
         "encompasses_codes",
-        "fact",
-        "retrieval_question",
-        "steps",
-        "blanked_step",
-        "solo_problem",
-        "solo_check",
-        "case_a",
-        "case_b",
-        "prediction",
-        "rule",
-        "decision_point",
-        "flawed_claim",
-        "causal_chain",
-        "mix_a",
-        "mix_b",
-        "faulty_plan",
     ],
 }
+
+
+def derive_rubric_from_blocks(blocks: list[dict]) -> list[str]:
+    """Compute component rubric criteria in block order from blocks[]."""
+    rubric: list[str] = []
+    for blk in blocks or []:
+        if not isinstance(blk, dict):
+            continue
+        btype = str(blk.get("type") or "").strip()
+        data = blk.get("data") if isinstance(blk.get("data"), dict) else {}
+        criterion = ""
+        if btype == "topic_goal":
+            criterion = str(data.get("goal") or data.get("acceptance_criteria") or "").strip()
+        elif btype == "mcq":
+            mode = str(data.get("mode") or "static").strip()
+            if mode == "dynamic":
+                criterion = str(data.get("target_skill") or "").strip()
+            else:
+                criterion = str(data.get("question_stem") or data.get("correct_explanation") or "").strip()
+        elif btype == "case_study":
+            criterion = str(data.get("invariant_principle") or "").strip()
+        elif btype == "socratic":
+            criterion = str(data.get("target_synthesis") or "").strip()
+        elif btype == "curiosity":
+            criterion = str(data.get("bridge_to_unit") or data.get("prediction_question") or "").strip()
+        elif btype == "worked_example":
+            criterion = str(data.get("solo_expected_answer") or data.get("problem_statement") or "").strip()
+        elif btype == "spot_the_flaw":
+            criterion = str(data.get("corrected_version") or data.get("flaw_description") or "").strip()
+        elif btype == "teach_back":
+            reqs = data.get("required_concepts")
+            if isinstance(reqs, list):
+                cleaned = [str(r).strip() for r in reqs if str(r).strip()]
+                criterion = "; ".join(cleaned)
+        elif btype == "retrieval_check":
+            criterion = str(data.get("expected_fact") or "").strip()
+        if criterion and criterion not in rubric:
+            rubric.append(criterion)
+    return rubric[:16]
 
 
 def model_for_call(model: str) -> str:
@@ -226,6 +481,220 @@ _BRIEF = re.compile(
     r"^Outline:\s*(.*?)\nTopics:\s*(.*?)\nGoals:\s*(.*)\s*\Z",
     re.DOTALL | re.IGNORECASE,
 )
+
+
+def clean_recommended_blocks(
+    value: object,
+    allowed_block_types: list[str] | None = None,
+    fallback_pairs: list[dict] | None = None,
+    title: str = "",
+) -> list[dict]:
+    """Normalize recommended_blocks against allowed_block_types (2-5 blocks when possible)."""
+    allowed = clean_allowed_block_types(allowed_block_types)
+    allowed_set = set(allowed)
+    default_type = allowed[0]
+    cleaned: list[dict] = []
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            btype = str(item.get("type") or "").strip()
+            focus = str(item.get("focus") or "").strip()
+            if not focus:
+                continue
+            if btype not in allowed_set:
+                btype = default_type
+            cleaned.append({"type": btype, "focus": focus})
+    if not cleaned and fallback_pairs:
+        for idx, pair in enumerate(fallback_pairs):
+            if isinstance(pair, dict) and str(pair.get("topic") or "").strip():
+                btype = allowed[idx % len(allowed)]
+                cleaned.append({"type": btype, "focus": str(pair["topic"]).strip()})
+    if not cleaned and title:
+        cleaned.append({"type": default_type, "focus": title})
+    return cleaned[:6]
+
+
+BLOCK_PLURAL_SHORT_LABELS: dict[str, str] = {
+    "topic_goal": "Topics",
+    "mcq": "MCQs",
+    "case_study": "Case Studies",
+    "socratic": "Socratic",
+    "curiosity": "Curiosity",
+    "worked_example": "Worked Examples",
+    "spot_the_flaw": "Spot the Flaw",
+    "teach_back": "Teach-Backs",
+    "retrieval_check": "Retrieval Checks",
+}
+
+
+def block_summary_label(blocks: list[dict]) -> str:
+    """Readable block summary pill (e.g. '1 Curiosity · 2 Topics · 1 Case Study · 1 MCQ')."""
+    if not isinstance(blocks, list) or not blocks:
+        return "No blocks yet"
+    runs: list[tuple[str, int]] = []
+    for item in blocks:
+        if not isinstance(item, dict):
+            continue
+        btype = str(item.get("type") or "topic_goal").strip()
+        if runs and runs[-1][0] == btype:
+            runs[-1] = (btype, runs[-1][1] + 1)
+        else:
+            runs.append((btype, 1))
+    if not runs:
+        return "No blocks yet"
+    parts: list[str] = []
+    for btype, count in runs:
+        label = (
+            BLOCK_SHORT_LABELS.get(btype, btype)
+            if count == 1
+            else BLOCK_PLURAL_SHORT_LABELS.get(btype, f"{BLOCK_SHORT_LABELS.get(btype, btype)}s")
+        )
+        parts.append(f"{count} {label}")
+    return " · ".join(parts)
+
+
+def format_recommended_blocks_summary(recommended_blocks: list[dict]) -> str:
+    """Format 'Recommended blocks: 1. Type Label (focus) -> 2. ...'."""
+    if not recommended_blocks:
+        return ""
+    parts: list[str] = []
+    for idx, item in enumerate(recommended_blocks, start=1):
+        if not isinstance(item, dict):
+            continue
+        btype = str(item.get("type") or "topic_goal").strip()
+        label = BLOCK_LABELS.get(btype, btype)
+        focus = str(item.get("focus") or "").strip()
+        if focus:
+            parts.append(f"{idx}. {label} ({focus})")
+        else:
+            parts.append(f"{idx}. {label}")
+    if not parts:
+        return ""
+    return "Recommended blocks: " + " -> ".join(parts) + "."
+
+
+def ensure_description_with_recommended_blocks(summary: str, recommended_blocks: list[dict]) -> str:
+    """Ensure description includes the readable Recommended blocks breakdown."""
+    text = (summary or "").strip()
+    rec_line = format_recommended_blocks_summary(recommended_blocks)
+    if not rec_line:
+        return text
+    stripped = re.sub(r"\s*Recommended blocks:\s*.*\Z", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    if not stripped:
+        return rec_line
+    sep = "" if stripped.endswith((".", "!", "?")) else "."
+    return f"{stripped}{sep} {rec_line}"
+
+
+def seed_skeleton_blocks_from_recommendations(
+    recommended_blocks: list[dict],
+    pairs: list[dict] | None = None,
+    title: str = "",
+) -> list[dict]:
+    """Create initial skeleton blocks on a newly created/empty component from recommended_blocks."""
+    cleaned_pairs = clean_pairs(pairs or [])
+    recs = clean_recommended_blocks(recommended_blocks, None, cleaned_pairs, title)
+    blocks: list[dict] = []
+    for idx, rec in enumerate(recs, start=1):
+        btype = str(rec.get("type") or "topic_goal").strip()
+        focus = str(rec.get("focus") or title or f"Part {idx}").strip()
+        pair_goal = ""
+        if idx - 1 < len(cleaned_pairs):
+            pair_goal = str(cleaned_pairs[idx - 1].get("goal") or "").strip()
+        if btype == "topic_goal":
+            data = {
+                "topic": focus,
+                "goal": pair_goal or f"Explain {focus} in your own words.",
+                "acceptance_criteria": "",
+                "teaching_notes": "",
+            }
+        elif btype == "mcq":
+            data = {
+                "mode": "static",
+                "question_stem": f"Which statement best describes {focus}?",
+                "choices": [
+                    {
+                        "id": "a",
+                        "text": pair_goal or f"Core principle of {focus}",
+                        "is_correct": True,
+                        "distractor_rationale": "",
+                        "misconception_code": "",
+                    },
+                    {
+                        "id": "b",
+                        "text": f"Common misconception about {focus}",
+                        "is_correct": False,
+                        "distractor_rationale": f"Confuses surface features of {focus}.",
+                        "misconception_code": "",
+                    },
+                ],
+                "correct_explanation": pair_goal or f"Applies {focus}.",
+            }
+        elif btype == "case_study":
+            data = {
+                "case_a": f"Case A illustrating {focus}",
+                "case_b": f"Contrasting Case B for {focus}",
+                "prediction_prompt": f"How do Case A and Case B differ on {focus}?",
+                "invariant_principle": pair_goal or f"Underlying rule for {focus}.",
+                "transfer_prompt": "",
+                "transfer_expected": "",
+            }
+        elif btype == "socratic":
+            data = {
+                "central_dilemma": f"Why does {focus} hold even in edge cases?",
+                "initial_probe": f"What is your initial hypothesis about {focus}?",
+                "counterexamples": [f"What if a boundary condition in {focus} changes?"],
+                "target_synthesis": pair_goal or f"Synthesized principle for {focus}.",
+            }
+        elif btype == "curiosity":
+            data = {
+                "phenomenon_hook": f"Surprising observation about {focus}",
+                "prediction_question": f"What do you think explains {focus}?",
+                "bridge_to_unit": pair_goal or f"Connects {focus} to the core concept.",
+                "wonder_branches": [],
+            }
+        elif btype == "worked_example":
+            data = {
+                "problem_statement": f"Worked example for {focus}",
+                "steps": [
+                    {"step_text": f"Set up {focus}.", "rationale": "Identifies the given quantities."},
+                    {"step_text": f"Solve {focus}.", "rationale": "Applies the rule to reach the result."},
+                ],
+                "faded_step_index": 1,
+                "solo_problem": f"Solve a parallel problem on {focus}.",
+                "solo_expected_answer": pair_goal or f"Expected solution for {focus}.",
+            }
+        elif btype == "spot_the_flaw":
+            data = {
+                "rookie_work": f"A student's flawed attempt at {focus}.",
+                "flaw_description": f"The specific mistake in {focus}.",
+                "underlying_misconception": f"Conceptual trap behind {focus}.",
+                "corrected_version": pair_goal or f"Corrected reasoning for {focus}.",
+            }
+        elif btype == "teach_back":
+            data = {
+                "peer_persona_prompt": f"How would you explain {focus} to a younger student?",
+                "required_concepts": [pair_goal or focus],
+                "peer_follow_up_question": f"Why does {focus} work that way?",
+            }
+        elif btype == "retrieval_check":
+            data = {
+                "recall_prompt": f"What is the key fact or relationship in {focus}?",
+                "expected_fact": pair_goal or focus,
+                "elaborative_why_prompt": f"Why does {focus} make sense?",
+                "expected_why_rationale": pair_goal or f"Causal explanation for {focus}.",
+            }
+        else:
+            btype = "topic_goal"
+            data = {
+                "topic": focus,
+                "goal": pair_goal or f"Explain {focus}.",
+                "acceptance_criteria": "",
+                "teaching_notes": "",
+            }
+        blocks.append({"id": f"blk_{idx}", "type": btype, "data": data})
+    return blocks
 
 
 def clean_pairs(value: object) -> list[dict]:
@@ -306,8 +775,10 @@ def _course_setup(
     minutes: int | None,
     message: str,
     model: str,
-) -> tuple[str, dict, list[str]]:
+    allowed_block_types: list[str] | None = None,
+) -> tuple[str, dict, list[str], list[str]]:
     chosen = checked_model(model)
+    allowed = clean_allowed_block_types(allowed_block_types)
     ctx = planning_context(
         title=title,
         description=description,
@@ -324,6 +795,7 @@ def _course_setup(
             "You may use them. If you choose others, they are distinct parts of the subject, "
             "not clauses cut from the description."
         )
+    allowed_labels = ", ".join(f"{b} ({BLOCK_LABELS.get(b, b)})" for b in allowed)
     lines = [
         COURSE_RULES,
         f"Course name: {title}",
@@ -331,11 +803,13 @@ def _course_setup(
         f"Audience: {audience}",
         _kind_line(ctx),
         _count_line(ctx),
+        f"Allowed block types for recommended_blocks: {allowed_labels}",
+        "You may ONLY recommend block types from this allowed list.",
         title_rule,
         "Syllabus titles:",
         listed or "- None",
     ]
-    return chosen, ctx, lines
+    return chosen, ctx, lines, allowed
 
 
 def course_bundle(
@@ -347,8 +821,9 @@ def course_bundle(
     minutes: int | None,
     message: str,
     model: str,
+    allowed_block_types: list[str] | None = None,
 ) -> dict:
-    chosen, ctx, lines = _course_setup(
+    chosen, ctx, lines, allowed = _course_setup(
         title=title,
         description=description,
         audience=audience,
@@ -356,6 +831,7 @@ def course_bundle(
         minutes=minutes,
         message=message,
         model=model,
+        allowed_block_types=allowed_block_types,
     )
     if _draft_width(ctx) > DESCRIPTION_SLICE:
         lines.append(
@@ -367,10 +843,11 @@ def course_bundle(
     else:
         lines.append(
             "Return the subject, the major ideas, and then the components. "
-            "Each component has a title, a short summary, a short outline, key topics, and key goals. "
+            "Each component has a title, a short summary (including 'Recommended blocks: 1. ... -> 2. ...'), "
+            "a short outline, key topics, key goals, and recommended_blocks (2-5 blocks with type and focus). "
             "Each topic is paired with its goal."
         )
-        schema = COURSE_SCHEMA
+        schema = _course_schema(allowed)
         phase = "full"
     return {
         "model": chosen,
@@ -380,6 +857,9 @@ def course_bundle(
         "pass": phase,
         "slice_size": DESCRIPTION_SLICE,
     }
+
+
+studio_bundle = course_bundle
 
 
 def _plain_titles(titles: list[str]) -> list[str]:
@@ -406,9 +886,12 @@ def _description_bundle(
     titles: list[str],
     subject: str,
     major_ideas: list[str],
+    allowed_block_types: list[str] | None = None,
 ) -> dict:
+    allowed = clean_allowed_block_types(allowed_block_types)
     listed = "\n".join(f"- {item}" for item in titles)
     ideas = "; ".join(major_ideas) if major_ideas else subject
+    allowed_labels = ", ".join(f"{b} ({BLOCK_LABELS.get(b, b)})" for b in allowed)
     system = "\n".join(
         [
             COURSE_RULES,
@@ -419,7 +902,9 @@ def _description_bundle(
             _count_line(ctx),
             f"Subject: {subject}",
             f"Major ideas: {ideas}",
-            "These titles are already chosen. Write a short summary, a short outline, the key topics, and the key goals for each one. "
+            f"Allowed block types for recommended_blocks: {allowed_labels}",
+            "These titles are already chosen. Write a short summary (with Recommended blocks), a short outline, "
+            "the key topics, the key goals, and recommended_blocks for each one. "
             "Each topic keeps the goal that belongs to it.",
             "Do not add a title, drop a title, or rename a title. Keep this order.",
             "Titles:",
@@ -431,7 +916,7 @@ def _description_bundle(
         "model": model,
         "system_prompt": system,
         "user_prompt": (message or "").strip() or "Write the descriptions for these titles.",
-        "schema": SLICE_SCHEMA,
+        "schema": _slice_schema(allowed),
         "titles": list(titles),
     }
 
@@ -448,9 +933,10 @@ def description_plan(
     titles: list[str],
     subject: str = "",
     major_ideas: list[str] | None = None,
+    allowed_block_types: list[str] | None = None,
 ) -> dict:
     """Description calls for one slice of titles at a time. The full list is checked first."""
-    chosen, ctx, _lines = _course_setup(
+    chosen, ctx, _lines, allowed = _course_setup(
         title=title,
         description=description,
         audience=audience,
@@ -458,6 +944,7 @@ def description_plan(
         minutes=minutes,
         message=message,
         model=model,
+        allowed_block_types=allowed_block_types,
     )
     chosen_titles = list(ctx["titles"]) if ctx["pasted"] else _plain_titles(titles)
     _check_titles(description, chosen_titles, ctx)
@@ -474,6 +961,7 @@ def description_plan(
             titles=group,
             subject=subject_text,
             major_ideas=ideas,
+            allowed_block_types=allowed,
         )
         for group in _groups(chosen_titles, DESCRIPTION_SLICE)
     ]
@@ -487,24 +975,35 @@ def _model_rows(proposal: dict) -> list[dict]:
     return [row for row in rows if isinstance(row, dict)]
 
 
-def _brief_fields(rows: list[dict], titles: list[str]) -> list[tuple[str, str, list[dict]]]:
+def _brief_fields(
+    rows: list[dict],
+    titles: list[str],
+    allowed_block_types: list[str] | None = None,
+) -> list[tuple[str, str, list[dict], list[dict]]]:
     by_title: dict[str, dict] = {}
     for row in rows:
         key = str(row.get("title") or "").strip().lower()
         if key and key not in by_title:
             by_title[key] = row
-    written: list[tuple[str, str, list[dict]]] = []
+    written: list[tuple[str, str, list[dict], list[dict]]] = []
     for index, title in enumerate(titles):
         row = by_title.get(title.lower())
         if row is None and index < len(rows):
             row = rows[index]
         if row is None:
-            written.append(("", "", []))
+            written.append(("", "", [], []))
             continue
         outline = str(row.get("outline") or "").strip()
         pairs = clean_pairs(row.get("topics"))
-        summary = str(row.get("description") or "").strip() or outline
-        written.append((summary, outline, pairs))
+        recs = clean_recommended_blocks(
+            row.get("recommended_blocks"),
+            allowed_block_types=allowed_block_types,
+            fallback_pairs=pairs,
+            title=title,
+        )
+        raw_summary = str(row.get("description") or "").strip() or outline
+        summary = ensure_description_with_recommended_blocks(raw_summary, recs)
+        written.append((summary, outline, pairs, recs))
     return written
 
 
@@ -565,6 +1064,7 @@ def assemble_course(
     minutes: int | None,
     message: str,
     proposal: dict,
+    allowed_block_types: list[str] | None = None,
 ) -> dict:
     """Turn a model object into a reply and a component list. This does not write."""
     if not isinstance(proposal, dict):
@@ -582,8 +1082,8 @@ def assemble_course(
     else:
         titles = _model_titles(rows)
     _check_titles(description, titles, ctx)
-    fields = _brief_fields(rows, titles)
-    if any(not outline or not pairs for _summary, outline, pairs in fields):
+    fields = _brief_fields(rows, titles, allowed_block_types=allowed_block_types)
+    if any(not outline or not pairs for _summary, outline, pairs, _recs in fields):
         raise ValueError("Each component needs a short outline, the key topics, and the key goals.")
     subject = str(proposal.get("subject") or "").strip() or str(ctx["subject"])
     if description and subject.lower() == description.strip().lower():
@@ -607,47 +1107,21 @@ def assemble_course(
                 "description": summary,
                 "outline": outline,
                 "topics": pairs,
+                "recommended_blocks": recs,
             }
-            for component_title, (summary, outline, pairs) in zip(titles, fields, strict=True)
+            for component_title, (summary, outline, pairs, recs) in zip(titles, fields, strict=True)
         ],
     }
 
 
-def _empty_mix_field() -> dict:
-    return {
-        "type": "string",
-        "enum": [""],
-        "description": "Leave empty. Do not ask for two mixes.",
-    }
-
-
-def _apply_mix_schema(schema: dict, other_codes: list[str]) -> None:
-    """Each mix is an enum of the other component codes, and the two values must differ.
-
-    Fewer than two other components cannot name two different mixes, so both
-    fields stay empty. OpenAI strict structured outputs reject if/then, so the
-    difference is required in the field text and checked again when the reply is saved.
-    """
-    if len(other_codes) < 2:
-        schema["properties"]["mix_a"] = _empty_mix_field()
-        schema["properties"]["mix_b"] = _empty_mix_field()
-        return
-    codes = list(other_codes)
-    description = "Each value is one of the other component codes, and the two values must differ."
-    schema["properties"]["mix_a"] = {"type": "string", "enum": list(codes), "description": description}
-    schema["properties"]["mix_b"] = {"type": "string", "enum": list(codes), "description": description}
-
-
-def _creator_schema(other_codes: list[str]) -> dict:
-    """The creator schema for this call.
-
-    When the course has other components, broken_kc is one of those codes.
-    When it has none, the misconceptions array is empty and broken_kc is not a field.
-    When at least two other components exist, mix_a and mix_b are an enum of those
-    codes and the two values must differ. Otherwise both mixes stay empty.
-    History is not a field on this schema.
-    """
+def _creator_schema(other_codes: list[str], allowed_block_types: list[str] | None = None) -> dict:
+    """The creator schema for this call, restricted to allowed_block_types."""
+    allowed = clean_allowed_block_types(allowed_block_types)
     schema = copy.deepcopy(CREATOR_SCHEMA)
+    schema["properties"]["blocks"] = {
+        "type": "array",
+        "items": _block_item_schema(allowed),
+    }
     if other_codes:
         schema["properties"]["misconceptions"] = {
             "type": "array",
@@ -674,7 +1148,6 @@ def _creator_schema(other_codes: list[str]) -> dict:
             "maxItems": 0,
             "items": {"type": "string"},
         }
-    _apply_mix_schema(schema, other_codes)
     return schema
 
 
@@ -683,27 +1156,18 @@ def _creator_links(other_codes: list[str]) -> str:
         return (
             "This course has no other component. Return an empty misconceptions array. "
             "Do not ask for a broken_kc. "
-            "Do not ask for two mixes. Leave mix_a and mix_b empty. "
             "Prerequisite codes and encompasses codes stay empty."
         )
     broken = (
         "Copy one code from the other component codes into broken_kc. "
         "It is not a description and not this component's code. "
     )
-    if len(other_codes) < 2:
-        mixes = "Do not ask for two mixes. Leave mix_a and mix_b empty. "
-    else:
-        mixes = (
-            "For a synthesis component, mix_a and mix_b must be two different codes "
-            "from the other component codes. "
-            "A mix is not a title and not this component's code. "
-        )
     links = (
         "Prerequisite codes and encompasses codes "
         "have to be chosen from the other component codes. "
         "Use an empty list for prerequisites or encompasses when none of those links fit."
     )
-    return broken + mixes + links
+    return broken + links
 
 
 def creator_bundle(
@@ -718,12 +1182,15 @@ def creator_bundle(
     node_description: str,
     node_outline: str = "",
     node_topics: list | None = None,
+    node_blocks: list | None = None,
+    allowed_block_types: list[str] | None = None,
     other_codes: list[str],
     previous: dict | None,
     message: str,
     model: str,
 ) -> dict:
     chosen = checked_model(model)
+    allowed = clean_allowed_block_types(allowed_block_types)
     if kind == "time_boxed" and minutes:
         kind_line = f"Kind: Time boxed, {minutes} minutes. Fit this component to that time."
     elif kind == "time_boxed":
@@ -735,14 +1202,42 @@ def creator_bundle(
     brief = (node_description or "").strip() or "This component has no description yet. Use the title and the course."
     pair_lines = [f"- {item['topic']}: {item['goal']}" for item in clean_pairs(node_topics or [])]
     stored_topics = "\n".join(pair_lines) if pair_lines else "- None yet."
+    block_lines: list[str] = []
+    for idx, blk in enumerate(node_blocks or [], start=1):
+        if not isinstance(blk, dict):
+            continue
+        btype = str(blk.get("type") or "topic_goal")
+        bdata = blk.get("data") if isinstance(blk.get("data"), dict) else {}
+        focus = (
+            bdata.get("topic")
+            or bdata.get("question_stem")
+            or bdata.get("target_skill")
+            or bdata.get("prediction_prompt")
+            or bdata.get("central_dilemma")
+            or bdata.get("phenomenon_hook")
+            or bdata.get("problem_statement")
+            or bdata.get("rookie_work")
+            or bdata.get("peer_persona_prompt")
+            or bdata.get("recall_prompt")
+            or ""
+        )
+        block_lines.append(f"- Block {idx}: {btype} ({BLOCK_LABELS.get(btype, btype)}) — {focus}".rstrip(" —"))
+    stored_blocks = "\n".join(block_lines) if block_lines else "- None yet."
     previous_line = "There is no draft yet. Go into the topic, then fill the fields."
     if previous:
+        prev_blocks = previous.get("blocks") or []
+        prev_summary = ", ".join(str(b.get("type")) for b in prev_blocks if isinstance(b, dict)) or "none"
         previous_line = (
             "A draft is already in the thread. Revise it. Still go into the topic before the fields. "
-            f"Current type: {previous.get('kc_type') or 'unset'}. "
+            f"Current blocks: {prev_summary}. "
             f"Current core truth: {previous.get('core_truth') or 'none'}."
         )
     codes = ", ".join(other_codes) if other_codes else "none"
+    allowed_rules = "\n".join(BLOCK_AUTHORING_RULES[btype] for btype in allowed if btype in BLOCK_AUTHORING_RULES)
+    scope_instruction = (
+        f"You may ONLY generate blocks whose `type` is in this allowed list: {allowed}. "
+        "Do not generate any other block type."
+    )
     system = "\n".join(
         [
             CREATOR_RULES,
@@ -755,22 +1250,19 @@ def creator_bundle(
             f"Outline: {(node_outline or '').strip() or 'None yet.'}",
             "Stored topics:",
             stored_topics,
+            "Seeded block blueprint (populate and enrich this sequence if present):",
+            stored_blocks,
             f"Other component codes: {codes}",
             previous_line,
+            scope_instruction,
+            "Allowed block type specifications:",
+            allowed_rules,
             "The discussion comes first and goes into the topic. "
             "Then recommend every enterable field from the brief. "
-            "The description is a short summary. Do not fold the outline or the topic pairs into it. "
+            "The description is a short summary. Do not fold the outline or the blocks into it. "
             "Return the outline in the outline field. "
-            "Return each topic with the goal that belongs to it. "
-            "A topic does not exist without its goal, and a goal does not exist without its topic. "
-            "Check each goal against the topic, the curriculum, and ordinary knowledge of the subject. "
-            "Rewrite a goal that does not belong to its topic. "
-            "You may add a topic and goal the description left out. "
-            "Do not copy the description's topic list as written. "
-            "Fill title, one type, the fields for that type, the core truth, "
-            "one rubric line for each topic goal, then the practice checks, "
-            "misconceptions, prerequisites, and encompasses. "
-            "Leave the fields of the other types empty. ",
+            "Return an ordered blocks[] array of 1 to 6 blocks using only the allowed block types, "
+            "the core_truth, misconceptions, prerequisites, and encompasses.",
             _creator_links(other_codes),
         ]
     )
@@ -778,7 +1270,7 @@ def creator_bundle(
         "model": chosen,
         "system_prompt": system,
         "user_prompt": (message or "").strip(),
-        "schema": _creator_schema(other_codes),
+        "schema": _creator_schema(other_codes, allowed),
     }
 
 
@@ -786,7 +1278,7 @@ def checked_discussion(discussion: str, title: str) -> str:
     text = (discussion or "").strip()
     if len(text) < 80:
         raise ValueError(
-            "Go into the topic before you fill the type, the core truth, the rubric, and the checks."
+            "Go into the topic before you fill the outline, the core truth, the blocks, and the checks."
         )
     if text.lower().startswith("title:"):
         raise ValueError("Go into the topic before you fill the fields.")

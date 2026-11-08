@@ -14,5 +14,6 @@ export function creatorPushPayload(draft: KcComponentDraft, component: KcCompone
     prerequisite_codes: draft.prerequisite_codes,
     encompasses_codes: draft.encompasses_codes,
     type_fields: draft.type_fields,
+    blocks: draft.blocks ?? component.blocks ?? [],
   };
 }
