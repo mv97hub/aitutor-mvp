@@ -1458,6 +1458,10 @@ body:has(.ds-landing) {
 }
 .ds-shell .ghost:hover { background: rgba(38, 49, 72, 0.06); }
 .ds-shell textarea { min-height: 0; }
+.ds-shell textarea.ds-draft {
+  flex: none;
+  min-height: 36px;
+}
 .ds-shell .settings-dialog textarea { min-height: 72px; }
 
 a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
@@ -2447,7 +2451,7 @@ a.ds-settings { text-decoration: none; color: rgb(15, 17, 21); }
 
 .kc-tutor { grid-template-columns: minmax(280px, 420px) minmax(0, 1fr); }
 
-.kc-rail, .kc-chat, .kc-picker, .kc-lesson, .kc-main {
+.kc-rail, .kc-chat, .kc-picker, .kc-main {
   min-width: 0;
   min-height: 0;
   padding: 18px;
@@ -2996,7 +3000,10 @@ a.ds-row { text-decoration: none; }
 .kc-step { margin: 0; font-weight: 500; }
 .kc-redirect { margin: 0; padding: 8px 20px 0; color: rgb(196, 73, 29); flex: none; }
 
-.kc-screen > .ds-stage { overflow: hidden; }
+.kc-screen > .ds-stage {
+  overflow: hidden;
+  overflow-anchor: none;
+}
 
 .kc-lesson {
   display: flex;
@@ -3005,6 +3012,7 @@ a.ds-row { text-decoration: none; }
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  overflow-anchor: none;
 }
 
 .kc-lesson > .ds-scroll {
@@ -3012,12 +3020,18 @@ a.ds-row { text-decoration: none; }
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  overflow-anchor: none;
   overscroll-behavior: contain;
 }
 
 .kc-lesson > .ds-typing,
-.kc-lesson > .banner,
-.kc-lesson > .ds-composer-seat { flex: none; }
+.kc-lesson > .banner { flex: none; }
+
+.kc-lesson > .ds-composer-seat {
+  flex: none;
+  flex-shrink: 0;
+  background: #fff;
+}
 
 .ds-shell.kc-screen.is-debug {
   grid-template-columns: 280px minmax(0, 1fr) minmax(280px, 400px);
