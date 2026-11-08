@@ -1321,6 +1321,51 @@ def test_model_draft_recommends_every_field_and_push_keeps_the_description() -> 
         _wipe_zz()
 
 
+def test_push_keeps_every_topic_goal_pair_from_the_model_reply() -> None:
+    pairs = [
+        {"topic": "color", "goal": "Recall the color"},
+        {"topic": "banks", "goal": "Name a bank"},
+        {"topic": "current", "goal": "Say which way it flows"},
+        {"topic": "source", "goal": "Name where it starts"},
+    ]
+    course = _make("zz-pairs", description="The river in this course is blue.")
+    try:
+        pushed = client.post(
+            f"/kc/courses/{course['id']}/push",
+            json={
+                "components": [
+                    {"code": "zz-pairs-a", "title": "River fact"},
+                    {"code": "zz-pairs-b", "title": "Other"},
+                ]
+            },
+        ).json()["components"]
+        river = pushed[0]
+        full = client.post(
+            f"/kc/nodes/{river['id']}/model-turn",
+            json={
+                "message": "Draft this component.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(
+                    topics=pairs,
+                    prerequisite_codes=["zz-pairs-b"],
+                    misconceptions=[{"wrong_move": "The river is red", "broken_kc": "zz-pairs-b"}],
+                ),
+            },
+        )
+        assert full.status_code == 200, full.text
+        draft = full.json()["draft"]
+        assert draft["topics"] == pairs
+
+        written = client.post(f"/kc/nodes/{river['id']}/push", json=draft)
+        assert written.status_code == 200, written.text
+        assert written.json()["topics"] == pairs
+        stored = client.get(f"/kc/nodes/{river['id']}").json()
+        assert stored["topics"] == pairs
+        assert len(stored["topics"]) == 4
+    finally:
+        _wipe_zz()
+
+
 def test_wrong_password_keeps_a_kc_course_and_the_right_password_deletes_it() -> None:
     _wipe_zz()
     before = _counts()
