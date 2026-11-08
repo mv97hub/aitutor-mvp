@@ -53,12 +53,26 @@ test("history on a component or course is left out of the tutor tester payload",
 
 test("KC Course Creator shows course and component history read-only", () => {
   const studio = readFileSync(new URL("../components/KcStudio.tsx", import.meta.url), "utf8");
+  const courseHistory = readFileSync(new URL("../components/KcCourseHistory.tsx", import.meta.url), "utf8");
   const creator = readFileSync(new URL("../components/KcCreator.tsx", import.meta.url), "utf8");
-  for (const source of [studio, creator]) {
-    assert.match(source, /<pre aria-label=\{label\}>/);
-    assert.match(source, /Course history/);
-    assert.doesNotMatch(source, /name="history"/);
-    assert.doesNotMatch(source, /contentEditable/);
-  }
+  assert.match(studio, /<KcCourseHistory text=\{course\.history \?\? ""\} \/>/);
+  assert.doesNotMatch(studio, /function HistoryLog/);
+  assert.doesNotMatch(studio, /name="history"/);
+  assert.doesNotMatch(studio, /contentEditable/);
+  assert.match(courseHistory, /useState\(false\)/);
+  assert.match(courseHistory, /Course history/);
+  assert.match(courseHistory, /type="button"/);
+  assert.match(courseHistory, /aria-expanded=\{open\}/);
+  assert.match(courseHistory, /aria-label="Course history"/);
+  assert.match(courseHistory, /hidden=\{!open\}/);
+  assert.doesNotMatch(courseHistory, /name="history"/);
+  assert.doesNotMatch(courseHistory, /contentEditable/);
+  assert.doesNotMatch(courseHistory, /<textarea/);
+  assert.doesNotMatch(courseHistory, /<input/);
+  assert.match(creator, /<pre aria-label=\{label\}>/);
+  assert.match(creator, /Course history/);
   assert.match(creator, /Component history/);
+  assert.doesNotMatch(creator, /KcCourseHistory/);
+  assert.doesNotMatch(creator, /name="history"/);
+  assert.doesNotMatch(creator, /contentEditable/);
 });

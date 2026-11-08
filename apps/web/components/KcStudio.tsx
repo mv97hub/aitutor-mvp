@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { KcBanner } from "@/components/KcBanner";
+import { KcCourseHistory } from "@/components/KcCourseHistory";
 import { KcCourseList } from "@/components/KcCourseList";
 import { NetworkMap } from "@/components/KcNetwork";
 import { KcNewCourse } from "@/components/KcNewCourse";
@@ -184,7 +185,7 @@ export function KcStudio({
                 />
               </div>
             </div>
-            <HistoryLog label="Course history" text={course.history ?? ""} />
+            <KcCourseHistory text={course.history ?? ""} />
           </>
         ) : null}
       </section>
@@ -192,15 +193,6 @@ export function KcStudio({
         <NetworkModal title={course.title} network={initialNetwork} closeHref={`/kc-studio?course=${course.id}`} />
       ) : null}
     </main>
-  );
-}
-
-function HistoryLog({ label, text }: { label: string; text: string }) {
-  return (
-    <section className="kc-history">
-      <h3>{label}</h3>
-      <pre aria-label={label}>{text.trim() ? text : "No history yet."}</pre>
-    </section>
   );
 }
 
