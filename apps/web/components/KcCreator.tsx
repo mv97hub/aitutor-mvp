@@ -9,7 +9,6 @@ import { KcCreatorComposer } from "@/components/KcComposer";
 import { markKcComplete, pushKcComponent, saveKcComponent } from "@/lib/kc-actions";
 import { BLOCK_LABELS, blockSummary, scopeFromCourse } from "@/lib/kc-blocks";
 import {
-  TYPE_LABELS,
   type KcComponent,
   type KcCourse,
   type KcCreatorThread,
@@ -229,7 +228,7 @@ export function KcCreator({
                   href={`/kc-creator?course=${course.id}&kc=${item.id}&model=${encodeURIComponent(model)}`}
                 >
                   <strong>{item.title}</strong>
-                  <small>{item.blocks?.length ? blockSummary(item.blocks) : TYPE_LABELS[item.kc_type ?? "unset"]}</small>
+                  <small>{item.blocks?.length ? blockSummary(item.blocks) : "No blocks yet"}</small>
                 </a>
               </li>
             ))}

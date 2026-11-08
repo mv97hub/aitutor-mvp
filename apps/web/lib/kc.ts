@@ -77,13 +77,11 @@ export type KcCourse = {
 
 export type KcStructure = {
   groups: {
-    kc_type: string;
     components: {
       id: string;
       code: string;
       title: string;
       description: string;
-      kc_type: string | null;
       recommended_blocks?: KcRecommendedBlock[];
       blocks?: { type: string }[];
       missing: string[];
@@ -153,6 +151,7 @@ export type KcProgress = {
     code: string;
     title: string;
     kc_type: string | null;
+    summary?: string;
     patch: boolean;
     status: "completed" | "in_progress" | "not_started";
     result?: {

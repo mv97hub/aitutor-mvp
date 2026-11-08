@@ -5,6 +5,7 @@ export type KcProgressUnit = {
   code: string;
   title: string;
   kc_type: string | null;
+  summary?: string;
   patch: boolean;
   status: KcUnitStatus;
 };

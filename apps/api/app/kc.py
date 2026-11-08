@@ -34,7 +34,6 @@ from app.kc_prompt import (
     Move,
     move_material,
     moves_for,
-    recipe_name,
     self_explanation_on,
     step_labels,
     stored_enrichment,
@@ -383,6 +382,12 @@ def load_patches(db: Session, targets: list[KcNode]) -> list[KcNode]:
     return patches
 
 
+def _block_summary(blocks: list[dict]) -> str:
+    from app.kc_model import block_summary_label
+
+    return block_summary_label(blocks)
+
+
 _BANNER_LABELS = {
     "topic_goal": "Topic + Goal",
     "mcq": "Multiple choice",
@@ -478,15 +483,115 @@ def course_out(db: Session, goal: KcGoal) -> dict:
     }
 
 
+def _has_text(value: object) -> bool:
+    return bool(str(value or "").strip())
+
+
+def _block_field_gaps(blocks: list[dict]) -> list[str]:
+    """Readiness gaps for ordered blocks. Topic and goal live on a topic_goal block."""
+    if not blocks:
+        return ["no blocks"]
+    gaps: list[str] = []
+    for index, block in enumerate(blocks, start=1):
+        kind = str(block.get("type") or "")
+        data = block.get("data") if isinstance(block.get("data"), dict) else {}
+        missing = _missing_block_fields(kind, data)
+        if missing:
+            gaps.append(f"block {index} {missing}")
+    return gaps
+
+
+def _missing_block_fields(kind: str, data: dict) -> str:
+    def text(*keys: str) -> bool:
+        return any(_has_text(data.get(key)) for key in keys)
+
+    if kind == "topic_goal":
+        if text("topic") and text("goal"):
+            return ""
+        return "needs a topic and a goal"
+    if kind == "mcq":
+        mode = str(data.get("mode") or "static").strip()
+        if mode == "dynamic":
+            if text("target_skill", "generation_prompt") and text("distractor_guidance", "why_wrong_guidance"):
+                return ""
+            return "needs a target skill and distractor guidance"
+        choices = data.get("choices") if isinstance(data.get("choices"), list) else data.get("options")
+        filled = []
+        if isinstance(choices, list):
+            for item in choices:
+                if isinstance(item, dict) and _has_text(item.get("text")):
+                    filled.append(item)
+                elif _has_text(item):
+                    filled.append(item)
+        if text("question_stem", "question") and len(filled) >= 2:
+            return ""
+        return "needs a question and at least two choices"
+    if kind == "case_study":
+        authored = text("case_a") and text("case_b") and text("prediction_prompt", "prediction") and text(
+            "invariant_principle", "rule"
+        )
+        canvas = text("scenario") and text("decision_point")
+        if authored or canvas:
+            return ""
+        return "needs both cases and the principle"
+    if kind == "socratic":
+        counters = data.get("counterexamples")
+        has_counter = isinstance(counters, list) and any(_has_text(item) for item in counters)
+        if text("central_dilemma", "opening_question") and (has_counter or text("probe_if_shallow")) and text(
+            "target_synthesis", "target_insight"
+        ):
+            return ""
+        return "needs a dilemma and a target synthesis"
+    if kind == "curiosity":
+        if text("phenomenon_hook", "hook_question") and text("prediction_question") and text(
+            "bridge_to_unit", "bridge_to_goal", "reveal"
+        ):
+            return ""
+        return "needs a hook, a prediction, and a bridge"
+    if kind == "worked_example":
+        steps = data.get("steps")
+        filled_steps = 0
+        if isinstance(steps, list):
+            for item in steps:
+                if isinstance(item, dict) and _has_text(item.get("step_text") or item.get("action")):
+                    filled_steps += 1
+                elif _has_text(item):
+                    filled_steps += 1
+        if text("problem_statement", "problem") and filled_steps >= 2 and text("solo_problem") and text(
+            "solo_expected_answer", "solo_check"
+        ):
+            return ""
+        return "needs a worked problem, steps, and a solo check"
+    if kind == "spot_the_flaw":
+        if text("rookie_work", "artifact") and text("flaw_description", "why_its_wrong") and text(
+            "underlying_misconception", "flaw_location"
+        ) and text("corrected_version", "fix"):
+            return ""
+        return "needs the flaw and the correction"
+    if kind == "teach_back":
+        concepts = data.get("required_concepts") if isinstance(data.get("required_concepts"), list) else data.get(
+            "must_include"
+        )
+        has_concept = isinstance(concepts, list) and any(_has_text(item) for item in concepts)
+        if text("peer_persona_prompt", "prompt") and has_concept and text("peer_follow_up_question", "follow_up_if_thin"):
+            return ""
+        return "needs a prompt and the concepts to include"
+    if kind == "retrieval_check":
+        points = data.get("acceptable_points")
+        has_point = isinstance(points, list) and any(_has_text(item) for item in points)
+        if text("recall_prompt", "prompt") and (text("expected_fact") or has_point):
+            return ""
+        return "needs a recall prompt and the expected fact"
+    return ""
+
+
 def gaps_for(node: KcNode, codes: set[str]) -> list[str]:
     missing: list[str] = []
-    if not node.kc_type and not _authored_blocks(node.blocks):
-        missing.append("no type")
+    if not (node.outline or "").strip():
+        missing.append("no outline")
     if not (node.core_truth or "").strip():
         missing.append("no truth")
-    rubric = [item for item in (node.rubric or []) if str(item).strip()]
-    if not rubric:
-        missing.append("no rubric check")
+    missing.extend(_block_field_gaps(_authored_blocks(node.blocks)))
     if any(code not in codes for code in _clean_codes(node.prerequisite_codes)):
         missing.append("a prerequisite that does not exist")
     if any(code not in codes for code in _clean_codes(node.encompasses_codes)):
@@ -730,6 +835,7 @@ def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
                 description=description,
                 outline=outline,
                 topics=topics,
+                blocks=_blocks_from_pairs(topics),
             )
             db.add(node)
             db.flush()
@@ -742,6 +848,7 @@ def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
                 node.outline = outline
                 node.topics = topics
             node.updated_at = _now()
+        _ensure_topic_blocks(node)
         if str(node.id) not in ordered:
             ordered.append(str(node.id))
     goal.target_kc_ids = ordered
@@ -878,17 +985,40 @@ def _authored_blocks(raw: object) -> list[dict]:
     return kept
 
 
+def _blocks_from_pairs(pairs: object) -> list[dict]:
+    """Topic and goal are stored on a topic_goal block, not as a lesson field of their own."""
+    from app.kc_model import clean_pairs
+
+    blocks: list[dict] = []
+    for index, item in enumerate(clean_pairs(pairs), start=1):
+        blocks.append(
+            {
+                "id": f"blk_{index}",
+                "type": "topic_goal",
+                "data": {"topic": item["topic"], "goal": item["goal"]},
+            }
+        )
+    return blocks
+
+
+def _ensure_topic_blocks(node: KcNode) -> None:
+    if _authored_blocks(node.blocks):
+        return
+    seeded = _blocks_from_pairs(node.topics)
+    if seeded:
+        node.blocks = seeded
+
+
 def apply_component(db: Session, node: KcNode, body: dict) -> KcNode:
     """Replace this component and the edges it owns. Other components stay."""
     from app.kc_model import derive_rubric_from_blocks
     from app.models import ALL_BLOCK_TYPES
 
-    kc_type = body.get("kc_type")
     real_blocks = [
         item for item in _authored_blocks(body.get("blocks")) if str(item.get("type") or "") in ALL_BLOCK_TYPES
     ]
-    if kc_type not in KC_TYPES and not real_blocks:
-        raise HTTPException(status_code=422, detail="Type is factual, procedural, conceptual, causal, or synthesis.")
+    if not real_blocks:
+        real_blocks = _blocks_from_pairs(body.get("topics"))
     if "title" in body and str(body.get("title") or "").strip():
         node.title = str(body["title"]).strip()
     _assign_topic_fields(node, body)
@@ -897,9 +1027,6 @@ def apply_component(db: Session, node: KcNode, body: dict) -> KcNode:
         node.rubric = _clean_rubric(derive_rubric_from_blocks(real_blocks))
     elif body.get("rubric") is not None:
         node.rubric = _clean_rubric(body.get("rubric") or [])
-    if kc_type in KC_TYPES:
-        node.kc_type = kc_type
-        node.type_fields = _clean_type_fields(kc_type, body.get("type_fields") or {})
     node.core_truth = str(body.get("core_truth") or "").strip()
     node.misconceptions = _clean_misconceptions(body.get("misconceptions") or [])
     node.prerequisite_codes = _clean_codes(body.get("prerequisite_codes") or [])
@@ -912,21 +1039,6 @@ def apply_component(db: Session, node: KcNode, body: dict) -> KcNode:
     return node
 
 
-def _infer_type(title: str, message: str) -> str:
-    text = f"{title} {message}".lower()
-    if any(word in text for word in ("synthesis", "mix", "rookie", "faulty plan")):
-        return "synthesis"
-    if any(word in text for word in ("why ", "because", "caused", "decision", "history")):
-        return "causal"
-    if any(word in text for word in ("step", "calculate", "solve", "find the", "procedure")):
-        return "procedural"
-    if any(word in text for word in ("versus", " vs", "contrast", "principle", "difference")):
-        return "conceptual"
-    if any(word in text for word in ("fact", "define", "what is", "recall")):
-        return "factual"
-    return "conceptual"
-
-
 def _first_sentence(text: str) -> str:
     cleaned = (text or "").strip()
     if not cleaned:
@@ -934,62 +1046,25 @@ def _first_sentence(text: str) -> str:
     return re.split(r"(?<=[.])\s+", cleaned, maxsplit=1)[0].strip()
 
 
-def _fields_for(kc_type: str, title: str, description: str, mixes: list[str]) -> dict:
-    sentence = _first_sentence(description) or title
-    if kc_type == "factual":
-        return {
-            "fact": sentence,
-            "retrieval_question": f"What should you remember about {title}?",
-        }
-    if kc_type == "procedural":
-        return {
-            "steps": [f"Set up {title}.", f"Finish {title}."],
-            "blanked_step": 1,
-            "solo_problem": f"Solve a new case of {title} on your own.",
-            "solo_check": sentence,
-        }
-    if kc_type == "conceptual":
-        return {
-            "case_a": f"A case that fits {title}.",
-            "case_b": f"A case that does not fit {title}.",
-            "prediction": f"Which case shows {title}?",
-            "rule": sentence,
-        }
-    if kc_type == "causal":
-        return {
-            "decision_point": f"Someone is about to decide {title}.",
-            "flawed_claim": f"{title} happens for the opposite reason.",
-            "causal_chain": sentence,
-        }
-    return {
-        "mixes": mixes[:2],
-        "faulty_plan": f"A rookie mixes the earlier ideas and gets {title} backwards.",
-    }
-
-
 def draft_component(goal: KcGoal, node: KcNode, ordered: list[KcNode], message: str) -> dict:
     """Draft this component only. This does not write."""
-    kc_type = _infer_type(node.title, message)
+    del message
     earlier = []
     for item in ordered:
         if item.id == node.id:
             break
         earlier.append(item)
     previous = earlier[-1] if earlier else None
-    mixes = [item.code for item in earlier[-2:]]
-    if kc_type == "synthesis" and len(mixes) < 2:
-        mixes = [item.code for item in ordered if item.id != node.id][:2]
-    prerequisites = mixes if kc_type == "synthesis" else ([previous.code] if previous else [])
-    encompasses = [previous.code] if previous and kc_type == "procedural" else []
-    misconceptions = []
-    if previous and kc_type in ("conceptual", "causal"):
-        misconceptions.append(
-            {
-                "wrong_move": f"{node.title} is the opposite of the core idea",
-                "broken_kc": previous.code,
-            }
-        )
     summary, outline, pairs = _topic_fields(goal, node)
+    blocks = _authored_blocks(node.blocks) or _blocks_from_pairs(pairs)
+    if not blocks:
+        goal_text = _first_sentence(goal.description) or f"Explain {node.title}."
+        blocks = [{"id": "blk_1", "type": "topic_goal", "data": {"topic": node.title, "goal": goal_text}}]
+        pairs = [{"topic": node.title, "goal": goal_text}]
+    truth = _first_sentence(goal.description) or f"The core idea of {node.title}."
+    from app.kc_model import derive_rubric_from_blocks
+
+    rubric = derive_rubric_from_blocks(blocks) or [f"States the idea of {node.title}"]
     draft = {
         "kind": "component",
         "id": str(node.id),
@@ -998,13 +1073,12 @@ def draft_component(goal: KcGoal, node: KcNode, ordered: list[KcNode], message: 
         "description": summary,
         "outline": outline,
         "topics": pairs,
-        "kc_type": kc_type,
-        "core_truth": _first_sentence(goal.description) or f"The core idea of {node.title}.",
-        "rubric": [f"States the idea of {node.title}"],
-        "misconceptions": misconceptions,
-        "prerequisite_codes": prerequisites,
-        "encompasses_codes": encompasses,
-        "type_fields": _fields_for(kc_type, node.title, goal.description, mixes),
+        "blocks": blocks,
+        "core_truth": truth,
+        "rubric": rubric,
+        "misconceptions": [],
+        "prerequisite_codes": [previous.code] if previous else [],
+        "encompasses_codes": [],
     }
     return {
         "reply": f"Draft for {node.title} only. Other components stay as they are. Nothing is saved until you push it.",
@@ -1015,25 +1089,23 @@ def draft_component(goal: KcGoal, node: KcNode, ordered: list[KcNode], message: 
 def structure(db: Session, goal: KcGoal) -> dict:
     targets = load_targets(db, goal)
     codes = set(_nodes_by_code(db))
-    groups: dict[str, list[dict]] = {name: [] for name in (*KC_TYPES, "unset")}
+    rows = []
     for position, node in enumerate(targets, start=1):
-        row = {
-            "id": str(node.id),
-            "code": node.code,
-            "title": node.title,
-            "description": node.description or "",
-            "kc_type": node.kc_type,
-            "blocks": _public_blocks(node),
-            "position": position,
-            "missing": gaps_for(node, codes),
-            "marked_complete": bool(node.marked_complete),
-        }
-        groups[node.kc_type or "unset"].append(row)
-    ordered = []
-    for name in (*KC_TYPES, "unset"):
-        if groups[name]:
-            ordered.append({"kc_type": name, "components": groups[name]})
-    return {"course_id": str(goal.id), "groups": ordered}
+        blocks = _public_blocks(node)
+        rows.append(
+            {
+                "id": str(node.id),
+                "code": node.code,
+                "title": node.title,
+                "description": node.description or "",
+                "blocks": blocks,
+                "summary": _block_summary(blocks),
+                "position": position,
+                "missing": gaps_for(node, codes),
+                "marked_complete": bool(node.marked_complete),
+            }
+        )
+    return {"course_id": str(goal.id), "groups": [{"components": rows}] if rows else []}
 
 
 def network(db: Session, goal: KcGoal) -> dict:
@@ -1275,7 +1347,8 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
                 "id": str(node.id),
                 "code": node.code,
                 "title": node.title,
-                "kc_type": node.kc_type,
+                "kc_type": None,
+                "summary": _block_summary(_public_blocks(node)),
                 "patch": node.id not in target_ids,
                 "status": _unit_status(states, node, open_ids),
                 "result": None if states.get(node.id) is None else states.get(node.id).result,
@@ -1616,8 +1689,8 @@ def session_out(db: Session, session: KcSession) -> dict:
 def open_session(db: Session, student: Student, goal: KcGoal, node: KcNode) -> KcSession:
     if not goal.ready:
         raise HTTPException(status_code=422, detail="This course is not ready.")
-    if not node.kc_type:
-        raise HTTPException(status_code=422, detail="This component has no type yet.")
+    if not _authored_blocks(node.blocks):
+        raise HTTPException(status_code=422, detail="This component has no blocks yet.")
     targets = load_targets(db, goal)
     allowed = {item.id for item in targets + load_patches(db, targets)}
     if node.id not in allowed:
@@ -1636,7 +1709,7 @@ def open_session(db: Session, student: Student, goal: KcGoal, node: KcNode) -> K
         student_id=student.id,
         goal_id=goal.id,
         kc_id=node.id,
-        recipe=recipe_name(node.kc_type),
+        recipe="block_walk",
         step=0,
         status="in_progress",
     )
@@ -2373,7 +2446,6 @@ def describe_component(
             wrongs.append(f"{wrong} ({broken})" if broken else wrong)
     lines = [
         f"Title: {title}",
-        f"Type: {TYPE_LABELS.get(kc_type or '', 'No type yet')}",
         f"Core truth: {(core_truth or '').strip() or 'none'}",
         "Rubric: " + ("; ".join(checks) if checks else "none"),
         "Wrong moves: " + ("; ".join(wrongs) if wrongs else "none"),
@@ -2567,10 +2639,6 @@ def _labeled_updates(message: str) -> dict:
             updates["description"] = value
         elif kind == "truth":
             updates["core_truth"] = value
-        elif kind == "type":
-            named = _explicit_type(value)
-            if named:
-                updates["kc_type"] = named
         elif kind == "rubric":
             updates["rubric"] = [part.strip() for part in re.split(r"[;]", value) if part.strip()]
         elif kind == "codes":
@@ -2607,7 +2675,7 @@ def _revise_draft(previous: dict, message: str, goal: KcGoal, node: KcNode) -> d
         "description": str(previous.get("description") or node.description or ""),
         "outline": str(previous.get("outline") or node.outline or ""),
         "topics": list(previous.get("topics") if previous.get("topics") is not None else (node.topics or [])),
-        "kc_type": previous.get("kc_type") or "conceptual",
+        "blocks": list(previous.get("blocks") or _authored_blocks(node.blocks)),
         "core_truth": previous.get("core_truth") or "",
         "rubric": list(previous.get("rubric") or []),
         "misconceptions": [
@@ -2615,21 +2683,15 @@ def _revise_draft(previous: dict, message: str, goal: KcGoal, node: KcNode) -> d
         ],
         "prerequisite_codes": list(previous.get("prerequisite_codes") or []),
         "encompasses_codes": list(previous.get("encompasses_codes") or []),
-        "type_fields": dict(previous.get("type_fields") or {}),
     }
     labels = _labeled_updates(message)
-    named = labels.get("kc_type") or _requested_type(message)
-    if named and named != draft["kc_type"] and named in KC_TYPES:
-        mixes = list(draft["type_fields"].get("mixes") or draft.get("prerequisite_codes") or [])
-        draft["kc_type"] = named
-        draft["type_fields"] = _fields_for(named, str(draft["title"]), goal.description, [str(item) for item in mixes])
     if str(labels.get("title") or "").strip():
         draft["title"] = str(labels["title"]).strip()
     if "description" in labels:
         draft["description"] = str(labels["description"]).strip()
     if "core_truth" in labels:
         draft["core_truth"] = str(labels["core_truth"]).strip()
-    elif not _label_present(labels) and not named:
+    elif not _label_present(labels):
         sentence = _first_sentence(message)
         if len(_norm(sentence)) >= OPEN_ANSWER_MIN:
             draft["core_truth"] = sentence
@@ -2641,9 +2703,6 @@ def _revise_draft(previous: dict, message: str, goal: KcGoal, node: KcNode) -> d
         draft["encompasses_codes"] = _clean_codes(labels["encompasses_codes"])
     if "misconception" in labels:
         draft["misconceptions"] = _clean_misconceptions(labels["misconception"])
-    fields = dict(draft["type_fields"])
-    fields.update(labels.get("fields") or {})
-    draft["type_fields"] = _clean_type_fields(str(draft["kc_type"]), fields)
     return draft
 
 
@@ -2656,7 +2715,6 @@ def _label_present(labels: dict) -> bool:
             "title",
             "description",
             "core_truth",
-            "kc_type",
             "rubric",
             "prerequisite_codes",
             "encompasses_codes",
@@ -3129,66 +3187,6 @@ def _require_recommendation(
             status_code=422,
             detail="Recommend a misconception: a wrong move and the component that is broken.",
         )
-
-
-def _require_type_fields(
-    kc_type: str,
-    fields: dict,
-    allowed: set[str],
-    *,
-    other_codes: list[str] | None = None,
-    node_id: str = "",
-    mix_repaired: bool = False,
-    submitted_mix: tuple[str, str] | None = None,
-) -> None:
-    def text(key: str) -> str:
-        return str(fields.get(key) or "").strip()
-
-    if kc_type == "factual":
-        if not text("fact") or not text("retrieval_question"):
-            raise HTTPException(status_code=422, detail="Recommend the fact and the retrieval question.")
-        return
-    if kc_type == "procedural":
-        steps = [str(item).strip() for item in (fields.get("steps") or []) if str(item).strip()]
-        blank = fields.get("blanked_step")
-        if not steps or blank is None or not text("solo_problem") or not text("solo_check"):
-            raise HTTPException(
-                status_code=422,
-                detail="Recommend the worked steps, the blanked step, the solo problem, and the solo check.",
-            )
-        if not isinstance(blank, int) or blank < 0 or blank >= len(steps):
-            raise HTTPException(
-                status_code=422,
-                detail="The blanked step has to point at one of the worked steps, starting at 0.",
-            )
-        return
-    if kc_type == "conceptual":
-        if not all(text(key) for key in ("case_a", "case_b", "prediction", "rule")):
-            raise HTTPException(
-                status_code=422,
-                detail="Recommend both cases, the prediction, and the rule.",
-            )
-        return
-    if kc_type == "causal":
-        if not all(text(key) for key in ("decision_point", "flawed_claim", "causal_chain")):
-            raise HTTPException(
-                status_code=422,
-                detail="Recommend the decision point, the flawed claim, and the causal chain.",
-            )
-        return
-    mixes = [str(item).strip() for item in (fields.get("mixes") or []) if str(item).strip()]
-    codes = list(other_codes) if other_codes is not None else sorted(allowed)
-    if submitted_mix is None:
-        pair = (mixes[0] if mixes else "", mixes[1] if len(mixes) > 1 else "")
-    else:
-        pair = submitted_mix
-    invalid = any(code not in allowed for code in mixes)
-    short = len(allowed) >= 2 and len(set(mixes)) < 2 and not mix_repaired
-    if invalid or short:
-        _log_mix("rejected", node_id, pair[0], pair[1], codes)
-        raise HTTPException(status_code=422, detail=_mix_rejection_detail(pair[0], pair[1], codes))
-    if not text("faulty_plan"):
-        raise HTTPException(status_code=422, detail="Recommend the rookie's faulty plan.")
 
 
 def accept_model_turn(

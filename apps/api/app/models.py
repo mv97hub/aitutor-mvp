@@ -13,10 +13,10 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    TypeDecorator,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -616,30 +616,32 @@ class StudioSettings(Base):
     model: Mapped[str] = mapped_column(String(64), nullable=False, default="gpt-4o-mini")
 
 
-def _legacy_block_data(blocks: object) -> dict:
-    if not isinstance(blocks, list):
-        return {}
-    for item in blocks:
-        if isinstance(item, dict) and item.get("type") == "_legacy":
-            data = item.get("data")
-            return data if isinstance(data, dict) else {}
-    return {}
+def without_legacy_blocks(value: object) -> list:
+    """Drop the retired type blob so it cannot appear as a block."""
+    if not isinstance(value, list):
+        return []
+    return [
+        item
+        for item in value
+        if not (isinstance(item, dict) and str(item.get("type") or "") == "_legacy")
+    ]
 
 
-def _blocks_with_legacy(blocks: object, key: str, value: object) -> list:
-    """Keep the five-type fields on the row after those columns were removed."""
-    items: list = []
-    data: dict = {}
-    for item in blocks or []:
-        if isinstance(item, dict) and item.get("type") == "_legacy":
-            raw = item.get("data")
-            if isinstance(raw, dict):
-                data = dict(raw)
-            continue
-        items.append(item)
-    data[key] = value
-    items.append({"id": "_legacy", "type": "_legacy", "data": data})
-    return items
+class BlockList(TypeDecorator):
+    """JSON block list. A retired `_legacy` blob is removed on read and on write."""
+
+    impl = JSON
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return []
+        return without_legacy_blocks(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return []
+        return without_legacy_blocks(value)
 
 
 class KcNode(Base):
@@ -653,7 +655,7 @@ class KcNode(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     outline: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     topics: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
-    blocks: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    blocks: Mapped[list] = mapped_column(BlockList, nullable=False, default=list, server_default="[]")
     core_truth: Mapped[str] = mapped_column(Text, nullable=False, default="")
     rubric: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     misconceptions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
@@ -670,24 +672,23 @@ class KcNode(Base):
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
 
-    @hybrid_property
+    def __init__(self, **kwargs):
+        # In-memory only. These are not columns and are not written into blocks.
+        self._kc_type_memory = kwargs.pop("kc_type", None)
+        fields = kwargs.pop("type_fields", None)
+        self._type_fields_memory = fields if isinstance(fields, dict) else {}
+        super().__init__(**kwargs)
+
+    @property
     def kc_type(self) -> str | None:
-        value = _legacy_block_data(self.blocks).get("kc_type")
+        value = getattr(self, "_kc_type_memory", None)
         text = str(value).strip() if value else ""
         return text or None
 
-    @kc_type.setter
-    def kc_type(self, value: str | None) -> None:
-        self.blocks = _blocks_with_legacy(self.blocks, "kc_type", value)
-
-    @hybrid_property
+    @property
     def type_fields(self) -> dict:
-        raw = _legacy_block_data(self.blocks).get("type_fields")
+        raw = getattr(self, "_type_fields_memory", None)
         return raw if isinstance(raw, dict) else {}
-
-    @type_fields.setter
-    def type_fields(self, value: dict | None) -> None:
-        self.blocks = _blocks_with_legacy(self.blocks, "type_fields", dict(value or {}))
 
 
 class KcEdge(Base):

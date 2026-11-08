@@ -50,4 +50,5 @@ test("the push payload sends draft blocks and does not require topic pairs", () 
   assert.equal(payload.blocks.length, 2);
   assert.equal("topics" in payload, false);
   assert.equal("kc_type" in payload, false);
+  assert.equal("type_fields" in payload, false);
 });

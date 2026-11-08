@@ -210,6 +210,10 @@ def test_a_middle_topic_does_not_say_the_unit_is_complete() -> None:
             {"topic": "shape", "goal": "Say why shape matters"},
             {"topic": "density", "goal": "Say why density matters"},
         ],
+        blocks=[
+            {"id": "blk_1", "type": "topic_goal", "data": {"topic": "shape", "goal": "Say why shape matters"}},
+            {"id": "blk_2", "type": "topic_goal", "data": {"topic": "density", "goal": "Say why density matters"}},
+        ],
         kc_type="conceptual",
         core_truth="Spread-out objects float.",
         type_fields={"rule": "Spread-out objects float."},
@@ -363,6 +367,10 @@ def test_a_conceptual_topic_names_only_that_topic_and_its_goal() -> None:
         topics=[
             {"topic": "shape", "goal": "Say why shape matters"},
             {"topic": "density", "goal": "Say why density matters"},
+        ],
+        blocks=[
+            {"id": "blk_1", "type": "topic_goal", "data": {"topic": "shape", "goal": "Say why shape matters"}},
+            {"id": "blk_2", "type": "topic_goal", "data": {"topic": "density", "goal": "Say why density matters"}},
         ],
         kc_type="conceptual",
         core_truth="Spread-out objects float.",

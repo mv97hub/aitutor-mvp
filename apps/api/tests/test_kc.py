@@ -137,16 +137,19 @@ def _make(
 def _component(title: str, **overrides) -> dict:
     body = {
         "title": title,
-        "kc_type": "factual",
+        "outline": f"How {title} works.",
         "core_truth": f"Truth for {title}.",
         "rubric": [f"Check for {title}."],
         "misconceptions": [],
         "prerequisite_codes": [],
         "encompasses_codes": [],
-        "type_fields": {
-            "fact": f"Truth for {title}.",
-            "retrieval_question": f"What is true of {title}?",
-        },
+        "blocks": [
+            {
+                "id": "blk-1",
+                "type": "topic_goal",
+                "data": {"topic": title, "goal": f"Explain {title}."},
+            }
+        ],
     }
     body.update(overrides)
     return body
@@ -514,12 +517,16 @@ def test_ready_requires_truth_a_check_and_real_edges() -> None:
 
         missing_check = client.put(
             f"/kc/nodes/{later['id']}",
-            json=_component("Later", rubric=[], prerequisite_codes=["zz-ready-a"]),
+            json=_component(
+                "Later",
+                prerequisite_codes=["zz-ready-a"],
+                blocks=[{"id": "blk-1", "type": "topic_goal", "data": {"topic": "Later", "goal": ""}}],
+            ),
         )
         assert missing_check.status_code == 200, missing_check.text
         not_ready = client.post(f"/kc/courses/{course['id']}/ready")
         assert not_ready.status_code == 422
-        assert "no rubric check" in not_ready.text
+        assert "needs a topic and a goal" in not_ready.text
 
         missing_edge = client.put(
             f"/kc/nodes/{later['id']}",
@@ -606,7 +613,7 @@ def test_kid_prompt_uses_the_tutor_profile() -> None:
         prompt = client.get(f"/kc/tutor/sessions/{opened.json()['id']}/prompt")
         assert prompt.status_code == 200, prompt.text
         text = prompt.json()["system_prompt"]
-        assert prompt.json()["recipe"] == "retrieval"
+        assert prompt.json()["recipe"] == "block_walk"
         assert prompt.json()["temperature"] == 0.4
         assert set(prompt.json()["response_schema"]["required"]) >= {
             "reply",
@@ -631,13 +638,13 @@ def test_kid_prompt_uses_the_tutor_profile() -> None:
         assert "What to return" in text
         assert "Layer 1, Component" not in text
         assert "Layer 7, Feedback loop" not in text
-        assert "retrieval" in text
+        assert "Orient" in text
         assert "You do not set the type, the edges, the score, or the step index." in text
         db = SessionLocal()
         try:
             stored = db.get(KcSession, opened.json()["id"])
             assert stored is not None
-            assert stored.recipe == "retrieval"
+            assert stored.recipe == "block_walk"
             assert not hasattr(stored, "persona") or "persona" not in stored.__table__.columns
         finally:
             db.close()
@@ -680,10 +687,6 @@ def test_pass_bumps_an_encompassed_component() -> None:
                 "Later fact",
                 core_truth="The river in this course is blue.",
                 encompasses_codes=["zz-bump-earlier"],
-                type_fields={
-                    "fact": "The river in this course is blue.",
-                    "retrieval_question": "What color is the river in this course?",
-                },
             ),
         ).status_code == 200
         ready = client.post(f"/kc/courses/{course['id']}/ready")
@@ -698,6 +701,19 @@ def test_pass_bumps_an_encompassed_component() -> None:
             json={"answer": "The river in this course is blue."},
         )
         assert answered.status_code == 200, answered.text
+        held = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/decision",
+            json={
+                "reply": "The outline is clear.",
+                "decision": "complete",
+                "rubric_met": [],
+                "affect": "engaged",
+                "confidence": "ok",
+            },
+        )
+        assert held.status_code == 200, held.text
+        assert held.json()["passed"] is False
+        assert held.json()["step_label"] == "This step"
         done = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
             json={
@@ -733,43 +749,22 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
             _spec(
                 "zz-mis-base",
                 "What congruence means",
-                kc_type="conceptual",
                 core_truth="Congruence means the same size and the same shape.",
                 rubric=["Says same size and same shape"],
-                type_fields={
-                    "case_a": "Same size and same shape.",
-                    "case_b": "Same shape and longer sides.",
-                    "prediction": "Which pair can be placed exactly on top of each other?",
-                    "rule": "Congruent triangles have the same size and the same shape.",
-                },
             ),
             _spec(
                 "zz-mis-patch",
                 "The included angle",
-                kc_type="conceptual",
                 core_truth="The included angle lies between the two sides.",
                 rubric=["Points to the angle between the two sides"],
-                type_fields={
-                    "case_a": "The angle between the two sides.",
-                    "case_b": "The angle at the opposite vertex.",
-                    "prediction": "Which angle is included?",
-                    "rule": "The included angle is the angle formed between the two given sides.",
-                },
             ),
             _spec(
                 "zz-mis-claim",
                 "SAS versus SSA",
-                kc_type="conceptual",
-                core_truth="SAS fixes a triangle and SSA does not.",
+                core_truth=rule,
                 rubric=["Names SAS as the proving case"],
                 prerequisite_codes=["zz-mis-base", "zz-mis-patch"],
                 misconceptions=[{"wrong_move": "SSA proves congruence", "broken_kc": "zz-mis-patch"}],
-                type_fields={
-                    "case_a": "Two sides with the angle between them fixed.",
-                    "case_b": "Two sides with an angle that is not between them.",
-                    "prediction": "Which description locks one triangle?",
-                    "rule": rule,
-                },
             ),
         ],
         patches=("zz-mis-patch",),
@@ -819,7 +814,7 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
         _clear_progress(storm.id)
         fresh = _course_by_code("zz-mis")
         sas = _node(fresh, "zz-mis-claim")
-        rule = sas["type_fields"]["rule"]
+        rule = sas["core_truth"]
         again = client.post(
             "/kc/tutor/sessions",
             json={"student_id": str(storm.id), "course_id": fresh["id"], "kc_id": sas["id"]},
@@ -827,9 +822,7 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
         assert again.status_code == 200, again.text
         session_id = again.json()["id"]
         steps = (
-            ("The case with the included angle locks one triangle.", "advance", []),
-            ("The other case leaves two possible triangles.", "advance", []),
-            ("One case closes and the other leaves two shapes.", "advance", []),
+            ("The outline is clear.", "advance", []),
             (rule, "complete", ["rule"]),
         )
         step = None
@@ -857,12 +850,6 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
 def test_time_box_synthesis_and_factual_recipe() -> None:
     storm = _storm()
     _clear_progress(storm.id)
-    concept = {
-        "case_a": "One case.",
-        "case_b": "The other case.",
-        "prediction": "Which one holds?",
-        "rule": "The rule for this course.",
-    }
     course = _ready(
         _make("zz-box", title="Timed course", kind="time_boxed", minutes=30),
         [
@@ -870,70 +857,42 @@ def test_time_box_synthesis_and_factual_recipe() -> None:
                 "zz-box-fact",
                 "Triangle angle sum",
                 core_truth="The interior angles of a triangle sum to 180 degrees.",
-                type_fields={
-                    "fact": "The interior angles of a triangle add up to 180 degrees.",
-                    "retrieval_question": "What do the three interior angles of a triangle add up to?",
-                },
             ),
             _spec(
                 "zz-box-steps",
                 "Find the missing angle",
-                kc_type="procedural",
                 core_truth="The missing angle is 180 minus the other two angles.",
                 prerequisite_codes=["zz-box-fact"],
                 encompasses_codes=["zz-box-fact"],
-                type_fields={
-                    "steps": ["Add the two known angles.", "Subtract that sum from 180."],
-                    "blanked_step": 1,
-                    "solo_problem": "A triangle has angles of 40 and 60. What is the third?",
-                    "solo_check": "80",
-                },
             ),
             _spec(
                 "zz-box-idea",
                 "What congruence means",
-                kc_type="conceptual",
                 core_truth="Congruence means the same size and the same shape.",
-                type_fields=concept,
             ),
             _spec(
                 "zz-box-patch",
                 "The included angle",
-                kc_type="conceptual",
                 core_truth="The included angle lies between the two sides.",
-                type_fields=concept,
             ),
             _spec(
                 "zz-box-claim",
                 "SAS versus SSA",
-                kc_type="conceptual",
                 core_truth="SAS fixes a triangle and SSA does not.",
                 prerequisite_codes=["zz-box-idea", "zz-box-patch"],
                 misconceptions=[{"wrong_move": "SSA proves congruence", "broken_kc": "zz-box-patch"}],
-                type_fields=concept,
             ),
             _spec(
                 "zz-box-cause",
                 "Why SSA fails",
-                kc_type="causal",
                 core_truth="SSA fails because the given angle is not included.",
                 prerequisite_codes=["zz-box-claim"],
-                type_fields={
-                    "decision_point": "Two sides and an angle that is not between them.",
-                    "flawed_claim": "The angle can sit anywhere and the triangle is still fixed.",
-                    "causal_chain": "The angle is not between the two sides, so the third side can meet them in two places.",
-                },
             ),
             _spec(
                 "zz-box-plan",
                 "Fix the congruence plan",
-                kc_type="synthesis",
                 core_truth="Same size and same shape, together with SAS, show congruence.",
                 prerequisite_codes=["zz-box-idea", "zz-box-claim"],
-                type_fields={
-                    "mixes": ["zz-box-idea", "zz-box-claim"],
-                    "faulty_plan": "The triangles look the same and SSA locks them.",
-                },
             ),
         ],
         patches=("zz-box-patch",),
@@ -956,25 +915,29 @@ def test_time_box_synthesis_and_factual_recipe() -> None:
             and edge["to_code"] == "zz-box-claim"
             for edge in diagram["edges"]
         )
-        assert {item["kc_type"] for item in course["components"]} >= {
-            "factual",
-            "procedural",
-            "conceptual",
-            "causal",
-            "synthesis",
-        }
+        assert {item["kc_type"] for item in course["components"]} == {None}
 
         factual = _node(course, "zz-box-fact")
         opened = client.post(
             "/kc/tutor/sessions",
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": factual["id"]},
         )
-        assert opened.json()["recipe"] == "retrieval"
-        assert opened.json()["step_label"] == "Retrieve"
+        assert opened.json()["recipe"] == "block_walk"
+        assert opened.json()["step_label"] == "Orient"
         client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
             json={"answer": "The interior angles of a triangle add up to 180 degrees."},
         )
+        held = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/decision",
+            json={
+                "reply": "The outline is clear.",
+                "decision": "complete",
+                "rubric_met": [],
+            },
+        )
+        assert held.status_code == 200, held.text
+        assert held.json()["passed"] is False
         answered = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
             json={
@@ -985,7 +948,7 @@ def test_time_box_synthesis_and_factual_recipe() -> None:
         )
         assert answered.status_code == 200, answered.text
         assert answered.json()["passed"] is True
-        assert answered.json()["step_label"] == "Retrieve"
+        assert answered.json()["step_label"] == "This step"
         assert "180" in answered.json()["reply"]
 
         _clear_progress(storm.id)
@@ -1035,7 +998,8 @@ def test_creator_thread_revises_one_component_and_complete_clears_on_write() -> 
         draft = first.json()["draft"]
         assert draft["kind"] == "component"
         assert draft["code"] == "zz-creator-a"
-        assert draft["kc_type"] == "factual"
+        assert "kc_type" not in draft
+        assert any(block.get("type") == "topic_goal" for block in draft["blocks"])
         assert _counts()["messages"] == before_messages
         stored = client.get(f"/kc/nodes/{river['id']}").json()
         assert stored["kc_type"] is None
@@ -1046,7 +1010,7 @@ def test_creator_thread_revises_one_component_and_complete_clears_on_write() -> 
         )
         assert revised.status_code == 200, revised.text
         assert revised.json()["draft"]["core_truth"] == "The river in this course is blue."
-        assert revised.json()["draft"]["kc_type"] == "factual"
+        assert "kc_type" not in revised.json()["draft"]
         assert "Nothing is saved until you push it." in revised.json()["messages"][-1]["content"]
 
         written = client.post(f"/kc/nodes/{river['id']}/push", json=revised.json()["draft"])
@@ -1083,7 +1047,7 @@ def test_creator_thread_revises_one_component_and_complete_clears_on_write() -> 
         empty = added["components"][0]
         refused = client.post(f"/kc/nodes/{empty['id']}/complete")
         assert refused.status_code == 422
-        assert "no type" in refused.text
+        assert "no blocks" in refused.text
     finally:
         _wipe_zz()
 
@@ -1105,30 +1069,14 @@ def test_tutor_speech_is_separate_from_the_score_and_two_steps_are_choices() -> 
         concept, cause = pushed
         assert client.put(
             f"/kc/nodes/{concept['id']}",
-            json=_component(
-                "Contrast",
-                kc_type="conceptual",
-                core_truth="The rule is the contrast.",
-                type_fields={
-                    "case_a": "The closed case",
-                    "case_b": "The open case",
-                    "prediction": "Which case fits?",
-                    "rule": "The rule is the contrast.",
-                },
-            ),
+            json=_component("Contrast", core_truth="The rule is the contrast."),
         ).status_code == 200
         assert client.put(
             f"/kc/nodes/{cause['id']}",
             json=_component(
                 "Decision",
-                kc_type="causal",
                 core_truth="Taxes move prices.",
                 prerequisite_codes=["zz-speak-concept"],
-                type_fields={
-                    "decision_point": "A council sets a tax.",
-                    "flawed_claim": "The tax lowers prices.",
-                    "causal_chain": "Taxes move prices.",
-                },
             ),
         ).status_code == 200
         assert client.post(f"/kc/courses/{course['id']}/ready").status_code == 200
@@ -1148,9 +1096,7 @@ def test_tutor_speech_is_separate_from_the_score_and_two_steps_are_choices() -> 
         assert spoken.status_code == 200, spoken.text
         assert spoken.json()["needs_speech"] is False
         assert spoken.json()["messages"][-1]["content"] == "Which case fits?"
-        assert [item["text"] for item in spoken.json()["choice"]["choices"]] == ["This holds", "This does not hold"]
-        assert "The closed case" in spoken.json()["choice"]["prompt"]
-        assert "The open case" not in spoken.json()["choice"]["prompt"]
+        assert spoken.json()["choice"] is None
         again = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/speech",
             json={"content": "Asked twice."},
@@ -1162,15 +1108,14 @@ def test_tutor_speech_is_separate_from_the_score_and_two_steps_are_choices() -> 
         )
         stepped = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
-            json={"reply": "Now the second case.", "decision": "advance"},
+            json={"reply": "Now the next block.", "decision": "advance"},
         )
         assert stepped.status_code == 200, stepped.text
         assert stepped.json()["passed"] is False
         assert stepped.json()["step"] == 1
         assert stepped.json()["needs_speech"] is False
-        assert [item["text"] for item in stepped.json()["choice"]["choices"]] == ["This holds", "This does not hold"]
-        assert "The open case" in stepped.json()["choice"]["prompt"]
-        assert "The closed case" not in stepped.json()["choice"]["prompt"]
+        assert stepped.json()["choice"] is None
+        assert stepped.json()["step_label"] == "This step"
 
         causal = client.post(
             "/kc/tutor/sessions",
@@ -1178,38 +1123,19 @@ def test_tutor_speech_is_separate_from_the_score_and_two_steps_are_choices() -> 
         ).json()
         client.post(f"/kc/tutor/sessions/{causal['id']}/speech", json={"content": "Taxes move prices."})
         client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "The tax changes the price."})
-        client.post(
+        held = client.post(
             f"/kc/tutor/sessions/{causal['id']}/decision",
             json={"reply": "What is at stake?", "decision": "advance"},
         )
-        client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "The tax is the stake."})
-        client.post(
-            f"/kc/tutor/sessions/{causal['id']}/decision",
-            json={"reply": "Mark this claim.", "decision": "advance"},
-        )
-        marked = client.get(f"/kc/tutor/sessions/{causal['id']}").json()
-        assert [item["text"] for item in marked["choice"]["choices"]] == ["This claim is flawed", "This claim holds"]
-        client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "This claim holds"})
-        held = client.post(
-            f"/kc/tutor/sessions/{causal['id']}/decision",
-            json={"reply": "Look again.", "decision": "advance", "rubric_met": []},
-        )
         assert held.json()["passed"] is False
-        assert held.json()["step"] == 2
+        assert held.json()["step"] == 1
+        assert held.json()["choice"] is None
         fresh = client.post(
             "/kc/tutor/sessions",
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": cause["id"]},
         )
         assert fresh.status_code == 200, fresh.text
-        client.post(f"/kc/tutor/sessions/{causal['id']}/turn", json={"answer": "This claim is flawed"})
-        done = client.post(
-            f"/kc/tutor/sessions/{causal['id']}/decision",
-            json={"reply": "Defend the chain.", "decision": "advance", "rubric_met": ["mark"]},
-        )
-        assert done.status_code == 200, done.text
-        assert done.json()["step"] == 3
-        assert done.json()["needs_speech"] is False
-        assert done.json()["passed"] is False
+        assert fresh.json()["id"] == causal["id"]
     finally:
         _clear_progress(storm.id)
         _wipe_zz()
@@ -1257,7 +1183,11 @@ def test_model_draft_recommends_every_field_and_push_keeps_the_description() -> 
         river = pushed[0]
         saved = client.put(
             f"/kc/nodes/{river['id']}",
-            json=_component("River fact", description="Outline: Edited by hand.\nTopics: color\nGoals: Recall it"),
+            json=_component(
+                "River fact",
+                description="Outline: Edited by hand.\nTopics: color\nGoals: Recall it",
+                outline=None,
+            ),
         )
         assert saved.status_code == 200, saved.text
         assert saved.json()["description"] == "Edited by hand."
@@ -1673,21 +1603,20 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         live = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
         assert live["Component title"] == "River fact"
         assert live["Component code"] == "zz-vars-fact"
-        assert live["Type"] == "factual (Factual)"
+        assert live["Type"] == ""
         assert live["Component description"] == "A short brief."
         assert live["Core truth"] == "Truth for River fact."
-        assert live["Type field: Fact"] == "Truth for River fact."
-        assert live["Type field: Retrieval question"] == "What is true of River fact?"
-        assert "Type fields" not in live
-        assert live["Rubric lines"] == "Check for River fact."
+        assert live["Type fields"] == ""
+        assert "Type field: Fact" not in live
+        assert live["Rubric lines"] == "Explain River fact."
         assert live["Misconceptions"] == "The river is red. -> zz-vars-other"
         assert live["Prerequisite codes"] == "zz-vars-other"
         assert live["Encompass codes"] == ""
-        assert live["Recipe"] == "retrieval"
-        assert live["Move index"] == "1 of 1"
-        assert live["Move name"] == "Retrieve"
-        assert live["Move content"] == "What is true of River fact?"
-        assert live["Evidence"] == "fact"
+        assert live["Recipe"] == "block_walk"
+        assert live["Move index"] == "1 of 2"
+        assert live["Move name"] == "Orient"
+        assert live["Move content"] == "Outline: How River fact works."
+        assert live["Evidence"] == ""
         assert live["Support band"] == "hold"
         assert live["Score"] == ""
         assert live["Status"] == "in_progress"
@@ -1699,6 +1628,10 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
             f"/kc/tutor/sessions/{session_id}/turn",
             json={"answer": "Truth for River fact."},
         )
+        client.post(
+            f"/kc/tutor/sessions/{session_id}/decision",
+            json={"reply": "The outline is clear.", "decision": "advance"},
+        )
         done = client.post(
             f"/kc/tutor/sessions/{session_id}/decision",
             json={
@@ -1709,8 +1642,8 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         )
         assert done.status_code == 200, done.text
         after = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
-        assert after["Move index"] == "1 of 1"
-        assert after["Move name"] == "Retrieve"
+        assert after["Move index"] == "2 of 2"
+        assert after["Move name"] == "This step"
         assert after["Score"] == "100"
         assert after["Status"] == "completed"
         assert after["Unit close"] == "yes"
@@ -1758,19 +1691,10 @@ def test_decision_overrides_and_course_outro() -> None:
         ).json()["components"]
         first, second = pushed
         assert client.put(f"/kc/nodes/{first['id']}", json=_component("First fact")).status_code == 200
-        conceptual = _component(
-            "Second fact",
-            kc_type="conceptual",
-            core_truth="The rule is the contrast.",
-            type_fields={
-                "case_a": "Closed",
-                "case_b": "Open",
-                "prediction": "Which fits?",
-                "rule": "The rule is the contrast.",
-                "transfer_case": "A third case the child already knows.",
-            },
-        )
-        assert client.put(f"/kc/nodes/{second['id']}", json=conceptual).status_code == 200
+        assert client.put(
+            f"/kc/nodes/{second['id']}",
+            json=_component("Second fact", core_truth="The rule is the contrast."),
+        ).status_code == 200
         assert client.post(f"/kc/courses/{course['id']}/ready").status_code == 200
 
         opened = client.post(
@@ -1790,7 +1714,7 @@ def test_decision_overrides_and_course_outro() -> None:
         assert held.status_code == 200, held.text
         assert held.json()["passed"] is False
         assert held.json()["status"] == "in_progress"
-        assert held.json()["step_label"] == "Restate"
+        assert held.json()["step_label"] == "This step"
         client.post(
             f"/kc/tutor/sessions/{opened['id']}/turn",
             json={"answer": "Truth for First fact is the whole line."},
@@ -1812,42 +1736,17 @@ def test_decision_overrides_and_course_outro() -> None:
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": second["id"]},
         ).json()
         other_prompt = client.get(f"/kc/tutor/sessions/{other['id']}/prompt").json()["system_prompt"]
-        assert "Case one: Closed" in other_prompt
-        assert "A third case the child already knows." not in other_prompt
-        assert "The rule is the contrast." not in other_prompt
-        for answer, decision, rubric in (
-            ("Closed", "advance", []),
-            ("They differ.", "advance", []),
-            ("The rule is the contrast.", "advance", []),
-        ):
-            client.post(f"/kc/tutor/sessions/{other['id']}/turn", json={"answer": answer})
-            step = client.post(
-                f"/kc/tutor/sessions/{other['id']}/decision",
-                json={"reply": "Stay with the rule.", "decision": decision, "rubric_met": rubric},
-            )
-            assert step.status_code == 200, step.text
-        assert step.json()["status"] == "in_progress"
-        assert step.json()["passed"] is False
+        assert "The outline is How Second fact works." in other_prompt
+        client.post(f"/kc/tutor/sessions/{other['id']}/turn", json={"answer": "The outline is clear."})
+        stepped = client.post(
+            f"/kc/tutor/sessions/{other['id']}/decision",
+            json={"reply": "Stay with this step.", "decision": "advance", "rubric_met": []},
+        )
+        assert stepped.status_code == 200, stepped.text
+        assert stepped.json()["status"] == "in_progress"
+        assert stepped.json()["passed"] is False
+        assert stepped.json()["step_label"] == "This step"
         client.post(f"/kc/tutor/sessions/{other['id']}/turn", json={"answer": "The rule is the contrast."})
-        blocked = client.post(
-            f"/kc/tutor/sessions/{other['id']}/decision",
-            json={"reply": "Not yet.", "decision": "complete", "rubric_met": []},
-        )
-        assert blocked.json()["status"] == "in_progress"
-        assert blocked.json()["step_label"] == "State the rule"
-        client.post(
-            f"/kc/tutor/sessions/{other['id']}/turn",
-            json={"answer": "Use it on the third case."},
-        )
-        # The blocked complete did not advance, so this answer is still on the rule move.
-        # Finish the rule, then the transfer move.
-        ruled = client.post(
-            f"/kc/tutor/sessions/{other['id']}/decision",
-            json={"reply": "The rule holds. Try the third case.", "decision": "advance", "rubric_met": ["rule"]},
-        )
-        assert ruled.json()["step_label"] == "Transfer"
-        assert ruled.json()["passed"] is False
-        client.post(f"/kc/tutor/sessions/{other['id']}/turn", json={"answer": "The third case follows the rule."})
         outro = client.post(
             f"/kc/tutor/sessions/{other['id']}/decision",
             json={
@@ -2019,16 +1918,9 @@ def test_closing_a_component_saves_the_result_on_that_child() -> None:
                     "Topics: shape; density\n"
                     "Goals: Say why shape matters; Say why density matters"
                 ),
-                kc_type="conceptual",
+                outline=None,
                 core_truth="Spread-out objects float.",
                 rubric=["Say why shape matters", "Say why density matters", "States the rule"],
-                type_fields={
-                    "case_a": "A wide boat",
-                    "case_b": "A solid cube",
-                    "prediction": "What happens to this one?",
-                    "rule": "Spread-out objects float.",
-                    "transfer_case": "",
-                },
             ),
         )
         assert saved.status_code == 200, saved.text
@@ -2056,29 +1948,12 @@ def test_closing_a_component_saves_the_result_on_that_child() -> None:
             assert body.status_code == 200, body.text
             return body.json()
 
-        assert decide("The outline is clear.", "advance", [])["step_label"] == "shape"
+        stepped = decide("The outline is clear.", "advance", [])
+        assert stepped["step_label"] == "This step"
         topic_prompt = client.get(f"/kc/tutor/sessions/{session_id}/prompt").json()["system_prompt"]
-        assert "The topic is shape." in topic_prompt
-        assert "The goal is Say why shape matters." in topic_prompt
-        for hidden in (
-            "density",
-            "Say why density matters",
-            "Spread-out objects float",
-            "A wide boat",
-            "A solid cube",
-            "A principle about floating",
-            "Boats and cubes in a harbor.",
-        ):
-            assert hidden not in topic_prompt, hidden
+        assert "This step" in topic_prompt
         assert "The child will type." in topic_prompt
-        missed = decide("Something else.", "advance", [])
-        assert missed["step_label"] == "shape"
-        assert decide("Shape changes how the water pushes.", "advance", ["goal-1"])["step_label"] == "density"
-        assert decide("Density is the other part.", "advance", ["goal-2"])["step_label"] == "Predict case one"
-        assert decide("This holds", "advance", [])["step_label"] == "Predict case two"
-        assert decide("This does not hold", "advance", [])["step_label"] == "Contrast"
-        assert decide("The wide one floats and the cube sinks.", "advance", [])["step_label"] == "State the rule"
-        finished = decide("Spread-out objects float.", "complete", ["rule"])
+        finished = decide("Spread-out objects float.", "complete", ["goal-1", "goal-2"])
         assert finished["passed"] is True
         assert finished["unit_complete"] is True
         board = client.get(
@@ -2090,7 +1965,7 @@ def test_closing_a_component_saves_the_result_on_that_child() -> None:
         unit = next(item for item in board["units"] if item["code"] == "zz-result-float")
         result = unit["result"]
         assert result["status"] == "known"
-        assert result["rubric_met"] == ["goal-1", "goal-2", "rule"]
+        assert result["rubric_met"] == ["goal-1", "goal-2"]
         assert "Say why shape matters" in result["justification"]
         assert result["strong"]
         assert result["work_on"]

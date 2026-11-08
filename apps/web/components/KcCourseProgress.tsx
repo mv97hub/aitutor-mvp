@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { KcBanner } from "@/components/KcBanner";
 import { NetworkMap } from "@/components/KcNetwork";
-import { TYPE_LABELS, type KcNetwork, type KcProgress, type KcTutorCourse } from "@/lib/kc";
+import { type KcNetwork, type KcProgress, type KcTutorCourse } from "@/lib/kc";
 import { statusByCode, unitsByStatus, type KcProgressUnit, type KcUnitStatus } from "@/lib/kc-progress";
 import type { Student } from "@/lib/types";
 
@@ -24,7 +24,7 @@ function progressPath(student: string, course: string) {
 }
 
 function unitType(unit: KcProgressUnit) {
-  const name = TYPE_LABELS[unit.kc_type ?? "unset"] ?? unit.kc_type ?? "No type yet";
+  const name = unit.summary || "No blocks yet";
   return unit.patch ? `${name} patch` : name;
 }
 

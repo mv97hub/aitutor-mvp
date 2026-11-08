@@ -11,8 +11,6 @@ export function creatorPushPayload(draft: KcComponentDraft, component: KcCompone
     prerequisite_codes: string[];
     encompasses_codes: string[];
     blocks: NonNullable<KcComponentDraft["blocks"]>;
-    kc_type?: KcComponentDraft["kc_type"];
-    type_fields?: KcComponentDraft["type_fields"];
     rubric?: string[];
   } = {
     description: draft.description ?? component.description,
@@ -24,10 +22,6 @@ export function creatorPushPayload(draft: KcComponentDraft, component: KcCompone
     encompasses_codes: draft.encompasses_codes,
     blocks: draft.blocks ?? [],
   };
-  if (draft.kc_type) {
-    payload.kc_type = draft.kc_type;
-    payload.type_fields = draft.type_fields ?? {};
-  }
   if (!draft.blocks?.length && draft.rubric) {
     payload.rubric = draft.rubric;
   }

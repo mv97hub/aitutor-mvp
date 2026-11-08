@@ -506,21 +506,19 @@ def test_fewer_than_two_other_codes_keep_a_named_code_and_drop_a_title() -> None
 
 
 def test_an_unrepaired_mix_names_the_rejected_strings_and_the_allowed_codes(caplog) -> None:
-    from app.kc import _require_type_fields
+    from app.kc import _log_mix, _mix_rejection_detail
 
     caplog.set_level("WARNING", logger="app.kc")
-    with pytest.raises(HTTPException) as caught:
-        _require_type_fields(
-            "synthesis",
-            {"mixes": ["angles", "angles"], "faulty_plan": "The rookie swaps them."},
-            {"angles", "lines"},
-            other_codes=["angles", "lines"],
-            node_id="15370df9-8e61-4e84-89d8-2d1af8651463",
-        )
-    assert caught.value.status_code == 422
-    detail = str(caught.value.detail)
+    detail = _mix_rejection_detail("angles", "angles", ["angles", "lines"])
     assert 'Rejected: "angles" and "angles".' in detail
     assert "Allowed codes: angles, lines." in detail
+    _log_mix(
+        "rejected",
+        "15370df9-8e61-4e84-89d8-2d1af8651463",
+        "angles",
+        "angles",
+        ["angles", "lines"],
+    )
     messages = [record.getMessage() for record in caplog.records]
     assert any(
         "kc mix rejected" in message
