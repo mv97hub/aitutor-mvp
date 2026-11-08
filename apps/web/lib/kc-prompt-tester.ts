@@ -1,6 +1,7 @@
 /** Form state for the KC Prompt Tester. The API calls build_kc_prompt. */
 
 import { LAYER_FIELDS, LAYER_HEADINGS, type LayerField } from "./kc-layer-fields.ts";
+import { BLOCK_LABELS, BLOCK_TYPES } from "./kc-blocks.ts";
 import { AUDIENCES, KINDS, type KcComponent, type KcCourse } from "./kc.ts";
 import type { Student, TutorProfile } from "./types.ts";
 
@@ -89,14 +90,7 @@ const UNIT_FIELDS = [
 export const FIELD_OPTIONS: Record<string, readonly (readonly [string, string])[]> = {
   Audience: AUDIENCES.map((band) => [band, band] as const),
   Kind: KINDS.map((kind) => [kind.id, kind.label] as const),
-  Type: [
-    ["", "Unset"],
-    ["factual", "Factual"],
-    ["procedural", "Procedural"],
-    ["conceptual", "Conceptual"],
-    ["causal", "Causal"],
-    ["synthesis", "Synthesis"],
-  ],
+  Type: [["", "Unset"], ...BLOCK_TYPES.map((type) => [type, BLOCK_LABELS[type]] as const)],
   Persona: [
     ["curious-co-explorer", "Curious co-explorer"],
     ["tactical-coach", "Tactical coach"],
@@ -288,10 +282,16 @@ export function unitsFor(course: KcCourse): TesterUnit[] {
   return [...targets, ...patches];
 }
 
-export function choiceForMove(kcType: string, moveIndex: number): "yes" | "no" {
-  const index = Number.isFinite(moveIndex) ? Math.max(1, Math.trunc(moveIndex)) : 1;
-  if (kcType === "conceptual" && index === 1) return "yes";
-  if (kcType === "causal" && index === 2) return "yes";
+const LEGACY_BLOCK: Record<string, string> = {
+  factual: "retrieval_check",
+  procedural: "worked_example",
+  conceptual: "case_study",
+  causal: "spot_the_flaw",
+  synthesis: "teach_back",
+};
+
+export function choiceForMove(blockType: string, _moveIndex: number): "yes" | "no" {
+  if (blockType === "mcq" || blockType === "case_study") return "yes";
   return "no";
 }
 
@@ -391,7 +391,7 @@ export function applyUnit(values: TesterValues, course: KcCourse, unit: KcCompon
     "Component title": unit.title,
     "Component code": unit.code,
     "Component description": unit.description ?? "",
-    Type: unit.kc_type ?? "",
+    Type: unit.blocks?.find((block) => block.type)?.type ?? LEGACY_BLOCK[unit.kc_type ?? ""] ?? unit.kc_type ?? "",
     "Core truth": unit.core_truth ?? "",
     "Rubric lines": (unit.rubric ?? []).join("\n"),
     Misconceptions: (unit.misconceptions ?? [])
@@ -403,7 +403,10 @@ export function applyUnit(values: TesterValues, course: KcCourse, unit: KcCompon
     Counterfactual: String(fields.counterfactual ?? ""),
     "Prerequisite status": prerequisiteStatus(unit.prerequisite_codes ?? []),
     "Course position": coursePosition(course, unit.id),
-    "Choice widget": choiceForMove(unit.kc_type ?? "", Number.isFinite(moveIndex) ? moveIndex : 1),
+    "Choice widget": choiceForMove(
+      unit.blocks?.find((block) => block.type)?.type ?? LEGACY_BLOCK[unit.kc_type ?? ""] ?? unit.kc_type ?? "",
+      Number.isFinite(moveIndex) ? moveIndex : 1,
+    ),
   };
 }
 

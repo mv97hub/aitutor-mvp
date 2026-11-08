@@ -95,8 +95,8 @@ export const LAYER_FIELDS: LayerField[] = [
   {
     layer: "Layer 1, Component",
     name: "Type",
-    hover: "One of the five types. It selects the move sequence. It does not change because of tutor settings.",
-    role: "Selects the move sequence.",
+    hover: "The active block type for this preview. The nine types are Topic / Goal, Multiple choice, Case study, Socratic, Curiosity, Worked example, Spot the flaw, Teach back, and Retrieval check.",
+    role: "Names the block the prompt is built for.",
     kind: "Configured",
     where: "KC Creator, /kc-creator",
   },
@@ -143,7 +143,7 @@ export const LAYER_FIELDS: LayerField[] = [
   {
     layer: "Layer 1, Component",
     name: "Transfer case",
-    hover: "A third case the child uses after stating the rule. Conceptual components only. Leave it empty to skip that move. The model does not invent one.",
+    hover: "A later case the learner uses after stating the rule. Leave it empty to skip that substep. The model does not invent one.",
     role: "Adds the transfer move after the rule when the field is present.",
     kind: "Configured",
     where: "KC Creator, /kc-creator, stored in type fields",
@@ -151,7 +151,7 @@ export const LAYER_FIELDS: LayerField[] = [
   {
     layer: "Layer 1, Component",
     name: "Counterfactual",
-    hover: "The what-if the child answers after defending the chain. Causal components only, and only when self-explanation is on. Leave it empty to skip that move.",
+    hover: "A what-if after the learner defends a claim. Leave it empty to skip that substep.",
     role: "Adds the counterfactual move when the field is present and self-explanation is on.",
     kind: "Configured",
     where: "KC Creator, /kc-creator, stored in type fields",
@@ -183,8 +183,8 @@ export const LAYER_FIELDS: LayerField[] = [
   {
     layer: "Layer 1, Component",
     name: "Choice widget",
-    hover: "True only for conceptual predict and the causal flawed claim. Every other move is typed.",
-    role: "Shows the two closed picks. The model still does not set the score.",
+    hover: "On for a multiple-choice block and for a case-study choice. Every other block is typed.",
+    role: "Shows the on-screen choices. The model still does not set the score.",
     kind: "Derived",
     where: "Derived from the move",
   },
