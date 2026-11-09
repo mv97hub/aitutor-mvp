@@ -2621,6 +2621,10 @@ a.ds-row { text-decoration: none; }
   color: #fff;
 }
 
+.kc-creator .kc-banner {
+  flex-wrap: wrap;
+}
+
 .kc-banner .brand,
 .kc-banner .brand span { color: #fff; }
 
@@ -2638,6 +2642,19 @@ a.ds-row { text-decoration: none; }
   flex: none;
   align-items: center;
   gap: 10px;
+}
+
+.kc-creator .kc-fast {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.kc-course-ready-form {
+  display: flex;
+  margin: 0;
 }
 
 .kc-fast-count {

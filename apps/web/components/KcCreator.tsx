@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { KcBanner } from "@/components/KcBanner";
 import { KcBlockCanvas, KcBlockScope } from "@/components/KcBlockCanvas";
 import { KcCreatorComposer } from "@/components/KcComposer";
-import { markKcComplete, pushKcComponent, saveKcComponent } from "@/lib/kc-actions";
+import { markKcComplete, markKcCourseReady, pushKcComponent, saveKcComponent } from "@/lib/kc-actions";
 import { BLOCK_LABELS, blockSummary, scopeFromCourse } from "@/lib/kc-blocks";
 import {
   type KcComponent,
@@ -176,9 +176,25 @@ export function KcCreator({
   }
 
   return (
-    <main className="ds-shell studio-shell kc-screen">
+    <main className="ds-shell studio-shell kc-screen kc-creator">
       <KcBanner name="KC Creator">
         <div className="kc-fast">
+          {course ? (
+            course.ready ? (
+              <button className="button" type="button" disabled>
+                Course ready
+              </button>
+            ) : (
+              <form className="kc-course-ready-form" action={markKcCourseReady}>
+                <input type="hidden" name="course_id" value={course.id} />
+                <input type="hidden" name="node_id" value={component?.id ?? ""} />
+                <input type="hidden" name="model" value={model} />
+                <button className="button" type="submit">
+                  Mark whole course ready
+                </button>
+              </form>
+            )
+          ) : null}
           {record ? (
             <span className="kc-fast-count" aria-live="polite">
               {record.done} / {record.ids.length}

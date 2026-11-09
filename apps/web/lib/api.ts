@@ -6,19 +6,23 @@ export function apiBase(): string {
   return (configured || "http://localhost:8000").replace(/\/$/, "");
 }
 
-function detailFrom(body: unknown, fallback: string): string {
+export function detailFrom(body: unknown, fallback: string): string {
   if (!body || typeof body !== "object" || !("detail" in body)) return fallback;
   const detail = (body as { detail?: unknown }).detail;
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) {
-    return detail
+    const parts = detail
       .map((item) => {
+        if (typeof item === "string") return item.trim();
         if (item && typeof item === "object" && "msg" in item) {
-          return String((item as { msg: unknown }).msg);
+          return String((item as { msg: unknown }).msg).trim();
         }
         return JSON.stringify(item);
       })
-      .join(" ");
+      .filter(Boolean);
+    if (parts.length === 0) return fallback;
+    const gaps = detail.every((item) => typeof item === "string");
+    return parts.join(gaps ? " · " : " ");
   }
   return fallback;
 }
