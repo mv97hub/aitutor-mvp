@@ -75,6 +75,28 @@ export async function markKcReady(formData: FormData) {
   redirect(`/kc-studio?course=${courseId}`);
 }
 
+function creatorReadyBack(formData: FormData) {
+  const courseId = String(formData.get("course_id") || "");
+  const nodeId = String(formData.get("node_id") || "").trim();
+  const raw = String(formData.get("model") || "").trim();
+  const params = new URLSearchParams();
+  params.set("course", courseId);
+  if (nodeId) params.set("kc", nodeId);
+  if (raw) params.set("model", kcModel(raw));
+  return `/kc-creator?${params.toString()}`;
+}
+
+export async function markKcCourseReady(formData: FormData) {
+  const back = creatorReadyBack(formData);
+  const courseId = String(formData.get("course_id") || "");
+  try {
+    await api(`/kc/courses/${courseId}/ready`, { method: "POST" });
+  } catch (error) {
+    bounce(back, error);
+  }
+  redirect(back);
+}
+
 export async function pushKcDraft(formData: FormData) {
   const courseId = String(formData.get("course_id") || "");
   try {

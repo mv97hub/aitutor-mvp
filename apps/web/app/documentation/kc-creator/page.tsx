@@ -62,6 +62,13 @@ export default function KcCreatorDocsPage() {
           Scope. The count beside it is how many of them are done. A push that still has a gap stops on that component
           and shows the gap text.
         </p>
+        <p>
+          Mark whole course ready sits in the top banner, to the left of the Fast Create count, AI Block Scope, and
+          Fast Create All. It shows only when a course is open. It calls the same ready check KC Course Creator uses,
+          which sets the course ready when every component can be taught. Mark complete on one component is a different
+          control. When the course is already ready, the banner says Course ready and does not offer a second mark. If
+          the course still has a gap, that reason shows and the course stays not ready.
+        </p>
 
         <h2>Settings you can change</h2>
         <p>Every component has:</p>
@@ -446,6 +453,10 @@ export default function KcCreatorDocsPage() {
             topic and goal. It skips a component that already has another block, a filled note, or a core truth.
           </li>
           <li>AI Block Scope limits what the chat and Fast Create All recommend. It does not delete blocks already on the canvas.</li>
+          <li>
+            Mark whole course ready is the banner control for the open course. Course ready means it is already marked.
+            A gap leaves the course not ready and shows the reason.
+          </li>
           <li>The chat draft is not the saved component until Push.</li>
           <li>Push and Save both clear Mark complete and mark the course not ready.</li>
           <li>Mark complete stays unavailable while any gap string would show on the structure row.</li>
