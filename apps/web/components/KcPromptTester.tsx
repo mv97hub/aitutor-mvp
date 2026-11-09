@@ -3,8 +3,10 @@
 import { FormEvent, useState } from "react";
 
 import { KcBanner } from "@/components/KcBanner";
+import { BlockDataEditor } from "@/components/KcBlockCanvas";
 import { api } from "@/lib/api";
-import type { KcCourse } from "@/lib/kc";
+import type { KcBlock, KcCourse } from "@/lib/kc";
+import { BLOCK_LABELS } from "@/lib/kc-blocks";
 import { hoverFor } from "@/lib/kc-layer-fields";
 import {
   DEFAULT_TUTOR_PROFILE,
@@ -13,6 +15,7 @@ import {
   applyChild,
   applyResult,
   applyUnit,
+  blocksForUnit,
   courseLabel,
   emptyTesterValues,
   fieldsForLayer,
@@ -43,6 +46,7 @@ export function KcPromptTester({
   const [unitId, setUnitId] = useState("");
   const [childId, setChildId] = useState("");
   const [typeFields, setTypeFields] = useState<Record<string, unknown>>({});
+  const [blocks, setBlocks] = useState<KcBlock[]>([]);
   const [values, setValues] = useState<TesterValues>(() => emptyTesterValues(profile ?? DEFAULT_TUTOR_PROFILE));
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState<string | null>(loadError);
@@ -50,6 +54,9 @@ export function KcPromptTester({
 
   const course = courses.find((item) => item.id === courseId) ?? null;
   const units = course ? unitsFor(course) : [];
+  const moveIndex = Number(values["Move index"] || "1");
+  const activeIndex = blocks.length ? Math.min(Math.max(Number.isFinite(moveIndex) ? moveIndex : 1, 1), blocks.length) - 1 : 0;
+  const activeBlock = blocks[activeIndex];
 
   function setField(name: string, value: string) {
     setValues((current) => ({ ...current, [name]: value }));
@@ -59,6 +66,7 @@ export function KcPromptTester({
     setCourseId(nextId);
     setUnitId("");
     setTypeFields({});
+    setBlocks([]);
     const next = courses.find((item) => item.id === nextId);
     if (!next) return;
     setValues((current) => selectCourse(current, next));
@@ -70,6 +78,7 @@ export function KcPromptTester({
     const unit = units.find((item) => item.id === nextId);
     if (!unit) return;
     setTypeFields({ ...(unit.component.type_fields ?? {}) });
+    setBlocks(blocksForUnit(unit.component));
     setValues((current) => applyUnit(current, course, unit.component));
   }
 
@@ -87,7 +96,7 @@ export function KcPromptTester({
     try {
       const result = await api<PromptTesterResult>("/kc/prompt-tester", {
         method: "POST",
-        body: JSON.stringify(testerPayload(values, typeFields)),
+        body: JSON.stringify(testerPayload(values, typeFields, blocks)),
       });
       setPrompt(result.system_prompt);
       setValues((current) => applyResult(current, result));
@@ -140,6 +149,21 @@ export function KcPromptTester({
                     ))}
                   </select>
                 </label>
+                {activeBlock ? (
+                  <div className="kc-block-body">
+                    <p>
+                      Block {activeIndex + 1} of {blocks.length}: {BLOCK_LABELS[activeBlock.type]}
+                    </p>
+                    <BlockDataEditor
+                      block={activeBlock}
+                      onChange={(data) =>
+                        setBlocks((current) =>
+                          current.map((item, index) => (index === activeIndex ? { ...item, data } : item)),
+                        )
+                      }
+                    />
+                  </div>
+                ) : null}
               </>
             ) : null}
             {heading === "Layer 2, Child" ? (

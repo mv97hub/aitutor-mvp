@@ -49,76 +49,86 @@ export function blankBlock(type: KcBlockType, id = newBlockId()): KcBlock {
   return { id, type, data: blankData(type) };
 }
 
+export type McqChoice = {
+  id: string;
+  text: string;
+  is_correct: boolean;
+  distractor_rationale: string;
+  misconception_code: string;
+};
+
+export type WorkedStep = { step_text: string; rationale: string };
+
+const CHOICE_IDS = ["a", "b", "c", "d", "e"] as const;
+
+export function blankChoice(index: number, correct = false): McqChoice {
+  return {
+    id: CHOICE_IDS[index] ?? String(index + 1),
+    text: "",
+    is_correct: correct,
+    distractor_rationale: "",
+    misconception_code: "",
+  };
+}
+
+/** Empty data for one block type, using the field-catalog keys. */
 export function blankData(type: KcBlockType): Record<string, unknown> {
   if (type === "topic_goal") {
-    return {
-      topic: "",
-      goal: "",
-      reveal_after_recall: true,
-      contrast_note: "",
-      common_mixup: "",
-      why_it_matters: "",
-    };
+    return { topic: "", goal: "", acceptance_criteria: "", teaching_notes: "" };
   }
   if (type === "mcq") {
     return {
       mode: "static",
-      question: "",
-      options: ["", "", "", ""],
-      correct_index: 0,
-      why_correct: "",
-      why_wrong: ["", "", "", ""],
-      generation_prompt: "",
-      why_correct_guidance: "",
-      why_wrong_guidance: "",
+      question_stem: "",
+      choices: [blankChoice(0, true), blankChoice(1)],
+      correct_explanation: "",
+      target_skill: "",
+      difficulty: "standard",
+      num_choices: 4,
+      distractor_guidance: "",
+      stem_constraints: "",
     };
   }
   if (type === "case_study") {
     return {
-      scenario: "",
-      decision_point: "",
-      decision_options: ["", ""],
-      best_option_index: 0,
-      why_best: "",
-      why_others: "",
-      follow_up_question: "",
-      what_transfers: "",
+      case_a: "",
+      case_b: "",
+      prediction_prompt: "",
+      invariant_principle: "",
+      transfer_prompt: "",
+      transfer_expected: "",
     };
   }
   if (type === "socratic") {
-    return {
-      opening_question: "",
-      probe_if_shallow: "",
-      probe_if_close: "",
-      target_insight: "",
-      max_exchanges: 4,
-    };
+    return { central_dilemma: "", initial_probe: "", counterexamples: [""], target_synthesis: "" };
   }
   if (type === "curiosity") {
-    return {
-      hook_question: "",
-      expected_hunch: "",
-      reveal: "",
-      why_surprising: "",
-      bridge_to_goal: "",
-    };
+    return { phenomenon_hook: "", prediction_question: "", bridge_to_unit: "", wonder_branches: [] };
   }
   if (type === "worked_example") {
     return {
-      problem: "",
-      steps: [{ action: "", reason: "" }],
-      faded_step_index: 0,
+      problem_statement: "",
+      steps: [
+        { step_text: "", rationale: "" },
+        { step_text: "", rationale: "" },
+      ],
+      faded_step_index: 1,
       solo_problem: "",
-      solo_check: "",
+      solo_expected_answer: "",
     };
   }
   if (type === "spot_the_flaw") {
-    return { artifact: "", flaw_location: "", why_its_wrong: "", fix: "", transfer_question: "" };
+    return { rookie_work: "", flaw_description: "", underlying_misconception: "", corrected_version: "" };
   }
   if (type === "teach_back") {
-    return { prompt: "", must_include: [], rubric_note: "", follow_up_if_thin: "" };
+    return { peer_persona_prompt: "", required_concepts: [""], peer_follow_up_question: "" };
   }
-  return { prompt: "", acceptable_points: [], partial_credit_note: "" };
+  return {
+    recall_prompt: "",
+    expected_fact: "",
+    elaborative_why_prompt: "",
+    expected_why_rationale: "",
+  };
 }
 
 /** Run-length label, such as `1 Curiosity · 2 Topics`. */

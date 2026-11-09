@@ -96,6 +96,35 @@ def _direct(body: dict) -> dict:
     return preview_kc_prompt(PromptTesterIn.model_validate(body))
 
 
+def test_prompt_tester_quotes_the_catalog_fields_on_the_block() -> None:
+    shown = _direct(
+        _body(
+            blocks=[
+                {
+                    "id": "blk_topic",
+                    "type": "topic_goal",
+                    "data": {
+                        "topic": "Angle sum",
+                        "goal": "Say why the angles add to 180.",
+                        "acceptance_criteria": "Mentions a straight line.",
+                        "teaching_notes": "Use a torn triangle.",
+                    },
+                }
+            ],
+            move_index=1,
+        )
+    )
+    text = shown["system_prompt"]
+    for phrase in (
+        "Angle sum",
+        "Say why the angles add to 180.",
+        "Mentions a straight line.",
+        "Use a torn triangle.",
+    ):
+        assert phrase in text
+    assert shown["active_block_type"] == "topic_goal"
+
+
 def test_prompt_tester_matches_build_kc_prompt_and_writes_nothing() -> None:
     assert "db" not in inspect.signature(post_prompt_tester).parameters
     assert "build_kc_prompt(" in ROUTE.read_text()

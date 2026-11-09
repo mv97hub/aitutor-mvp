@@ -11,6 +11,7 @@ import {
   applyChild,
   applyResult,
   applyUnit,
+  blocksForUnit,
   choiceForMove,
   coursePosition,
   emptyTesterValues,
@@ -107,6 +108,30 @@ test("the form skips the model and keeps computed fields read-only", () => {
   assert.equal(payload.unit_close, "no");
   assert.equal(payload.persona, "curious-co-explorer");
   assert.deepEqual(payload.type_fields, { fact: "kept" });
+  assert.deepEqual(payload.blocks, []);
+});
+
+test("the prompt tester previews the unit's catalog block fields", () => {
+  const unit = component({
+    blocks: [
+      {
+        id: "blk-1",
+        type: "retrieval_check",
+        data: {
+          recall_prompt: "What do the angles add to?",
+          expected_fact: "180 degrees",
+          elaborative_why_prompt: "Why a straight line?",
+          expected_why_rationale: "The exterior walk turns halfway.",
+        },
+      },
+    ],
+  });
+  const blocks = blocksForUnit(unit);
+  assert.equal(blocks[0]?.type, "retrieval_check");
+  assert.equal(blocks[0]?.data.recall_prompt, "What do the angles add to?");
+  const payload = testerPayload(applyUnit(emptyTesterValues(), course({ components: [unit] }), unit), {}, blocks);
+  assert.equal(payload.blocks[0]?.data.expected_fact, "180 degrees");
+  assert.equal(payload.kc_type, "retrieval_check");
 });
 
 test("choosing a unit fills layer 1 from that course and component", () => {

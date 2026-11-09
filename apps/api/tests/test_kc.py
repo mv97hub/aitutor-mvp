@@ -1310,7 +1310,6 @@ def test_push_keeps_every_block_from_the_model_reply() -> None:
             "Recall the color",
             "Name a bank",
             "The river is blue.",
-            "Light scatters.",
         ]
         stored = client.get(f"/kc/nodes/{river['id']}").json()
         assert stored["blocks"] == blocks

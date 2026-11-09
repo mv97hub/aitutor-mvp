@@ -58,11 +58,11 @@ BLOCK_AUTHORING_RULES: dict[str, str] = {
         "and optional teaching_notes."
     ),
     "mcq": (
-        "- mcq (Multiple Choice Question): Set mode to 'static' or 'dynamic'. "
-        "When mode is 'static', provide question_stem, 2-5 choices ({ id, text, is_correct, distractor_rationale, misconception_code } "
-        "with exactly one is_correct=true), and correct_explanation. "
-        "When mode is 'dynamic', provide target_skill, difficulty ('foundation' | 'standard' | 'stretch'), "
-        "num_choices (3-5), distractor_guidance, and stem_constraints."
+        "- mcq (Multiple Choice Question): mode is required, 'static' or 'dynamic'. "
+        "Static requires question_stem and 2-5 choices ({ id, text, is_correct, optional distractor_rationale, "
+        "optional misconception_code }) with exactly one is_correct true. correct_explanation is optional. "
+        "Dynamic requires target_skill and distractor_guidance. difficulty ('foundation' | 'standard' | 'stretch'), "
+        "num_choices (3-5), and stem_constraints are optional."
     ),
     "case_study": (
         "- case_study (Case Study / Contrasting Cases): Provide case_a, contrasting case_b, "
@@ -78,7 +78,8 @@ BLOCK_AUTHORING_RULES: dict[str, str] = {
     ),
     "worked_example": (
         "- worked_example (Worked Example + Faded Step): Provide problem_statement, "
-        "2-6 steps ({ step_text, rationale }), 0-based faded_step_index, solo_problem, and solo_expected_answer."
+        "2-6 steps ({ step_text required, rationale optional }), optional 0-based faded_step_index "
+        "(the last step when omitted), solo_problem, and solo_expected_answer."
     ),
     "spot_the_flaw": (
         "- spot_the_flaw (Spot the Flaw / Buggy Rule): Provide rookie_work, flaw_description, "
@@ -261,119 +262,160 @@ _MISCONCEPTION = {
     "required": ["wrong_move", "broken_kc"],
 }
 
-_MCQ_CHOICE_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "id": {"type": "string"},
-        "text": {"type": "string"},
-        "is_correct": {"type": "boolean"},
-        "distractor_rationale": {"type": "string"},
-        "misconception_code": {"type": "string"},
-    },
-    "required": ["id", "text", "is_correct", "distractor_rationale", "misconception_code"],
-}
-
-_WORKED_STEP_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "step_text": {"type": "string"},
-        "rationale": {"type": "string"},
-    },
-    "required": ["step_text", "rationale"],
-}
-
-_BLOCK_TYPE_PROPERTIES: dict[str, dict[str, dict]] = {
-    "topic_goal": {
-        "topic": {"type": "string"},
-        "goal": {"type": "string"},
-        "acceptance_criteria": {"type": "string"},
-        "teaching_notes": {"type": "string"},
-    },
-    "mcq": {
-        "mode": {"type": "string", "enum": ["static", "dynamic"]},
-        "question_stem": {"type": "string"},
-        "choices": {"type": "array", "items": _MCQ_CHOICE_SCHEMA},
-        "correct_explanation": {"type": "string"},
-        "target_skill": {"type": "string"},
-        "difficulty": {"type": "string", "enum": ["foundation", "standard", "stretch"]},
-        "num_choices": {"type": "integer"},
-        "distractor_guidance": {"type": "string"},
-        "stem_constraints": {"type": "string"},
-    },
-    "case_study": {
-        "case_a": {"type": "string"},
-        "case_b": {"type": "string"},
-        "prediction_prompt": {"type": "string"},
-        "invariant_principle": {"type": "string"},
-        "transfer_prompt": {"type": "string"},
-        "transfer_expected": {"type": "string"},
-    },
-    "socratic": {
-        "central_dilemma": {"type": "string"},
-        "initial_probe": {"type": "string"},
-        "counterexamples": {"type": "array", "items": {"type": "string"}},
-        "target_synthesis": {"type": "string"},
-    },
-    "curiosity": {
-        "phenomenon_hook": {"type": "string"},
-        "prediction_question": {"type": "string"},
-        "bridge_to_unit": {"type": "string"},
-        "wonder_branches": {"type": "array", "items": {"type": "string"}},
-    },
-    "worked_example": {
-        "problem_statement": {"type": "string"},
-        "steps": {"type": "array", "items": _WORKED_STEP_SCHEMA},
-        "faded_step_index": {"type": "integer"},
-        "solo_problem": {"type": "string"},
-        "solo_expected_answer": {"type": "string"},
-    },
-    "spot_the_flaw": {
-        "rookie_work": {"type": "string"},
-        "flaw_description": {"type": "string"},
-        "underlying_misconception": {"type": "string"},
-        "corrected_version": {"type": "string"},
-    },
-    "teach_back": {
-        "peer_persona_prompt": {"type": "string"},
-        "required_concepts": {"type": "array", "items": {"type": "string"}},
-        "peer_follow_up_question": {"type": "string"},
-    },
-    "retrieval_check": {
-        "recall_prompt": {"type": "string"},
-        "expected_fact": {"type": "string"},
-        "elaborative_why_prompt": {"type": "string"},
-        "expected_why_rationale": {"type": "string"},
-    },
-}
-
-
-def _block_data_schema(allowed_types: list[str]) -> dict:
-    props: dict[str, dict] = {}
-    for btype in allowed_types:
-        for key, spec in _BLOCK_TYPE_PROPERTIES.get(btype, {}).items():
-            props[key] = copy.deepcopy(spec)
+def _object_schema(properties: dict, required: list[str]) -> dict:
     return {
         "type": "object",
         "additionalProperties": False,
-        "properties": props,
-        "required": list(props.keys()),
+        "properties": properties,
+        "required": required,
     }
 
 
-def _block_item_schema(allowed_types: list[str]) -> dict:
-    allowed = clean_allowed_block_types(allowed_types)
+_STRING = {"type": "string"}
+
+_MCQ_CHOICE_SCHEMA = _object_schema(
+    {
+        "id": _STRING,
+        "text": _STRING,
+        "is_correct": {"type": "boolean"},
+        "distractor_rationale": _STRING,
+        "misconception_code": _STRING,
+    },
+    ["id", "text", "is_correct"],
+)
+
+_WORKED_STEP_SCHEMA = _object_schema(
+    {"step_text": _STRING, "rationale": _STRING},
+    ["step_text"],
+)
+
+_MCQ_STATIC_SCHEMA = _object_schema(
+    {
+        "mode": {"type": "string", "enum": ["static"]},
+        "question_stem": _STRING,
+        "choices": {"type": "array", "minItems": 2, "maxItems": 5, "items": _MCQ_CHOICE_SCHEMA},
+        "correct_explanation": _STRING,
+    },
+    ["mode", "question_stem", "choices"],
+)
+
+_MCQ_DYNAMIC_SCHEMA = _object_schema(
+    {
+        "mode": {"type": "string", "enum": ["dynamic"]},
+        "target_skill": _STRING,
+        "distractor_guidance": _STRING,
+        "difficulty": {"type": "string", "enum": ["foundation", "standard", "stretch"]},
+        "num_choices": {"type": "integer", "minimum": 3, "maximum": 5},
+        "stem_constraints": _STRING,
+    },
+    ["mode", "target_skill", "distractor_guidance"],
+)
+
+# One data object per block type. Required keys are the catalog's required fields.
+# Optional catalog fields stay on the object and are omitted from required.
+_BLOCK_DATA_SCHEMAS: dict[str, dict] = {
+    "topic_goal": _object_schema(
+        {
+            "topic": _STRING,
+            "goal": _STRING,
+            "acceptance_criteria": _STRING,
+            "teaching_notes": _STRING,
+        },
+        ["topic", "goal"],
+    ),
+    "mcq": {"anyOf": [_MCQ_STATIC_SCHEMA, _MCQ_DYNAMIC_SCHEMA]},
+    "case_study": _object_schema(
+        {
+            "case_a": _STRING,
+            "case_b": _STRING,
+            "prediction_prompt": _STRING,
+            "invariant_principle": _STRING,
+            "transfer_prompt": _STRING,
+            "transfer_expected": _STRING,
+        },
+        ["case_a", "case_b", "prediction_prompt", "invariant_principle"],
+    ),
+    "socratic": _object_schema(
+        {
+            "central_dilemma": _STRING,
+            "initial_probe": _STRING,
+            "counterexamples": {"type": "array", "minItems": 1, "maxItems": 3, "items": _STRING},
+            "target_synthesis": _STRING,
+        },
+        ["central_dilemma", "initial_probe", "counterexamples", "target_synthesis"],
+    ),
+    "curiosity": _object_schema(
+        {
+            "phenomenon_hook": _STRING,
+            "prediction_question": _STRING,
+            "bridge_to_unit": _STRING,
+            "wonder_branches": {"type": "array", "maxItems": 3, "items": _STRING},
+        },
+        ["phenomenon_hook", "prediction_question", "bridge_to_unit"],
+    ),
+    "worked_example": _object_schema(
+        {
+            "problem_statement": _STRING,
+            "steps": {"type": "array", "minItems": 2, "maxItems": 6, "items": _WORKED_STEP_SCHEMA},
+            "faded_step_index": {"type": "integer", "minimum": 0},
+            "solo_problem": _STRING,
+            "solo_expected_answer": _STRING,
+        },
+        ["problem_statement", "steps", "solo_problem", "solo_expected_answer"],
+    ),
+    "spot_the_flaw": _object_schema(
+        {
+            "rookie_work": _STRING,
+            "flaw_description": _STRING,
+            "underlying_misconception": _STRING,
+            "corrected_version": _STRING,
+        },
+        ["rookie_work", "flaw_description", "underlying_misconception", "corrected_version"],
+    ),
+    "teach_back": _object_schema(
+        {
+            "peer_persona_prompt": _STRING,
+            "required_concepts": {"type": "array", "minItems": 1, "maxItems": 4, "items": _STRING},
+            "peer_follow_up_question": _STRING,
+        },
+        ["peer_persona_prompt", "required_concepts", "peer_follow_up_question"],
+    ),
+    "retrieval_check": _object_schema(
+        {
+            "recall_prompt": _STRING,
+            "expected_fact": _STRING,
+            "elaborative_why_prompt": _STRING,
+            "expected_why_rationale": _STRING,
+        },
+        ["recall_prompt", "expected_fact", "elaborative_why_prompt", "expected_why_rationale"],
+    ),
+}
+
+
+def _block_variant(btype: str) -> dict:
     return {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "id": {"type": "string"},
-            "type": {"type": "string", "enum": list(allowed)},
-            "data": _block_data_schema(allowed),
+            "id": _STRING,
+            "type": {
+                "type": "string",
+                "enum": [btype],
+                "description": "Only block types in this course's AI Block Scope may be emitted.",
+            },
+            "data": copy.deepcopy(_BLOCK_DATA_SCHEMAS[btype]),
         },
         "required": ["id", "type", "data"],
     }
+
+
+def _block_item_schema(allowed_types: list[str]) -> dict:
+    """One schema per allowed block type. Fields are not merged across types."""
+    allowed = clean_allowed_block_types(allowed_types)
+    variants = [_block_variant(btype) for btype in allowed if btype in _BLOCK_DATA_SCHEMAS]
+    if len(variants) == 1:
+        return variants[0]
+    return {"anyOf": variants}
 
 
 CREATOR_SCHEMA = {
@@ -431,8 +473,6 @@ def derive_rubric_from_blocks(blocks: list[dict]) -> list[str]:
             criterion = str(data.get("invariant_principle") or "").strip()
         elif btype == "socratic":
             criterion = str(data.get("target_synthesis") or "").strip()
-        elif btype == "curiosity":
-            criterion = str(data.get("bridge_to_unit") or data.get("prediction_question") or "").strip()
         elif btype == "worked_example":
             criterion = str(data.get("solo_expected_answer") or data.get("problem_statement") or "").strip()
         elif btype == "spot_the_flaw":
@@ -1120,6 +1160,10 @@ def _creator_schema(other_codes: list[str], allowed_block_types: list[str] | Non
     schema = copy.deepcopy(CREATOR_SCHEMA)
     schema["properties"]["blocks"] = {
         "type": "array",
+        "description": (
+            "Ordered blocks. Emit only types in this course's AI Block Scope. "
+            "Each type has its own data fields. Do not fill another type's fields."
+        ),
         "items": _block_item_schema(allowed),
     }
     if other_codes:

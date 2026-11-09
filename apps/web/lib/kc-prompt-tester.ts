@@ -1,8 +1,8 @@
 /** Form state for the KC Prompt Tester. The API calls build_kc_prompt. */
 
 import { LAYER_FIELDS, LAYER_HEADINGS, type LayerField } from "./kc-layer-fields.ts";
-import { BLOCK_LABELS, BLOCK_TYPES } from "./kc-blocks.ts";
-import { AUDIENCES, KINDS, type KcComponent, type KcCourse } from "./kc.ts";
+import { BLOCK_LABELS, BLOCK_TYPES, isBlockType } from "./kc-blocks.ts";
+import { AUDIENCES, KINDS, type KcBlock, type KcComponent, type KcCourse } from "./kc.ts";
 import type { Student, TutorProfile } from "./types.ts";
 
 export { LAYER_HEADINGS };
@@ -178,6 +178,7 @@ export type PromptTesterRequest = {
   transfer_case: string;
   counterfactual: string;
   type_fields: Record<string, unknown>;
+  blocks: KcBlock[];
   move_index: number;
   choice_on_screen: string;
   prerequisite_status: string;
@@ -435,9 +436,21 @@ export function parseMisconceptions(value: string): { wrong_move: string; broken
   });
 }
 
+/** Blocks the prompt tester previews. Only catalog block types are kept. */
+export function blocksForUnit(unit: KcComponent): KcBlock[] {
+  return (unit.blocks ?? [])
+    .filter((block): block is KcBlock => isBlockType(block.type))
+    .map((block) => ({
+      id: block.id,
+      type: block.type,
+      data: structuredClone(block.data),
+    }));
+}
+
 export function testerPayload(
   values: TesterValues,
   typeFields: Record<string, unknown> = {},
+  blocks: KcBlock[] = [],
 ): PromptTesterRequest {
   return {
     course_title: values["Course title"] ?? "",
@@ -457,6 +470,7 @@ export function testerPayload(
     transfer_case: values["Transfer case"] ?? "",
     counterfactual: values.Counterfactual ?? "",
     type_fields: typeFields,
+    blocks,
     move_index: whole(values["Move index"] ?? "", 1),
     choice_on_screen: values["Choice widget"] === "yes" ? "yes" : "no",
     prerequisite_status: values["Prerequisite status"] ?? "",

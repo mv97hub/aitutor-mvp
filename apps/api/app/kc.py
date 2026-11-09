@@ -417,7 +417,19 @@ def _public_blocks(node: KcNode | None) -> list[dict]:
 
 
 def _block_title(data: dict, fallback: str) -> str:
-    for key in ("topic", "question", "question_stem", "scenario", "recall_prompt", "goal"):
+    for key in (
+        "topic",
+        "question_stem",
+        "target_skill",
+        "case_a",
+        "central_dilemma",
+        "phenomenon_hook",
+        "problem_statement",
+        "rookie_work",
+        "peer_persona_prompt",
+        "recall_prompt",
+        "goal",
+    ):
         text = str(data.get(key) or "").strip()
         if text:
             return text
@@ -501,9 +513,17 @@ def _block_field_gaps(blocks: list[dict]) -> list[str]:
     return gaps
 
 
+def _filled_strings(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if _has_text(item)]
+
+
 def _missing_block_fields(kind: str, data: dict) -> str:
-    def text(*keys: str) -> bool:
-        return any(_has_text(data.get(key)) for key in keys)
+    """Catalog readiness. Only the field catalog keys count."""
+
+    def text(key: str) -> bool:
+        return _has_text(data.get(key))
 
     if kind == "topic_goal":
         if text("topic") and text("goal"):
@@ -512,74 +532,70 @@ def _missing_block_fields(kind: str, data: dict) -> str:
     if kind == "mcq":
         mode = str(data.get("mode") or "static").strip()
         if mode == "dynamic":
-            if text("target_skill", "generation_prompt") and text("distractor_guidance", "why_wrong_guidance"):
+            if text("target_skill") and text("distractor_guidance"):
                 return ""
             return "needs a target skill and distractor guidance"
-        choices = data.get("choices") if isinstance(data.get("choices"), list) else data.get("options")
-        filled = []
-        if isinstance(choices, list):
-            for item in choices:
-                if isinstance(item, dict) and _has_text(item.get("text")):
-                    filled.append(item)
-                elif _has_text(item):
-                    filled.append(item)
-        if text("question_stem", "question") and len(filled) >= 2:
+        choices = data.get("choices") if isinstance(data.get("choices"), list) else []
+        filled = [item for item in choices if isinstance(item, dict) and _has_text(item.get("text"))]
+        correct = [item for item in filled if item.get("is_correct") is True]
+        if text("question_stem") and len(filled) >= 2 and len(correct) == 1:
             return ""
         return "needs a question and at least two choices"
     if kind == "case_study":
-        authored = text("case_a") and text("case_b") and text("prediction_prompt", "prediction") and text(
-            "invariant_principle", "rule"
-        )
-        canvas = text("scenario") and text("decision_point")
-        if authored or canvas:
+        ready = text("case_a") and text("case_b") and text("prediction_prompt") and text("invariant_principle")
+        if ready and text("transfer_prompt") and not text("transfer_expected"):
+            return "needs the expected transfer"
+        if ready:
             return ""
         return "needs both cases and the principle"
     if kind == "socratic":
-        counters = data.get("counterexamples")
-        has_counter = isinstance(counters, list) and any(_has_text(item) for item in counters)
-        if text("central_dilemma", "opening_question") and (has_counter or text("probe_if_shallow")) and text(
-            "target_synthesis", "target_insight"
-        ):
+        counters = _filled_strings(data.get("counterexamples"))
+        if text("central_dilemma") and text("initial_probe") and counters and text("target_synthesis"):
             return ""
         return "needs a dilemma and a target synthesis"
     if kind == "curiosity":
-        if text("phenomenon_hook", "hook_question") and text("prediction_question") and text(
-            "bridge_to_unit", "bridge_to_goal", "reveal"
-        ):
+        if text("phenomenon_hook") and text("prediction_question") and text("bridge_to_unit"):
             return ""
         return "needs a hook, a prediction, and a bridge"
     if kind == "worked_example":
-        steps = data.get("steps")
-        filled_steps = 0
-        if isinstance(steps, list):
-            for item in steps:
-                if isinstance(item, dict) and _has_text(item.get("step_text") or item.get("action")):
-                    filled_steps += 1
-                elif _has_text(item):
-                    filled_steps += 1
-        if text("problem_statement", "problem") and filled_steps >= 2 and text("solo_problem") and text(
-            "solo_expected_answer", "solo_check"
+        steps = data.get("steps") if isinstance(data.get("steps"), list) else []
+        filled_steps = [
+            item for item in steps if isinstance(item, dict) and _has_text(item.get("step_text"))
+        ]
+        index = data.get("faded_step_index")
+        index_ok = index is None or index == "" or (
+            isinstance(index, int) and not isinstance(index, bool) and 0 <= index < len(steps)
+        )
+        if (
+            text("problem_statement")
+            and len(filled_steps) >= 2
+            and index_ok
+            and text("solo_problem")
+            and text("solo_expected_answer")
         ):
             return ""
         return "needs a worked problem, steps, and a solo check"
     if kind == "spot_the_flaw":
-        if text("rookie_work", "artifact") and text("flaw_description", "why_its_wrong") and text(
-            "underlying_misconception", "flaw_location"
-        ) and text("corrected_version", "fix"):
+        if (
+            text("rookie_work")
+            and text("flaw_description")
+            and text("underlying_misconception")
+            and text("corrected_version")
+        ):
             return ""
         return "needs the flaw and the correction"
     if kind == "teach_back":
-        concepts = data.get("required_concepts") if isinstance(data.get("required_concepts"), list) else data.get(
-            "must_include"
-        )
-        has_concept = isinstance(concepts, list) and any(_has_text(item) for item in concepts)
-        if text("peer_persona_prompt", "prompt") and has_concept and text("peer_follow_up_question", "follow_up_if_thin"):
+        concepts = _filled_strings(data.get("required_concepts"))
+        if text("peer_persona_prompt") and 1 <= len(concepts) <= 4 and text("peer_follow_up_question"):
             return ""
         return "needs a prompt and the concepts to include"
     if kind == "retrieval_check":
-        points = data.get("acceptable_points")
-        has_point = isinstance(points, list) and any(_has_text(item) for item in points)
-        if text("recall_prompt", "prompt") and (text("expected_fact") or has_point):
+        if (
+            text("recall_prompt")
+            and text("expected_fact")
+            and text("elaborative_why_prompt")
+            and text("expected_why_rationale")
+        ):
             return ""
         return "needs a recall prompt and the expected fact"
     return ""
