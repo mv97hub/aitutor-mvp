@@ -1528,51 +1528,70 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
             "Minutes",
             "Component title",
             "Component code",
-            "Type",
-            "Component description",
+            "Outline",
             "Core truth",
-            "Type fields",
-            "Rubric lines",
+            "Derived rubric",
             "Misconceptions",
             "Prerequisite codes",
             "Encompass codes",
-            "Move index",
-            "Move name",
-            "Evidence",
-            "Choice widget",
-            "Course position",
-            "Move content",
+            "Prerequisite status",
+            "Block index",
+            "Block type",
+            "Substep",
+            "Choice on screen",
             "Display name",
             "Age",
             "Reading level",
             "Modality",
             "Interests",
-            "Attempts on this move",
+            "Attempts",
             "Last answer",
             "Last misconception",
             "Minutes used",
             "Support band",
-            "Score",
-            "Status",
             "Affect",
             "Last four messages",
+            "Eliminated choices",
+            "Finished blocks",
         ):
             assert blank[name] == ""
         assert blank["Persona"]
         assert blank["Lexicon"]
-        assert blank["Instructive"]
-        assert blank["Stay on course"] in {"yes", "no"}
+        assert blank["Orient framing"] == "elaborate_outline"
+        assert blank["Stay on course"] == "brief_answer_then_return"
         assert blank["Use interests"] in {"yes", "no"}
-        assert blank["Misconception policy"] == "retry_once"
-        assert blank["Self-explanation"] in {"yes", "no"}
-        assert blank["Enrichment"] in {"direct", "on_request", "offer"}
-        assert blank["Growth-mindset praise"] in {"yes", "no"}
-        assert blank["Anti-spoiler"] in {"yes", "no"}
-        assert blank["One question"] in {"yes", "no"}
-        assert blank["Unit close"] == "no"
-        assert blank["Course outro"] == "no"
-        for unused in ("Voice override", "Tutor persona"):
-            assert unused not in blank
+        assert blank["Misconception policy"] == "explain_and_retry_once"
+        assert blank["Encouragement style"] == "process_praise"
+        assert blank["Close summary depth"] == "diagnostic_strengths_and_gaps"
+        assert blank["Close component"] == "no"
+        assert blank["Close course"] == "no"
+        for retired in (
+            "Type",
+            "Type fields",
+            "Component description",
+            "Move index",
+            "Move name",
+            "Evidence",
+            "Choice widget",
+            "Move content",
+            "Instructive",
+            "Struggle window",
+            "Effective struggle window",
+            "Anti-spoiler",
+            "One question",
+            "Enrichment",
+            "Effective enrichment",
+            "Growth-mindset praise",
+            "Self-explanation",
+            "Asks why",
+            "Stability",
+            "Score",
+            "Status",
+            "Recipe",
+            "Voice override",
+            "Tutor persona",
+        ):
+            assert retired not in blank
 
         picked = _variable_map(
             client.get("/kc/tutor/variables", params={"student_id": str(storm.id), "course_id": course["id"]})
@@ -1585,9 +1604,11 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         assert picked["Display name"] == "Storm"
         assert picked["Age"] == "10"
         assert picked["Component title"] == ""
-        assert picked["Type fields"] == ""
-        assert picked["Move index"] == ""
+        assert picked["Block index"] == ""
+        assert picked["Outline"] == ""
         assert picked["Redirect pending"] == "no"
+        assert "Type fields" not in picked
+        assert "Move index" not in picked
 
         pushed = client.post(
             f"/kc/courses/{course['id']}/push",
@@ -1619,25 +1640,31 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         live = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
         assert live["Component title"] == "River fact"
         assert live["Component code"] == "zz-vars-fact"
-        assert live["Type"] == ""
-        assert live["Component description"] == "A short brief."
+        assert live["Outline"] == "How River fact works."
         assert live["Core truth"] == "Truth for River fact."
-        assert live["Type fields"] == ""
-        assert "Type field: Fact" not in live
-        assert live["Rubric lines"] == "Explain River fact."
+        assert live["Derived rubric"] == "Explain River fact."
+        assert "Type" not in live
+        assert "Type fields" not in live
+        assert "Component description" not in live
         assert live["Misconceptions"] == "The river is red. -> zz-vars-other"
         assert live["Prerequisite codes"] == "zz-vars-other"
         assert live["Encompass codes"] == ""
-        assert live["Recipe"] == "block_walk"
-        assert live["Move index"] == "1 of 1"
-        assert live["Move name"] == "Block 1 of 1: Topic / Goal"
-        assert live["Move content"] == "Topic: River fact | Goal: Explain River fact."
-        assert live["Evidence"] == "blk-1"
+        assert live["Block index"] == "1 of 1"
+        assert live["Block type"] == "topic_goal (Topic / Goal)"
+        assert live["Substep"] == "main"
+        assert live["Choice on screen"] == "no"
+        assert live["Topic"] == "River fact"
+        assert live["Goal"] == "Explain River fact."
+        assert live["Acceptance criteria"] == ""
+        assert "Question stem" not in live
+        assert live["Explanation depth"] == "3"
+        assert live["Ask for a full sentence"] == "yes"
+        assert "Retry attempts" not in live
         assert live["Support band"] == "hold"
-        assert live["Score"] == ""
-        assert live["Status"] == "in_progress"
         assert live["Redirect pending"] == "no"
-        assert live["Unit close"] == "no"
+        assert live["Close component"] == "yes"
+        assert live["Close course"] == "no"
+        assert live["Finished blocks"] == ""
         assert "weather" in live["Interests"]
 
         client.post(
@@ -1664,12 +1691,13 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         )
         assert done.status_code == 200, done.text
         after = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
-        assert after["Move index"] == "1 of 1"
-        assert after["Move name"] == "Block 1 of 1: Topic / Goal"
-        assert after["Score"] == "100"
-        assert after["Status"] == "completed"
-        assert after["Unit close"] == "yes"
-        assert after["Course outro"] == "no"
+        assert after["Block index"] == "1 of 1"
+        assert after["Block type"] == "topic_goal (Topic / Goal)"
+        assert after["Close component"] == "yes"
+        assert after["Close course"] == "no"
+        assert "Score" not in after
+        assert "Status" not in after
+        assert "passed after" in after["Finished blocks"]
         assert after["Redirect pending"] == "no"
         assert client.get("/kc/tutor/variables", params={"session_id": str(uuid.uuid4())}).status_code == 404
     finally:
@@ -1678,6 +1706,82 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
 
 
 LAYER_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "021_kc_seven_layer.py"
+
+
+def test_tutor_variables_follow_the_active_block() -> None:
+    storm = _storm()
+    _clear_progress(storm.id)
+    course = _ready(
+        _make("zz-varblock", title="Block variables"),
+        [
+            _spec(
+                "zz-varblock-color",
+                "Sky light",
+                blocks=[
+                    {
+                        "id": "topic",
+                        "type": "topic_goal",
+                        "data": {"topic": "Sky light", "goal": "The sky sends blue light."},
+                    },
+                    {
+                        "id": "quiz",
+                        "type": "mcq",
+                        "data": {
+                            "mode": "static",
+                            "question_stem": "What sends the blue light?",
+                            "choices": [
+                                {"id": "a", "text": "The sky", "is_correct": True},
+                                {"id": "b", "text": "The mud", "is_correct": False},
+                            ],
+                            "correct_explanation": "The sky sends blue light.",
+                        },
+                    },
+                ],
+            )
+        ],
+    )
+    try:
+        opened = client.post(
+            "/kc/tutor/sessions",
+            json={
+                "student_id": str(storm.id),
+                "course_id": course["id"],
+                "kc_id": _node(course, "zz-varblock-color")["id"],
+            },
+        )
+        assert opened.status_code == 200, opened.text
+        session_id = opened.json()["id"]
+        topic = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
+        assert topic["Block index"] == "1 of 2"
+        assert topic["Block type"] == "topic_goal (Topic / Goal)"
+        assert topic["Substep"] == "main"
+        assert topic["Choice on screen"] == "no"
+        assert topic["Topic"] == "Sky light"
+        assert topic["Goal"] == "The sky sends blue light."
+        assert "Question stem" not in topic
+        assert topic["Explanation depth"] == "3"
+        assert "Retry attempts" not in topic
+        assert topic["Close component"] == "no"
+
+        moved = _decide(session_id, "The sky sends blue light.", reply="Next is the choice.")
+        assert moved["step"] == 1
+        quiz = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
+        assert quiz["Block index"] == "2 of 2"
+        assert quiz["Block type"] == "mcq (Multiple Choice Question)"
+        assert quiz["Substep"] == "choice"
+        assert quiz["Choice on screen"] == "yes"
+        assert quiz["Question stem"] == "What sends the blue light?"
+        assert "The sky" in quiz["Choices"]
+        assert "The mud" in quiz["Choices"]
+        assert "Topic" not in quiz
+        assert "Explanation depth" not in quiz
+        assert quiz["Retry attempts"] == "2"
+        assert quiz["Disable eliminated choices"] == "yes"
+        assert quiz["Close component"] == "yes"
+        assert "passed after" in quiz["Finished blocks"]
+    finally:
+        _clear_progress(storm.id)
+        _wipe_zz()
 
 
 def test_seven_layer_revision_adds_columns_only() -> None:
@@ -2465,12 +2569,22 @@ def test_course_progress_reports_percent_and_unit_status() -> None:
         status = {item["code"]: item["status"] for item in body["units"]}
         assert status == {
             "zz-prog-known": "completed",
-            "zz-prog-fragile": "in_progress",
+            "zz-prog-fragile": "completed",
             "zz-prog-open": "in_progress",
-            "zz-prog-closed": "not_started",
+            "zz-prog-closed": "completed",
             "zz-prog-known-open": "completed",
             "zz-prog-patch": "not_started",
         }
+        mastery = {item["code"]: item["mastery"] for item in body["units"]}
+        assert mastery["zz-prog-known"] == "known"
+        assert mastery["zz-prog-fragile"] == "fragile"
+        assert mastery["zz-prog-open"] == ""
+        opened_unit = next(item for item in body["units"] if item["code"] == "zz-prog-open")
+        assert opened_unit["finished_blocks"] == 0
+        assert opened_unit["total_blocks"] == 1
+        assert "Explain Open fact." in opened_unit["rubric"]
+        known_unit = next(item for item in body["units"] if item["code"] == "zz-prog-known")
+        assert "Explain Known fact." in known_unit["rubric"]
         assert body["units"][-1]["patch"] is True
         assert body["units"][-1]["title"] == "Patch fact"
         assert all(item["patch"] is False for item in body["units"][:-1])
@@ -2487,6 +2601,49 @@ def test_course_progress_reports_percent_and_unit_status() -> None:
         assert again["units"] == body["units"]
         assert again["percent"] == body["percent"]
         assert _counts()["sessions"] == sessions_after_open
+
+        db = SessionLocal()
+        try:
+            row = db.get(KcSession, uuid.UUID(opened.json()["id"]))
+            assert row is not None
+            assert row.status == "in_progress"
+            row.block_results = [
+                {
+                    "id": "blk-1",
+                    "block_id": "blk-1",
+                    "outcome": "passed",
+                    "attempts": 1,
+                    "title": "Open fact",
+                }
+            ]
+            db.commit()
+        finally:
+            db.close()
+        left_open = client.get(
+            f"/kc/tutor/courses/{course['id']}",
+            params={"student_id": str(storm.id)},
+        ).json()
+        left = {item["code"]: item for item in left_open["units"]}
+        assert left["zz-prog-open"]["status"] == "completed"
+        assert left["zz-prog-open"]["mastery"] == "known"
+        assert left["zz-prog-open"]["finished_blocks"] == 1
+        refused = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/decision",
+            json={"reply": "This unit is complete.", "decision": "complete"},
+        )
+        assert refused.status_code == 422
+        db = SessionLocal()
+        try:
+            row = db.get(KcSession, uuid.UUID(opened.json()["id"]))
+            assert row is not None
+            assert row.status == "completed"
+            state = db.scalar(select(KcState).where(KcState.student_id == storm.id, KcState.kc_id == row.kc_id))
+            assert state is not None
+            assert state.status == "known"
+            assert state.result["strong"]
+            assert state.result["work_on"]
+        finally:
+            db.close()
     finally:
         _clear_progress(storm.id)
         _wipe_zz()

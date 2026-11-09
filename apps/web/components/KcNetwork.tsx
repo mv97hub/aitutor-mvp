@@ -1,14 +1,28 @@
+import type { CSSProperties } from "react";
+
 import type { KcNetwork } from "@/lib/kc";
 import { networkStatusClass, type KcUnitStatus } from "@/lib/kc-progress";
+
+export const NETWORK_WIDTH = 840;
+
+export function networkHeight(network: KcNetwork): number {
+  const targets = network.nodes.filter((node) => !node.patch);
+  const patches = network.nodes.filter((node) => node.patch);
+  return Math.max(360, 100 + Math.max(Math.ceil(targets.length / 3), patches.length, 1) * 120);
+}
 
 export function NetworkMap({
   network,
   statusByCode,
+  noteByCode,
   label = "Component network",
+  style,
 }: {
   network: KcNetwork;
   statusByCode?: Record<string, KcUnitStatus>;
+  noteByCode?: Record<string, string>;
   label?: string;
+  style?: CSSProperties;
 }) {
   const targets = network.nodes.filter((node) => !node.patch);
   const patches = network.nodes.filter((node) => node.patch);
@@ -19,9 +33,9 @@ export function NetworkMap({
   patches.forEach((node, index) => {
     pos.set(node.code, { x: 720, y: 78 + index * 120 });
   });
-  const height = Math.max(360, 100 + Math.max(Math.ceil(targets.length / 3), patches.length, 1) * 120);
+  const height = networkHeight(network);
   return (
-    <svg className="kc-net" viewBox={`0 0 840 ${height}`} role="img" aria-label={label}>
+    <svg className="kc-net" viewBox={`0 0 ${NETWORK_WIDTH} ${height}`} role="img" aria-label={label} style={style}>
       {network.edges.map((edge, index) => {
         const from = pos.get(edge.from_code);
         const to = pos.get(edge.to_code);
@@ -49,6 +63,11 @@ export function NetworkMap({
             <text x={point.x} y={point.y + 46} textAnchor="middle">
               {node.title.length > 22 ? `${node.title.slice(0, 20)}…` : node.title}
             </text>
+            {noteByCode?.[node.code] ? (
+              <text x={point.x} y={point.y + 62} textAnchor="middle" className="kc-net-note">
+                {noteByCode[node.code]}
+              </text>
+            ) : null}
           </g>
         );
       })}

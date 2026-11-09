@@ -24,26 +24,19 @@ from app.kc_loop import resolve_block_turn
 from app.kc_prompt import (
     AFFECTS,
     DECISIONS,
-    block_evidence_id,
-    block_material_summary,
     build_kc_prompt,
     block_step_label,
     block_uses_choice_widget,
     default_substep_for_block,
-    effective_enrichment,
-    effective_window_name,
     format_active_substep_label,
-    instructive_value,
     is_fragment,
     labeled_choice,
     on_screen_choice,
-    self_explanation_on,
     stored_blocks,
-    stored_enrichment,
-    struggle_tries,
+    substeps_for_block,
     topic_goal,
 )
-from app.tutor_profile import effective_kc_tutor_config, load_profile
+from app.tutor_profile import BLOCK_CONFIG_SPECS, effective_kc_tutor_config, load_profile
 from app.kc_syllabus import component_fields, planning_context
 from app.models import (
     ALL_BLOCK_TYPES,
@@ -118,13 +111,6 @@ OTHER_PASS = "That holds. {body}"
 MISS_REPLY = "Not yet. {truth} That explanation is the one retry. Answer this same step again."
 MISCONCEPTION_TAIL = "The next card opens that component."
 SAVED_NOTE = "The draft was saved."
-TYPE_LABELS = {
-    "factual": "Factual",
-    "procedural": "Procedural",
-    "conceptual": "Conceptual principle",
-    "causal": "Causal or historical",
-    "synthesis": "Synthesis",
-}
 FIELD_LABELS = {
     "fact": "Fact",
     "retrieval_question": "Retrieval question",
@@ -1202,30 +1188,149 @@ def _percent(known: int, total: int) -> int:
     return (known * 100 + total // 2) // total
 
 
-def _open_unit_ids(
+def _sessions_for(
     db: Session, student_id: uuid.UUID, goal_id: uuid.UUID, node_ids: list[uuid.UUID]
-) -> set[uuid.UUID]:
+) -> dict[uuid.UUID, list[KcSession]]:
     if not node_ids:
-        return set()
-    return set(
-        db.scalars(
-            select(KcSession.kc_id).where(
-                KcSession.student_id == student_id,
-                KcSession.goal_id == goal_id,
-                KcSession.kc_id.in_(node_ids),
-                KcSession.status == "in_progress",
-            )
+        return {}
+    grouped: dict[uuid.UUID, list[KcSession]] = {}
+    rows = db.scalars(
+        select(KcSession).where(
+            KcSession.student_id == student_id,
+            KcSession.goal_id == goal_id,
+            KcSession.kc_id.in_(node_ids),
         )
     )
+    for row in rows:
+        grouped.setdefault(row.kc_id, []).append(row)
+    return grouped
 
 
-def _unit_status(states: dict[uuid.UUID, KcState], node: KcNode, open_ids: set[uuid.UUID]) -> str:
-    row = states.get(node.id)
-    if row is not None and row.status == "known":
+def _block_key(block: dict, index: int) -> str:
+    return str(block.get("id") or f"blk_{index + 1}").strip() or f"blk_{index + 1}"
+
+
+def _result_ids(results: object) -> set[str]:
+    found: set[str] = set()
+    if not isinstance(results, list):
+        return found
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("id") or item.get("block_id") or "").strip()
+        if key:
+            found.add(key)
+    return found
+
+
+def _last_block_finished(node: KcNode | None, session: KcSession) -> bool:
+    blocks = stored_blocks(node)
+    if not blocks:
+        return False
+    last = len(blocks) - 1
+    return _block_key(blocks[last], last) in _result_ids(session.block_results)
+
+
+def _walk_fragile(blocks: list[dict], results: object, cfg: dict) -> bool:
+    """A required block was revealed or never passed. Curiosity counts only when that setting is on."""
+    by_id: dict[str, dict] = {}
+    if isinstance(results, list):
+        for item in results:
+            if isinstance(item, dict):
+                key = str(item.get("id") or item.get("block_id") or "").strip()
+                if key:
+                    by_id[key] = item
+    counted = False
+    fragile = False
+    for index, block in enumerate(blocks):
+        counts = True
+        if str(block.get("type") or "").strip() == "curiosity":
+            curiosity = ((cfg or {}).get("blocks") or {}).get("curiosity") or {}
+            counts = bool(curiosity.get("counts_toward_mastery_score", False))
+        if not counts:
+            continue
+        counted = True
+        row = by_id.get(_block_key(block, index))
+        if row is None or row.get("outcome") != "passed":
+            fragile = True
+    if not counted:
+        return False
+    return fragile
+
+
+def _close_finished_walk(
+    db: Session,
+    session: KcSession,
+    node: KcNode,
+    reply: str = "",
+    body: dict | None = None,
+) -> None:
+    """A finished block walk must not stay open. Known or fragile is written with the close."""
+    if session.status == "completed":
+        return
+    blocks = stored_blocks(node)
+    if not _last_block_finished(node, session):
+        return
+    cfg = effective_kc_tutor_config(load_profile(db))
+    state = _get_state(db, session.student_id, node.id)
+    if state.status not in {"known", "fragile"}:
+        if _walk_fragile(blocks, session.block_results, cfg):
+            _mark_fragile(db, session, node)
+        else:
+            _mark_known(db, session, node)
+    session.status = "completed"
+    session.updated_at = _now()
+    _save_component_result(db, session, node, body or {}, reply)
+
+
+def _unit_status(state: KcState | None, node: KcNode, sessions: list[KcSession]) -> str:
+    """Finished work is completed. In progress is only an open session before the last block."""
+    if state is not None and state.status in {"known", "fragile"}:
         return "completed"
-    if (row is not None and row.status == "fragile") or node.id in open_ids:
+    if any(row.status == "completed" for row in sessions):
+        return "completed"
+    if any(row.status == "in_progress" and _last_block_finished(node, row) for row in sessions):
+        return "completed"
+    if any(row.status == "in_progress" and not _last_block_finished(node, row) for row in sessions):
         return "in_progress"
     return "not_started"
+
+
+def _count_session(node: KcNode, sessions: list[KcSession]) -> KcSession | None:
+    unfinished = [
+        row for row in sessions if row.status == "in_progress" and not _last_block_finished(node, row)
+    ]
+    chosen = unfinished or sessions
+    if not chosen:
+        return None
+    return max(chosen, key=lambda row: row.updated_at or row.created_at or _now())
+
+
+def _block_counts(node: KcNode, session: KcSession | None) -> tuple[int, int]:
+    blocks = stored_blocks(node)
+    if session is None:
+        return 0, len(blocks)
+    done_ids = _result_ids(session.block_results)
+    done = sum(1 for index, block in enumerate(blocks) if _block_key(block, index) in done_ids)
+    return done, len(blocks)
+
+
+def _mastery_label(state: KcState | None, node: KcNode, sessions: list[KcSession], cfg: dict) -> str:
+    if state is not None and state.status in {"known", "fragile"}:
+        return state.status
+    finished = [
+        row
+        for row in sessions
+        if row.status == "completed" or (row.status == "in_progress" and _last_block_finished(node, row))
+    ]
+    if not finished:
+        return ""
+    latest = max(finished, key=lambda row: row.updated_at or row.created_at or _now())
+    if not _result_ids(latest.block_results):
+        return ""
+    if _walk_fragile(stored_blocks(node), latest.block_results, cfg):
+        return "fragile"
+    return "known"
 
 
 def _latest_redirect(db: Session, student_id: uuid.UUID, goal_id: uuid.UUID) -> KcNode | None:
@@ -1252,7 +1357,8 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
     everyone = targets + patches
     target_ids = {node.id for node in targets}
     states = _state_map(db, student.id, [node.id for node in everyone])
-    open_ids = _open_unit_ids(db, student.id, goal.id, [node.id for node in everyone])
+    sessions = _sessions_for(db, student.id, goal.id, [node.id for node in everyone])
+    cfg = effective_kc_tutor_config(load_profile(db))
     known = sum(1 for node in targets if _is_known(states, node))
     conceptual_known = sum(
         1 for node in targets if node.kc_type == "conceptual" and _is_known(states, node)
@@ -1351,6 +1457,27 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
                 "reason": reason,
             }
         )
+    from app.kc_model import derive_rubric_from_blocks
+
+    def unit_row(node: KcNode) -> dict:
+        node_sessions = sessions.get(node.id, [])
+        state = states.get(node.id)
+        done, total = _block_counts(node, _count_session(node, node_sessions))
+        return {
+            "id": str(node.id),
+            "code": node.code,
+            "title": node.title,
+            "kc_type": None,
+            "summary": _block_summary(_public_blocks(node)),
+            "patch": node.id not in target_ids,
+            "status": _unit_status(state, node, node_sessions),
+            "mastery": _mastery_label(state, node, node_sessions, cfg),
+            "finished_blocks": done,
+            "total_blocks": total,
+            "rubric": derive_rubric_from_blocks(stored_blocks(node)),
+            "result": None if state is None else state.result,
+        }
+
     return {
         "course_id": str(goal.id),
         "title": goal.title,
@@ -1360,19 +1487,7 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
         "total": len(targets),
         "percent": _percent(known, len(targets)),
         "count_label": f"{known} of {len(targets)}",
-        "units": [
-            {
-                "id": str(node.id),
-                "code": node.code,
-                "title": node.title,
-                "kc_type": None,
-                "summary": _block_summary(_public_blocks(node)),
-                "patch": node.id not in target_ids,
-                "status": _unit_status(states, node, open_ids),
-                "result": None if states.get(node.id) is None else states.get(node.id).result,
-            }
-            for node in everyone
-        ],
+        "units": [unit_row(node) for node in everyone],
         "ring": [
             {
                 "id": str(node.id),
@@ -1730,6 +1845,8 @@ def open_session(db: Session, student: Student, goal: KcGoal, node: KcNode) -> K
         )
     )
     if existing is not None:
+        if _last_block_finished(node, existing):
+            _close_finished_walk(db, existing, node)
         return existing
     blocks = stored_blocks(node)
     cfg = effective_kc_tutor_config(load_profile(db))
@@ -1769,24 +1886,6 @@ def _csv(values: object) -> str:
     return ", ".join(part for part in (_text(item).strip() for item in values) if part)
 
 
-def _type_rows(node: KcNode | None) -> list[tuple[str, str]]:
-    if node is None:
-        return [("Type fields", "")]
-    fields = dict(node.type_fields or {})
-    keys = [key for key in TYPE_KEYS.get(node.kc_type or "", ())]
-    for key in fields:
-        if str(key) not in keys:
-            keys.append(str(key))
-    if not keys:
-        return [("Type fields", "")]
-    rows: list[tuple[str, str]] = []
-    for key in keys:
-        label = FIELD_LABELS.get(key, key)
-        name = label if key in ("transfer_case", "counterfactual") else f"Type field: {label}"
-        rows.append((name, _text(fields.get(key))))
-    return rows
-
-
 def _misconceptions(values: object) -> str:
     if not isinstance(values, list):
         return ""
@@ -1801,15 +1900,6 @@ def _misconceptions(values: object) -> str:
     return "\n".join(lines)
 
 
-def _type_value(kc_type: str | None) -> str:
-    if not kc_type:
-        return ""
-    label = TYPE_LABELS.get(kc_type, "")
-    if not label or label == kc_type:
-        return kc_type
-    return f"{kc_type} ({label})"
-
-
 _LAYER_1 = "Layer 1, Component"
 _LAYER_2 = "Layer 2, Child"
 _LAYER_3 = "Layer 3, Voice"
@@ -1817,6 +1907,114 @@ _LAYER_4 = "Layer 4, Guidance"
 _LAYER_5 = "Layer 5, Encouragement"
 _LAYER_6 = "Layer 6, Metacognition"
 _LAYER_7 = "Layer 7, Feedback loop"
+
+_CATALOG_FIELDS: dict[str, list[tuple[str, str]]] = {
+    "topic_goal": [
+        ("topic", "Topic"),
+        ("goal", "Goal"),
+        ("acceptance_criteria", "Acceptance criteria"),
+        ("teaching_notes", "Teaching notes"),
+    ],
+    "mcq": [
+        ("mode", "Mode"),
+        ("question_stem", "Question stem"),
+        ("choices", "Choices"),
+        ("correct_explanation", "Correct explanation"),
+        ("target_skill", "Target skill"),
+        ("difficulty", "Difficulty"),
+        ("num_choices", "Number of choices"),
+        ("distractor_guidance", "Distractor guidance"),
+        ("stem_constraints", "Stem constraints"),
+    ],
+    "case_study": [
+        ("case_a", "Case A"),
+        ("case_b", "Case B"),
+        ("prediction_prompt", "Prediction prompt"),
+        ("invariant_principle", "Invariant principle"),
+        ("transfer_prompt", "Transfer prompt"),
+        ("transfer_expected", "Transfer expected"),
+    ],
+    "socratic": [
+        ("central_dilemma", "Central dilemma"),
+        ("initial_probe", "Opening probe"),
+        ("counterexamples", "Counterexamples"),
+        ("target_synthesis", "Target synthesis"),
+    ],
+    "curiosity": [
+        ("phenomenon_hook", "Phenomenon hook"),
+        ("prediction_question", "Prediction question"),
+        ("bridge_to_unit", "Bridge to unit"),
+        ("wonder_branches", "Wonder branches"),
+    ],
+    "worked_example": [
+        ("problem_statement", "Problem statement"),
+        ("steps", "Steps"),
+        ("faded_step_index", "Faded step"),
+        ("solo_problem", "Solo problem"),
+        ("solo_expected_answer", "Solo expected answer"),
+    ],
+    "spot_the_flaw": [
+        ("rookie_work", "Rookie work"),
+        ("flaw_description", "Flaw description"),
+        ("underlying_misconception", "Underlying misconception"),
+        ("corrected_version", "Corrected version"),
+    ],
+    "teach_back": [
+        ("peer_persona_prompt", "Peer prompt"),
+        ("required_concepts", "Required concepts"),
+        ("peer_follow_up_question", "Peer follow-up"),
+    ],
+    "retrieval_check": [
+        ("recall_prompt", "Recall prompt"),
+        ("expected_fact", "Expected fact"),
+        ("elaborative_why_prompt", "Elaborative why prompt"),
+        ("expected_why_rationale", "Expected why rationale"),
+    ],
+}
+
+_MCQ_STATIC = {"mode", "question_stem", "choices", "correct_explanation"}
+_MCQ_DYNAMIC = {
+    "mode",
+    "target_skill",
+    "difficulty",
+    "num_choices",
+    "distractor_guidance",
+    "stem_constraints",
+}
+
+_SETTING_LABELS = {
+    "explanation_depth": "Explanation depth",
+    "max_retries_before_reveal": "Retries before reveal",
+    "hint_ladder_style": "Hint ladder",
+    "goal_evaluation_strictness": "Goal evaluation",
+    "fragment_self_explanation": "Ask for a full sentence",
+    "enrichment_mode": "Enrichment",
+    "max_retry_attempts": "Retry attempts",
+    "wrong_answer_explanation_depth": "Wrong-answer depth",
+    "disable_eliminated_choices": "Disable eliminated choices",
+    "confirm_why_on_correct": "Ask why it is correct",
+    "correct_pass_explanation_depth": "Pass explanation",
+    "case_presentation": "Case presentation",
+    "require_transfer_application": "Require transfer",
+    "dialogue_depth_turns": "Dialogue depth",
+    "challenge_intensity": "Challenge intensity",
+    "hint_when_stuck": "Hint when stuck",
+    "max_wonder_turns": "Wonder turns",
+    "require_initial_prediction": "Require a prediction",
+    "counts_toward_mastery_score": "Counts toward mastery",
+    "hook_framing_style": "Hook framing",
+    "fading_level": "Fading level",
+    "require_step_self_explanation": "Require a why",
+    "wrong_step_explanation_depth": "Wrong-step depth",
+    "critique_depth": "Critique depth",
+    "show_misconception_why": "Name why the trap is tempting",
+    "peer_confusion_level": "Peer confusion",
+    "follow_up_questions_count": "Follow-up questions",
+    "evaluation_strictness": "Evaluation",
+    "cue_scaffolding": "Cue scaffolding",
+    "require_elaborative_why": "Ask why",
+    "accept_paraphrase": "Accept a paraphrase",
+}
 
 
 def _row(name: str, value: object, layer: str) -> dict[str, str]:
@@ -1902,6 +2100,115 @@ def _last_messages(messages: list[KcMessage], limit: int = 4) -> str:
     return " | ".join(f"{message.role}: {message.content}" for message in chosen)
 
 
+def _catalog_text(key: str, value: object) -> str:
+    if key == "choices" and isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            letter = str(item.get("id") or "").strip()
+            text = str(item.get("text") or "").strip()
+            if not letter and not text:
+                continue
+            mark = " correct" if item.get("is_correct") else ""
+            parts.append(f"{letter}. {text}{mark}".strip())
+        return "; ".join(parts)
+    if key == "steps" and isinstance(value, list):
+        parts = []
+        for index, item in enumerate(value, start=1):
+            if isinstance(item, dict):
+                text = str(item.get("step_text") or "").strip()
+            else:
+                text = str(item or "").strip()
+            if text:
+                parts.append(f"{index}. {text}")
+        return "; ".join(parts)
+    if isinstance(value, list):
+        return "; ".join(str(item).strip() for item in value if str(item).strip() and not isinstance(item, (dict, list)))
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if value is None:
+        return ""
+    return str(value).strip() if isinstance(value, str) else str(value)
+
+
+def _active_catalog_rows(block: dict | None) -> list[tuple[str, str]]:
+    """Catalog fields the active block's prompt reads. Empty fields stay."""
+    if not isinstance(block, dict):
+        return []
+    btype = str(block.get("type") or "").strip()
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    fields = list(_CATALOG_FIELDS.get(btype, []))
+    if btype == "mcq":
+        keep = _MCQ_DYNAMIC if str(data.get("mode") or "static").strip() == "dynamic" else _MCQ_STATIC
+        fields = [item for item in fields if item[0] in keep]
+    return [(label, _catalog_text(key, data.get(key))) for key, label in fields]
+
+
+def _active_setting_rows(block: dict | None, cfg: dict) -> list[tuple[str, str]]:
+    if not isinstance(block, dict):
+        return []
+    btype = str(block.get("type") or "").strip()
+    stored = ((cfg.get("blocks") or {}).get(btype) or {})
+    rows: list[tuple[str, str]] = []
+    for key in BLOCK_CONFIG_SPECS.get(btype, {}):
+        value = stored.get(key)
+        text = "yes" if value is True else "no" if value is False else "" if value is None else str(value)
+        rows.append((_SETTING_LABELS.get(key, key), text))
+    return rows
+
+
+def _close_flags(
+    block: dict | None,
+    blocks: list[dict],
+    index: int,
+    substep: str,
+    attempts: int,
+    cfg: dict,
+    *,
+    unit_complete: bool,
+    known: bool,
+    others_known: bool,
+) -> tuple[str, str]:
+    """Whether this turn may end the component, and whether it may end the course."""
+    if block is None:
+        return "no", "no"
+    substeps = substeps_for_block(block, cfg)
+    btype = str(block.get("type") or "").strip()
+    is_last_block = index >= len(blocks) - 1
+    is_last_substep = substep == substeps[-1] if substeps else True
+    if substep == "awaiting_why":
+        is_last_substep = True
+    confirm_why = str(((cfg.get("blocks") or {}).get("mcq") or {}).get("confirm_why_on_correct") or "on_retry_only")
+    if btype == "mcq" and substep == "choice" and confirm_why == "on_retry_only" and attempts > 0:
+        is_last_substep = False
+    may_component = (is_last_block and is_last_substep) or unit_complete
+    already_fragile = unit_complete and not known
+    may_course = may_component and others_known and not already_fragile
+    return ("yes" if may_component else "no", "yes" if may_course else "no")
+
+
+def _eliminated_choices(state: dict) -> str:
+    mcq = state.get("mcq") if isinstance(state.get("mcq"), dict) else {}
+    raw = mcq.get("eliminated_indices") if isinstance(mcq, dict) else []
+    if not isinstance(raw, list) or not raw:
+        return ""
+    return ", ".join(str(item) for item in raw)
+
+
+def _finished_block_text(results: object) -> str:
+    if not isinstance(results, list):
+        return ""
+    lines: list[str] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("block_id") or "block").strip()
+        outcome = str(item.get("outcome") or "").strip()
+        lines.append(f"{title}: {outcome} after {item.get('attempts') or 0} tries")
+    return "\n".join(lines)
+
+
 def tutor_variables(
     db: Session,
     *,
@@ -1936,20 +2243,28 @@ def tutor_variables(
         block = blocks[0]
         block_state = {"substep": default_substep_for_block(block, cfg)}
     substep = str(block_state.get("substep") or "")
-    move_index = f"{index + 1} of {len(blocks)}" if block is not None else ""
-    move_name = block_step_label(block, index, len(blocks), substep) if block is not None else ""
-    move_evidence = block_evidence_id(block, index, substep) if block is not None else ""
-    move_choice = "yes" if block is not None and block_uses_choice_widget(block, substep, block_state) else "no"
-    move_content = block_material_summary(block, substep) if block is not None else ""
-    asks = "yes" if substep == "awaiting_why" else "no"
+    if block is not None and not substep:
+        substep = default_substep_for_block(block, cfg)
+    from app.kc_model import BLOCK_LABELS, derive_rubric_from_blocks
+
     state = _state_row(db, student, node)
     prereq = _prerequisite_status(db, student, node)
     band = _support_band(prereq) if node is not None else ""
-    position = _course_position(db, goal, node)
     others = _others_known(db, student, goal, node)
     known = state is not None and state.status == "known"
     unit_complete = bool(session is not None and session.status == "completed")
-    course_complete = unit_complete and known and others
+    attempts = int(session.move_attempts or 0) if session is not None else 0
+    close_component, close_course = _close_flags(
+        block,
+        blocks,
+        index,
+        substep,
+        attempts,
+        cfg,
+        unit_complete=unit_complete,
+        known=known,
+        others_known=others,
+    )
     redirect = ""
     if session is not None and session.redirect_kc_id is not None:
         target = db.get(KcNode, session.redirect_kc_id)
@@ -1958,7 +2273,15 @@ def tutor_variables(
     interests = ""
     if student is not None:
         interests = ", ".join(str(item).strip() for item in (student.interests or []) if str(item).strip())
-    window = effective_window_name(profile, goal) if goal is not None or session is not None else effective_window_name(profile, goal)
+    over = cfg.get("overarching") or {}
+    block_type = ""
+    derived = ""
+    if block is not None:
+        kind = str(block.get("type") or "").strip()
+        label = BLOCK_LABELS.get(kind, kind)
+        block_type = kind if not label or label == kind else f"{kind} ({label})"
+        derived = "\n".join(derive_rubric_from_blocks([block]))
+    outline = str(getattr(node, "outline", "") or "") if node is not None else ""
     rows: list[dict[str, str]] = [
         _row("Course title", goal.title if goal is not None else "", _LAYER_1),
         _row("Course description", (goal.description or "") if goal is not None else "", _LAYER_1),
@@ -1967,34 +2290,33 @@ def tutor_variables(
         _row("Minutes", "" if goal is None or goal.minutes is None else str(goal.minutes), _LAYER_1),
         _row("Component title", node.title if node is not None else "", _LAYER_1),
         _row("Component code", node.code if node is not None else "", _LAYER_1),
-        _row("Component description", (node.description or "") if node is not None else "", _LAYER_1),
-        _row("Type", _type_value(node.kc_type if node is not None else None), _LAYER_1),
+        _row("Outline", outline, _LAYER_1),
         _row("Core truth", (node.core_truth or "") if node is not None else "", _LAYER_1),
-        _row("Rubric lines", _csv(node.rubric if node is not None else []), _LAYER_1),
+        _row("Derived rubric", derived, _LAYER_1),
         _row("Misconceptions", _misconceptions(node.misconceptions if node is not None else []), _LAYER_1),
         _row("Prerequisite codes", _csv(node.prerequisite_codes if node is not None else []), _LAYER_1),
         _row("Encompass codes", _csv(node.encompasses_codes if node is not None else []), _LAYER_1),
+        _row("Prerequisite status", prereq, _LAYER_1),
+        _row("Block index", f"{index + 1} of {len(blocks)}" if block is not None else "", _LAYER_1),
+        _row("Block type", block_type, _LAYER_1),
+        _row("Substep", substep if block is not None else "", _LAYER_1),
+        _row(
+            "Choice on screen",
+            ("yes" if block_uses_choice_widget(block, substep, block_state) else "no") if block is not None else "",
+            _LAYER_1,
+        ),
     ]
-    for name, value in _type_rows(node):
+    for name, value in _active_catalog_rows(block):
         rows.append(_row(name, value, _LAYER_1))
     rows.extend(
         [
-            _row("Move index", move_index, _LAYER_1),
-            _row("Move name", move_name, _LAYER_1),
-            _row("Evidence", move_evidence, _LAYER_1),
-            _row("Choice widget", move_choice if block is not None else "", _LAYER_1),
-            _row("Prerequisite status", prereq, _LAYER_1),
-            _row("Course position", position, _LAYER_1),
-            _row("Move content", move_content, _LAYER_1),
             _row("Display name", student.display_name if student is not None else "", _LAYER_2),
             _row("Age", "" if student is None or student.age is None else str(student.age), _LAYER_2),
             _row("Reading level", (student.reading_level or "") if student is not None else "", _LAYER_2),
             _row("Modality", (student.modality or "") if student is not None else "", _LAYER_2),
             _row("Interests", interests, _LAYER_2),
-            _row("Attempts on this move", "" if session is None else str(session.move_attempts or 0), _LAYER_2),
             _row("Hint tier already given", "" if session is None else (session.hint_tier or "nudge"), _LAYER_2),
             _row("Component status", "" if state is None else state.status, _LAYER_2),
-            _row("Stability", "" if state is None else str(state.stability), _LAYER_2),
             _row(
                 "Last answer",
                 next((message.content for message in reversed(messages) if message.role == "user"), ""),
@@ -2008,36 +2330,39 @@ def tutor_variables(
             _row("Metaphors", labeled_choice(METAPHORS, profile.metaphors), _LAYER_3),
             _row("Sidekick", labeled_choice(SIDEKICKS, profile.sidekick), _LAYER_3),
             _row("Use interests", "yes" if profile.use_interests else "no", _LAYER_3),
-            _row("Instructive", instructive_value(profile.instructive), _LAYER_4),
-            _row("Struggle window", profile.struggle_window or "", _LAYER_4),
+            _row("Orient framing", str(over.get("orient_framing") or ""), _LAYER_4),
+            _row("Stay on course", str(over.get("stay_on_course") or ""), _LAYER_4),
+            _row("Misconception policy", str(over.get("misconception_policy") or ""), _LAYER_4),
+        ]
+    )
+    for name, value in _active_setting_rows(block, cfg):
+        rows.append(_row(name, value, _LAYER_4))
+    rows.extend(
+        [
+            _row("Encouragement style", str(over.get("encouragement_style") or ""), _LAYER_5),
+            _row("Close summary depth", str(over.get("close_summary_depth") or ""), _LAYER_6),
+            _row("Attempts", "" if session is None else str(attempts), _LAYER_7),
             _row(
-                "Effective struggle window",
-                f"{window} ({struggle_tries(window)} tries)",
-                _LAYER_4,
+                "Dialogue turns",
+                "" if session is None else str(int(block_state.get("dialogue_turns") or 0)),
+                _LAYER_7,
             ),
-            _row("Stay on course", "yes" if profile.stay_on_course else "no", _LAYER_4),
-            _row("Anti-spoiler", "yes" if profile.anti_spoiler else "no", _LAYER_4),
-            _row("One question", "yes" if profile.one_question else "no", _LAYER_4),
-            _row("Misconception policy", getattr(profile, "misconception_policy", None) or "retry_once", _LAYER_4),
-            _row("Enrichment", stored_enrichment(profile), _LAYER_4),
-            _row("Effective enrichment", effective_enrichment(profile, goal), _LAYER_4),
-            _row("Growth-mindset praise", "yes" if profile.growth_praise else "no", _LAYER_5),
-            _row("Self-explanation", "yes" if self_explanation_on(profile) else "no", _LAYER_6),
-            _row("Asks why", asks if block is not None else "", _LAYER_6),
+            _row("Eliminated choices", _eliminated_choices(block_state) if session is not None else "", _LAYER_7),
+            _row(
+                "Finished blocks",
+                _finished_block_text(session.block_results) if session is not None else "",
+                _LAYER_7,
+            ),
             _row("Reveals used", "" if session is None else str(session.reveals or 0), _LAYER_7),
             _row("Off-course count", "" if session is None else str(session.off_course_count or 0), _LAYER_7),
             _row("Rubric points met", "" if session is None else _csv(list(session.rubric_met or [])), _LAYER_7),
             _row("Last four messages", _last_messages(messages), _LAYER_7),
             _row("Affect", "" if session is None else (session.affect or ""), _LAYER_7),
             _row("Help requested", "" if session is None else ("yes" if session.help_requested else "no"), _LAYER_7),
-            _row("Last practiced", "" if state is None or state.last_practiced is None else state.last_practiced.isoformat(), _LAYER_7),
             _row("Redirect pending", "yes" if redirect else "no", _LAYER_7),
             _row("Enrichment turns", "" if session is None else str(session.enrichment_turns or 0), _LAYER_7),
-            _row("Score", "" if session is None or session.score is None else str(session.score), _LAYER_7),
-            _row("Status", "" if session is None else (session.status or ""), _LAYER_7),
-            _row("Unit close", "yes" if unit_complete else "no", _LAYER_7),
-            _row("Course outro", "yes" if course_complete else "no", _LAYER_7),
-            _row("Recipe", "" if session is None else (session.recipe or ""), _LAYER_7),
+            _row("Close component", close_component, _LAYER_7),
+            _row("Close course", close_course, _LAYER_7),
         ]
     )
     return rows
@@ -2206,6 +2531,11 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     """Check the model's decision and write mastery, edges, and the reply."""
     if session.status == "completed":
         raise HTTPException(status_code=422, detail="This component session is already finished.")
+    node = _node_or_404(db, session.kc_id)
+    if _last_block_finished(node, session):
+        _close_finished_walk(db, session, node)
+        db.commit()
+        raise HTTPException(status_code=422, detail="This component session is already finished.")
     reply = str(body.get("reply") or "").strip()
     if not reply:
         raise HTTPException(status_code=422, detail="The tutor did not write a reply.")
@@ -2215,7 +2545,6 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     affect = str(body.get("affect") or "engaged").strip()
     if affect not in AFFECTS:
         affect = "engaged"
-    node = _node_or_404(db, session.kc_id)
     _profile, goal, messages, fragment, cfg, blocks, index, _block, block_state = _block_context(db, session, node)
     if goal is None:
         goal = _course_or_404(db, session.goal_id)
@@ -2282,16 +2611,19 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     if resolution.unit_complete:
         session.status = "completed"
         _save_component_result(db, session, node, body, reply)
+    elif _last_block_finished(node, session):
+        _close_finished_walk(db, session, node, reply, body)
     session.updated_at = _now()
     _add_message(db, session, "assistant", reply)
     student = _student_or_404(db, session.student_id)
     state = _state_row(db, student, node)
     known = state is not None and state.status == "known"
-    course_complete = bool(resolution.unit_complete and known and _others_known(db, student, goal, node))
+    unit_complete = session.status == "completed"
+    course_complete = bool(unit_complete and known and _others_known(db, student, goal, node))
     result = session_out(db, session)
     result["reply"] = reply
     result["passed"] = resolution.passed
-    result["unit_complete"] = resolution.unit_complete
+    result["unit_complete"] = unit_complete
     result["course_complete"] = course_complete
     return result
 
