@@ -261,8 +261,8 @@ def test_a_time_box_sends_the_effective_limits_only() -> None:
         "keep framing to one sentence",
         "one or two concise sentences",
         "Budget: 20 minutes (4 used).",
-        "max_retries_before_reveal=1",
-        "enrichment_mode=direct",
+        "Reveal the goal after one missed answer.",
+        "Do not wait to be asked.",
     ):
         _once(text, phrase)
     assert "after two tries" not in text

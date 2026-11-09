@@ -20,26 +20,30 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, VOICES
-from app.kc_loop import resolve_decision
-from app.kc_moves import build_kc_prompt
+from app.kc_loop import resolve_block_turn
 from app.kc_prompt import (
     AFFECTS,
     DECISIONS,
-    asks_why,
+    block_evidence_id,
+    block_material_summary,
+    build_kc_prompt,
+    block_step_label,
+    block_uses_choice_widget,
+    default_substep_for_block,
     effective_enrichment,
     effective_window_name,
+    format_active_substep_label,
     instructive_value,
     is_fragment,
     labeled_choice,
-    Move,
-    move_material,
-    moves_for,
+    on_screen_choice,
     self_explanation_on,
-    step_labels,
+    stored_blocks,
     stored_enrichment,
-    topic_goal,
     struggle_tries,
+    topic_goal,
 )
+from app.tutor_profile import effective_kc_tutor_config, load_profile
 from app.kc_syllabus import component_fields, planning_context
 from app.models import (
     ALL_BLOCK_TYPES,
@@ -52,10 +56,8 @@ from app.models import (
     KcSession,
     KcState,
     Student,
-    TutorProfile,
 )
 from app.present import student_out
-from app.tutor_profile import load_profile
 
 logger = logging.getLogger(__name__)
 
@@ -1599,19 +1601,23 @@ def _needs_speech(session: KcSession, messages: list[KcMessage]) -> bool:
     return not any(message.role == "assistant" for message in messages)
 
 
-def _move_context(db: Session, session: KcSession, node: KcNode | None):
+def _block_context(db: Session, session: KcSession, node: KcNode | None):
+    """The active block, its substep, and whether a short answer still needs a full sentence."""
     profile = load_profile(db)
     goal = db.get(KcGoal, session.goal_id)
     messages = _session_messages(db, session)
-    fragment = False
-    if node is not None and node.kc_type == "factual":
-        fact = str((node.type_fields or {}).get("fact") or node.core_truth or "")
-        first = next((message.content for message in messages if message.role == "user"), "")
-        fragment = is_fragment(first, fact)
-    moves = moves_for(node, profile, goal, fragment=fragment) if node is not None else []
-    if not moves:
-        moves = [Move("this", "This step", (), False)]
-    return profile, goal, messages, fragment, moves
+    cfg = effective_kc_tutor_config(profile)
+    blocks = stored_blocks(node)
+    index = min(max(int(session.step or 0), 0), len(blocks) - 1) if blocks else 0
+    block = blocks[index] if blocks else None
+    state = dict(session.active_block_state or {})
+    if block is not None and not str(state.get("substep") or "").strip():
+        state["substep"] = default_substep_for_block(block, cfg)
+    data = block.get("data") if isinstance(block, dict) and isinstance(block.get("data"), dict) else {}
+    required = str(data.get("acceptance_criteria") or data.get("goal") or "")
+    first = next((message.content for message in messages if message.role == "user"), "")
+    fragment = bool(block and block.get("type") == "topic_goal" and is_fragment(first, required))
+    return profile, goal, messages, fragment, cfg, blocks, index, block, state
 
 
 def _session_block_progress(node: KcNode | None, session: KcSession) -> dict:
@@ -1619,22 +1625,25 @@ def _session_block_progress(node: KcNode | None, session: KcSession) -> dict:
     if not blocks or node is None:
         return {}
     total = len(blocks)
-    if session.status == "completed":
-        active = total - 1
-        completed = total
-    else:
-        active = min(max(int(session.step or 0), 0), total - 1)
-        completed = active
+    active = min(max(int(session.step or 0), 0), total - 1)
     state = session.active_block_state if isinstance(session.active_block_state, dict) else {}
     substep = str(state.get("substep") or "").strip()
     results = session.block_results if isinstance(session.block_results, list) else []
-    by_id = {str(item.get("id")): item for item in results if isinstance(item, dict)}
+    by_id = {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("id") or item.get("block_id") or "")
+        if key:
+            by_id[key] = item
     progress: list[dict] = []
+    completed = 0
     for index, block in enumerate(blocks):
         bid = str(block.get("id") or f"blk_{index + 1}")
-        if session.status == "completed" or index < completed:
+        if bid in by_id:
             status = "completed"
-        elif index == active:
+            completed += 1
+        elif session.status == "in_progress" and index == active:
             status = "active"
         else:
             status = "upcoming"
@@ -1670,12 +1679,13 @@ def _session_block_progress(node: KcNode | None, session: KcSession) -> dict:
 
 def session_out(db: Session, session: KcSession) -> dict:
     node = db.get(KcNode, session.kc_id)
-    _profile, _goal, messages, _fragment, moves = _move_context(db, session, node)
-    index = min(max(session.step, 0), len(moves) - 1)
+    _profile, _goal, messages, _fragment, cfg, blocks, index, block, state = _block_context(db, session, node)
     needs_speech = _needs_speech(session, messages)
+    substep = str(state.get("substep") or "")
     choice = None
-    if node is not None and session.status == "in_progress" and not needs_speech:
-        choice = choice_for(node, moves[index])
+    if block is not None and session.status == "in_progress" and not needs_speech:
+        choice = on_screen_choice(block, substep, state, cfg)
+    label = block_step_label(block, index, len(blocks), substep) if block is not None else "This step"
     redirect = db.get(KcNode, session.redirect_kc_id) if session.redirect_kc_id else None
     return {
         "id": str(session.id),
@@ -1686,7 +1696,7 @@ def session_out(db: Session, session: KcSession) -> dict:
         "kc_type": node.kc_type if node else None,
         "recipe": session.recipe,
         "step": session.step,
-        "step_label": moves[index].name,
+        "step_label": label,
         "status": session.status,
         "score": session.score,
         "needs_speech": needs_speech,
@@ -1721,6 +1731,9 @@ def open_session(db: Session, student: Student, goal: KcGoal, node: KcNode) -> K
     )
     if existing is not None:
         return existing
+    blocks = stored_blocks(node)
+    cfg = effective_kc_tutor_config(load_profile(db))
+    substep = default_substep_for_block(blocks[0], cfg) if blocks else "main"
     session = KcSession(
         student_id=student.id,
         goal_id=goal.id,
@@ -1728,6 +1741,7 @@ def open_session(db: Session, student: Student, goal: KcGoal, node: KcNode) -> K
         recipe="block_walk",
         step=0,
         status="in_progress",
+        active_block_state={"substep": substep, "dialogue_turns": 0},
     )
     db.add(session)
     db.flush()
@@ -1909,17 +1923,25 @@ def tutor_variables(
         node = None
     profile = load_profile(db)
     messages: list[KcMessage] = []
-    moves: list[Move] = []
-    fragment = False
-    if session is not None and node is not None:
-        _profile, _goal, messages, fragment, moves = _move_context(db, session, node)
-    elif node is not None:
-        moves = moves_for(node, profile, goal, fragment=False)
+    cfg = effective_kc_tutor_config(profile)
+    blocks = stored_blocks(node)
     index = 0
-    move = moves[0] if moves else None
-    if session is not None and moves:
-        index = min(max(session.step, 0), len(moves) - 1)
-        move = moves[index]
+    block = None
+    block_state: dict = {}
+    if session is not None and node is not None:
+        _profile, _goal, messages, _fragment, cfg, blocks, index, block, block_state = _block_context(
+            db, session, node
+        )
+    elif blocks:
+        block = blocks[0]
+        block_state = {"substep": default_substep_for_block(block, cfg)}
+    substep = str(block_state.get("substep") or "")
+    move_index = f"{index + 1} of {len(blocks)}" if block is not None else ""
+    move_name = block_step_label(block, index, len(blocks), substep) if block is not None else ""
+    move_evidence = block_evidence_id(block, index, substep) if block is not None else ""
+    move_choice = "yes" if block is not None and block_uses_choice_widget(block, substep, block_state) else "no"
+    move_content = block_material_summary(block, substep) if block is not None else ""
+    asks = "yes" if substep == "awaiting_why" else "no"
     state = _state_row(db, student, node)
     prereq = _prerequisite_status(db, student, node)
     band = _support_band(prereq) if node is not None else ""
@@ -1957,13 +1979,13 @@ def tutor_variables(
         rows.append(_row(name, value, _LAYER_1))
     rows.extend(
         [
-            _row("Move index", "" if move is None else f"{index + 1} of {len(moves)}", _LAYER_1),
-            _row("Move name", "" if move is None else move.name, _LAYER_1),
-            _row("Evidence", "" if move is None else (", ".join(move.evidence) if move.evidence else ""), _LAYER_1),
-            _row("Choice widget", "" if move is None else ("yes" if move.choice else "no"), _LAYER_1),
+            _row("Move index", move_index, _LAYER_1),
+            _row("Move name", move_name, _LAYER_1),
+            _row("Evidence", move_evidence, _LAYER_1),
+            _row("Choice widget", move_choice if block is not None else "", _LAYER_1),
             _row("Prerequisite status", prereq, _LAYER_1),
             _row("Course position", position, _LAYER_1),
-            _row("Move content", "" if move is None or node is None else move_material(node, move), _LAYER_1),
+            _row("Move content", move_content, _LAYER_1),
             _row("Display name", student.display_name if student is not None else "", _LAYER_2),
             _row("Age", "" if student is None or student.age is None else str(student.age), _LAYER_2),
             _row("Reading level", (student.reading_level or "") if student is not None else "", _LAYER_2),
@@ -2001,7 +2023,7 @@ def tutor_variables(
             _row("Effective enrichment", effective_enrichment(profile, goal), _LAYER_4),
             _row("Growth-mindset praise", "yes" if profile.growth_praise else "no", _LAYER_5),
             _row("Self-explanation", "yes" if self_explanation_on(profile) else "no", _LAYER_6),
-            _row("Asks why", "" if move is None else ("yes" if asks_why(profile, move) else "no"), _LAYER_6),
+            _row("Asks why", asks if block is not None else "", _LAYER_6),
             _row("Reveals used", "" if session is None else str(session.reveals or 0), _LAYER_7),
             _row("Off-course count", "" if session is None else str(session.off_course_count or 0), _LAYER_7),
             _row("Rubric points met", "" if session is None else _csv(list(session.rubric_met or [])), _LAYER_7),
@@ -2025,9 +2047,8 @@ def prompt_for(db: Session, session: KcSession) -> dict:
     student = _student_or_404(db, session.student_id)
     goal = _course_or_404(db, session.goal_id)
     node = _node_or_404(db, session.kc_id)
-    profile, _goal, messages, fragment, moves = _move_context(db, session, node)
-    index = min(max(session.step, 0), len(moves) - 1)
-    move = moves[index]
+    profile, _goal, messages, fragment, _cfg, blocks, index, block, block_state = _block_context(db, session, node)
+    substep = str(block_state.get("substep") or "")
     state = _state_row(db, student, node)
     opening = not any(message.role == "assistant" for message in messages)
     others = _others_known(db, student, goal, node)
@@ -2035,15 +2056,26 @@ def prompt_for(db: Session, session: KcSession) -> dict:
     unit_complete = session.status == "completed"
     course_complete = unit_complete and known and others
     prereq = _prerequisite_status(db, student, node)
+    transition = None
+    if block is not None and index > 0:
+        previous = blocks[index - 1]
+        previous_id = str(previous.get("id") or "")
+        finished = {
+            str(item.get("id") or item.get("block_id") or "")
+            for item in (session.block_results or [])
+            if isinstance(item, dict)
+        }
+        if previous_id and previous_id in finished:
+            transition = previous
+    active = block or {"id": "blk_1", "type": "topic_goal", "data": {}}
     bundle = build_kc_prompt(
         student=student,
         profile=profile,
         node=node,
         goal=goal,
-        step=session.step,
-        moves=moves,
+        step=index,
         opening=opening,
-        choice_on_screen=bool(move.choice),
+        choice_on_screen=block_uses_choice_widget(active, substep, block_state),
         prerequisite_status=prereq,
         support_band=_support_band(prereq),
         course_position=_course_position(db, goal, node),
@@ -2066,10 +2098,13 @@ def prompt_for(db: Session, session: KcSession) -> dict:
         redirect_pending=session.redirect_kc_id is not None,
         fragment=fragment,
         others_known=others,
+        active_block_state=block_state,
+        transition_from_block=transition,
+        block_results=list(session.block_results or []),
     )
     bundle["recipe"] = session.recipe
     bundle["step"] = session.step
-    bundle["step_label"] = move.name
+    bundle["step_label"] = block_step_label(active, index, max(len(blocks), 1), substep)
     return bundle
 
 
@@ -2113,21 +2148,23 @@ def _point_label(node: KcNode, point_id: str) -> str:
     return point_id
 
 
-def _save_component_result(db: Session, session: KcSession, node: KcNode, body: dict) -> None:
-    """Known or fragile, the points that held, and a short note. Not a course score."""
+def _save_component_result(db: Session, session: KcSession, node: KcNode, body: dict, reply: str = "") -> None:
+    """Known or fragile, the closing reply, and what was strong. Not a course score."""
     state = _get_state(db, session.student_id, node.id)
     status = state.status if state.status in {"known", "fragile"} else "fragile"
     met = [str(item).strip() for item in (session.rubric_met or []) if str(item).strip()]
-    labels = [_point_label(node, item) for item in met]
-    listed = ", ".join(labels) if labels else "none"
-    justification = str(body.get("justification") or "").strip()
-    strong = str(body.get("strong") or "").strip()
-    work_on = str(body.get("work_on") or "").strip()
+    last = {}
+    results = session.block_results if isinstance(session.block_results, list) else []
+    if results and isinstance(results[-1], dict):
+        last = results[-1]
+    justification = str(body.get("score_justification") or body.get("justification") or "").strip()
+    strong = str(body.get("what_was_strong") or body.get("strong") or last.get("strong") or "").strip()
+    work_on = str(body.get("what_to_work_on") or body.get("work_on") or last.get("work_on") or "").strip()
+    spoken = (reply or "").strip()
     if not justification:
-        word = "Known" if status == "known" else "Fragile"
-        justification = f"{word}. The rubric points that held are {listed}."
+        justification = spoken or ("Known." if status == "known" else "Fragile.")
     if not strong:
-        strong = listed if labels else "No rubric point was recorded."
+        strong = "The finished blocks held." if status == "known" else "A required block was revealed."
     if not work_on:
         work_on = "Use this on the next piece." if status == "known" else "Look at this component again."
     state.result = {
@@ -2136,6 +2173,7 @@ def _save_component_result(db: Session, session: KcSession, node: KcNode, body: 
         "justification": justification,
         "strong": strong,
         "work_on": work_on,
+        "reply": spoken or justification,
     }
 
 
@@ -2178,32 +2216,39 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     if affect not in AFFECTS:
         affect = "engaged"
     node = _node_or_404(db, session.kc_id)
-    profile, goal, messages, fragment, moves = _move_context(db, session, node)
+    _profile, goal, messages, fragment, cfg, blocks, index, _block, block_state = _block_context(db, session, node)
+    if goal is None:
+        goal = _course_or_404(db, session.goal_id)
+    if not blocks:
+        raise HTTPException(status_code=422, detail="This component has no blocks yet.")
     if not any(message.role == "user" for message in messages):
         raise HTTPException(status_code=422, detail="Write an answer first.")
     answer = next(message.content for message in reversed(messages) if message.role == "user")
-    index = min(max(session.step, 0), len(moves) - 1)
-    move = moves[index]
     reported = body.get("misconception")
     matched = _stored_wrong(node, answer, None if reported is None else str(reported))
     rubric = [str(item).strip() for item in (body.get("rubric_met") or []) if str(item).strip()]
-    resolution = resolve_decision(
+    resolution = resolve_block_turn(
         decision=decision,
+        substep_passed=bool(body.get("substep_passed")),
+        block_complete=bool(body.get("block_complete")),
         rubric_met=rubric,
         stored_rubric=[str(item) for item in (session.rubric_met or [])],
         matched_wrong=matched,
-        move=move,
+        blocks=blocks,
         step=index,
-        moves=moves,
+        active_block_state=block_state,
+        block_results=list(session.block_results or []),
         move_attempts=int(session.move_attempts or 0),
         hint_tier=session.hint_tier or "nudge",
         reveals=int(session.reveals or 0),
         enrichment_turns=int(session.enrichment_turns or 0),
-        enrichment=effective_enrichment(profile, goal),
-        window_tries=struggle_tries(effective_window_name(profile, goal)),
+        cfg=cfg,
+        goal=goal,
         last_misconception=session.last_misconception or "",
+        answer=answer,
         fragment=fragment,
-        self_explanation=self_explanation_on(profile),
+        strong=str(body.get("what_was_strong") or body.get("strong") or ""),
+        work_on=str(body.get("what_to_work_on") or body.get("work_on") or ""),
     )
     if resolution.mark_fragile:
         _mark_fragile(db, session, node)
@@ -2227,11 +2272,16 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     if bool(body.get("off_course")):
         session.off_course_count = int(session.off_course_count or 0) + 1
     session.attempts = int(session.attempts or 0) + 1
-    if resolution.advance:
-        session.step = index + 1
+    session.step = resolution.next_step
+    next_state = dict(resolution.next_block_state or {})
+    generated = body.get("generated_mcq")
+    if isinstance(generated, dict) and generated.get("choices"):
+        next_state["generated_mcq"] = generated
+    session.active_block_state = next_state
+    session.block_results = list(resolution.block_results)
     if resolution.unit_complete:
         session.status = "completed"
-        _save_component_result(db, session, node, body)
+        _save_component_result(db, session, node, body, reply)
     session.updated_at = _now()
     _add_message(db, session, "assistant", reply)
     student = _student_or_404(db, session.student_id)
@@ -2246,25 +2296,14 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     return result
 
 
-def _label_profile() -> TutorProfile:
-    return TutorProfile(
-        id="default",
-        instructive=3,
-        persona="curious-co-explorer",
-        lexicon="middle-grade-vivid",
-        metaphors="playground-sports",
-        sidekick="bumbling-partner",
-        self_explanation=True,
-        enrichment="on_request",
-        misconception_policy="retry_once",
-    )
-
-
 def _chat_step_label(node: KcNode | None, step: int, goal: KcGoal | None = None) -> str:
-    if node is None:
+    del goal
+    blocks = stored_blocks(node)
+    if not blocks:
         return "This step"
-    labels = [move.name for move in moves_for(node, _label_profile(), goal)] or ["This step"]
-    return labels[min(max(step, 0), len(labels) - 1)]
+    index = min(max(step, 0), len(blocks) - 1)
+    substep = default_substep_for_block(blocks[index], effective_kc_tutor_config(None))
+    return block_step_label(blocks[index], index, len(blocks), substep)
 
 
 def _chat_load_options():

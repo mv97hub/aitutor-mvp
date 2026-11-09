@@ -296,13 +296,90 @@ def block_step_label(block: dict, step_index: int, total_blocks: int, substep: s
     return base
 
 
-def block_uses_choice_widget(block: dict, substep: str) -> bool:
+def _cached_generated_mcq(active_block_state: dict | None) -> dict | None:
+    """The dynamic question stored by speech or the previous decision."""
+    if not isinstance(active_block_state, dict):
+        return None
+    for key in ("generated_mcq", "mcq"):
+        raw = active_block_state.get(key)
+        if isinstance(raw, dict) and raw.get("question_stem") and isinstance(raw.get("choices"), list) and raw.get("choices"):
+            return raw
+    return None
+
+
+def block_uses_choice_widget(
+    block: dict,
+    substep: str,
+    active_block_state: dict | None = None,
+) -> bool:
+    """True when this substep has choices the learner can pick on screen."""
     btype = str(block.get("type") or "").strip()
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
     if btype == "mcq" and substep in {"", "choice"}:
-        return True
+        mode = str(data.get("mode") or "static").strip()
+        if mode == "dynamic":
+            return _cached_generated_mcq(active_block_state) is not None
+        raw = data.get("choices") if isinstance(data.get("choices"), list) else []
+        labeled = [
+            item
+            for item in raw
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+        return len(labeled) >= 2
     if btype == "case_study" and substep == "predict":
-        return True
+        return bool(str(data.get("case_a") or "").strip() and str(data.get("case_b") or "").strip())
     return False
+
+
+def on_screen_choice(
+    block: dict,
+    substep: str,
+    active_block_state: dict | None = None,
+    cfg: dict | None = None,
+) -> dict | None:
+    """The choice card for the active block, or nothing when this substep is typed."""
+    if not block_uses_choice_widget(block, substep, active_block_state):
+        return None
+    btype = str(block.get("type") or "").strip()
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    state = active_block_state if isinstance(active_block_state, dict) else {}
+    bcfg = ((cfg or {}).get("blocks") or {}).get(btype) or {}
+    if btype == "mcq":
+        mode = str(data.get("mode") or "static").strip()
+        if mode == "dynamic":
+            generated = _cached_generated_mcq(state) or {}
+            stem = str(generated.get("question_stem") or "").strip()
+            raw = generated.get("choices") if isinstance(generated.get("choices"), list) else []
+        else:
+            stem = str(data.get("question_stem") or "").strip()
+            raw = data.get("choices") if isinstance(data.get("choices"), list) else []
+        eliminated: set[int] = set()
+        mcq_state = state.get("mcq") if isinstance(state.get("mcq"), dict) else {}
+        if bool(bcfg.get("disable_eliminated_choices", True)):
+            for item in mcq_state.get("eliminated_indices") or []:
+                try:
+                    eliminated.add(int(item))
+                except (TypeError, ValueError):
+                    continue
+        choices: list[dict] = []
+        for index, item in enumerate(raw):
+            if not isinstance(item, dict) or index in eliminated:
+                continue
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            choices.append({"id": str(item.get("id") or chr(ord("a") + index)), "text": text})
+        if len(choices) < 2 or not stem:
+            return None
+        return {"prompt": stem, "choices": choices}
+    prompt = str(data.get("prediction_prompt") or "Which case fits?").strip()
+    return {
+        "prompt": prompt,
+        "choices": [
+            {"id": "case-a", "text": str(data.get("case_a") or "").strip()},
+            {"id": "case-b", "text": str(data.get("case_b") or "").strip()},
+        ],
+    }
 
 
 def block_evidence_id(block: dict, step_index: int, substep: str = "") -> str:
@@ -513,16 +590,22 @@ def _ending(
     if not is_final_block_and_substep and not unit_complete and not course_complete:
         return (
             "Mid-Unit Contract: Advance substep or next block when satisfied. "
-            "The unit is not finished. This reply must NEVER say the unit is complete."
+            "The unit is not finished. This reply must NEVER say the unit is complete. "
+            "Do not say this component is finished."
         )
     length = _close_summary_sentence(close_depth, kind)
     close = _close_body()
+    summary = (
+        "Summarize what the learner can now do. Name what was strong and what to practice. "
+        "Do not ask a new question."
+    )
     if course_complete:
         lead = "Close Contract: End the unit and the course in this reply."
     elif unit_complete:
         lead = "Close Contract: End the unit in this reply."
     else:
         lead = "Close Contract: When the decision ends the unit on this final substep, include the unit close."
+    close = " ".join((close, summary))
     outro = _outro_sentence(others_known, course_title, required=course_complete)
     return " ".join(part for part in (lead, length, close, outro) if part)
 
@@ -632,7 +715,7 @@ def _what_to_teach(
 
     elif btype == "mcq":
         mode = str(data.get("mode") or "static").strip()
-        cached_mcq = active_block_state.get("mcq") if isinstance(active_block_state, dict) else None
+        cached_mcq = _cached_generated_mcq(active_block_state)
         if mode == "static":
             stem = str(data.get("question_stem") or "").strip()
             choices = data.get("choices") if isinstance(data.get("choices"), list) else []
@@ -821,112 +904,244 @@ def _what_to_teach(
     return lines
 
 
+def _retry_sentence(count: int, subject: str) -> str:
+    if count <= 1:
+        return f"Reveal {subject} after one missed answer."
+    return f"Reveal {subject} after {count} missed answers."
+
+
+def _depth_sentence(depth: int) -> str:
+    bounded = min(5, max(1, int(depth or 3)))
+    return _EXPLAIN.get(bounded, _EXPLAIN[3])
+
+
 def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> list[str]:
-    """Return ONLY the active block type's configuration rules."""
+    """Plain instructions for the active block type. No setting names."""
     btype = str(block.get("type") or "topic_goal").strip()
     bcfg = ((cfg.get("blocks") or {}).get(btype)) or {}
     lines: list[str] = []
+    timed = goal.kind == "time_boxed"
 
     if btype == "topic_goal":
         depth = int(bcfg.get("explanation_depth", 3) or 3)
-        retries = 1 if goal.kind == "time_boxed" else int(bcfg.get("max_retries_before_reveal", 3) or 3)
+        retries = 1 if timed else int(bcfg.get("max_retries_before_reveal", 3) or 3)
         ladder = str(bcfg.get("hint_ladder_style") or "progressive_nudge_analogy_scaffold")
         strictness = str(bcfg.get("goal_evaluation_strictness") or "conceptual_gist")
         frag_exp = bool(bcfg.get("fragment_self_explanation", True))
-        enrich = "direct" if goal.kind == "time_boxed" else str(bcfg.get("enrichment_mode") or "on_request")
-        lines.append(f"Topic/Goal explanation_depth={depth}: {_EXPLAIN.get(depth, _EXPLAIN[3])}")
+        enrich = "direct" if timed else str(bcfg.get("enrichment_mode") or "on_request")
+        lines.append(f"How to explain this goal: {_depth_sentence(depth)}")
+        ladders = {
+            "socratic_questions_only": (
+                "When the learner is stuck, ask another question. Do not explain the goal until you reveal it."
+            ),
+            "direct_scaffold": (
+                "When the learner is stuck, give the next piece of the idea directly, then reveal the goal if they are still stuck."
+            ),
+        }
         lines.append(
-            f"Topic/Goal hint_ladder_style={ladder}, max_retries_before_reveal={retries}, "
-            f"goal_evaluation_strictness={strictness}, fragment_self_explanation={frag_exp}, enrichment_mode={enrich}."
+            ladders.get(
+                ladder,
+                "When the learner is stuck, start with a nudge, then an analogy, then a scaffold, and reveal the goal only after those hints.",
+            )
         )
+        lines.append(_retry_sentence(retries, "the goal"))
+        strict = {
+            "precise_vocabulary": "Accept an answer only when it uses the important words of the goal.",
+            "applied_transfer": "Accept an answer only when it uses the goal on a new case, not when it only repeats the goal.",
+        }
+        lines.append(
+            strict.get(strictness, "Accept an answer that carries the idea of the goal, even when the wording is different.")
+        )
+        if frag_exp:
+            lines.append(
+                "If the answer is only one or two words, ask for the idea in a full sentence before this block can pass."
+            )
+        else:
+            lines.append("A one or two word answer can pass when it already states the goal.")
+        enrichments = {
+            "direct": "When the goal is met, add a short enrichment in the same reply. Do not wait to be asked.",
+            "offer": "After the goal is met, ask whether the learner wants one extra example, and wait for a yes.",
+        }
+        lines.append(enrichments.get(enrich, "Wait until the learner asks before you add anything beyond the goal."))
 
     elif btype == "mcq":
-        retries = int(bcfg.get("max_retry_attempts", 2) or 2)
+        retries = 1 if timed else int(bcfg.get("max_retry_attempts", 2) or 2)
         w_depth = int(bcfg.get("wrong_answer_explanation_depth", 2) or 2)
         disable_elim = bool(bcfg.get("disable_eliminated_choices", True))
         confirm_why = str(bcfg.get("confirm_why_on_correct") or "on_retry_only")
         pass_depth = str(bcfg.get("correct_pass_explanation_depth") or "reinforce_why")
-        w_desc = {
-            1: "Give a brief nudge pointing out what to re-check without explaining why the chosen option is wrong.",
-            2: "Give a diagnostic breakdown of why the chosen distractor is a trap without giving away the right option.",
-            3: "Contrast the chosen distractor against the concept with a mini-example before retry.",
-        }.get(w_depth, "")
+        lines.append(_retry_sentence(retries, "the correct option"))
+        wrongs = {
+            1: "On a wrong pick, give a brief nudge about what to re-check. Do not explain why that option is wrong, and do not name the right option.",
+            3: "On a wrong pick, contrast that option with the idea using a short example. Do not name the right option.",
+        }
         lines.append(
-            f"MCQ config: max_retry_attempts={retries}, wrong_answer_explanation_depth={w_depth} ({w_desc}), "
-            f"disable_eliminated_choices={disable_elim}, confirm_why_on_correct={confirm_why}, "
-            f"correct_pass_explanation_depth={pass_depth}."
+            wrongs.get(
+                w_depth,
+                "On a wrong pick, say why that option is a trap. Do not give away the right option.",
+            )
         )
+        if disable_elim:
+            lines.append("Take a wrong choice off the screen so the learner cannot pick it again.")
+        else:
+            lines.append("Leave a wrong choice on the screen. The learner may pick it again.")
+        whys = {
+            "never": "A correct pick ends this block. Do not ask why that option is right.",
+            "always": "A correct pick must include why that option is right before this block ends.",
+        }
+        lines.append(
+            whys.get(
+                confirm_why,
+                "If the first pick is correct, end this block. If the learner needed another try, ask why that option is right before the block ends.",
+            )
+        )
+        if pass_depth == "brief_confirm":
+            lines.append("When the pick is correct, confirm it in one short sentence.")
+        else:
+            lines.append("When the pick is correct, restate why that option fits.")
+        if substep == "awaiting_why":
+            lines.append("This turn is only the why. Do not ask the multiple choice again.")
 
     elif btype == "case_study":
         pres = str(bcfg.get("case_presentation") or "sequential_predict_then_contrast")
         depth = int(bcfg.get("explanation_depth", 3) or 3)
-        retries = int(bcfg.get("max_retries_before_reveal", 3) or 3)
+        retries = 1 if timed else int(bcfg.get("max_retries_before_reveal", 3) or 3)
         req_trans = bool(bcfg.get("require_transfer_application", True))
-        lines.append(
-            f"Case Study config: case_presentation={pres}, explanation_depth={depth} ({_EXPLAIN.get(depth, _EXPLAIN[3])}), "
-            f"max_retries_before_reveal={retries}, require_transfer_application={req_trans} (active substep: {substep})."
-        )
+        if pres == "side_by_side_single_turn":
+            lines.append("Show both cases in the same turn and ask for the rule that fits both.")
+        else:
+            lines.append("Show one case at a time. Ask for a prediction, then contrast the cases and ask for the rule.")
+        lines.append(f"How to explain the contrast: {_depth_sentence(depth)}")
+        lines.append(_retry_sentence(retries, "the principle"))
+        if req_trans:
+            lines.append("After the principle, ask the transfer question. This block is not done until that answer is in.")
+        else:
+            lines.append("Do not ask a transfer question. This block ends when the principle is stated.")
 
     elif btype == "socratic":
         turns = int(bcfg.get("dialogue_depth_turns", 2) or 2)
         intensity = str(bcfg.get("challenge_intensity") or "counterexample_entrapment")
-        retries = int(bcfg.get("max_retries_before_reveal", 3) or 3)
+        retries = 1 if timed else int(bcfg.get("max_retries_before_reveal", 3) or 3)
         hint_mode = str(bcfg.get("hint_when_stuck") or "highlight_contradiction")
+        if turns <= 1:
+            lines.append("Give one challenge turn, then this block can pass.")
+        else:
+            lines.append(f"Keep the challenge going for {turns} turns before this block can pass.")
+        challenges = {
+            "gentle_clarification": "Push gently. Ask the learner to make their claim clearer.",
+            "devil_advocate": "Take the opposite side and make the learner defend the claim.",
+        }
         lines.append(
-            f"Socratic config: dialogue_depth_turns={turns}, challenge_intensity={intensity}, "
-            f"max_retries_before_reveal={retries}, hint_when_stuck={hint_mode}."
+            challenges.get(intensity, "Answer with a counterexample that makes a weak claim fail.")
         )
+        lines.append(_retry_sentence(retries, "the synthesis"))
+        if hint_mode == "give_analogy":
+            lines.append("When the learner is stuck, give an analogy that points at the contradiction.")
+        else:
+            lines.append("When the learner is stuck, point at the contradiction in what they just said.")
 
     elif btype == "curiosity":
         w_turns = int(bcfg.get("max_wonder_turns", 2) or 2)
         req_pred = bool(bcfg.get("require_initial_prediction", True))
         counts = bool(bcfg.get("counts_toward_mastery_score", False))
         framing = str(bcfg.get("hook_framing_style") or "mystery_paradox")
-        lines.append(
-            f"Curiosity config: hook_framing_style={framing}, max_wonder_turns={w_turns}, "
-            f"require_initial_prediction={req_pred}, counts_toward_mastery_score={counts}. "
-            "Validate curiosity and share bridge_to_unit without penalizing wild guesses."
-        )
+        hooks = {
+            "real_world_surprise": "Open with a real situation whose result is surprising.",
+            "thought_experiment": "Open with a short thought experiment the learner can picture.",
+        }
+        lines.append(hooks.get(framing, "Open with a mystery that seems to contradict itself."))
+        if w_turns <= 1:
+            lines.append("Allow one wonder turn, then share the bridge and move on.")
+        else:
+            lines.append(f"Allow {w_turns} wonder turns, then share the bridge and move on.")
+        if req_pred:
+            lines.append("Ask for a prediction before you share the bridge.")
+        else:
+            lines.append("A prediction is optional. Share the bridge once the learner has engaged.")
+        if counts:
+            lines.append("This block counts toward whether the component is known or fragile.")
+        else:
+            lines.append("This block does not count toward known or fragile. A bold guess is not a miss.")
 
     elif btype == "worked_example":
         fading = str(bcfg.get("fading_level") or "single_blanked_step")
         req_why = bool(bcfg.get("require_step_self_explanation", True))
-        retries = int(bcfg.get("max_retries_before_reveal", 2) or 2)
+        retries = 1 if timed else int(bcfg.get("max_retries_before_reveal", 2) or 2)
         w_depth = int(bcfg.get("wrong_step_explanation_depth", 2) or 2)
-        lines.append(
-            f"Worked Example config: fading_level={fading}, require_step_self_explanation={req_why}, "
-            f"max_retries_before_reveal={retries}, wrong_step_explanation_depth={w_depth}."
-        )
+        if fading == "two_steps":
+            lines.append("Hide two steps of the worked solution and ask the learner to supply them.")
+        else:
+            lines.append("Hide one step of the worked solution and ask the learner to supply it.")
+        if req_why:
+            lines.append("The learner must explain why that step works, not only fill the blank.")
+        else:
+            lines.append("The learner only needs to fill the blank step.")
+        lines.append(_retry_sentence(retries, "the missing step"))
+        wrongs = {
+            1: "On a wrong step, give a brief nudge and do not show the missing step.",
+            3: "On a wrong step, walk through where the step went off, without showing the missing step.",
+        }
+        lines.append(wrongs.get(w_depth, "On a wrong step, say what to re-check. Do not show the missing step."))
 
     elif btype == "spot_the_flaw":
         c_depth = str(bcfg.get("critique_depth") or "identify_and_correct")
         w_depth = int(bcfg.get("wrong_answer_explanation_depth", 2) or 2)
-        retries = int(bcfg.get("max_retries_before_reveal", 2) or 2)
+        retries = 1 if timed else int(bcfg.get("max_retries_before_reveal", 2) or 2)
         show_why = bool(bcfg.get("show_misconception_why", True))
-        lines.append(
-            f"Spot the Flaw config: critique_depth={c_depth}, wrong_answer_explanation_depth={w_depth}, "
-            f"max_retries_before_reveal={retries}, show_misconception_why={show_why}."
-        )
+        if c_depth == "identify_only":
+            lines.append("The learner only has to find the flaw. Do not require a correction.")
+        else:
+            lines.append("The learner must find the flaw and also correct it.")
+        wrongs = {
+            1: "On a miss, give a brief nudge toward the flaw. Do not name it.",
+            3: "On a miss, contrast the rookie work with the idea. Do not hand over the correction.",
+        }
+        lines.append(wrongs.get(w_depth, "On a miss, point at the kind of mistake. Do not name the flaw."))
+        lines.append(_retry_sentence(retries, "the flaw"))
+        if show_why:
+            lines.append("When you explain a miss, name the misconception that produced the flaw.")
+        else:
+            lines.append("When you explain a miss, stay with the flaw itself and do not name a misconception.")
 
     elif btype == "teach_back":
         confusion = str(bcfg.get("peer_confusion_level") or "curious_beginner")
         f_count = int(bcfg.get("follow_up_questions_count", 1) or 0)
-        retries = int(bcfg.get("max_retries_before_reveal", 2) or 2)
+        retries = 1 if timed else int(bcfg.get("max_retries_before_reveal", 2) or 2)
         strictness = str(bcfg.get("evaluation_strictness") or "plain_language_clarity")
-        lines.append(
-            f"Teach-Back config: peer_confusion_level={confusion}, follow_up_questions_count={f_count}, "
-            f"max_retries_before_reveal={retries}, evaluation_strictness={strictness}."
-        )
+        if confusion == "stubborn_misconception":
+            lines.append("Play a peer who holds a wrong idea and will not drop it without a clear explanation.")
+        else:
+            lines.append("Play a peer who is new to the idea and asks from genuine confusion.")
+        if f_count <= 0:
+            lines.append("Do not ask a follow-up. The first explanation ends this block.")
+        elif f_count == 1:
+            lines.append("Ask one follow-up after the first explanation.")
+        else:
+            lines.append(f"Ask {f_count} follow-ups after the first explanation.")
+        lines.append(_retry_sentence(retries, "a clear explanation"))
+        if strictness == "all_required_concepts_exact":
+            lines.append("Accept the explanation only when every required concept is in it.")
+        else:
+            lines.append("Accept a plain explanation that makes the idea clear, even if a term is missing.")
 
     elif btype == "retrieval_check":
         scaff = str(bcfg.get("cue_scaffolding") or "cued_hint_on_first_miss")
         req_why = bool(bcfg.get("require_elaborative_why", True))
-        retries = int(bcfg.get("max_retries_before_reveal", 2) or 2)
+        retries = 1 if timed else int(bcfg.get("max_retries_before_reveal", 2) or 2)
         paraphrase = bool(bcfg.get("accept_paraphrase", True))
-        lines.append(
-            f"Retrieval Check config: cue_scaffolding={scaff}, require_elaborative_why={req_why}, "
-            f"max_retries_before_reveal={retries}, accept_paraphrase={paraphrase}."
-        )
+        if scaff == "free_recall_first":
+            lines.append("Ask for a free recall. Do not cue the first miss.")
+        else:
+            lines.append("On the first miss, give a cue and let the learner try again. Do not say the fact.")
+        if req_why:
+            lines.append("After the fact is recalled, ask why it is so. This block is not done until that why is in.")
+        else:
+            lines.append("This block ends when the fact is recalled. Do not ask why.")
+        lines.append(_retry_sentence(retries, "the fact"))
+        if paraphrase:
+            lines.append("A paraphrase of the fact counts as a recall.")
+        else:
+            lines.append("The fact has to be stated in the stored words. A loose paraphrase does not count.")
 
     return lines
 
@@ -960,20 +1175,22 @@ def _how_to_teach(
         )
 
     if stay_mode == "strict":
-        lines.append("Stay on course (strict): redirect any off-topic question immediately back to the active block.")
+        lines.append(
+            "Stay on this component. If the learner leaves the topic, bring them back in the same reply and do not answer the tangent."
+        )
     elif stay_mode == "exploratory":
-        lines.append("Stay on course (exploratory): you may briefly explore a curiosity tangent before returning to the active block.")
+        lines.append("You may follow a short tangent, then come back to this block.")
     else:
-        lines.append("Stay on course (brief_answer_then_return): answer a tangent in one brief sentence, then return to this block.")
+        lines.append("Answer a tangent in one brief sentence, then return to this block.")
 
     if has_misconceptions:
         if misc_policy == "immediate_redirect":
             lines.append(
-                "Misconception policy (immediate_redirect): if a stored wrong move matches, immediately name it and set decision='redirect'."
+                "If a stored wrong move matches, name it on that same turn and set the decision to redirect."
             )
         else:
             lines.append(
-                "Misconception policy (explain_and_retry_once): the first time a stored wrong move matches, explain the trap and retry this block; the second time, redirect."
+                "the first time a stored wrong move matches, explain the trap and retry this block. The second time, redirect."
             )
 
     if support_band == "hold":
@@ -987,10 +1204,10 @@ def _how_to_teach(
 
     if praise_style == "process_praise":
         lines.append(
-            "Encouragement (process_praise): name the specific reasoning move the learner made rather than generic praise."
+            "When you encourage, name the specific reasoning move the learner made. Do not use generic praise."
         )
     else:
-        lines.append("Encouragement (minimal): keep acknowledgment brief and matter-of-fact.")
+        lines.append("Keep any acknowledgment to a few words. Do not add praise.")
 
     if not choice_on_screen:
         q_line = "End a teaching or probing turn with a single clear question."
@@ -1017,6 +1234,7 @@ def _what_happened(
     rubric_met: list[str],
     redirect_pending: bool,
     active_block_state: dict,
+    block_results: list | None = None,
 ) -> list[str]:
     substep = str(active_block_state.get("substep") or "main")
     dialogue_turns = int(active_block_state.get("dialogue_turns") or 0)
@@ -1046,6 +1264,20 @@ def _what_happened(
     ]
     if (component_status or "").strip():
         lines.append(f"This component status is {component_status}.")
+    earlier = [item for item in (block_results or []) if isinstance(item, dict)]
+    if earlier:
+        lines.append("Earlier block assessments the learner already finished:")
+        for item in earlier:
+            title = str(item.get("title") or item.get("block_id") or "a block").strip()
+            outcome = str(item.get("outcome") or "passed").strip()
+            attempts = int(item.get("attempts") or 0)
+            strong = str(item.get("strong") or "").strip() or "not noted"
+            work_on = str(item.get("work_on") or "").strip() or "not noted"
+            lines.append(
+                f"{title}: {outcome} after {attempts} tries. What was strong: {strong}. What to work on: {work_on}."
+            )
+    else:
+        lines.append("No earlier block has an assessment yet.")
     return lines
 
 
@@ -1115,6 +1347,7 @@ def build_kc_prompt(
     others_known: bool,
     active_block_state: dict | None = None,
     transition_from_block: dict | None = None,
+    block_results: list | None = None,
     moves: object | None = None,
 ) -> dict:
     """Assemble the 7-section prompt for the active block (`node.blocks[step]`)."""
@@ -1144,13 +1377,24 @@ def build_kc_prompt(
     substeps = substeps_for_block(active_block, cfg)
     is_last_block = index >= len(blocks) - 1
     is_last_substep = substep == substeps[-1] if substeps else True
+    if substep == "awaiting_why":
+        is_last_substep = True
+    confirm_why = str(((cfg.get("blocks") or {}).get("mcq") or {}).get("confirm_why_on_correct") or "on_retry_only")
+    pending_why = (
+        btype == "mcq"
+        and substep == "choice"
+        and confirm_why == "on_retry_only"
+        and int(attempts or 0) > 0
+    )
+    if pending_why:
+        is_last_substep = False
     is_final_block_and_substep = is_last_block and is_last_substep
 
     data = active_block.get("data") if isinstance(active_block.get("data"), dict) else {}
     needs_dynamic_mcq = (
         btype == "mcq"
         and str(data.get("mode") or "static") == "dynamic"
-        and not (isinstance(state_dict.get("mcq"), dict) and state_dict["mcq"].get("question_stem"))
+        and _cached_generated_mcq(state_dict) is None
     )
     if (
         not needs_dynamic_mcq
@@ -1159,7 +1403,7 @@ def build_kc_prompt(
         and str((blocks[index + 1].get("data") or {}).get("mode") or "static") == "dynamic"
     ):
         needs_dynamic_mcq = True
-    widget_on = choice_on_screen or block_uses_choice_widget(active_block, substep)
+    widget_on = choice_on_screen or block_uses_choice_widget(active_block, substep, state_dict)
     include_close = is_final_block_and_substep or unit_complete or course_complete
     frag_self_exp = bool(((cfg.get("blocks") or {}).get("topic_goal") or {}).get("fragment_self_explanation", True))
     interests = ", ".join(str(item) for item in (student.interests or []) if str(item).strip()) or "none named"
@@ -1236,6 +1480,7 @@ def build_kc_prompt(
                     rubric_met=rubric_met,
                     redirect_pending=redirect_pending,
                     active_block_state=state_dict,
+                    block_results=block_results,
                 ),
             ),
             ("What to return", _what_to_return(needs_dynamic_mcq=needs_dynamic_mcq)),

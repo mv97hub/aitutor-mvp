@@ -23,6 +23,7 @@ type PromptBundle = {
 
 type Decision = {
   reply?: string;
+  generated_mcq?: Record<string, unknown> | null;
 };
 
 type StoredCall = {
@@ -86,6 +87,7 @@ export async function POST(req: Request) {
   };
 
   let spoken = "";
+  let generatedMcq: Record<string, unknown> | null = null;
   try {
     const result = await generateText({
       model: wrapLanguageModel({ model: languageModel(modelName), middleware: captureRequest }),
@@ -96,6 +98,10 @@ export async function POST(req: Request) {
     });
     const decision = result.output as Decision | undefined;
     spoken = (decision?.reply || result.text || "").trim();
+    const generated = decision?.generated_mcq;
+    if (generated && typeof generated === "object" && !Array.isArray(generated) && generated.choices) {
+      generatedMcq = generated;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "The tutor could not say this step.";
     return new Response(message, { status: 502 });
@@ -108,7 +114,7 @@ export async function POST(req: Request) {
   try {
     session = await api<KcTutorSession>(`/kc/tutor/sessions/${sessionId}/speech`, {
       method: "POST",
-      body: JSON.stringify({ content: spoken }),
+      body: JSON.stringify({ content: spoken, generated_mcq: generatedMcq }),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not store that step.";

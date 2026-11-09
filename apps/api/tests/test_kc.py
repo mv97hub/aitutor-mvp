@@ -607,6 +607,15 @@ def test_kid_prompt_uses_the_tutor_profile() -> None:
                 "use_interests": True,
                 "stay_on_course": False,
                 "growth_praise": True,
+                "kc_tutor_config": {
+                    "overarching": {"stay_on_course": "exploratory"},
+                    "blocks": {
+                        "topic_goal": {
+                            "explanation_depth": 5,
+                            "max_retries_before_reveal": 3,
+                        }
+                    },
+                },
             },
         )
         assert switched.status_code == 200, switched.text
@@ -625,9 +634,9 @@ def test_kid_prompt_uses_the_tutor_profile() -> None:
         assert "analytical high-school" in text
         assert "cause-and-effect" in text
         assert "pundit" in text
-        assert "Teach a little more first, then ask one question." in text
-        assert "three tries" in text
-        assert "You may follow a tangent." in text
+        assert "Teach thoroughly with step-by-step scaffolding and an example before asking the question." in text
+        assert "Reveal the goal after 3 missed answers." in text
+        assert "You may follow a short tangent, then come back to this block." in text
         assert f"{age}-year-old" in text
         for interest in interests:
             assert interest in text
@@ -638,8 +647,8 @@ def test_kid_prompt_uses_the_tutor_profile() -> None:
         assert "What to return" in text
         assert "Layer 1, Component" not in text
         assert "Layer 7, Feedback loop" not in text
-        assert "Orient" in text
-        assert "You do not set the type, the edges, the score, or the step index." in text
+        assert "Block 1 of 1: Topic / Goal" in text
+        assert "You do not set the block order, the edges, or the final mastery score." in text
         db = SessionLocal()
         try:
             stored = db.get(KcSession, opened.json()["id"])
@@ -713,7 +722,11 @@ def test_pass_bumps_an_encompassed_component() -> None:
         )
         assert held.status_code == 200, held.text
         assert held.json()["passed"] is False
-        assert held.json()["step_label"] == "This step"
+        assert held.json()["step_label"] == "Block 1 of 1: Topic / Goal"
+        client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/turn",
+            json={"answer": "I can explain the later fact."},
+        )
         done = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
             json={
@@ -823,7 +836,7 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
         session_id = again.json()["id"]
         steps = (
             ("The outline is clear.", "advance", []),
-            (rule, "complete", ["rule"]),
+            ("I can explain SAS versus SSA.", "complete", ["rule"]),
         )
         step = None
         for answer, decision, rubric in steps:
@@ -923,10 +936,10 @@ def test_time_box_synthesis_and_factual_recipe() -> None:
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": factual["id"]},
         )
         assert opened.json()["recipe"] == "block_walk"
-        assert opened.json()["step_label"] == "Orient"
+        assert opened.json()["step_label"] == "Block 1 of 1: Topic / Goal"
         client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
-            json={"answer": "The interior angles of a triangle add up to 180 degrees."},
+            json={"answer": "Not yet."},
         )
         held = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
@@ -938,6 +951,10 @@ def test_time_box_synthesis_and_factual_recipe() -> None:
         )
         assert held.status_code == 200, held.text
         assert held.json()["passed"] is False
+        client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/turn",
+            json={"answer": "Explain the triangle angle sum."},
+        )
         answered = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
             json={
@@ -948,7 +965,7 @@ def test_time_box_synthesis_and_factual_recipe() -> None:
         )
         assert answered.status_code == 200, answered.text
         assert answered.json()["passed"] is True
-        assert answered.json()["step_label"] == "This step"
+        assert answered.json()["step_label"] == "Block 1 of 1: Topic / Goal"
         assert "180" in answered.json()["reply"]
 
         _clear_progress(storm.id)
@@ -1112,10 +1129,10 @@ def test_tutor_speech_is_separate_from_the_score_and_two_steps_are_choices() -> 
         )
         assert stepped.status_code == 200, stepped.text
         assert stepped.json()["passed"] is False
-        assert stepped.json()["step"] == 1
+        assert stepped.json()["step"] == 0
         assert stepped.json()["needs_speech"] is False
         assert stepped.json()["choice"] is None
-        assert stepped.json()["step_label"] == "This step"
+        assert stepped.json()["step_label"] == "Block 1 of 1: Topic / Goal"
 
         causal = client.post(
             "/kc/tutor/sessions",
@@ -1128,7 +1145,7 @@ def test_tutor_speech_is_separate_from_the_score_and_two_steps_are_choices() -> 
             json={"reply": "What is at stake?", "decision": "advance"},
         )
         assert held.json()["passed"] is False
-        assert held.json()["step"] == 1
+        assert held.json()["step"] == 0
         assert held.json()["choice"] is None
         fresh = client.post(
             "/kc/tutor/sessions",
@@ -1612,10 +1629,10 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         assert live["Prerequisite codes"] == "zz-vars-other"
         assert live["Encompass codes"] == ""
         assert live["Recipe"] == "block_walk"
-        assert live["Move index"] == "1 of 2"
-        assert live["Move name"] == "Orient"
-        assert live["Move content"] == "Outline: How River fact works."
-        assert live["Evidence"] == ""
+        assert live["Move index"] == "1 of 1"
+        assert live["Move name"] == "Block 1 of 1: Topic / Goal"
+        assert live["Move content"] == "Topic: River fact | Goal: Explain River fact."
+        assert live["Evidence"] == "blk-1"
         assert live["Support band"] == "hold"
         assert live["Score"] == ""
         assert live["Status"] == "in_progress"
@@ -1625,11 +1642,17 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
 
         client.post(
             f"/kc/tutor/sessions/{session_id}/turn",
-            json={"answer": "Truth for River fact."},
+            json={"answer": "The outline is clear."},
         )
-        client.post(
+        held = client.post(
             f"/kc/tutor/sessions/{session_id}/decision",
             json={"reply": "The outline is clear.", "decision": "advance"},
+        )
+        assert held.status_code == 200, held.text
+        assert held.json()["passed"] is False
+        client.post(
+            f"/kc/tutor/sessions/{session_id}/turn",
+            json={"answer": "Explain the river fact."},
         )
         done = client.post(
             f"/kc/tutor/sessions/{session_id}/decision",
@@ -1641,8 +1664,8 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         )
         assert done.status_code == 200, done.text
         after = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
-        assert after["Move index"] == "2 of 2"
-        assert after["Move name"] == "This step"
+        assert after["Move index"] == "1 of 1"
+        assert after["Move name"] == "Block 1 of 1: Topic / Goal"
         assert after["Score"] == "100"
         assert after["Status"] == "completed"
         assert after["Unit close"] == "yes"
@@ -1713,7 +1736,7 @@ def test_decision_overrides_and_course_outro() -> None:
         assert held.status_code == 200, held.text
         assert held.json()["passed"] is False
         assert held.json()["status"] == "in_progress"
-        assert held.json()["step_label"] == "This step"
+        assert held.json()["step_label"] == "Block 1 of 1: Topic / Goal"
         client.post(
             f"/kc/tutor/sessions/{opened['id']}/turn",
             json={"answer": "Truth for First fact is the whole line."},
@@ -1735,7 +1758,7 @@ def test_decision_overrides_and_course_outro() -> None:
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": second["id"]},
         ).json()
         other_prompt = client.get(f"/kc/tutor/sessions/{other['id']}/prompt").json()["system_prompt"]
-        assert "The outline is How Second fact works." in other_prompt
+        assert "How Second fact works." in other_prompt
         client.post(f"/kc/tutor/sessions/{other['id']}/turn", json={"answer": "The outline is clear."})
         stepped = client.post(
             f"/kc/tutor/sessions/{other['id']}/decision",
@@ -1744,8 +1767,11 @@ def test_decision_overrides_and_course_outro() -> None:
         assert stepped.status_code == 200, stepped.text
         assert stepped.json()["status"] == "in_progress"
         assert stepped.json()["passed"] is False
-        assert stepped.json()["step_label"] == "This step"
-        client.post(f"/kc/tutor/sessions/{other['id']}/turn", json={"answer": "The rule is the contrast."})
+        assert stepped.json()["step_label"] == "Block 1 of 1: Topic / Goal"
+        client.post(
+            f"/kc/tutor/sessions/{other['id']}/turn",
+            json={"answer": "Explain the second fact. The rule is the contrast."},
+        )
         outro = client.post(
             f"/kc/tutor/sessions/{other['id']}/decision",
             json={
@@ -1930,31 +1956,46 @@ def test_closing_a_component_saves_the_result_on_that_child() -> None:
         )
         assert opened.status_code == 200, opened.text
         session_id = opened.json()["id"]
-        assert opened.json()["step_label"] == "Orient"
+        assert opened.json()["step_label"] == "Block 1 of 1: Topic / Goal"
         prompt = client.get(f"/kc/tutor/sessions/{session_id}/prompt").json()["system_prompt"]
         assert "A principle about floating." in prompt
         assert "density" not in prompt
         assert "Spread-out objects float" not in prompt
         assert "Boats and cubes in a harbor." not in prompt
 
-        def decide(answer: str, decision: str, rubric: list[str]) -> dict:
-            posted = client.post(f"/kc/tutor/sessions/{session_id}/turn", json={"answer": answer})
-            assert posted.status_code == 200, posted.text
-            body = client.post(
-                f"/kc/tutor/sessions/{session_id}/decision",
-                json={"reply": "Stay with this step.", "decision": decision, "rubric_met": rubric},
-            )
-            assert body.status_code == 200, body.text
-            return body.json()
-
-        stepped = decide("The outline is clear.", "advance", [])
-        assert stepped["step_label"] == "This step"
+        posted = client.post(
+            f"/kc/tutor/sessions/{session_id}/turn",
+            json={"answer": "The outline is clear."},
+        )
+        assert posted.status_code == 200, posted.text
+        stepped = client.post(
+            f"/kc/tutor/sessions/{session_id}/decision",
+            json={"reply": "Stay with this step.", "decision": "advance", "rubric_met": []},
+        )
+        assert stepped.status_code == 200, stepped.text
+        assert stepped.json()["step_label"] == "Block 1 of 1: Topic / Goal"
         topic_prompt = client.get(f"/kc/tutor/sessions/{session_id}/prompt").json()["system_prompt"]
-        assert "This step" in topic_prompt
+        assert "Topic / Goal" in topic_prompt
+        assert "Explain Floating." in topic_prompt
         assert "The child will type." in topic_prompt
-        finished = decide("Spread-out objects float.", "complete", ["goal-1", "goal-2"])
-        assert finished["passed"] is True
-        assert finished["unit_complete"] is True
+        client.post(
+            f"/kc/tutor/sessions/{session_id}/turn",
+            json={"answer": "I can explain floating."},
+        )
+        finished = client.post(
+            f"/kc/tutor/sessions/{session_id}/decision",
+            json={
+                "reply": "You can explain why floating works. Practice the next shape.",
+                "decision": "complete",
+                "rubric_met": ["goal-1", "goal-2"],
+                "score_justification": "Say why shape matters.",
+                "what_was_strong": "Named the floating idea.",
+                "what_to_work_on": "Try a new object.",
+            },
+        )
+        assert finished.status_code == 200, finished.text
+        assert finished.json()["passed"] is True
+        assert finished.json()["unit_complete"] is True
         board = client.get(
             f"/kc/tutor/courses/{course['id']}",
             params={"student_id": str(storm.id)},
@@ -1964,11 +2005,397 @@ def test_closing_a_component_saves_the_result_on_that_child() -> None:
         unit = next(item for item in board["units"] if item["code"] == "zz-result-float")
         result = unit["result"]
         assert result["status"] == "known"
-        assert result["rubric_met"] == ["goal-1", "goal-2"]
+        assert "blk-1" in result["rubric_met"]
+        assert "goal-1" in result["rubric_met"]
         assert "Say why shape matters" in result["justification"]
         assert result["strong"]
         assert result["work_on"]
+        assert "?" not in result["reply"]
     finally:
+        _clear_progress(storm.id)
+        _wipe_zz()
+
+
+def _decide(session_id: str, answer: str, decision: str = "stay", reply: str = "Noted.", **extra: object) -> dict:
+    posted = client.post(f"/kc/tutor/sessions/{session_id}/turn", json={"answer": answer})
+    assert posted.status_code == 200, posted.text
+    body = {"reply": reply, "decision": decision, "rubric_met": [], **extra}
+    decided = client.post(f"/kc/tutor/sessions/{session_id}/decision", json=body)
+    assert decided.status_code == 200, decided.text
+    return decided.json()
+
+
+def _assessments(session_id: str) -> list[dict]:
+    db = SessionLocal()
+    try:
+        row = db.get(KcSession, uuid.UUID(session_id))
+        assert row is not None
+        return [dict(item) for item in (row.block_results or []) if isinstance(item, dict)]
+    finally:
+        db.close()
+
+
+def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> None:
+    storm = _storm()
+    _clear_progress(storm.id)
+    original = client.get("/tutor-profile")
+    assert original.status_code == 200, original.text
+    course = _ready(
+        _make("zz-loop", title="River course", description="A river and its color."),
+        [
+            _spec(
+                "zz-loop-color",
+                "River color",
+                blocks=[
+                    {
+                        "id": "topic",
+                        "type": "topic_goal",
+                        "data": {
+                            "topic": "River color",
+                            "goal": "Explain the river color.",
+                            "acceptance_criteria": "The river is blue.",
+                        },
+                    },
+                    {
+                        "id": "quiz",
+                        "type": "mcq",
+                        "data": {
+                            "mode": "static",
+                            "question_stem": "Which color is the river?",
+                            "choices": [
+                                {"id": "a", "text": "Blue water", "is_correct": True},
+                                {"id": "b", "text": "Red water", "is_correct": False},
+                                {"id": "c", "text": "Green water", "is_correct": False},
+                            ],
+                            "correct_explanation": "Blue water reflects the sky.",
+                        },
+                    },
+                ],
+            ),
+            _spec(
+                "zz-loop-why",
+                "Why the color",
+                blocks=[
+                    {
+                        "id": "topic",
+                        "type": "topic_goal",
+                        "data": {
+                            "topic": "Sky light",
+                            "goal": "Explain the sky light.",
+                            "acceptance_criteria": "The sky sends blue light.",
+                        },
+                    },
+                    {
+                        "id": "quiz",
+                        "type": "mcq",
+                        "data": {
+                            "mode": "static",
+                            "question_stem": "What sends the blue light?",
+                            "choices": [
+                                {"id": "a", "text": "The sky", "is_correct": True},
+                                {"id": "b", "text": "The mud", "is_correct": False},
+                            ],
+                            "correct_explanation": "The sky sends blue light.",
+                        },
+                    },
+                ],
+            ),
+            _spec(
+                "zz-loop-open",
+                "Two topics",
+                blocks=[
+                    {
+                        "id": "first",
+                        "type": "topic_goal",
+                        "data": {"topic": "First idea", "goal": "Explain the first idea."},
+                    },
+                    {
+                        "id": "second",
+                        "type": "topic_goal",
+                        "data": {"topic": "Second idea", "goal": "Explain the second idea."},
+                    },
+                ],
+            ),
+            _spec(
+                "zz-loop-dynamic",
+                "Generated question",
+                blocks=[
+                    {
+                        "id": "live",
+                        "type": "mcq",
+                        "data": {
+                            "mode": "dynamic",
+                            "target_skill": "Name the river color",
+                            "distractor_guidance": "A color the river is not",
+                        },
+                    }
+                ],
+            ),
+            _spec(
+                "zz-loop-wonder",
+                "A wonder",
+                blocks=[
+                    {
+                        "id": "wonder",
+                        "type": "curiosity",
+                        "data": {
+                            "phenomenon_hook": "Why is the river blue?",
+                            "prediction_question": "Guess first.",
+                            "bridge_to_unit": "The color comes from the sky.",
+                        },
+                    }
+                ],
+            ),
+        ],
+    )
+    try:
+        color = _node(course, "zz-loop-color")
+        opened = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": color["id"]},
+        )
+        assert opened.status_code == 200, opened.text
+        session_id = opened.json()["id"]
+        assert opened.json()["choice"] is None
+        assert opened.json()["step"] == 0
+        progress = opened.json()["block_progress"]
+        assert [item["status"] for item in progress] == ["active", "upcoming"]
+        assert opened.json()["completed_blocks"] == 0
+        prompt = client.get(f"/kc/tutor/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "River color" in prompt
+        assert "Explain the river color." in prompt
+        assert "The river is blue." in prompt
+        assert "The unit is not finished." in prompt
+        assert "Do not say this component is finished." in prompt
+
+        ignored = _decide(
+            session_id,
+            "I do not know this yet.",
+            decision="complete",
+            reply="This component is finished.",
+            block_complete=True,
+            substep_passed=True,
+        )
+        assert ignored["passed"] is False
+        assert ignored["unit_complete"] is False
+        assert ignored["step"] == 0
+        assert ignored["status"] == "in_progress"
+        assert _assessments(session_id) == []
+
+        advanced = _decide(
+            session_id,
+            "The river is blue.",
+            decision="stay",
+            reply="The river color is in place. Which color is the river?",
+        )
+        assert advanced["passed"] is False
+        assert advanced["step"] == 1
+        assert advanced["status"] == "in_progress"
+        assert advanced["choice"]["prompt"] == "Which color is the river?"
+        assert [item["text"] for item in advanced["choice"]["choices"]] == [
+            "Blue water",
+            "Red water",
+            "Green water",
+        ]
+        assert [item["status"] for item in advanced["block_progress"]] == ["completed", "active"]
+        topic_done = _assessments(session_id)
+        assert len(topic_done) == 1
+        assert topic_done[0]["block_id"] == "topic"
+        assert topic_done[0]["outcome"] == "passed"
+        assert topic_done[0]["strong"]
+        mcq_prompt = client.get(f"/kc/tutor/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "Which color is the river?" in mcq_prompt
+        assert "Blue water" in mcq_prompt
+        assert "If the first pick is correct, end this block." in mcq_prompt
+        assert "River color: passed after" in mcq_prompt
+        assert "Summarize what the learner can now do." in mcq_prompt
+        assert "Do not ask a new question." in mcq_prompt
+        assert "The unit is not finished." not in mcq_prompt
+
+        wrong = _decide(
+            session_id,
+            "Red water",
+            decision="complete",
+            reply="Look again.",
+            block_complete=True,
+        )
+        assert wrong["passed"] is False
+        assert wrong["unit_complete"] is False
+        assert wrong["step"] == 1
+        assert wrong["status"] == "in_progress"
+        assert [item["status"] for item in wrong["block_progress"]] == ["completed", "active"]
+        assert "Red water" not in [item["text"] for item in wrong["choice"]["choices"]]
+        assert len(_assessments(session_id)) == 1
+
+        retried = _decide(
+            session_id,
+            "Blue water",
+            decision="complete",
+            reply="Why is that the right color?",
+            block_complete=True,
+        )
+        assert retried["passed"] is False
+        assert retried["unit_complete"] is False
+        assert retried["step"] == 1
+        assert "Explain Why" in retried["step_label"]
+        assert len(_assessments(session_id)) == 1
+        finished = _decide(
+            session_id,
+            "Blue water reflects the sky.",
+            decision="stay",
+            reply="You can name the river color and pick it out. Practice the next river.",
+            score_justification="Named the color and picked blue water.",
+            what_was_strong="Named the color.",
+            what_to_work_on="Practice the next river.",
+        )
+        assert finished["passed"] is True
+        assert finished["unit_complete"] is True
+        assert finished["status"] == "completed"
+        assert "?" not in finished["reply"]
+        assert [item["status"] for item in finished["block_progress"]] == ["completed", "completed"]
+        both = _assessments(session_id)
+        assert [item["block_id"] for item in both] == ["topic", "quiz"]
+        assert [item["outcome"] for item in both] == ["passed", "passed"]
+        state = _state(storm.id, "zz-loop-color")
+        assert state is not None and state.status == "known"
+        assert state.result["reply"] == finished["reply"]
+        assert "?" not in state.result["reply"]
+
+        switched = client.put(
+            "/tutor-profile",
+            json={
+                **{key: value for key, value in original.json().items() if key != "updated_at"},
+                "kc_tutor_config": {
+                    "blocks": {"mcq": {"confirm_why_on_correct": "always"}},
+                },
+            },
+        )
+        assert switched.status_code == 200, switched.text
+        why_node = _node(course, "zz-loop-why")
+        why = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": why_node["id"]},
+        ).json()
+        _decide(why["id"], "The sky sends blue light.", reply="On to the choice.")
+        why_prompt = client.get(f"/kc/tutor/sessions/{why['id']}/prompt").json()["system_prompt"]
+        assert "A correct pick must include why that option is right before this block ends." in why_prompt
+        assert "The unit is not finished." in why_prompt
+        held = _decide(why["id"], "The sky", decision="complete", reply="Why does that option work?", block_complete=True)
+        assert held["passed"] is False
+        assert held["unit_complete"] is False
+        assert held["step"] == 1
+        assert "Explain Why" in held["step_label"]
+        why_next = client.get(f"/kc/tutor/sessions/{why['id']}/prompt").json()["system_prompt"]
+        assert "Do not ask a new question." in why_next
+        assert "Summarize what the learner can now do." in why_next
+        closed = _decide(
+            why["id"],
+            "The sky sends blue light.",
+            reply="You can explain the sky light and why that choice holds.",
+        )
+        assert closed["passed"] is True
+        assert closed["status"] == "completed"
+        assert _state(storm.id, "zz-loop-why").status == "known"
+
+        client.put("/tutor-profile", json=original.json())
+        open_node = _node(course, "zz-loop-open")
+        partial = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": open_node["id"]},
+        ).json()
+        moved = _decide(partial["id"], "Explain the first idea.", reply="The first idea holds.")
+        assert moved["step"] == 1
+        assert [item["status"] for item in moved["block_progress"]] == ["completed", "active"]
+        db = SessionLocal()
+        try:
+            row = db.get(KcSession, uuid.UUID(partial["id"]))
+            assert row is not None
+            row.status = "completed"
+            db.commit()
+        finally:
+            db.close()
+        forced = client.get(f"/kc/tutor/sessions/{partial['id']}")
+        assert forced.status_code == 200, forced.text
+        assert [item["status"] for item in forced.json()["block_progress"]] == ["completed", "upcoming"]
+        assert forced.json()["completed_blocks"] == 1
+
+        dynamic_node = _node(course, "zz-loop-dynamic")
+        dynamic = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": dynamic_node["id"]},
+        ).json()
+        assert dynamic["choice"] is None
+        spoken = client.post(
+            f"/kc/tutor/sessions/{dynamic['id']}/speech",
+            json={
+                "content": "Pick the river color.",
+                "generated_mcq": {
+                    "question_stem": "Pick the river color",
+                    "choices": [
+                        {"id": "a", "text": "Blue"},
+                        {"id": "b", "text": "Red"},
+                    ],
+                    "correct_index": 0,
+                },
+            },
+        )
+        assert spoken.status_code == 200, spoken.text
+        assert spoken.json()["choice"]["prompt"] == "Pick the river color"
+        missed = _decide(dynamic["id"], "Red", decision="complete", reply="Try the other color.", block_complete=True)
+        assert missed["passed"] is False
+        assert missed["status"] == "in_progress"
+        picked = _decide(dynamic["id"], "Blue", decision="complete", reply="Say why that color fits.", block_complete=True)
+        assert picked["passed"] is False
+        assert "Explain Why" in picked["step_label"]
+        known = _decide(
+            dynamic["id"],
+            "Blue is the color of this river.",
+            reply="You can name the river color now.",
+        )
+        assert known["passed"] is True
+        assert known["status"] == "completed"
+        assert _assessments(dynamic["id"])[0]["outcome"] == "passed"
+
+        wonder_node = _node(course, "zz-loop-wonder")
+        wonder = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": wonder_node["id"]},
+        ).json()
+        counted_off = _decide(
+            wonder["id"],
+            "I wonder why.",
+            reply="Here is the wonder, and you can ask it again later.",
+        )
+        assert counted_off["passed"] is True
+        assert _state(storm.id, "zz-loop-wonder").status == "known"
+
+        counting = client.put(
+            "/tutor-profile",
+            json={
+                **{key: value for key, value in original.json().items() if key != "updated_at"},
+                "kc_tutor_config": {
+                    "blocks": {
+                        "curiosity": {
+                            "counts_toward_mastery_score": True,
+                            "max_wonder_turns": 1,
+                        }
+                    }
+                },
+            },
+        )
+        assert counting.status_code == 200, counting.text
+        _clear_progress(storm.id)
+        again = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": wonder_node["id"]},
+        ).json()
+        revealed = _decide(again["id"], "Nope", reply="The wonder stays open for another look.")
+        assert revealed["passed"] is False
+        assert revealed["unit_complete"] is True
+        assert _state(storm.id, "zz-loop-wonder").status == "fragile"
+        assert _assessments(again["id"])[0]["outcome"] == "revealed"
+    finally:
+        client.put("/tutor-profile", json=original.json())
         _clear_progress(storm.id)
         _wipe_zz()
 
