@@ -462,23 +462,113 @@ def test_creator_schema_keeps_each_block_type_on_its_own_fields() -> None:
     variants = bundle["schema"]["properties"]["blocks"]["items"]["anyOf"]
     assert [item["properties"]["type"]["enum"] for item in variants] == [["topic_goal"], ["mcq"]]
     topic = variants[0]["properties"]["data"]
-    assert topic["required"] == ["topic", "goal"]
-    assert "acceptance_criteria" in topic["properties"]
-    assert "acceptance_criteria" not in topic["required"]
+    assert topic["required"] == ["topic", "goal", "acceptance_criteria", "teaching_notes"]
+    assert topic["additionalProperties"] is False
+    assert topic["properties"]["topic"]["type"] == "string"
+    assert topic["properties"]["goal"]["type"] == "string"
+    assert topic["properties"]["acceptance_criteria"]["type"] == ["string", "null"]
+    assert topic["properties"]["teaching_notes"]["type"] == ["string", "null"]
     assert "question_stem" not in topic["properties"]
     assert "case_a" not in topic["properties"]
     modes = variants[1]["properties"]["data"]["anyOf"]
     static, dynamic = modes
-    assert static["required"] == ["mode", "question_stem", "choices"]
-    assert "correct_explanation" not in static["required"]
+    assert static["required"] == ["mode", "question_stem", "choices", "correct_explanation"]
+    assert static["properties"]["question_stem"]["type"] == "string"
+    assert static["properties"]["correct_explanation"]["type"] == ["string", "null"]
     assert "target_skill" not in static["properties"]
     choice = static["properties"]["choices"]["items"]
-    assert choice["required"] == ["id", "text", "is_correct"]
-    assert "distractor_rationale" not in choice["required"]
-    assert dynamic["required"] == ["mode", "target_skill", "distractor_guidance"]
+    assert choice["required"] == ["id", "text", "is_correct", "distractor_rationale", "misconception_code"]
+    assert choice["properties"]["text"]["type"] == "string"
+    assert choice["properties"]["is_correct"]["type"] == "boolean"
+    assert choice["properties"]["distractor_rationale"]["type"] == ["string", "null"]
+    assert choice["properties"]["misconception_code"]["type"] == ["string", "null"]
+    assert dynamic["required"] == [
+        "mode",
+        "target_skill",
+        "distractor_guidance",
+        "difficulty",
+        "num_choices",
+        "stem_constraints",
+    ]
+    assert dynamic["properties"]["target_skill"]["type"] == "string"
+    assert dynamic["properties"]["distractor_guidance"]["type"] == "string"
+    assert dynamic["properties"]["difficulty"]["type"] == ["string", "null"]
+    assert dynamic["properties"]["num_choices"]["type"] == ["integer", "null"]
     assert dynamic["properties"]["num_choices"]["minimum"] == 3
     assert dynamic["properties"]["num_choices"]["maximum"] == 5
-    assert "question_stem" not in dynamic["required"]
+    assert dynamic["properties"]["stem_constraints"]["type"] == ["string", "null"]
+    assert "question_stem" not in dynamic["properties"]
+
+
+def _strict_schema_gaps(node: object, path: str = "$") -> list[str]:
+    """The OpenAI strict rule that produced invalid_json_schema for kc_draft."""
+    gaps: list[str] = []
+    if isinstance(node, dict):
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            required = node.get("required")
+            if node.get("additionalProperties") is not False:
+                gaps.append(f"{path} additionalProperties must be false")
+            if not isinstance(required, list) or list(required) != list(properties):
+                missing = [key for key in properties if not isinstance(required, list) or key not in required]
+                gaps.append(f"{path} required must include every property. Missing {missing}.")
+        for key, value in node.items():
+            gaps.extend(_strict_schema_gaps(value, f"{path}.{key}"))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            gaps.extend(_strict_schema_gaps(value, f"{path}[{index}]"))
+    return gaps
+
+
+def test_creator_schema_accepts_strict_structured_output() -> None:
+    full = _creator(["missing-angle"])
+    gaps = _strict_schema_gaps(full["schema"])
+    assert gaps == [], "invalid_json_schema: " + "; ".join(gaps)
+    variants = full["schema"]["properties"]["blocks"]["items"]["anyOf"]
+    by_type = {item["properties"]["type"]["enum"][0]: item["properties"]["data"] for item in variants}
+    assert list(by_type) == [
+        "topic_goal",
+        "mcq",
+        "case_study",
+        "socratic",
+        "curiosity",
+        "worked_example",
+        "spot_the_flaw",
+        "teach_back",
+        "retrieval_check",
+    ]
+    topic = by_type["topic_goal"]
+    assert "acceptance_criteria" in topic["required"]
+    assert topic["properties"]["acceptance_criteria"]["type"] == ["string", "null"]
+    assert topic["properties"]["topic"]["type"] == "string"
+    worked = by_type["worked_example"]
+    assert worked["properties"]["faded_step_index"]["type"] == ["integer", "null"]
+    assert worked["properties"]["solo_problem"]["type"] == "string"
+    assert worked["properties"]["steps"]["items"]["properties"]["rationale"]["type"] == ["string", "null"]
+    assert worked["properties"]["steps"]["items"]["properties"]["step_text"]["type"] == "string"
+    assert by_type["curiosity"]["properties"]["wonder_branches"]["type"] == ["array", "null"]
+    assert by_type["teach_back"]["properties"]["peer_follow_up_question"]["type"] == "string"
+    assert "case_a" not in topic["properties"]
+    narrow = creator_bundle(
+        course_title="Euclidean geometry",
+        course_description=GEOMETRY,
+        audience="12-14",
+        kind="mastery",
+        minutes=None,
+        node_title="Triangle angle sum",
+        node_code="angle-sum",
+        node_description="The interior angles add to a straight line.",
+        allowed_block_types=["topic_goal"],
+        other_codes=["missing-angle"],
+        previous=None,
+        message="Draft this component.",
+        model="gpt-4.1",
+    )
+    items = narrow["schema"]["properties"]["blocks"]["items"]
+    assert "anyOf" not in items
+    assert items["properties"]["type"]["enum"] == ["topic_goal"]
+    assert "question_stem" not in items["properties"]["data"]["properties"]
+    assert _strict_schema_gaps(narrow["schema"]) == []
 
 
 def test_creator_schema_does_not_ask_for_two_mixes_without_two_siblings() -> None:
