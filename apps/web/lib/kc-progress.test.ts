@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { masteryByCode, networkStatusClass, statusByCode, unitLine, unitsByStatus, type KcProgressUnit } from "./kc-progress.ts";
+import {
+  courseScore,
+  masteryByCode,
+  networkStatusClass,
+  statusByCode,
+  unitLine,
+  unitsByStatus,
+  type KcProgressUnit,
+} from "./kc-progress.ts";
 
 function unit(code: string, status: KcProgressUnit["status"], patch = false): KcProgressUnit {
   return { id: code, code, title: code, kc_type: "factual", patch, status };
@@ -53,5 +61,20 @@ test("the three lists keep course order and the map joins on component code", ()
       { ...unit("open", "in_progress"), mastery: "known" },
     ]),
     { known: "known", gap: "fragile" },
+  );
+});
+
+test("the course percent counts known and fragile, and keeps the known count", () => {
+  assert.deepEqual(
+    courseScore(
+      [
+        { ...unit("known", "completed"), mastery: "known" },
+        { ...unit("gap", "completed"), mastery: "fragile" },
+        unit("later", "not_started"),
+        unit("patch", "not_started", true),
+      ],
+      1,
+    ),
+    { percent: 67, finished: 2, total: 3, known: 1 },
   );
 });

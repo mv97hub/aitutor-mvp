@@ -137,6 +137,16 @@ export type KcCard = {
   reason: string;
 };
 
+export type KcProgressBlock = {
+  id: string;
+  type: string;
+  type_label: string;
+  status: "completed" | "active";
+  outcome?: "passed" | "revealed";
+  attempts?: number;
+  rubric?: string;
+};
+
 export type KcProgress = {
   course_id: string;
   title: string;
@@ -146,6 +156,8 @@ export type KcProgress = {
   total: number;
   percent: number;
   count_label: string;
+  course_complete?: boolean;
+  next_course?: { id: string; code: string; title: string } | null;
   units: {
     id: string;
     code: string;
@@ -157,6 +169,7 @@ export type KcProgress = {
     mastery?: "" | "known" | "fragile";
     finished_blocks?: number;
     total_blocks?: number;
+    blocks?: KcProgressBlock[];
     rubric?: string[];
     result?: {
       status: "known" | "fragile";

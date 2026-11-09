@@ -2728,6 +2728,168 @@ def test_course_progress_reports_percent_and_unit_status() -> None:
         _wipe_zz()
 
 
+def _miss_until_revealed(session_id: str, **extra: object) -> dict:
+    revealed = {}
+    for index in range(4):
+        revealed = _decide(
+            session_id,
+            f"This reply number {index} misses the idea on purpose.",
+            reply="The answer stays covered for now.",
+            **extra,
+        )
+        if revealed.get("unit_complete"):
+            return revealed
+    raise AssertionError(revealed)
+
+
+def test_fragile_finishes_the_course_without_becoming_known() -> None:
+    storm = _storm()
+    _clear_progress(storm.id)
+    course = _ready(
+        _make("zz-amber", title="zzz Amber handoff"),
+        [
+            _spec("zz-amber-gap", "Gap fact"),
+            _spec("zz-amber-next", "Next fact", prerequisite_codes=["zz-amber-gap"]),
+        ],
+    )
+    later = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-next",
+            "title": "zzzz Next handoff",
+            "description": "The course that opens after a fragile finish.",
+            "audience": "12-14",
+            "kind": "mastery",
+        },
+    )
+    assert later.status_code == 200, later.text
+    _ready(later.json(), [_spec("zz-next-fact", "Next course fact")])
+    try:
+        gap = _node(course, "zz-amber-gap")
+        opened = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": gap["id"]},
+        )
+        assert opened.status_code == 200, opened.text
+        revealed = _miss_until_revealed(
+            opened.json()["id"],
+            what_was_strong="You stayed with the question.",
+            what_to_work_on="Name the idea in your own words.",
+            score_justification="A required block was revealed.",
+        )
+        assert revealed["unit_complete"] is True
+        assert revealed["course_complete"] is False
+        assert _state(storm.id, "zz-amber-gap").status == "fragile"
+
+        board = client.get(
+            f"/kc/tutor/courses/{course['id']}",
+            params={"student_id": str(storm.id)},
+        ).json()
+        assert board["course_complete"] is False
+        assert board["next_course"] is None
+        assert any(card["code"] == "zz-amber-next" for card in board["cards"])
+        assert all(card["code"] != "zz-amber-gap" for card in board["cards"])
+        nxt = _node(course, "zz-amber-next")
+        follow = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": nxt["id"]},
+        )
+        assert follow.status_code == 200, follow.text
+        assert _state(storm.id, "zz-amber-gap").status == "fragile"
+
+        closed = _miss_until_revealed(follow.json()["id"])
+        assert closed["unit_complete"] is True
+        assert closed["course_complete"] is True
+        assert _state(storm.id, "zz-amber-gap").status == "fragile"
+        assert _state(storm.id, "zz-amber-next").status == "fragile"
+
+        done = client.get(
+            f"/kc/tutor/courses/{course['id']}",
+            params={"student_id": str(storm.id)},
+        ).json()
+        assert done["known"] == 0
+        assert done["course_complete"] is True
+        assert done["next_course"]["title"] == "zzzz Next handoff"
+        assert done["cards"] == []
+        gap_unit = next(item for item in done["units"] if item["code"] == "zz-amber-gap")
+        assert gap_unit["mastery"] == "fragile"
+        assert gap_unit["finished_blocks"] == 1
+        assert gap_unit["blocks"][0]["type"] == "topic_goal"
+        assert gap_unit["blocks"][0]["outcome"] == "revealed"
+        assert gap_unit["blocks"][0]["attempts"] >= 1
+        assert gap_unit["blocks"][0]["rubric"] == "Explain Gap fact."
+        assert gap_unit["result"]["strong"] == "You stayed with the question."
+        assert gap_unit["result"]["work_on"] == "Name the idea in your own words."
+        assert gap_unit["result"]["justification"] == "A required block was revealed."
+        assert "score" not in gap_unit
+    finally:
+        _clear_progress(storm.id)
+        _wipe_zz()
+
+
+def test_curiosity_adds_a_rubric_line_only_when_it_counts() -> None:
+    storm = _storm()
+    _clear_progress(storm.id)
+    original = client.get("/tutor-profile")
+    assert original.status_code == 200, original.text
+    course = _ready(
+        _make("zz-wonder-line", title="ZZ wonder line"),
+        [
+            _spec(
+                "zz-wonder-line-a",
+                "Wonder",
+                blocks=[
+                    {
+                        "id": "blk-c",
+                        "type": "curiosity",
+                        "data": {
+                            "phenomenon_hook": "A quiet river",
+                            "prediction_question": "Why is the river quiet?",
+                            "bridge_to_unit": "Still water hides the current.",
+                        },
+                    }
+                ],
+            )
+        ],
+    )
+    try:
+        node = _node(course, "zz-wonder-line-a")
+        opened = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": node["id"]},
+        )
+        assert opened.status_code == 200, opened.text
+        quiet = client.get(
+            f"/kc/tutor/courses/{course['id']}",
+            params={"student_id": str(storm.id)},
+        ).json()
+        block = next(item for item in quiet["units"] if item["code"] == "zz-wonder-line-a")["blocks"][0]
+        assert block["status"] == "active"
+        assert block["type"] == "curiosity"
+        assert "outcome" not in block
+        assert "rubric" not in block
+
+        counting = client.put(
+            "/tutor-profile",
+            json={
+                **{key: value for key, value in original.json().items() if key != "updated_at"},
+                "kc_tutor_config": {"blocks": {"curiosity": {"counts_toward_mastery_score": True}}},
+            },
+        )
+        assert counting.status_code == 200, counting.text
+        counted = client.get(
+            f"/kc/tutor/courses/{course['id']}",
+            params={"student_id": str(storm.id)},
+        ).json()
+        line = next(item for item in counted["units"] if item["code"] == "zz-wonder-line-a")["blocks"][0]
+        assert line["rubric"] == "Still water hides the current."
+        assert "outcome" not in line
+    finally:
+        client.put("/tutor-profile", json=original.json())
+        _clear_progress(storm.id)
+        _wipe_zz()
+
+
 def _history_lines(text: str) -> list[str]:
     return [line for line in (text or "").splitlines() if line.strip()]
 

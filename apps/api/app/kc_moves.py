@@ -718,11 +718,11 @@ def _outro_sentence(others_known: bool, course_title: str, *, required: bool) ->
                 "and recap the ideas the child now holds."
             )
         return (
-            "If this unit ends known, every other target is already known. "
+            "If this unit ends known or fragile, every other target is already known or fragile. "
             f"After the close, add the course outro: {course_title} is complete, "
             "and recap the ideas the child now holds."
         )
-    return "Another target is not known yet. Do not write a course outro. The close may point at the next card."
+    return "Another target is not known or fragile yet. Do not write a course outro. The close may point at the next card."
 
 
 def _ending(

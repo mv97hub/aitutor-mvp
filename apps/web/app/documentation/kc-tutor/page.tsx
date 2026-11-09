@@ -70,8 +70,9 @@ export default function KcTutorDocsPage() {
         <h2>How it works</h2>
         <p>
           Open asks for a child and a ready course. The course list is only courses KC Course Creator has marked ready.
-          The ring counts target components that are known, out of all target components. A segment is known, fragile,
-          or not started. A time-boxed course also shows its minutes. Mastery and curiosity do not.
+          The ring paints a known target in the completed color and a fragile target amber. Under the wheel, completed
+          includes fragile, and fragile is counted on its own. A segment is known, fragile, or not started. A
+          time-boxed course also shows its minutes. Mastery and curiosity do not.
         </p>
         <p>
           Start Course Over clears the selected child&apos;s progress on the open course and starts that course again
@@ -80,9 +81,9 @@ export default function KcTutorDocsPage() {
         </p>
         <p>Up to three cards offer the next work:</p>
         <ul>
-          <li>Fastest path is the next target component whose prerequisites are known.</li>
+          <li>Fastest path is the next target component whose prerequisites are known or fragile.</li>
           <li>Foundation patch is a component that is not a target, when a target is waiting on it.</li>
-          <li>Stretch is a later component whose prerequisites are known.</li>
+          <li>Stretch is a later component whose prerequisites are known or fragile.</li>
         </ul>
         <p>
           A card opens that one component. The stage header shows the block progress banner when the session includes
@@ -111,7 +112,8 @@ export default function KcTutorDocsPage() {
         </ul>
         <p>
           When the learner finishes a block, the same reply can affirm that block and open the next one. The unit close
-          is reserved for the last block. The course outro follows only when every target component is known.
+          is reserved for the last block. The course outro follows when every target component is known or fragile.
+          Fragile is not rewritten to known.
         </p>
         <p>
           Debug, on the right, opens a panel beside the lesson. Variables keeps the seven headings. A row is shown only
@@ -195,7 +197,7 @@ export default function KcTutorDocsPage() {
           <li>TEST KC Selection jumps to any component of the current course.</li>
           <li>A course that is still a draft does not appear here.</li>
           <li>With no card open, the page says a card opens one component.</li>
-          <li>When every target component is known, the page says so and offers no cards.</li>
+          <li>When every target component is known or fragile, the page offers the next course. It says every target is known only when none are fragile.</li>
           <li>A finished component hides the composer and shows the score in the header.</li>
           <li>The wording of a question comes from the model. The score does not. A multiple-choice grade is the picked index.</li>
         </ul>
