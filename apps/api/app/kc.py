@@ -2554,42 +2554,194 @@ def _topic_fields(goal: KcGoal, node: KcNode) -> tuple[str, str, list]:
     return summary, summary, [{"topic": node.title, "goal": f"Use {node.title}."}]
 
 
+_BLOCK_CATALOG_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
+    "topic_goal": (
+        ("topic", "Topic"),
+        ("goal", "Goal"),
+        ("acceptance_criteria", "Acceptance criteria"),
+        ("teaching_notes", "Teaching notes"),
+    ),
+    "mcq": (
+        ("mode", "Mode"),
+        ("question_stem", "Question stem"),
+        ("choices", "Choices"),
+        ("correct_explanation", "Correct explanation"),
+        ("target_skill", "Target skill"),
+        ("difficulty", "Difficulty"),
+        ("num_choices", "Number of choices"),
+        ("distractor_guidance", "Distractor guidance"),
+        ("stem_constraints", "Stem constraints"),
+    ),
+    "case_study": (
+        ("case_a", "Case A"),
+        ("case_b", "Case B"),
+        ("prediction_prompt", "Prediction prompt"),
+        ("invariant_principle", "Invariant principle"),
+        ("transfer_prompt", "Transfer prompt"),
+        ("transfer_expected", "Transfer expected"),
+    ),
+    "socratic": (
+        ("central_dilemma", "Central dilemma"),
+        ("initial_probe", "Opening probe"),
+        ("counterexamples", "Counterexamples"),
+        ("target_synthesis", "Target synthesis"),
+    ),
+    "curiosity": (
+        ("phenomenon_hook", "Phenomenon hook"),
+        ("prediction_question", "Prediction question"),
+        ("bridge_to_unit", "Bridge to unit"),
+        ("wonder_branches", "Wonder branches"),
+    ),
+    "worked_example": (
+        ("problem_statement", "Problem statement"),
+        ("steps", "Steps"),
+        ("faded_step_index", "Faded step"),
+        ("solo_problem", "Solo problem"),
+        ("solo_expected_answer", "Solo expected answer"),
+    ),
+    "spot_the_flaw": (
+        ("rookie_work", "Rookie work"),
+        ("flaw_description", "Flaw description"),
+        ("underlying_misconception", "Underlying misconception"),
+        ("corrected_version", "Corrected version"),
+    ),
+    "teach_back": (
+        ("peer_persona_prompt", "Peer prompt"),
+        ("required_concepts", "Required concepts"),
+        ("peer_follow_up_question", "Peer follow-up"),
+    ),
+    "retrieval_check": (
+        ("recall_prompt", "Recall prompt"),
+        ("expected_fact", "Expected fact"),
+        ("elaborative_why_prompt", "Elaborative why prompt"),
+        ("expected_why_rationale", "Expected why rationale"),
+    ),
+}
+
+
+def _catalog_field_lines(key: str, label: str, value: object) -> list[str]:
+    """One catalog field, omitted when Push draft would write it empty."""
+    if key == "choices":
+        return _choice_lines(value)
+    if key == "steps":
+        return _step_lines(value)
+    if isinstance(value, list):
+        items = [
+            str(item).strip()
+            for item in value
+            if item is not None and not isinstance(item, (dict, list)) and str(item).strip()
+        ]
+        return [f"{label}: {'; '.join(items)}"] if items else []
+    if isinstance(value, bool):
+        return [f"{label}: {'yes' if value else 'no'}"]
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return [f"{label}: {value}"]
+    if value is None:
+        return []
+    text = str(value).strip()
+    return [f"{label}: {text}"] if text else []
+
+
+def _choice_lines(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    rows: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        letter = str(item.get("id") or "").strip()
+        text = str(item.get("text") or "").strip()
+        if letter and text:
+            head = f"{letter}. {text}"
+        elif text:
+            head = text
+        elif letter:
+            head = letter
+        else:
+            continue
+        notes: list[str] = []
+        if item.get("is_correct") is True:
+            notes.append("correct")
+        trap = str(item.get("distractor_rationale") or "").strip()
+        if trap:
+            notes.append(f"trap: {trap}")
+        code = str(item.get("misconception_code") or "").strip()
+        if code:
+            notes.append(f"misconception: {code}")
+        rows.append(f"- {head}" + (f" ({'; '.join(notes)})" if notes else ""))
+    return ["Choices:", *rows] if rows else []
+
+
+def _step_lines(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    rows: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("step_text") or "").strip()
+        why = str(item.get("rationale") or "").strip()
+        if text and why:
+            rows.append(f"- {text} ({why})")
+        elif text:
+            rows.append(f"- {text}")
+        elif why:
+            rows.append(f"- {why}")
+    return ["Steps:", *rows] if rows else []
+
+
+def _block_field_lines(raw: object) -> list[str]:
+    """Each block, in order, with its type label and the filled catalog fields."""
+    from app.kc_model import BLOCK_LABELS
+
+    if not isinstance(raw, list) or not raw:
+        return ["Blocks: none"]
+    lines: list[str] = []
+    shown = 0
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "").strip()
+        if not kind:
+            continue
+        shown += 1
+        lines.append(f"{shown}. {BLOCK_LABELS.get(kind, kind)}")
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        for key, label in _BLOCK_CATALOG_FIELDS.get(kind, ()):
+            if key not in data:
+                continue
+            lines.extend(_catalog_field_lines(key, label, data.get(key)))
+    return lines or ["Blocks: none"]
+
+
 def _draft_reply(draft: dict) -> str:
-    body = describe_component(
-        title=str(draft.get("title") or ""),
-        kc_type=draft.get("kc_type"),
-        core_truth=str(draft.get("core_truth") or ""),
-        rubric=list(draft.get("rubric") or []),
-        misconceptions=list(draft.get("misconceptions") or []),
-        prerequisite_codes=list(draft.get("prerequisite_codes") or []),
-        encompasses_codes=list(draft.get("encompasses_codes") or []),
-        type_fields=dict(draft.get("type_fields") or {}),
-    )
-    title = draft.get("title") or "this component"
+    """The block fields Push draft writes. The topic list and type fields stay out."""
+    title = str(draft.get("title") or "").strip() or "this component"
+    lines = [f"Draft for {title} only. Other components stay as they are."]
     description = str(draft.get("description") or "").strip()
+    if description:
+        lines.append(f"Description: {description}")
     outline = str(draft.get("outline") or "").strip()
-    pairs = draft.get("topics") or []
-    shown = []
-    if isinstance(pairs, list):
-        for item in pairs:
-            if isinstance(item, dict) and str(item.get("topic") or "").strip():
-                shown.append(f"{item.get('topic')} ({item.get('goal') or ''})".strip())
-    brief = f"Description: {description}\n" if description else ""
-    block_names = []
-    raw_blocks = draft.get("blocks") or []
-    if isinstance(raw_blocks, list):
-        for item in raw_blocks:
-            if isinstance(item, dict) and str(item.get("type") or "").strip():
-                block_names.append(str(item.get("type")).strip())
-    return (
-        f"Draft for {title} only. Other components stay as they are.\n"
-        f"{brief}"
-        f"Outline: {outline or 'none'}\n"
-        f"Blocks: {', '.join(block_names) if block_names else 'none'}\n"
-        f"Topics: {'; '.join(shown) if shown else 'none'}\n"
-        f"{body}\n"
-        "Nothing is saved until you push it."
+    lines.append(f"Outline: {outline or 'none'}")
+    lines.extend(_block_field_lines(draft.get("blocks")))
+    lines.append(f"Core truth: {str(draft.get('core_truth') or '').strip() or 'none'}")
+    wrongs: list[str] = []
+    for item in draft.get("misconceptions") or []:
+        if not isinstance(item, dict):
+            continue
+        wrong = str(item.get("wrong_move") or "").strip()
+        broken = str(item.get("broken_kc") or "").strip()
+        if wrong or broken:
+            wrongs.append(f"{wrong} ({broken})" if broken else wrong)
+    lines.append("Misconceptions: " + ("; ".join(wrongs) if wrongs else "none"))
+    lines.append(
+        "Prerequisites: " + (", ".join(_clean_codes(draft.get("prerequisite_codes") or [])) or "none")
     )
+    lines.append(
+        "Encompasses: " + (", ".join(_clean_codes(draft.get("encompasses_codes") or [])) or "none")
+    )
+    lines.append("Nothing is saved until you push it.")
+    return "\n".join(lines)
 
 
 _LABEL_MAP = {

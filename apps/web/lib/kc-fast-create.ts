@@ -1,7 +1,9 @@
 /**
  * Fast Create All walks the selected course's empty components.
- * An empty component has no blocks. The cycle selects one, sends Create Draft,
- * pushes the reply, then marks it complete when the gaps are empty.
+ * An empty component has no blocks, or only the course's default topic and goal
+ * blocks. A core truth, another block type, or a filled acceptance criterion or
+ * teaching note means the component is already started. The cycle selects one,
+ * sends Create Draft, pushes the reply, then marks it complete when the gaps are empty.
  */
 
 export const CREATE_DRAFT_MESSAGE = "Create Draft";
@@ -40,11 +42,63 @@ export type FastAction =
 
 const PHASES: readonly FastPhase[] = ["draft", "draft-sent", "push-sent", "complete-sent"];
 
-export function emptyComponentIds(
-  components: { id: string; blocks?: unknown[] | null }[],
-): string[] {
+type FastComponent = {
+  id: string;
+  blocks?: unknown[] | null;
+  topics?: { topic?: unknown; goal?: unknown }[] | null;
+  core_truth?: string | null;
+};
+
+function filledText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+function pairKey(topic: string, goal: string): string {
+  return `${topic}\n${goal}`;
+}
+
+function storedPairKeys(topics: FastComponent["topics"]): Set<string> {
+  const keys = new Set<string>();
+  if (!Array.isArray(topics)) return keys;
+  for (const item of topics) {
+    if (!item || typeof item !== "object") continue;
+    const topic = filledText(item.topic);
+    const goal = filledText(item.goal);
+    if (topic && goal) keys.add(pairKey(topic, goal));
+  }
+  return keys;
+}
+
+function isBlankCatalogValue(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.every(isBlankCatalogValue);
+  return false;
+}
+
+/** A course push stores each topic and goal on a topic_goal block and leaves the other catalog fields empty. */
+function isDefaultTopicBlock(block: unknown, pairs: Set<string>): boolean {
+  if (!block || typeof block !== "object") return false;
+  const record = block as { type?: unknown; data?: unknown };
+  if (record.type !== "topic_goal") return false;
+  const data = record.data && typeof record.data === "object" ? (record.data as Record<string, unknown>) : {};
+  const topic = filledText(data.topic);
+  const goal = filledText(data.goal);
+  if (!pairs.has(pairKey(topic, goal))) return false;
+  return isBlankCatalogValue(data.acceptance_criteria) && isBlankCatalogValue(data.teaching_notes);
+}
+
+export function emptyComponentIds(components: FastComponent[]): string[] {
   return components
-    .filter((item) => !Array.isArray(item.blocks) || item.blocks.length === 0)
+    .filter((item) => {
+      if (filledText(item.core_truth)) return false;
+      const blocks = item.blocks;
+      if (!Array.isArray(blocks) || blocks.length === 0) return true;
+      const pairs = storedPairKeys(item.topics);
+      return blocks.every((block) => isDefaultTopicBlock(block, pairs));
+    })
     .map((item) => item.id);
 }
 
