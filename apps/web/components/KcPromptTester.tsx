@@ -11,6 +11,7 @@ import { hoverFor } from "@/lib/kc-layer-fields";
 import {
   DEFAULT_TUTOR_PROFILE,
   FIELD_OPTIONS,
+  INTEREST_TAG_OPTIONS,
   LAYER_HEADINGS,
   applyChild,
   applyResult,
@@ -229,10 +230,44 @@ function FieldControl({
       </output>
     );
   }
+  if (name === "Interest tags") {
+    const selected = value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    function toggle(tag: string) {
+      const next = selected.includes(tag)
+        ? selected.filter((item) => item !== tag)
+        : selected.length < 4
+          ? [...selected, tag]
+          : selected;
+      onChange(next.join(", "));
+    }
+    return (
+      <div className="kc-chip-group" role="group" aria-label={name} title={hover}>
+        {INTEREST_TAG_OPTIONS.map(([id, label]) => {
+          const active = selected.includes(id);
+          return (
+            <button
+              key={id}
+              type="button"
+              className={`kc-chip${active ? " is-active" : ""}`}
+              aria-pressed={active}
+              onClick={() => toggle(id)}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
   const options = FIELD_OPTIONS[name];
   if (options) {
+    const hasCurrent = value === "" || options.some(([id]) => id === value);
     return (
       <select title={hover} aria-label={name} value={value} onChange={(event) => onChange(event.target.value)}>
+        {!hasCurrent ? <option value={value}>{value}</option> : null}
         {options.map(([id, label]) => (
           <option key={id || "unset"} value={id}>
             {label}

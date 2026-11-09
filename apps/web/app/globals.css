@@ -3515,3 +3515,31 @@ a.ds-row { text-decoration: none; }
     border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
   }
 }
+
+.kc-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.kc-chip {
+  appearance: none;
+  border: 0.5px solid rgba(0, 0, 0, 0.16);
+  border-radius: 999px;
+  background: #fff;
+  padding: 5px 11px;
+  color: rgb(15, 17, 21);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.kc-chip.is-active {
+  border-color: rgb(65, 118, 230);
+  background: rgba(65, 118, 230, 0.12);
+  color: rgb(25, 72, 176);
+  font-weight: 600;
+}

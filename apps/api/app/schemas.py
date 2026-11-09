@@ -23,6 +23,15 @@ class StudentOut(BaseModel):
     reading_level: str = ""
     modality: str = ""
     interests: list[str] = Field(default_factory=list)
+    grade_band: str = "upper_elementary"
+    response_length: str = "balanced"
+    expression_style: str = "short_phrases"
+    explanation_style: str = "concrete_examples"
+    challenge_appetite: str = "steady"
+    communication_tone: str = "warm_and_encouraging"
+    learning_support: str = "none"
+    interest_tags: list[str] = Field(default_factory=list)
+    child_profile: dict = Field(default_factory=dict)
     tutor_persona: str = ""
     tutor_lexicon: str = ""
     tutor_metaphors: str = ""
@@ -38,7 +47,16 @@ class StudentCreate(BaseModel):
     age: int = Field(ge=4, le=18)
     reading_level: str | None = None
     modality: str | None = None
-    interests: list[str] | None = None
+    interests: list[str] | str | None = None
+    grade_band: str | None = None
+    response_length: str | None = None
+    expression_style: str | None = None
+    explanation_style: str | None = None
+    challenge_appetite: str | None = None
+    communication_tone: str | None = None
+    learning_support: str | None = None
+    interest_tags: list[str] | None = None
+    child_profile: dict | None = None
     tutor_persona: str | None = None
     tutor_lexicon: str | None = None
     tutor_metaphors: str | None = None
@@ -53,7 +71,16 @@ class StudentPatch(BaseModel):
     age: int | None = Field(default=None, ge=4, le=18)
     reading_level: str | None = None
     modality: str | None = None
-    interests: list[str] | None = None
+    interests: list[str] | str | None = None
+    grade_band: str | None = None
+    response_length: str | None = None
+    expression_style: str | None = None
+    explanation_style: str | None = None
+    challenge_appetite: str | None = None
+    communication_tone: str | None = None
+    learning_support: str | None = None
+    interest_tags: list[str] | None = None
+    child_profile: dict | None = None
     tutor_persona: str | None = None
     tutor_lexicon: str | None = None
     tutor_metaphors: str | None = None

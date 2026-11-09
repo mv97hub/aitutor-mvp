@@ -18,7 +18,15 @@ from __future__ import annotations
 
 from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, VOICES
 from app.kc_model import BLOCK_LABELS
-from app.models import ALL_BLOCK_TYPES, KcGoal, KcNode, Student, TutorProfile
+from app.models import (
+    ALL_BLOCK_TYPES,
+    INTEREST_TAG_LABELS,
+    KcGoal,
+    KcNode,
+    Student,
+    TutorProfile,
+    effective_child_profile,
+)
 from app.tutor_profile import effective_kc_tutor_config
 
 TEMPERATURE = 0.4
@@ -498,49 +506,154 @@ def _voice_paragraph(profile: TutorProfile) -> str:
     )
 
 
-def _learner_sentence(
+_GRADE_BAND_LABELS = {
+    "early_elementary": "Early elementary (Grades K-2)",
+    "upper_elementary": "Upper elementary (Grades 3-5)",
+    "middle_school": "Middle school (Grades 6-8)",
+    "high_school": "High school (Grades 9-12)",
+}
+
+_READING_LEVEL_LINES = {
+    "emerging": "The reading level is emerging, so use very short sentences, everyday sight words, and define any new term right away.",
+    "early_fluent": "The reading level is early fluent, so use concrete sentences, one clause at a time, with plain transitions.",
+    "on_grade": "The reading level is on grade, so use natural grade-level vocabulary and sentence flow.",
+    "advanced": "The reading level is advanced, so use precise academic terms and richer compound sentences.",
+}
+
+_RESPONSE_LENGTH_LINES = {
+    "bite_sized": "Keep response length bite-sized: write 1 to 2 short sentences per turn for low working-memory load.",
+    "balanced": "Keep response length balanced: write 2 to 4 sentences per turn.",
+    "detailed": "Use a detailed response length: give fuller explanations with explicit connections when needed.",
+}
+
+_EXPRESSION_STYLE_LINES = {
+    "one_word_or_taps": "The learner's expression style is one-word replies or taps: when they type 1 to 3 words, validate the core idea and model a clean sentence back.",
+    "short_phrases": "The learner's expression style is short phrases: expect brief phrases or single sentences and keep follow-ups crisp.",
+    "conversational": "The learner's expression style is conversational: invite back-and-forth dialogue and thinking out loud.",
+    "analytical": "The learner's expression style is analytical: welcome fuller reasoning and offer precise pushback.",
+}
+
+_EXPLANATION_STYLE_LINES = {
+    "concrete_examples": "Lead explanations with concrete examples: ground the idea in everyday real-world objects and familiar situations first.",
+    "step_by_step": "Lead explanations step by step: walk through a sequential breakdown of one piece at a time.",
+    "visual_spatial": "Lead explanations with visual-spatial framing: paint vivid mental pictures, spatial layouts, and diagram descriptions.",
+    "story_and_analogy": "Lead explanations with story and analogy: use a short narrative hook or an 'imagine if' comparison.",
+    "pattern_and_rule": "Lead explanations with pattern and rule: state the underlying rule or structure first, then apply it.",
+}
+
+_CHALLENGE_APPETITE_LINES = {
+    "needs_reassurance": "For challenge appetite, this learner needs reassurance: normalize mistakes early and lower the stakes of trying.",
+    "steady": "For challenge appetite, this learner is steady: keep normal scaffolding and a comfortable pace.",
+    "loves_a_challenge": "For challenge appetite, this learner loves a challenge: use brisk pacing, stretch prompts, and minimal hints before they try.",
+}
+
+_COMMUNICATION_TONE_LINES = {
+    "calm_and_gentle": "Keep your communication tone calm and gentle: low-stimulation, patient, and zero pressure.",
+    "warm_and_encouraging": "Keep your communication tone warm and encouraging: sound like a friendly, upbeat coach.",
+    "playful_and_curious": "Keep your communication tone playful and curious: bring light humor and wonder-driven energy.",
+    "direct_and_matter_of_fact": "Keep your communication tone direct and matter-of-fact: skip fluff and go straight to the concept.",
+}
+
+_LEARNING_SUPPORT_LINES = {
+    "adhd_focus_friendly": "Learning support (ADHD focus-friendly): keep turns extra-crisp with an immediate hook and never stack multi-part instructions.",
+    "dyslexia_reading_friendly": "Learning support (dyslexia reading-friendly): use simple phonics-friendly words, short lines, and avoid dense paragraphs.",
+    "ell_language_support": "Learning support (ELL language support): avoid idioms, explain figurative phrases, and pair new terms with simple synonyms.",
+    "math_or_test_anxiety": "Learning support (math or test anxiety): frame checks as low-stakes puzzles and never mention tests or grades.",
+}
+
+
+def _who_you_are_talking_to(
     student: Student,
     profile: TutorProfile,
     block: dict,
     interests: str,
-) -> str:
+) -> list[str]:
+    cp = effective_child_profile(student)
     parts = [f"Speak to {student.display_name}."]
     age = student.age
-    level = (student.reading_level or "").strip()
-    early = _early_reading(level)
+    raw_level = (student.reading_level or "").strip()
+    read_lvl = cp["reading_level"]
+    early = _early_reading(raw_level) or read_lvl == "emerging"
     young = age is not None and age <= 8
+    grade_label = _GRADE_BAND_LABELS.get(cp["grade_band"], cp["grade_band"])
     if young and early:
-        parts.append(f"Age {age} and an early reading level both mean shorter sentences and simpler examples.")
+        parts.append(
+            f"Age {age} ({grade_label}) and an early reading level both mean shorter sentences and simpler examples."
+        )
     elif young:
-        parts.append(f"Age {age} means shorter sentences and simpler examples.")
+        parts.append(f"Age {age} ({grade_label}) means shorter sentences and simpler examples.")
     elif age is not None:
-        parts.append(f"Keep the examples right for a {age}-year-old.")
+        parts.append(f"Keep the examples right for a {age}-year-old in {grade_label}.")
     else:
-        parts.append("No age is set.")
+        parts.append(f"No age is set ({grade_label}).")
+
     if early and not young:
-        parts.append("The reading level is early, so use shorter sentences.")
-    elif level and not (early and young):
-        parts.append(f"The reading level is {level}.")
-    elif not level:
+        parts.append(
+            "The reading level is early, so use shorter sentences, everyday sight words, and define any new term right away."
+        )
+    elif raw_level and raw_level not in _READING_LEVEL_LINES and not (early and young):
+        parts.append(
+            f"The reading level is {raw_level}. {_READING_LEVEL_LINES.get(read_lvl, _READING_LEVEL_LINES['on_grade'])}"
+        )
+    elif not raw_level and not (student.child_profile or {}).get("reading_level"):
         parts.append("No reading level is set.")
-    modality = (student.modality or "").strip()
+    elif not (early and young):
+        parts.append(_READING_LEVEL_LINES.get(read_lvl, _READING_LEVEL_LINES["on_grade"]))
+
+    parts.append(_RESPONSE_LENGTH_LINES.get(cp["response_length"], _RESPONSE_LENGTH_LINES["balanced"]))
+    parts.append(_EXPRESSION_STYLE_LINES.get(cp["expression_style"], _EXPRESSION_STYLE_LINES["short_phrases"]))
+
+    raw_modality = (student.modality or "").strip()
+    expl_style = cp["explanation_style"]
     btype = str(block.get("type") or "").strip()
-    if modality.lower() == "visual" and btype in {"case_study", "worked_example", "spot_the_flaw"}:
-        parts.append("You may ask for a described picture on this block because it already has cases or steps.")
-    elif modality.lower() == "visual":
-        parts.append("Stay in words on this block.")
-    elif modality:
-        parts.append(f"This child takes an example in through {modality}, so stay in words.")
-    else:
+    if raw_modality.lower() == "visual" or expl_style == "visual_spatial":
+        if btype in {"case_study", "worked_example", "spot_the_flaw"}:
+            parts.append(
+                "You may ask for a described picture on this block because it already has cases or steps. "
+                + _EXPLANATION_STYLE_LINES["visual_spatial"]
+            )
+        else:
+            parts.append("Stay in words on this block. " + _EXPLANATION_STYLE_LINES["visual_spatial"])
+    elif raw_modality and raw_modality not in _EXPLANATION_STYLE_LINES:
+        parts.append(
+            f"This child takes an example in through {raw_modality}, so stay in words. "
+            + _EXPLANATION_STYLE_LINES.get(expl_style, _EXPLANATION_STYLE_LINES["concrete_examples"])
+        )
+    elif not raw_modality and not (student.child_profile or {}).get("explanation_style"):
         parts.append("No modality is set, so stay in words.")
-    named = interests if interests and interests != "none named" else ""
+    else:
+        parts.append(_EXPLANATION_STYLE_LINES.get(expl_style, _EXPLANATION_STYLE_LINES["concrete_examples"]))
+
+    parts.append(_CHALLENGE_APPETITE_LINES.get(cp["challenge_appetite"], _CHALLENGE_APPETITE_LINES["steady"]))
+    parts.append(_COMMUNICATION_TONE_LINES.get(cp["communication_tone"], _COMMUNICATION_TONE_LINES["warm_and_encouraging"]))
+
+    support = cp["learning_support"]
+    if support in _LEARNING_SUPPORT_LINES:
+        parts.append(_LEARNING_SUPPORT_LINES[support])
+
+    tag_labels = [INTEREST_TAG_LABELS.get(tag, tag) for tag in cp["interest_tags"]]
+    specific = cp["interests"] or (interests if interests and interests != "none named" else "")
+    interest_pieces: list[str] = []
+    for piece in [*tag_labels, *([specific] if specific else [])]:
+        if piece and piece not in interest_pieces:
+            interest_pieces.append(piece)
+    named = ", ".join(interest_pieces)
     if profile.use_interests and named:
         parts.append(f"When an example would help, use one of these interests: {named}.")
     elif named:
         parts.append(f"The child cares about {named}. Keep examples inside the subject.")
     else:
         parts.append("Keep examples inside the subject.")
-    return " ".join(parts)
+    return [" ".join(parts)]
+
+
+def _learner_sentence(
+    student: Student,
+    profile: TutorProfile,
+    block: dict,
+    interests: str,
+) -> str:
+    return " ".join(_who_you_are_talking_to(student, profile, block, interests))
 
 
 def _close_summary_sentence(close_depth: str, kind: str) -> str:
@@ -1445,7 +1558,7 @@ def build_kc_prompt(
                 next_block=blocks[index + 1] if (is_last_substep and index + 1 < len(blocks)) else None,
             ),
             ),
-            ("Who you are talking to", [_learner_sentence(student, profile, active_block, interests)]),
+            ("Who you are talking to", _who_you_are_talking_to(student, profile, active_block, interests)),
             (
                 "How to teach",
                 _how_to_teach(

@@ -23,6 +23,223 @@ from app.database import Base
 
 AGE_BANDS = ("6-8", "9-11", "12-14", "15-17")
 
+GRADE_BANDS = (
+    "early_elementary",
+    "upper_elementary",
+    "middle_school",
+    "high_school",
+)
+READING_LEVELS = (
+    "emerging",
+    "early_fluent",
+    "on_grade",
+    "advanced",
+)
+RESPONSE_LENGTHS = (
+    "bite_sized",
+    "balanced",
+    "detailed",
+)
+EXPRESSION_STYLES = (
+    "one_word_or_taps",
+    "short_phrases",
+    "conversational",
+    "analytical",
+)
+EXPLANATION_STYLES = (
+    "concrete_examples",
+    "step_by_step",
+    "visual_spatial",
+    "story_and_analogy",
+    "pattern_and_rule",
+)
+CHALLENGE_APPETITES = (
+    "needs_reassurance",
+    "steady",
+    "loves_a_challenge",
+)
+COMMUNICATION_TONES = (
+    "calm_and_gentle",
+    "warm_and_encouraging",
+    "playful_and_curious",
+    "direct_and_matter_of_fact",
+)
+LEARNING_SUPPORTS = (
+    "none",
+    "adhd_focus_friendly",
+    "dyslexia_reading_friendly",
+    "ell_language_support",
+    "math_or_test_anxiety",
+)
+INTEREST_TAGS = (
+    "sports_and_games",
+    "video_games",
+    "animals_and_nature",
+    "space_and_science",
+    "art_and_design",
+    "music_and_dance",
+    "building_and_coding",
+    "cooking_and_food",
+    "cars_and_trains",
+    "stories_and_comics",
+)
+
+INTEREST_TAG_LABELS: dict[str, str] = {
+    "sports_and_games": "Sports & games",
+    "video_games": "Video games",
+    "animals_and_nature": "Animals & nature",
+    "space_and_science": "Space & science",
+    "art_and_design": "Art & design",
+    "music_and_dance": "Music & dance",
+    "building_and_coding": "Building & coding",
+    "cooking_and_food": "Cooking & food",
+    "cars_and_trains": "Cars & trains",
+    "stories_and_comics": "Stories & comics",
+}
+
+
+def grade_band_for_age(age: int | None) -> str:
+    if age is None:
+        return "upper_elementary"
+    if age <= 7:
+        return "early_elementary"
+    if age <= 10:
+        return "upper_elementary"
+    if age <= 13:
+        return "middle_school"
+    return "high_school"
+
+
+def normalize_reading_level(raw: str | None) -> str:
+    val = (raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if val in READING_LEVELS:
+        return val
+    if val in {"early_reader", "early", "beginner", "k_2", "emerging_reader"}:
+        return "emerging"
+    if val in {"middle_grade", "early_fluent_reader", "elementary"}:
+        return "early_fluent"
+    if val in {"grade_level", "on_grade_level", "standard"}:
+        return "on_grade"
+    if val in {"high_school", "above_grade", "advanced_reader", "college"}:
+        return "advanced"
+    if any(token in val for token in ("early", "emerg", "begin", "simple", "short")):
+        return "emerging"
+    if any(token in val for token in ("high", "advanc", "above")):
+        return "advanced"
+    return "on_grade"
+
+
+def normalize_explanation_style(raw: str | None) -> str:
+    val = (raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if val in EXPLANATION_STYLES:
+        return val
+    if val in {"visual", "picture", "diagram", "spatial"} or "visual" in val:
+        return "visual_spatial"
+    if val in {"story", "narrative", "analogy", "metaphor"} or "story" in val:
+        return "story_and_analogy"
+    if val in {"steps", "procedural", "sequential"} or "step" in val:
+        return "step_by_step"
+    if val in {"verbal", "rule", "pattern", "abstract", "logic"} or "rule" in val:
+        return "pattern_and_rule"
+    return "concrete_examples"
+
+
+def normalize_interest_tags(raw: object) -> list[str]:
+    if isinstance(raw, str):
+        items = [part.strip() for part in raw.split(",") if part.strip()]
+    elif isinstance(raw, (list, tuple)):
+        items = [str(part).strip() for part in raw if str(part).strip()]
+    else:
+        items = []
+    out: list[str] = []
+    for item in items:
+        key = item.lower().replace("-", "_").replace(" ", "_")
+        if key in INTEREST_TAGS and key not in out:
+            out.append(key)
+        if len(out) >= 4:
+            break
+    return out
+
+
+def default_child_profile(age: int | None = 10) -> dict:
+    return {
+        "grade_band": grade_band_for_age(age),
+        "reading_level": "on_grade",
+        "response_length": "balanced",
+        "expression_style": "short_phrases",
+        "explanation_style": "concrete_examples",
+        "challenge_appetite": "steady",
+        "communication_tone": "warm_and_encouraging",
+        "learning_support": "none",
+        "interest_tags": [],
+        "interests": "",
+    }
+
+
+def normalize_child_profile(
+    raw: dict | None,
+    *,
+    age: int | None = None,
+    reading_level: str | None = None,
+    modality: str | None = None,
+    interests: list[str] | str | None = None,
+) -> dict:
+    src = raw if isinstance(raw, dict) else {}
+    base = default_child_profile(age)
+
+    gb = str(src.get("grade_band") or "").strip()
+    base["grade_band"] = gb if gb in GRADE_BANDS else grade_band_for_age(age)
+
+    rl_raw = src.get("reading_level") or reading_level
+    base["reading_level"] = normalize_reading_level(str(rl_raw) if rl_raw else None)
+
+    resp_len = str(src.get("response_length") or "").strip()
+    if resp_len in RESPONSE_LENGTHS:
+        base["response_length"] = resp_len
+
+    expr = str(src.get("expression_style") or "").strip()
+    if expr in EXPRESSION_STYLES:
+        base["expression_style"] = expr
+
+    expl_raw = src.get("explanation_style") or modality
+    base["explanation_style"] = normalize_explanation_style(str(expl_raw) if expl_raw else None)
+
+    chal = str(src.get("challenge_appetite") or "").strip()
+    if chal in CHALLENGE_APPETITES:
+        base["challenge_appetite"] = chal
+
+    tone = str(src.get("communication_tone") or "").strip()
+    if tone in COMMUNICATION_TONES:
+        base["communication_tone"] = tone
+
+    supp = str(src.get("learning_support") or src.get("learning_accommodation") or "").strip()
+    if supp in LEARNING_SUPPORTS:
+        base["learning_support"] = supp
+
+    base["interest_tags"] = normalize_interest_tags(src.get("interest_tags"))
+
+    fav_raw = src.get("interests")
+    if fav_raw is None and interests is not None:
+        if isinstance(interests, str):
+            fav_raw = interests
+        elif isinstance(interests, (list, tuple)):
+            fav_raw = ", ".join(str(x).strip() for x in interests if str(x).strip())
+    base["interests"] = str(fav_raw or "").strip()[:120]
+    return base
+
+
+def effective_child_profile(student: "Student | None") -> dict:
+    if student is None:
+        return default_child_profile(None)
+    raw = getattr(student, "child_profile", None)
+    return normalize_child_profile(
+        raw if isinstance(raw, dict) else {},
+        age=student.age,
+        reading_level=student.reading_level,
+        modality=student.modality,
+        interests=student.interests,
+    )
+
 
 class Student(Base):
     """Layer 2 lives here. Older tutor_* columns are not what kid chat reads.
@@ -40,6 +257,7 @@ class Student(Base):
     reading_level: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     modality: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     interests: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    child_profile: Mapped[dict] = mapped_column(JSON, nullable=False, default=default_child_profile)
     tutor_persona: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     tutor_lexicon: Mapped[str] = mapped_column(Text, nullable=False, default="")
     tutor_metaphors: Mapped[str] = mapped_column(Text, nullable=False, default="")

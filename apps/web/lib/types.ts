@@ -1,5 +1,18 @@
 import type { KcTutorConfig } from "./kc-tutor-config";
 
+export type ChildProfile = {
+  grade_band: string;
+  reading_level: string;
+  response_length: string;
+  expression_style: string;
+  explanation_style: string;
+  challenge_appetite: string;
+  communication_tone: string;
+  learning_support: string;
+  interest_tags: string[];
+  interests: string;
+};
+
 export type Student = {
   id: string;
   slug: string;
@@ -9,6 +22,15 @@ export type Student = {
   reading_level: string;
   modality: string;
   interests: string[];
+  grade_band?: string;
+  response_length?: string;
+  expression_style?: string;
+  explanation_style?: string;
+  challenge_appetite?: string;
+  communication_tone?: string;
+  learning_support?: string;
+  interest_tags?: string[];
+  child_profile?: ChildProfile;
   tutor_persona: string;
   tutor_lexicon: string;
   tutor_metaphors: string;

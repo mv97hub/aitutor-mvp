@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.engine.defaults import profile_for_age
-from app.models import Student
+from app.models import Student, normalize_child_profile
 from app.tutor_profile import ensure_default_profile
 
 STUDENTS = [
@@ -57,6 +57,14 @@ def _fill_student(student: Student, spec: dict) -> None:
         student.modality = profile.modality
     if not student.interests:
         student.interests = list(spec["interests"])
+    if not student.child_profile:
+        student.child_profile = normalize_child_profile(
+            {},
+            age=student.age,
+            reading_level=student.reading_level,
+            modality=student.modality,
+            interests=student.interests,
+        )
 
 
 def seed(db: Session) -> dict[str, int]:

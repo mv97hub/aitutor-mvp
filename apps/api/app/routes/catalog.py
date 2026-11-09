@@ -21,6 +21,9 @@ from app.models import (
     Quest,
     Session as TutorSession,
     Student,
+    effective_child_profile,
+    grade_band_for_age,
+    normalize_child_profile,
 )
 from app.present import course_summary, course_tree, quest_detail, quest_list_item, student_out
 from app.queries import load_course, load_quest, quest_in_use
@@ -49,10 +52,56 @@ def _provided(body) -> set[str]:
     return set(body.model_fields_set)
 
 
-def _clean_list(values: list[str] | None) -> list[str]:
+def _clean_list(values: list[str] | str | None) -> list[str]:
     if not values:
         return []
+    if isinstance(values, str):
+        return [item.strip() for item in values.split(",") if item and item.strip()]
     return [item.strip() for item in values if item and item.strip()]
+
+
+def _apply_child_profile_updates(student: Student, body, provided: set[str], *, age_changed: bool = False) -> None:
+    current = effective_child_profile(student)
+    raw = dict(current)
+    if "child_profile" in provided and isinstance(body.child_profile, dict):
+        raw.update(body.child_profile)
+    for key in (
+        "grade_band",
+        "reading_level",
+        "response_length",
+        "expression_style",
+        "explanation_style",
+        "challenge_appetite",
+        "communication_tone",
+        "learning_support",
+        "interest_tags",
+    ):
+        if key in provided and getattr(body, key) is not None:
+            raw[key] = getattr(body, key)
+    if "modality" in provided and body.modality is not None and "explanation_style" not in provided:
+        raw["explanation_style"] = body.modality.strip()
+    if "interests" in provided and body.interests is not None:
+        if isinstance(body.interests, str):
+            raw["interests"] = body.interests.strip()[:120]
+        elif isinstance(body.interests, list):
+            raw["interests"] = ", ".join(_clean_list(body.interests))[:120]
+    if age_changed and "grade_band" not in provided and not (
+        "child_profile" in provided and isinstance(body.child_profile, dict) and "grade_band" in body.child_profile
+    ):
+        raw["grade_band"] = grade_band_for_age(student.age)
+    student.child_profile = normalize_child_profile(
+        raw,
+        age=student.age,
+        reading_level=student.reading_level,
+        modality=student.modality,
+        interests=student.interests,
+    )
+    if "explanation_style" in provided and body.explanation_style and "modality" not in provided:
+        student.modality = student.child_profile["explanation_style"]
+    if "reading_level" not in provided and "child_profile" in provided and isinstance(body.child_profile, dict) and body.child_profile.get("reading_level"):
+        student.reading_level = str(body.child_profile["reading_level"]).strip()
+    if "interests" not in provided and "child_profile" in provided and isinstance(body.child_profile, dict) and "interests" in body.child_profile:
+        student.interests = _clean_list(str(body.child_profile.get("interests") or ""))
 
 
 @router.get("/profile-defaults", response_model=ProfileDefaults)
@@ -118,6 +167,7 @@ def create_student(body: StudentCreate, db: Session = Depends(get_db)) -> Studen
     if "tutor_pacing" in provided and body.tutor_pacing is not None:
         student.tutor_pacing = body.tutor_pacing.strip()
     apply_student_profile(student, provided=provided)
+    _apply_child_profile_updates(student, body, provided, age_changed=True)
     db.add(student)
     db.flush()
     return student_out(student)
@@ -129,7 +179,9 @@ def patch_student(student_id: UUID, body: StudentPatch, db: Session = Depends(ge
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
     provided = _provided(body)
+    age_changed = False
     if "age" in provided and body.age is not None:
+        age_changed = student.age != body.age
         student.age = body.age
     if "reading_level" in provided and body.reading_level is not None:
         student.reading_level = body.reading_level.strip()
@@ -153,6 +205,7 @@ def patch_student(student_id: UUID, body: StudentPatch, db: Session = Depends(ge
         student.tutor_anti_spoiler = body.tutor_anti_spoiler
     if "tutor_pacing" in provided and body.tutor_pacing is not None:
         student.tutor_pacing = body.tutor_pacing.strip()
+    _apply_child_profile_updates(student, body, provided, age_changed=age_changed)
     db.flush()
     return student_out(student)
 
