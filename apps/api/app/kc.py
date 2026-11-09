@@ -49,6 +49,7 @@ from app.models import (
     KcSession,
     KcState,
     Student,
+    effective_child_profile,
 )
 from app.present import student_out
 
@@ -2271,8 +2272,11 @@ def tutor_variables(
         if target is not None:
             redirect = f"{target.title} ({target.code})"
     interests = ""
-    if student is not None:
-        interests = ", ".join(str(item).strip() for item in (student.interests or []) if str(item).strip())
+    cp = effective_child_profile(student) if student is not None else None
+    if student is not None and cp is not None:
+        interests = cp["interests"] or ", ".join(
+            str(item).strip() for item in (student.interests or []) if str(item).strip()
+        )
     over = cfg.get("overarching") or {}
     block_type = ""
     derived = ""
@@ -2312,8 +2316,15 @@ def tutor_variables(
         [
             _row("Display name", student.display_name if student is not None else "", _LAYER_2),
             _row("Age", "" if student is None or student.age is None else str(student.age), _LAYER_2),
-            _row("Reading level", (student.reading_level or "") if student is not None else "", _LAYER_2),
-            _row("Modality", (student.modality or "") if student is not None else "", _LAYER_2),
+            _row("Grade band", "" if cp is None else str(cp["grade_band"]), _LAYER_2),
+            _row("Reading level", "" if cp is None else str(cp["reading_level"]), _LAYER_2),
+            _row("Response length", "" if cp is None else str(cp["response_length"]), _LAYER_2),
+            _row("Expression style", "" if cp is None else str(cp["expression_style"]), _LAYER_2),
+            _row("Explanation style", "" if cp is None else str(cp["explanation_style"]), _LAYER_2),
+            _row("Challenge appetite", "" if cp is None else str(cp["challenge_appetite"]), _LAYER_2),
+            _row("Communication tone", "" if cp is None else str(cp["communication_tone"]), _LAYER_2),
+            _row("Learning support", "" if cp is None else str(cp["learning_support"]), _LAYER_2),
+            _row("Interest tags", "" if cp is None else _csv(list(cp["interest_tags"] or [])), _LAYER_2),
             _row("Interests", interests, _LAYER_2),
             _row("Hint tier already given", "" if session is None else (session.hint_tier or "nudge"), _LAYER_2),
             _row("Component status", "" if state is None else state.status, _LAYER_2),

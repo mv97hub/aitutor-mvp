@@ -55,14 +55,16 @@ export default function KcTutorDocsPage() {
           KC Tutor, at <Link href="/kc-tutor">/kc-tutor</Link>, practices one component at a time by walking that
           component&apos;s blocks in order. The lesson is a chat. Questions and on-screen choices live in the thread.
           Settings is a button in the side column, separate from the lesson chat. It chooses the model from the same
-          list as KC Course Creator. gpt-4.1 is the default. The same settings surface edits the child fields the
-          prompt already includes: age, reading level, modality, and interests. How a block is taught stays on{" "}
+          list as KC Course Creator. gpt-4.1 is the default. The same settings dialog edits the child&apos;s Layer 2
+          persona settings: age, grade band, reading level, response length, expression style, explanation style,
+          challenge appetite, communication tone, learning support, up to four interest tags, and specific favorites.
+          How a block is taught stays on{" "}
           <Link href="/admin/agent-customizations">Agent customizations</Link>. The field catalog is{" "}
           <Link href="/documentation/kc-prompt-layers">KC prompt layers</Link>.
         </p>
         <p>
-          The child menu lists Add New Child first. Choosing it opens a dialog for a name, an age, a reading level, a
-          modality, and interests. Save creates the child, closes the dialog, and selects that child.
+          The child menu lists Add New Child first. Choosing it opens a dialog for the child&apos;s name and Layer 2
+          persona settings. Save creates the child, closes the dialog, and selects that child.
         </p>
 
         <h2>How it works</h2>
@@ -122,10 +124,69 @@ export default function KcTutorDocsPage() {
         <p>
           This page does not edit the course. The choices on the page are which child, which ready course, Start Course
           Over, which card to open, TEST KC Selection, and Settings. The model list is gpt-4o-mini, gpt-4o,
-          gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and ~deepseek/deepseek-flash-latest. Age, reading level, modality, and
-          interests save on the child. Component blocks are set in KC Creator. How the tutor speaks, and how each block
-          type is taught, is the shared profile on Agent customizations.
+          gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and ~deepseek/deepseek-flash-latest. Component blocks are set in KC
+          Creator. How the tutor speaks, and how each block type is taught, is the shared profile on Agent
+          customizations.
         </p>
+        <p>
+          Each child stores a Layer 2 persona profile (edited in Settings and visible under <code>Layer 2, Child</code>{" "}
+          in Debug Variables):
+        </p>
+        <ul>
+          <li>
+            <strong>Display name</strong> (read-only in Settings, set on creation): The learner&apos;s name addressed by
+            the tutor.
+          </li>
+          <li>
+            <strong>Age</strong> (5 to 18, default 10): Sets developmental framing and auto-derives the default grade
+            band.
+          </li>
+          <li>
+            <strong>Grade band</strong> (<code>early_elementary</code>, <code>upper_elementary</code>,{" "}
+            <code>middle_school</code>, <code>high_school</code>): Calibrates example maturity and conceptual framing.
+          </li>
+          <li>
+            <strong>Reading level</strong> (<code>emerging</code>, <code>early_fluent</code>, <code>on_grade</code>,{" "}
+            <code>advanced</code>): Adjusts vocabulary and sentence structure, defining new terms right away for
+            emerging readers.
+          </li>
+          <li>
+            <strong>Response length</strong> (<code>bite_sized</code>, <code>balanced</code>, <code>detailed</code>):
+            Controls whether turns stay at 1-2 short sentences, 2-4 sentences, or fuller explanations.
+          </li>
+          <li>
+            <strong>Expression style</strong> (<code>one_word_or_taps</code>, <code>short_phrases</code>,{" "}
+            <code>conversational</code>, <code>analytical</code>): Tells the tutor what the child&apos;s own typing
+            looks like so brief replies are validated and modeled back without penalty.
+          </li>
+          <li>
+            <strong>Explanation style</strong> (<code>concrete_examples</code>, <code>step_by_step</code>,{" "}
+            <code>visual_spatial</code>, <code>story_and_analogy</code>, <code>pattern_and_rule</code>): Chooses the
+            representation the tutor leads with (replacing the legacy <code>modality</code> field).
+          </li>
+          <li>
+            <strong>Challenge appetite</strong> (<code>needs_reassurance</code>, <code>steady</code>,{" "}
+            <code>loves_a_challenge</code>): Tunes how mistakes are normalized and how quickly stretch prompts appear.
+          </li>
+          <li>
+            <strong>Communication tone</strong> (<code>calm_and_gentle</code>, <code>warm_and_encouraging</code>,{" "}
+            <code>playful_and_curious</code>, <code>direct_and_matter_of_fact</code>): Sets the warmth and energy of
+            tutor feedback.
+          </li>
+          <li>
+            <strong>Learning support</strong> (<code>none</code>, <code>adhd_focus_friendly</code>,{" "}
+            <code>dyslexia_reading_friendly</code>, <code>ell_language_support</code>,{" "}
+            <code>math_or_test_anxiety</code>): Adds targeted UDL pacing, phonics-friendly lines, idiom explanations, or
+            low-stakes puzzle framing.
+          </li>
+          <li>
+            <strong>Interest tags</strong> (up to 4 chips from <code>sports_and_games</code>, <code>video_games</code>,{" "}
+            <code>animals_and_nature</code>, <code>space_and_science</code>, <code>art_and_design</code>,{" "}
+            <code>music_and_dance</code>, <code>building_and_coding</code>, <code>cooking_and_food</code>,{" "}
+            <code>cars_and_trains</code>, <code>stories_and_comics</code>) and <strong>Specific favorites</strong> (up
+            to 120 characters): Anchors examples and analogies when Use interests is enabled on Agent customizations.
+          </li>
+        </ul>
 
         <h2>What to know when using it</h2>
         <ul>

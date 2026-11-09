@@ -1,11 +1,26 @@
 /** Form state for the KC Prompt Tester. The API calls build_kc_prompt. */
 
-import { LAYER_FIELDS, LAYER_HEADINGS, type LayerField } from "./kc-layer-fields.ts";
+import {
+  CHALLENGE_APPETITE_OPTIONS,
+  COMMUNICATION_TONE_OPTIONS,
+  EXPLANATION_STYLE_OPTIONS,
+  EXPRESSION_STYLE_OPTIONS,
+  GRADE_BAND_OPTIONS,
+  INTEREST_TAG_OPTIONS,
+  LAYER_FIELDS,
+  LAYER_HEADINGS,
+  LEARNING_SUPPORT_OPTIONS,
+  READING_LEVEL_OPTIONS,
+  RESPONSE_LENGTH_OPTIONS,
+  gradeBandForAge,
+  normalizeExplanationStyleOption,
+  type LayerField,
+} from "./kc-layer-fields.ts";
 import { BLOCK_LABELS, BLOCK_TYPES, isBlockType } from "./kc-blocks.ts";
 import { AUDIENCES, KINDS, type KcBlock, type KcComponent, type KcCourse } from "./kc.ts";
 import type { Student, TutorProfile } from "./types.ts";
 
-export { LAYER_HEADINGS };
+export { LAYER_HEADINGS, INTEREST_TAG_OPTIONS };
 
 export const READ_ONLY_DERIVED = [
   "Move name",
@@ -156,6 +171,14 @@ export const FIELD_OPTIONS: Record<string, readonly (readonly [string, string])[
     ["fragile", "Fragile"],
     ["known", "Known"],
   ],
+  "Grade band": [["", "Auto from age"], ...GRADE_BAND_OPTIONS],
+  "Reading level": [["", "Unset"], ...READING_LEVEL_OPTIONS],
+  "Response length": RESPONSE_LENGTH_OPTIONS,
+  "Expression style": EXPRESSION_STYLE_OPTIONS,
+  "Explanation style": EXPLANATION_STYLE_OPTIONS,
+  "Challenge appetite": CHALLENGE_APPETITE_OPTIONS,
+  "Communication tone": COMMUNICATION_TONE_OPTIONS,
+  "Learning support": LEARNING_SUPPORT_OPTIONS,
 };
 
 export type TesterValues = Record<string, string>;
@@ -185,7 +208,15 @@ export type PromptTesterRequest = {
   course_position: string;
   display_name: string;
   age: number | null;
+  grade_band: string;
   reading_level: string;
+  response_length: string;
+  expression_style: string;
+  explanation_style: string;
+  challenge_appetite: string;
+  communication_tone: string;
+  learning_support: string;
+  interest_tags: string[];
   modality: string;
   interests: string[];
   attempts: number;
@@ -323,6 +354,14 @@ export function emptyTesterValues(profile: TutorProfile = DEFAULT_TUTOR_PROFILE)
     Kind: "mastery",
     "Move index": "1",
     "Choice widget": "no",
+    "Grade band": "upper_elementary",
+    "Response length": "balanced",
+    "Expression style": "short_phrases",
+    "Explanation style": "concrete_examples",
+    "Challenge appetite": "steady",
+    "Communication tone": "warm_and_encouraging",
+    "Learning support": "none",
+    "Interest tags": "",
     "Attempts on this move": "0",
     "Hint tier already given": "nudge",
     "Component status": "unknown",
@@ -369,13 +408,27 @@ export function selectCourse(values: TesterValues, course: KcCourse): TesterValu
 }
 
 export function applyChild(values: TesterValues, child: Student): TesterValues {
+  const cp = child.child_profile;
+  const interestsList = child.interests ?? [];
+  const favText = cp?.interests ?? interestsList.join(", ");
   return {
     ...values,
     "Display name": child.display_name ?? "",
     Age: child.age == null ? "" : String(child.age),
-    "Reading level": child.reading_level ?? "",
+    "Grade band": child.grade_band ?? cp?.grade_band ?? (child.age == null ? "" : gradeBandForAge(child.age)),
+    "Reading level": child.reading_level || cp?.reading_level || "",
+    "Response length": child.response_length ?? cp?.response_length ?? "balanced",
+    "Expression style": child.expression_style ?? cp?.expression_style ?? "short_phrases",
+    "Explanation style":
+      child.explanation_style ??
+      cp?.explanation_style ??
+      (child.modality ? normalizeExplanationStyleOption(child.modality) : "concrete_examples"),
     Modality: child.modality ?? "",
-    Interests: (child.interests ?? []).join(", "),
+    "Challenge appetite": child.challenge_appetite ?? cp?.challenge_appetite ?? "steady",
+    "Communication tone": child.communication_tone ?? cp?.communication_tone ?? "warm_and_encouraging",
+    "Learning support": child.learning_support ?? cp?.learning_support ?? "none",
+    "Interest tags": (child.interest_tags ?? cp?.interest_tags ?? []).join(", "),
+    Interests: favText,
   };
 }
 
@@ -477,7 +530,15 @@ export function testerPayload(
     course_position: values["Course position"] ?? "",
     display_name: values["Display name"] ?? "",
     age: optionalInt(values.Age ?? ""),
+    grade_band: values["Grade band"] ?? "",
     reading_level: values["Reading level"] ?? "",
+    response_length: values["Response length"] ?? "",
+    expression_style: values["Expression style"] ?? "",
+    explanation_style: values["Explanation style"] ?? "",
+    challenge_appetite: values["Challenge appetite"] ?? "",
+    communication_tone: values["Communication tone"] ?? "",
+    learning_support: values["Learning support"] ?? "",
+    interest_tags: pieces(values["Interest tags"] ?? "").slice(0, 4),
     modality: values.Modality ?? "",
     interests: pieces(values.Interests ?? ""),
     attempts: whole(values["Attempts on this move"] ?? "", 0),

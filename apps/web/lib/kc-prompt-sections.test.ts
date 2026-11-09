@@ -23,6 +23,14 @@ test("the layers page explains the model prompt at the bottom", () => {
   assert.match(page, /active block only/);
   assert.match(page, /Close component/);
   assert.match(page, /Close course/);
+  assert.match(page, /Layer 2, child persona settings/);
+  assert.match(page, /Response length/);
+  assert.match(page, /Expression style/);
+  assert.match(page, /Explanation style/);
+  assert.match(page, /Challenge appetite/);
+  assert.match(page, /Communication tone/);
+  assert.match(page, /Learning support/);
+  assert.match(page, /Interest tags/);
   assert.doesNotMatch(section, /You are the knowledge-component tutor/);
   assert.doesNotMatch(section, /Grade the answer against this core truth/);
 });

@@ -27,6 +27,105 @@ export const MOVE_SEQUENCES = [
   "Synthesis. Orient names the job and the two earlier components. Each job is a typed topic. The rookie's faulty plan, then the correction, then which component does which job.",
 ] as const;
 
+export const GRADE_BAND_OPTIONS = [
+  ["early_elementary", "Early elementary (Grades K-2, ages 5-7)"],
+  ["upper_elementary", "Upper elementary (Grades 3-5, ages 8-10)"],
+  ["middle_school", "Middle school (Grades 6-8, ages 11-13)"],
+  ["high_school", "High school (Grades 9-12, ages 14-18)"],
+] as const;
+
+export const READING_LEVEL_OPTIONS = [
+  ["emerging", "Emerging (Very short sentences, everyday sight words, define new terms right away)"],
+  ["early_fluent", "Early fluent (Concrete sentences, one clause at a time, plain transitions)"],
+  ["on_grade", "On grade (Natural grade-level vocabulary and sentence flow)"],
+  ["advanced", "Advanced (Precise academic terms and richer compound sentences)"],
+] as const;
+
+export const RESPONSE_LENGTH_OPTIONS = [
+  ["bite_sized", "Bite-sized (1-2 short sentences per turn; low working-memory load)"],
+  ["balanced", "Balanced (2-4 sentences per turn; standard conversational flow)"],
+  ["detailed", "Detailed (Fuller explanations with explicit connections when needed)"],
+] as const;
+
+export const EXPRESSION_STYLE_OPTIONS = [
+  ["one_word_or_taps", "One word or taps (Types 1-3 words; tutor validates the idea and models a clean sentence)"],
+  ["short_phrases", "Short phrases (Types brief phrases or single sentences; tutor keeps follow-ups crisp)"],
+  ["conversational", "Conversational (Likes back-and-forth dialogue and thinking out loud)"],
+  ["analytical", "Analytical (Writes fuller reasoning and likes precise pushback)"],
+] as const;
+
+export const EXPLANATION_STYLE_OPTIONS = [
+  ["concrete_examples", "Concrete examples (Everyday real-world objects and familiar situations first)"],
+  ["step_by_step", "Step by step (Numbered, sequential breakdown of one piece at a time)"],
+  ["visual_spatial", "Visual-spatial (Vivid mental pictures, spatial layouts, and diagram descriptions)"],
+  ["story_and_analogy", "Story and analogy (Short narrative hooks and 'imagine if' comparisons)"],
+  ["pattern_and_rule", "Pattern and rule (Show the underlying rule or structure first, then apply it)"],
+] as const;
+
+export const CHALLENGE_APPETITE_OPTIONS = [
+  ["needs_reassurance", "Needs reassurance (Hesitant to guess; normalize mistakes early and lower stakes)"],
+  ["steady", "Steady (Comfortable trying with normal scaffolding)"],
+  ["loves_a_challenge", "Loves a challenge (Enjoys stretch prompts, quick pacing, and minimal hints)"],
+] as const;
+
+export const COMMUNICATION_TONE_OPTIONS = [
+  ["calm_and_gentle", "Calm and gentle (Low-stimulation, patient, zero pressure)"],
+  ["warm_and_encouraging", "Warm and encouraging (Friendly, upbeat coach)"],
+  ["playful_and_curious", "Playful and curious (Light humor and wonder-driven energy)"],
+  ["direct_and_matter_of_fact", "Direct and matter-of-fact (No fluff; straight to the concept)"],
+] as const;
+
+export const LEARNING_SUPPORT_OPTIONS = [
+  ["none", "None (No special pacing rules)"],
+  ["adhd_focus_friendly", "ADHD focus-friendly (Extra-crisp turns, immediate hook, no multi-part instructions)"],
+  ["dyslexia_reading_friendly", "Dyslexia reading-friendly (Simple phonics-friendly words, short lines, avoid dense paragraphs)"],
+  ["ell_language_support", "ELL language support (Avoid idioms, explain figurative phrases, pair new terms with synonyms)"],
+  ["math_or_test_anxiety", "Math or test anxiety (Frame checks as low-stakes puzzles, never mention tests or grades)"],
+] as const;
+
+export const INTEREST_TAG_OPTIONS = [
+  ["sports_and_games", "Sports & games"],
+  ["video_games", "Video games"],
+  ["animals_and_nature", "Animals & nature"],
+  ["space_and_science", "Space & science"],
+  ["art_and_design", "Art & design"],
+  ["music_and_dance", "Music & dance"],
+  ["building_and_coding", "Building & coding"],
+  ["cooking_and_food", "Cooking & food"],
+  ["cars_and_trains", "Cars & trains"],
+  ["stories_and_comics", "Stories & comics"],
+] as const;
+
+export function gradeBandForAge(age: number | null | undefined): string {
+  if (age == null || Number.isNaN(age)) return "upper_elementary";
+  if (age <= 7) return "early_elementary";
+  if (age <= 10) return "upper_elementary";
+  if (age <= 13) return "middle_school";
+  return "high_school";
+}
+
+export function normalizeReadingLevelOption(raw: string | undefined | null): string {
+  const val = (raw ?? "").trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_");
+  if (READING_LEVEL_OPTIONS.some(([id]) => id === val)) return val;
+  if (val === "early_reader" || val === "early" || val === "beginner") return "emerging";
+  if (val === "middle_grade" || val === "elementary") return "early_fluent";
+  if (val === "grade_level" || val === "standard") return "on_grade";
+  if (val === "high_school" || val === "above_grade") return "advanced";
+  if (val.includes("early") || val.includes("emerg")) return "emerging";
+  if (val.includes("high") || val.includes("advanc")) return "advanced";
+  return "on_grade";
+}
+
+export function normalizeExplanationStyleOption(raw: string | undefined | null): string {
+  const val = (raw ?? "").trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_");
+  if (EXPLANATION_STYLE_OPTIONS.some(([id]) => id === val)) return val;
+  if (val.includes("visual") || val === "picture" || val === "spatial") return "visual_spatial";
+  if (val.includes("story") || val === "narrative" || val === "analogy") return "story_and_analogy";
+  if (val.includes("step") || val === "procedural") return "step_by_step";
+  if (val === "verbal" || val.includes("rule") || val.includes("pattern")) return "pattern_and_rule";
+  return "concrete_examples";
+}
+
 export const LAYER_FIELDS: LayerField[] = [
   {
     layer: "Layer 1, Component",
@@ -215,32 +314,96 @@ export const LAYER_FIELDS: LayerField[] = [
   {
     layer: "Layer 2, Child",
     name: "Age",
-    hover: "The child's age. Set the real age. Lower ages use shorter sentences and simpler examples.",
+    hover: "The child's age (5 to 18). Sets developmental framing, example maturity, and the default grade band.",
     role: "Wording and example complexity.",
     kind: "Configured",
     where: "KC Tutor settings, /kc-tutor, saved on the student",
   },
   {
     layer: "Layer 2, Child",
+    name: "Grade band",
+    hover: "Developmental band: early elementary (K-2), upper elementary (3-5), middle school (6-8), or high school (9-12). Auto-derived from age by default, or overridden.",
+    role: "Frames example maturity and conceptual scaffolding for the learner's developmental stage.",
+    kind: "Configured",
+    where: "KC Tutor settings, /kc-tutor, saved on the student",
+  },
+  {
+    layer: "Layer 2, Child",
     name: "Reading level",
-    hover: "How hard the wording may be. Set it to the level the child reads at. An early level shortens the intro, the replies, and the close.",
-    role: "Shortens sentences when the level is early.",
+    hover: "Reading and vocabulary level: emerging, early fluent, on grade, or advanced. Emerging and early fluent shorten sentences and define new terms right away.",
+    role: "Calibrates vocabulary complexity and sentence structure.",
+    kind: "Configured",
+    where: "KC Tutor settings, /kc-tutor, saved on the student",
+  },
+  {
+    layer: "Layer 2, Child",
+    name: "Response length",
+    hover: "How much text the tutor puts in a single turn: bite-sized (1-2 sentences), balanced (2-4 sentences), or detailed (fuller explanations with explicit connections).",
+    role: "Controls cognitive load and sentence chunking per turn.",
+    kind: "Configured",
+    where: "KC Tutor settings, /kc-tutor, saved on the student",
+  },
+  {
+    layer: "Layer 2, Child",
+    name: "Expression style",
+    hover: "What the child's own replies look like: one word or taps, short phrases, conversational, or analytical. Prevents penalizing brief typing.",
+    role: "Tells the tutor how to interpret brief or detailed learner input and how to model replies back.",
+    kind: "Configured",
+    where: "KC Tutor settings, /kc-tutor, saved on the student",
+  },
+  {
+    layer: "Layer 2, Child",
+    name: "Explanation style",
+    hover: "How explanations are represented: concrete examples, step by step, visual-spatial mental pictures, story and analogy, or pattern and rule.",
+    role: "Chooses the primary cognitive representation when introducing or hinting at a concept.",
     kind: "Configured",
     where: "KC Tutor settings, /kc-tutor, saved on the student",
   },
   {
     layer: "Layer 2, Child",
     name: "Modality",
-    hover: "How the child takes in an example. Visual may ask for a described picture when the component already has cases or steps. Other values stay in words.",
-    role: "Allows a described picture only when the component already has cases or steps.",
+    hover: "Legacy representation alias mapped to Explanation style. Visual may ask for a described picture when the component has cases or steps.",
+    role: "Backward-compatible representation field.",
+    kind: "Configured",
+    where: "KC Tutor settings, /kc-tutor, saved on the student",
+  },
+  {
+    layer: "Layer 2, Child",
+    name: "Challenge appetite",
+    hover: "How the learner responds to difficulty: needs reassurance (normalize mistakes early), steady (normal scaffolding), or loves a challenge (stretch prompts and minimal hints).",
+    role: "Adjusts scaffolding pace and how mistakes or stretch questions are framed.",
+    kind: "Configured",
+    where: "KC Tutor settings, /kc-tutor, saved on the student",
+  },
+  {
+    layer: "Layer 2, Child",
+    name: "Communication tone",
+    hover: "Conversational energy: calm and gentle, warm and encouraging, playful and curious, or direct and matter-of-fact.",
+    role: "Sets the affective warmth and directness of the tutor's replies.",
+    kind: "Configured",
+    where: "KC Tutor settings, /kc-tutor, saved on the student",
+  },
+  {
+    layer: "Layer 2, Child",
+    name: "Learning support",
+    hover: "Optional pacing or language accommodations: none, ADHD focus-friendly, dyslexia reading-friendly, ELL language support, or math/test anxiety.",
+    role: "Applies targeted UDL accommodations to sentence layout, idioms, and check framing.",
+    kind: "Configured",
+    where: "KC Tutor settings, /kc-tutor, saved on the student",
+  },
+  {
+    layer: "Layer 2, Child",
+    name: "Interest tags",
+    hover: "Up to 4 curated interest categories (such as video games, animals & nature, or space & science) woven into analogies when Use interests is on.",
+    role: "Provides reliable topic anchors for analogies when Use interests is on.",
     kind: "Configured",
     where: "KC Tutor settings, /kc-tutor, saved on the student",
   },
   {
     layer: "Layer 2, Child",
     name: "Interests",
-    hover: "Topics the child cares about. List a few real ones. They become the example only when use interests is on.",
-    role: "Example material, and only when use interests is on.",
+    hover: "Specific favorites or personal context (up to 120 chars, such as Minecraft redstone or soccer goalie). Used when Use interests is on.",
+    role: "Specific personal favorites for examples when Use interests is on.",
     kind: "Configured",
     where: "KC Tutor settings, /kc-tutor, saved on the student",
   },

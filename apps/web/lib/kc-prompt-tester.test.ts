@@ -206,8 +206,16 @@ test("choosing a child fills the layer 2 settings and leaves session fields", ()
   const filled = applyChild(values, child());
   assert.equal(filled["Display name"], "Ada");
   assert.equal(filled.Age, "11");
+  assert.equal(filled["Grade band"], "middle_school");
   assert.equal(filled["Reading level"], "middle-grade");
+  assert.equal(filled["Response length"], "balanced");
+  assert.equal(filled["Expression style"], "short_phrases");
+  assert.equal(filled["Explanation style"], "visual_spatial");
   assert.equal(filled.Modality, "visual");
+  assert.equal(filled["Challenge appetite"], "steady");
+  assert.equal(filled["Communication tone"], "warm_and_encouraging");
+  assert.equal(filled["Learning support"], "none");
+  assert.equal(filled["Interest tags"], "");
   assert.equal(filled.Interests, "kites, maps");
   assert.equal(filled["Course title"], "Triangles");
   assert.equal(filled.Persona, "tactical-coach");

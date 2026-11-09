@@ -1541,8 +1541,15 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
             "Choice on screen",
             "Display name",
             "Age",
+            "Grade band",
             "Reading level",
-            "Modality",
+            "Response length",
+            "Expression style",
+            "Explanation style",
+            "Challenge appetite",
+            "Communication tone",
+            "Learning support",
+            "Interest tags",
             "Interests",
             "Attempts",
             "Last answer",
@@ -1603,6 +1610,14 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         assert picked["Minutes"] == ""
         assert picked["Display name"] == "Storm"
         assert picked["Age"] == "10"
+        assert picked["Grade band"] == "upper_elementary"
+        assert picked["Reading level"] in {"early_fluent", "on_grade", "emerging", "advanced"}
+        assert picked["Response length"] == "balanced"
+        assert picked["Expression style"] == "short_phrases"
+        assert picked["Explanation style"] == "story_and_analogy"
+        assert picked["Challenge appetite"] == "steady"
+        assert picked["Communication tone"] == "warm_and_encouraging"
+        assert picked["Learning support"] == "none"
         assert picked["Component title"] == ""
         assert picked["Block index"] == ""
         assert picked["Outline"] == ""
@@ -1711,6 +1726,32 @@ LAYER_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / 
 def test_tutor_variables_follow_the_active_block() -> None:
     storm = _storm()
     _clear_progress(storm.id)
+    patched = client.patch(
+        f"/students/{storm.id}",
+        json={
+            "age": 12,
+            "grade_band": "middle_school",
+            "reading_level": "advanced",
+            "response_length": "bite_sized",
+            "expression_style": "one_word_or_taps",
+            "explanation_style": "visual_spatial",
+            "challenge_appetite": "loves_a_challenge",
+            "communication_tone": "playful_and_curious",
+            "learning_support": "adhd_focus_friendly",
+            "interest_tags": ["space_and_science", "video_games"],
+            "interests": ["Minecraft redstone", "telescopes"],
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["grade_band"] == "middle_school"
+    assert patched.json()["reading_level"] == "advanced"
+    assert patched.json()["response_length"] == "bite_sized"
+    assert patched.json()["expression_style"] == "one_word_or_taps"
+    assert patched.json()["explanation_style"] == "visual_spatial"
+    assert patched.json()["challenge_appetite"] == "loves_a_challenge"
+    assert patched.json()["communication_tone"] == "playful_and_curious"
+    assert patched.json()["learning_support"] == "adhd_focus_friendly"
+    assert patched.json()["interest_tags"] == ["space_and_science", "video_games"]
     course = _ready(
         _make("zz-varblock", title="Block variables"),
         [
@@ -1752,6 +1793,27 @@ def test_tutor_variables_follow_the_active_block() -> None:
         assert opened.status_code == 200, opened.text
         session_id = opened.json()["id"]
         topic = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
+        assert topic["Grade band"] == "middle_school"
+        assert topic["Reading level"] == "advanced"
+        assert topic["Response length"] == "bite_sized"
+        assert topic["Expression style"] == "one_word_or_taps"
+        assert topic["Explanation style"] == "visual_spatial"
+        assert topic["Challenge appetite"] == "loves_a_challenge"
+        assert topic["Communication tone"] == "playful_and_curious"
+        assert topic["Learning support"] == "adhd_focus_friendly"
+        assert topic["Interest tags"] == "space_and_science, video_games"
+        assert "Minecraft redstone" in topic["Interests"]
+        prompt_text = client.get(f"/kc/tutor/sessions/{session_id}/prompt").json()["system_prompt"]
+        assert "Middle school (Grades 6-8)" in prompt_text
+        assert "bite-sized" in prompt_text
+        assert "one-word replies or taps" in prompt_text
+        assert "visual-spatial framing" in prompt_text
+        assert "loves a challenge" in prompt_text
+        assert "playful and curious" in prompt_text
+        assert "ADHD focus-friendly" in prompt_text
+        assert "Space & science" in prompt_text
+        assert "Video games" in prompt_text
+        assert "Minecraft redstone" in prompt_text
         assert topic["Block index"] == "1 of 2"
         assert topic["Block type"] == "topic_goal (Topic / Goal)"
         assert topic["Substep"] == "main"
@@ -1780,6 +1842,23 @@ def test_tutor_variables_follow_the_active_block() -> None:
         assert quiz["Close component"] == "yes"
         assert "passed after" in quiz["Finished blocks"]
     finally:
+        client.patch(
+            f"/students/{storm.id}",
+            json={
+                "age": 10,
+                "grade_band": "upper_elementary",
+                "reading_level": "middle-grade",
+                "response_length": "balanced",
+                "expression_style": "short_phrases",
+                "explanation_style": "story_and_analogy",
+                "modality": "story",
+                "challenge_appetite": "steady",
+                "communication_tone": "warm_and_encouraging",
+                "learning_support": "none",
+                "interest_tags": [],
+                "interests": ["weather", "leadership"],
+            },
+        )
         _clear_progress(storm.id)
         _wipe_zz()
 

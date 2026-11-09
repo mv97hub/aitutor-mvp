@@ -8,27 +8,58 @@ import { ChoiceWidget } from "@/components/LessonBlocks";
 import { api } from "@/lib/api";
 import type { KcBlockProgress, KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
 import type { KcDebugTurn } from "@/lib/kc-debug";
-import { hoverFor } from "@/lib/kc-layer-fields";
+import {
+  CHALLENGE_APPETITE_OPTIONS,
+  COMMUNICATION_TONE_OPTIONS,
+  EXPLANATION_STYLE_OPTIONS,
+  EXPRESSION_STYLE_OPTIONS,
+  GRADE_BAND_OPTIONS,
+  INTEREST_TAG_OPTIONS,
+  LEARNING_SUPPORT_OPTIONS,
+  READING_LEVEL_OPTIONS,
+  RESPONSE_LENGTH_OPTIONS,
+  gradeBandForAge,
+  hoverFor,
+  normalizeExplanationStyleOption,
+  normalizeReadingLevelOption,
+} from "@/lib/kc-layer-fields";
 import { KC_MODELS, kcModel, type KcModel } from "@/lib/kc-models";
 import { tutorPath } from "@/lib/kc-tutor-path";
-import type { KidQuiz, ProfileDefaults, Student } from "@/lib/types";
+import type { KidQuiz, Student } from "@/lib/types";
 import { useRouter } from "next/navigation";
 
 type SettingsDraft = {
   model: KcModel;
   age: string;
+  grade_band: string;
   reading_level: string;
-  modality: string;
+  response_length: string;
+  expression_style: string;
+  explanation_style: string;
+  challenge_appetite: string;
+  communication_tone: string;
+  learning_support: string;
+  interest_tags: string[];
   interests: string;
 };
 
 function settingsDraft(learner: Student | null, model: string): SettingsDraft {
+  const cp = learner?.child_profile;
   return {
     model: kcModel(model),
-    age: learner?.age == null ? "" : String(learner.age),
-    reading_level: learner?.reading_level ?? "",
-    modality: learner?.modality ?? "",
-    interests: learner?.interests.join(", ") ?? "",
+    age: learner?.age == null ? "10" : String(learner.age),
+    grade_band: learner?.grade_band ?? cp?.grade_band ?? gradeBandForAge(learner?.age ?? 10),
+    reading_level: normalizeReadingLevelOption(cp?.reading_level ?? learner?.reading_level),
+    response_length: learner?.response_length ?? cp?.response_length ?? "balanced",
+    expression_style: learner?.expression_style ?? cp?.expression_style ?? "short_phrases",
+    explanation_style: normalizeExplanationStyleOption(
+      learner?.explanation_style ?? cp?.explanation_style ?? learner?.modality,
+    ),
+    challenge_appetite: learner?.challenge_appetite ?? cp?.challenge_appetite ?? "steady",
+    communication_tone: learner?.communication_tone ?? cp?.communication_tone ?? "warm_and_encouraging",
+    learning_support: learner?.learning_support ?? cp?.learning_support ?? "none",
+    interest_tags: [...(learner?.interest_tags ?? cp?.interest_tags ?? [])].slice(0, 4),
+    interests: cp?.interests ?? learner?.interests.join(", ") ?? "",
   };
 }
 
@@ -37,36 +68,68 @@ const ADD_NEW_CHILD = "__add_new_child__";
 type ChildDraft = {
   name: string;
   age: string;
+  grade_band: string;
   reading_level: string;
-  modality: string;
+  response_length: string;
+  expression_style: string;
+  explanation_style: string;
+  challenge_appetite: string;
+  communication_tone: string;
+  learning_support: string;
+  interest_tags: string[];
   interests: string;
 };
 
 function blankChild(): ChildDraft {
-  return { name: "", age: "", reading_level: "", modality: "", interests: "" };
+  return {
+    name: "",
+    age: "10",
+    grade_band: "upper_elementary",
+    reading_level: "on_grade",
+    response_length: "balanced",
+    expression_style: "short_phrases",
+    explanation_style: "concrete_examples",
+    challenge_appetite: "steady",
+    communication_tone: "warm_and_encouraging",
+    learning_support: "none",
+    interest_tags: [],
+    interests: "",
+  };
 }
 
 function childCreateBody(draft: ChildDraft) {
-  const body: {
-    display_name: string;
-    age: number;
-    reading_level?: string;
-    modality?: string;
-    interests?: string[];
-  } = {
-    display_name: draft.name.trim(),
-    age: Number(draft.age),
-  };
-  const readingLevel = draft.reading_level.trim();
-  const modality = draft.modality.trim();
+  const age = Number(draft.age);
   const interests = draft.interests
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-  if (readingLevel) body.reading_level = readingLevel;
-  if (modality) body.modality = modality;
-  if (interests.length > 0) body.interests = interests;
-  return body;
+  return {
+    display_name: draft.name.trim(),
+    age,
+    grade_band: draft.grade_band || gradeBandForAge(age),
+    reading_level: draft.reading_level || "on_grade",
+    response_length: draft.response_length || "balanced",
+    expression_style: draft.expression_style || "short_phrases",
+    explanation_style: draft.explanation_style || "concrete_examples",
+    modality: draft.explanation_style || "concrete_examples",
+    challenge_appetite: draft.challenge_appetite || "steady",
+    communication_tone: draft.communication_tone || "warm_and_encouraging",
+    learning_support: draft.learning_support || "none",
+    interest_tags: draft.interest_tags.slice(0, 4),
+    interests,
+    child_profile: {
+      grade_band: draft.grade_band || gradeBandForAge(age),
+      reading_level: draft.reading_level || "on_grade",
+      response_length: draft.response_length || "balanced",
+      expression_style: draft.expression_style || "short_phrases",
+      explanation_style: draft.explanation_style || "concrete_examples",
+      challenge_appetite: draft.challenge_appetite || "steady",
+      communication_tone: draft.communication_tone || "warm_and_encouraging",
+      learning_support: draft.learning_support || "none",
+      interest_tags: draft.interest_tags.slice(0, 4),
+      interests: draft.interests.trim().slice(0, 120),
+    },
+  };
 }
 
 function GearIcon() {
@@ -229,12 +292,32 @@ export function KcTutor({
           method: "PATCH",
           body: JSON.stringify({
             age,
-            reading_level: draft.reading_level.trim(),
-            modality: draft.modality.trim(),
+            grade_band: draft.grade_band,
+            reading_level: draft.reading_level,
+            response_length: draft.response_length,
+            expression_style: draft.expression_style,
+            explanation_style: draft.explanation_style,
+            modality: draft.explanation_style,
+            challenge_appetite: draft.challenge_appetite,
+            communication_tone: draft.communication_tone,
+            learning_support: draft.learning_support,
+            interest_tags: draft.interest_tags.slice(0, 4),
             interests: draft.interests
               .split(",")
               .map((item) => item.trim())
               .filter(Boolean),
+            child_profile: {
+              grade_band: draft.grade_band,
+              reading_level: draft.reading_level,
+              response_length: draft.response_length,
+              expression_style: draft.expression_style,
+              explanation_style: draft.explanation_style,
+              challenge_appetite: draft.challenge_appetite,
+              communication_tone: draft.communication_tone,
+              learning_support: draft.learning_support,
+              interest_tags: draft.interest_tags.slice(0, 4),
+              interests: draft.interests.trim().slice(0, 120),
+            },
           }),
         });
       }
@@ -722,6 +805,42 @@ function isTyping(element: HTMLElement) {
   return element.tagName === "INPUT" || element.tagName === "TEXTAREA" || element.tagName === "SELECT";
 }
 
+function InterestTagChips({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  function toggle(tag: string) {
+    if (selected.includes(tag)) {
+      onChange(selected.filter((item) => item !== tag));
+      return;
+    }
+    if (selected.length < 4) {
+      onChange([...selected, tag]);
+    }
+  }
+  return (
+    <div className="kc-chip-group" role="group" aria-label="Interest tags" title={hoverFor("Interest tags")}>
+      {INTEREST_TAG_OPTIONS.map(([id, label]) => {
+        const active = selected.includes(id);
+        return (
+          <button
+            key={id}
+            type="button"
+            className={`kc-chip${active ? " is-active" : ""}`}
+            aria-pressed={active}
+            onClick={() => toggle(id)}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function AddChildDialog({
   saving,
   notice,
@@ -734,8 +853,7 @@ function AddChildDialog({
   onClose: () => void;
 }) {
   const nameRef = useRef<HTMLInputElement>(null);
-  const readingTouched = useRef(false);
-  const modalityTouched = useRef(false);
+  const gradeTouched = useRef(false);
   const [draft, setDraft] = useState<ChildDraft>(blankChild);
 
   useEffect(() => {
@@ -750,29 +868,6 @@ function AddChildDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  useEffect(() => {
-    const age = Number(draft.age);
-    if (!Number.isInteger(age) || age < 4 || age > 18) return;
-    if (readingTouched.current && modalityTouched.current) return;
-    let cancelled = false;
-    void api<ProfileDefaults>(`/profile-defaults?age=${age}`)
-      .then((defaults) => {
-        if (cancelled) return;
-        setDraft((current) => {
-          if (current.age !== draft.age) return current;
-          return {
-            ...current,
-            reading_level: readingTouched.current ? current.reading_level : defaults.reading_level,
-            modality: modalityTouched.current ? current.modality : defaults.modality,
-          };
-        });
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [draft.age]);
-
   return (
     <div className="prompt-backdrop" role="presentation" onMouseDown={onClose}>
       <div
@@ -786,7 +881,7 @@ function AddChildDialog({
         <header>
           <div>
             <h2 id="kc-add-child-title">Add New Child</h2>
-            <p>Name, age, reading level, modality, and interests.</p>
+            <p>Layer 2 child persona settings.</p>
           </div>
           <button type="button" className="ghost" onClick={onClose}>
             Close
@@ -813,50 +908,163 @@ function AddChildDialog({
               autoComplete="off"
             />
           </label>
-          <label>
+          <label title={hoverFor("Age")}>
             Age
             <input
               type="number"
               inputMode="numeric"
-              min={4}
+              min={5}
               max={18}
               required
+              title={hoverFor("Age")}
               value={draft.age}
               onChange={(event) => {
                 const age = event.target.value;
-                setDraft((current) => ({ ...current, age }));
+                const parsed = Number(age);
+                setDraft((current) => ({
+                  ...current,
+                  age,
+                  grade_band: gradeTouched.current ? current.grade_band : gradeBandForAge(parsed),
+                }));
               }}
             />
           </label>
-          <label>
+          <label title={hoverFor("Grade band")}>
+            Grade band
+            <select
+              aria-label="Grade band"
+              title={hoverFor("Grade band")}
+              value={draft.grade_band}
+              onChange={(event) => {
+                gradeTouched.current = true;
+                setDraft((current) => ({ ...current, grade_band: event.target.value }));
+              }}
+            >
+              {GRADE_BAND_OPTIONS.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label title={hoverFor("Reading level")}>
             Reading level
-            <input
-              maxLength={80}
+            <select
+              aria-label="Reading level"
+              title={hoverFor("Reading level")}
               value={draft.reading_level}
-              onChange={(event) => {
-                readingTouched.current = true;
-                const reading_level = event.target.value;
-                setDraft((current) => ({ ...current, reading_level }));
-              }}
+              onChange={(event) => setDraft((current) => ({ ...current, reading_level: event.target.value }))}
+            >
+              {READING_LEVEL_OPTIONS.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label title={hoverFor("Response length")}>
+            Response length
+            <select
+              aria-label="Response length"
+              title={hoverFor("Response length")}
+              value={draft.response_length}
+              onChange={(event) => setDraft((current) => ({ ...current, response_length: event.target.value }))}
+            >
+              {RESPONSE_LENGTH_OPTIONS.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label title={hoverFor("Expression style")}>
+            Expression style
+            <select
+              aria-label="Expression style"
+              title={hoverFor("Expression style")}
+              value={draft.expression_style}
+              onChange={(event) => setDraft((current) => ({ ...current, expression_style: event.target.value }))}
+            >
+              {EXPRESSION_STYLE_OPTIONS.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label title={hoverFor("Explanation style")}>
+            Explanation style
+            <select
+              aria-label="Explanation style"
+              title={hoverFor("Explanation style")}
+              value={draft.explanation_style}
+              onChange={(event) => setDraft((current) => ({ ...current, explanation_style: event.target.value }))}
+            >
+              {EXPLANATION_STYLE_OPTIONS.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label title={hoverFor("Challenge appetite")}>
+            Challenge appetite
+            <select
+              aria-label="Challenge appetite"
+              title={hoverFor("Challenge appetite")}
+              value={draft.challenge_appetite}
+              onChange={(event) => setDraft((current) => ({ ...current, challenge_appetite: event.target.value }))}
+            >
+              {CHALLENGE_APPETITE_OPTIONS.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label title={hoverFor("Communication tone")}>
+            Communication tone
+            <select
+              aria-label="Communication tone"
+              title={hoverFor("Communication tone")}
+              value={draft.communication_tone}
+              onChange={(event) => setDraft((current) => ({ ...current, communication_tone: event.target.value }))}
+            >
+              {COMMUNICATION_TONES_OR_OPTIONS.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label title={hoverFor("Learning support")}>
+            Learning support
+            <select
+              aria-label="Learning support"
+              title={hoverFor("Learning support")}
+              value={draft.learning_support}
+              onChange={(event) => setDraft((current) => ({ ...current, learning_support: event.target.value }))}
+            >
+              {LEARNING_SUPPORT_OPTIONS.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label title={hoverFor("Interest tags")}>
+            Interest tags (up to 4)
+            <InterestTagChips
+              selected={draft.interest_tags}
+              onChange={(interest_tags) => setDraft((current) => ({ ...current, interest_tags }))}
             />
           </label>
-          <label>
-            Modality
+          <label title={hoverFor("Interests")}>
+            Specific favorites
             <input
-              maxLength={80}
-              value={draft.modality}
-              onChange={(event) => {
-                modalityTouched.current = true;
-                const modality = event.target.value;
-                setDraft((current) => ({ ...current, modality }));
-              }}
-            />
-          </label>
-          <label>
-            Interests
-            <input
+              maxLength={120}
               value={draft.interests}
-              placeholder="cities, fairness"
+              placeholder="Minecraft redstone, golden retrievers, soccer goalie"
               onChange={(event) => {
                 const interests = event.target.value;
                 setDraft((current) => ({ ...current, interests }));
@@ -864,8 +1072,7 @@ function AddChildDialog({
             />
           </label>
           <p className="help">
-            Age, reading level, modality, and interests are saved on the child. A blank reading level or modality
-            keeps the age default. Persona and the other tutor settings stay on Agent customizations.
+            Layer 2 child settings are saved on the child. Voice and block teaching rules stay on Agent customizations.
           </p>
           {notice ? (
             <div className="banner" role="alert">
@@ -882,6 +1089,8 @@ function AddChildDialog({
     </div>
   );
 }
+
+const COMMUNICATION_TONES_OR_OPTIONS = COMMUNICATION_TONE_OPTIONS;
 
 function TutorSettingsDialog({
   learner,
@@ -918,7 +1127,7 @@ function TutorSettingsDialog({
     ? learner.age == null
       ? learner.display_name
       : `${learner.display_name} · age ${learner.age}`
-    : "Choose a child to edit age, reading level, modality, and interests.";
+    : "Choose a child to edit Layer 2 child persona settings.";
 
   return (
     <div className="prompt-backdrop" role="presentation" onMouseDown={onClose}>
@@ -966,44 +1175,162 @@ function TutorSettingsDialog({
                 Age
                 <input
                   type="number"
-                  min={4}
+                  min={5}
                   max={18}
                   required
                   title={hoverFor("Age")}
                   value={draft.age}
-                  onChange={(event) => onChange({ ...draft, age: event.target.value })}
+                  onChange={(event) => {
+                    const age = event.target.value;
+                    const parsed = Number(age);
+                    onChange({
+                      ...draft,
+                      age,
+                      grade_band: Number.isInteger(parsed) ? gradeBandForAge(parsed) : draft.grade_band,
+                    });
+                  }}
                 />
+              </label>
+              <label title={hoverFor("Grade band")}>
+                Grade band
+                <select
+                  aria-label="Grade band"
+                  title={hoverFor("Grade band")}
+                  value={draft.grade_band}
+                  onChange={(event) => onChange({ ...draft, grade_band: event.target.value })}
+                >
+                  {GRADE_BAND_OPTIONS.map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label title={hoverFor("Reading level")}>
                 Reading level
-                <input
-                  maxLength={80}
+                <select
+                  aria-label="Reading level"
                   title={hoverFor("Reading level")}
                   value={draft.reading_level}
                   onChange={(event) => onChange({ ...draft, reading_level: event.target.value })}
-                />
+                >
+                  {READING_LEVEL_OPTIONS.map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
               </label>
-              <label title={hoverFor("Modality")}>
-                Modality
-                <input
-                  maxLength={80}
-                  title={hoverFor("Modality")}
-                  value={draft.modality}
-                  onChange={(event) => onChange({ ...draft, modality: event.target.value })}
+              <label title={hoverFor("Response length")}>
+                Response length
+                <select
+                  aria-label="Response length"
+                  title={hoverFor("Response length")}
+                  value={draft.response_length}
+                  onChange={(event) => onChange({ ...draft, response_length: event.target.value })}
+                >
+                  {RESPONSE_LENGTH_OPTIONS.map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label title={hoverFor("Expression style")}>
+                Expression style
+                <select
+                  aria-label="Expression style"
+                  title={hoverFor("Expression style")}
+                  value={draft.expression_style}
+                  onChange={(event) => onChange({ ...draft, expression_style: event.target.value })}
+                >
+                  {EXPRESSION_STYLE_OPTIONS.map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label title={hoverFor("Explanation style")}>
+                Explanation style
+                <select
+                  aria-label="Explanation style"
+                  title={hoverFor("Explanation style")}
+                  value={draft.explanation_style}
+                  onChange={(event) => onChange({ ...draft, explanation_style: event.target.value })}
+                >
+                  {EXPLANATION_STYLE_OPTIONS.map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label title={hoverFor("Challenge appetite")}>
+                Challenge appetite
+                <select
+                  aria-label="Challenge appetite"
+                  title={hoverFor("Challenge appetite")}
+                  value={draft.challenge_appetite}
+                  onChange={(event) => onChange({ ...draft, challenge_appetite: event.target.value })}
+                >
+                  {CHALLENGE_APPETITE_OPTIONS.map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label title={hoverFor("Communication tone")}>
+                Communication tone
+                <select
+                  aria-label="Communication tone"
+                  title={hoverFor("Communication tone")}
+                  value={draft.communication_tone}
+                  onChange={(event) => onChange({ ...draft, communication_tone: event.target.value })}
+                >
+                  {COMMUNICATION_TONE_OPTIONS.map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label title={hoverFor("Learning support")}>
+                Learning support
+                <select
+                  aria-label="Learning support"
+                  title={hoverFor("Learning support")}
+                  value={draft.learning_support}
+                  onChange={(event) => onChange({ ...draft, learning_support: event.target.value })}
+                >
+                  {LEARNING_SUPPORT_OPTIONS.map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label title={hoverFor("Interest tags")}>
+                Interest tags (up to 4)
+                <InterestTagChips
+                  selected={draft.interest_tags}
+                  onChange={(interest_tags) => onChange({ ...draft, interest_tags })}
                 />
               </label>
               <label title={hoverFor("Interests")}>
-                Interests
+                Specific favorites
                 <input
+                  maxLength={120}
                   title={hoverFor("Interests")}
                   value={draft.interests}
-                  placeholder="cities, fairness"
+                  placeholder="Minecraft redstone, golden retrievers, soccer goalie"
                   onChange={(event) => onChange({ ...draft, interests: event.target.value })}
                 />
               </label>
               <p className="help">
-                Age, reading level, modality, and interests are sent with the next step. Voice, guidance, and
-                self-explanation stay on Agent customizations.
+                Layer 2 child settings are sent with the next step. Voice, guidance, and block teaching rules stay on
+                Agent customizations.
               </p>
             </>
           ) : null}

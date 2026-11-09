@@ -26,7 +26,15 @@ from app.kc_prompt import (
     stored_blocks,
     substeps_for_block,
 )
-from app.models import ALL_BLOCK_TYPES, KcGoal, KcNode, Student, TutorProfile, default_kc_tutor_config
+from app.models import (
+    ALL_BLOCK_TYPES,
+    KcGoal,
+    KcNode,
+    Student,
+    TutorProfile,
+    default_kc_tutor_config,
+    normalize_child_profile,
+)
 from app.tutor_profile import OVERARCHING_ENUMS, normalize_kc_tutor_config
 
 SUPPORT_BANDS = ("ready", "stretch", "hold")
@@ -67,7 +75,15 @@ class PromptTesterIn(BaseModel):
     course_position: str = ""
     display_name: str = ""
     age: int | None = None
+    grade_band: str = ""
     reading_level: str = ""
+    response_length: str = ""
+    expression_style: str = ""
+    explanation_style: str = ""
+    challenge_appetite: str = ""
+    communication_tone: str = ""
+    learning_support: str = ""
+    interest_tags: list[str] = Field(default_factory=list)
     modality: str = ""
     interests: list[str] = Field(default_factory=list)
     attempts: int = Field(default=0, ge=0)
@@ -221,13 +237,39 @@ def _rows(body: PromptTesterIn) -> tuple[Student, TutorProfile, KcNode, KcGoal, 
     cfg = _effective_config(body)
     blocks = _effective_blocks(body)
     rubric = list(body.rubric) or derive_rubric_from_blocks(blocks)
+    child_raw: dict = {}
+    for k in (
+        "grade_band",
+        "reading_level",
+        "response_length",
+        "expression_style",
+        "explanation_style",
+        "challenge_appetite",
+        "communication_tone",
+        "learning_support",
+    ):
+        v = str(getattr(body, k, "") or "").strip()
+        if v:
+            child_raw[k] = v
+    if body.interest_tags:
+        child_raw["interest_tags"] = list(body.interest_tags)
+    if body.interests:
+        child_raw["interests"] = ", ".join(str(x).strip() for x in body.interests if str(x).strip())
+    cp = normalize_child_profile(
+        child_raw,
+        age=body.age,
+        reading_level=body.reading_level,
+        modality=body.explanation_style or body.modality,
+        interests=list(body.interests),
+    )
     student = Student(
         slug="prompt-tester",
         display_name=body.display_name,
         age=body.age,
         reading_level=body.reading_level,
-        modality=body.modality,
+        modality=body.modality or body.explanation_style,
         interests=list(body.interests),
+        child_profile=cp if (child_raw or body.age is not None or body.reading_level or body.modality) else {},
     )
     profile = TutorProfile(
         id="prompt-tester",

@@ -3,7 +3,15 @@ from __future__ import annotations
 from app.engine.assemble import hint_tier_for
 from app.engine.defaults import age_band_for
 from app.flow import failed_attempts
-from app.models import Course, GoalResult, Message, ModelPrompt, Quest, Session as TutorSession
+from app.models import (
+    Course,
+    GoalResult,
+    Message,
+    ModelPrompt,
+    Quest,
+    Session as TutorSession,
+    effective_child_profile,
+)
 from app.queries import (
     active_close_question,
     choice_widget_visible,
@@ -52,15 +60,25 @@ ROLE_TITLE = {
 
 
 def student_out(student) -> StudentOut:
+    cp = effective_child_profile(student)
     return StudentOut(
         id=student.id,
         slug=student.slug,
         display_name=student.display_name,
         age=student.age,
         age_band=age_band_for(student.age),
-        reading_level=student.reading_level or "",
-        modality=student.modality or "",
+        reading_level=student.reading_level or cp["reading_level"],
+        modality=student.modality or cp["explanation_style"],
         interests=[str(item) for item in (student.interests or [])],
+        grade_band=cp["grade_band"],
+        response_length=cp["response_length"],
+        expression_style=cp["expression_style"],
+        explanation_style=cp["explanation_style"],
+        challenge_appetite=cp["challenge_appetite"],
+        communication_tone=cp["communication_tone"],
+        learning_support=cp["learning_support"],
+        interest_tags=list(cp["interest_tags"]),
+        child_profile=cp,
         tutor_persona=student.tutor_persona or "",
         tutor_lexicon=student.tutor_lexicon or "",
         tutor_metaphors=student.tutor_metaphors or "",
