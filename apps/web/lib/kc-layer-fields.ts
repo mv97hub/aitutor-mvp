@@ -690,10 +690,10 @@ export const LAYER_FIELDS: LayerField[] = [
   {
     layer: "Layer 7, Feedback loop",
     name: "Course outro",
-    hover: "Whether this turn must append the course outro. True only when the unit close is required and every target component is known. The app sets the flag. The model writes the words.",
+    hover: "Whether this turn must append the course outro. True when the unit close is required and every target component is known or fragile. Fragile stays fragile. The app sets the flag. The model writes the words.",
     role: "Appends the course complete line after the unit close, and only then.",
     kind: "Derived",
-    where: "Set by the app when the unit ends known and every target is known",
+    where: "Set by the app when the unit ends known or fragile and every other target is known or fragile",
   },
   {
     layer: "Layer 2, Child",

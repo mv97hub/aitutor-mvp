@@ -450,7 +450,17 @@ export function KcTutor({
                 </li>
               ))}
             </ul>
-            {progress.cards.length === 0 ? <p className="ds-quiet">Every target component is known.</p> : null}
+            {progress.next_course ? (
+              <a
+                className="button kc-next-course"
+                href={tutorPath({ student: studentId, course: progress.next_course.id, model })}
+              >
+                Open {progress.next_course.title}
+              </a>
+            ) : null}
+            {progress.cards.length === 0 && progress.ring.every((item) => item.status === "known") ? (
+              <p className="ds-quiet">Every target component is known.</p>
+            ) : null}
           </>
         ) : null}
         <div className="ds-foot">
@@ -1367,12 +1377,15 @@ function Ring({ progress }: { progress: KcProgress }) {
   const segment = circumference / count;
   const color = {
     known: "#1d6b45",
-    fragile: "#c4491d",
+    fragile: "#e6a317",
     not_started: "#d5cbbd",
   };
+  const completed = progress.ring.filter((item) => item.status === "known" || item.status === "fragile").length;
+  const fragile = progress.ring.filter((item) => item.status === "fragile").length;
+  const caption = `${completed} completed, ${fragile} fragile`;
   return (
     <figure className="kc-ring">
-      <svg viewBox="0 0 140 140" role="img" aria-label={`${progress.count_label} known`}>
+      <svg viewBox="0 0 140 140" role="img" aria-label={caption}>
         {progress.ring.map((item, index) => (
           <circle
             key={item.id}
@@ -1385,16 +1398,15 @@ function Ring({ progress }: { progress: KcProgress }) {
             strokeDasharray={`${Math.max(segment - gap, 1)} ${circumference}`}
             strokeDashoffset={-index * segment}
             transform="rotate(-90 70 70)"
+            data-status={item.status}
+            aria-label={`${item.title}: ${item.status}`}
           />
         ))}
         <text x="70" y="74" textAnchor="middle">
           {progress.count_label}
         </text>
       </svg>
-      <figcaption>
-        {progress.known} known
-        {progress.ring.some((item) => item.status === "fragile") ? " · some fragile" : ""}
-      </figcaption>
+      <figcaption>{caption}</figcaption>
     </figure>
   );
 }

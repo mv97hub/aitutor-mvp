@@ -1,5 +1,15 @@
 export type KcUnitStatus = "completed" | "in_progress" | "not_started";
 
+export type KcProgressBlock = {
+  id: string;
+  type: string;
+  type_label: string;
+  status: "completed" | "active";
+  outcome?: "passed" | "revealed";
+  attempts?: number;
+  rubric?: string;
+};
+
 export type KcProgressUnit = {
   id: string;
   code: string;
@@ -11,6 +21,7 @@ export type KcProgressUnit = {
   mastery?: "" | "known" | "fragile";
   finished_blocks?: number;
   total_blocks?: number;
+  blocks?: KcProgressBlock[];
   rubric?: string[];
   result?: {
     status: "known" | "fragile";
@@ -20,6 +31,15 @@ export type KcProgressUnit = {
     work_on: string;
   } | null;
 };
+
+/** Finished means known or fragile. The known count stays separate. */
+export function courseScore(units: KcProgressUnit[], known: number) {
+  const targets = units.filter((unit) => !unit.patch);
+  const total = targets.length;
+  const finished = targets.filter((unit) => unit.status === "completed").length;
+  const percent = total <= 0 ? 0 : Math.floor((finished * 100 + Math.floor(total / 2)) / total);
+  return { percent, finished, total, known };
+}
 
 export function unitLine(unit: KcProgressUnit): string {
   const patch = unit.patch ? " patch" : "";

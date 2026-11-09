@@ -217,7 +217,7 @@ export default function KcPromptLayersPage() {
           <p>
             Who is speaking, which block and substep this is, and the one job of the reply. The opening, the unit close,
             and the course outro are here only when they change that job. The unit close is the last block. The course
-            outro follows only when every target is known.
+            outro follows when every target is known or fragile. A fragile result stays fragile.
           </p>
         </section>
         <section>

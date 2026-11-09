@@ -7,10 +7,12 @@ import { KcBanner } from "@/components/KcBanner";
 import { NETWORK_WIDTH, NetworkMap, networkHeight } from "@/components/KcNetwork";
 import { type KcNetwork, type KcProgress, type KcTutorCourse } from "@/lib/kc";
 import {
+  courseScore,
   masteryByCode,
   statusByCode,
   unitLine,
   unitsByStatus,
+  type KcProgressUnit,
   type KcUnitStatus,
 } from "@/lib/kc-progress";
 import type { Student } from "@/lib/types";
@@ -98,6 +100,72 @@ function NetworkFrame({
   );
 }
 
+function statusLabel(unit: KcProgressUnit) {
+  if (unit.mastery === "known" || unit.mastery === "fragile") return unit.mastery;
+  return "in progress";
+}
+
+function attemptLabel(count: number) {
+  return count === 1 ? "1 attempt" : `${count} attempts`;
+}
+
+function ComponentPopup({ unit, onClose }: { unit: KcProgressUnit; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const node = dialog.current;
+    if (!node || node.open) return;
+    node.showModal();
+  }, [unit.id]);
+
+  const blocks = (unit.blocks ?? []).filter((block) => {
+    if (unit.status === "in_progress") return block.status === "completed" || block.status === "active";
+    return block.status !== "active" || Boolean(block.outcome);
+  });
+  const close = unit.result;
+  const finished = unit.finished_blocks ?? 0;
+  const total = unit.total_blocks ?? 0;
+
+  return (
+    <dialog
+      ref={dialog}
+      className="kc-progress-popup"
+      aria-label={`${unit.title} score`}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClick={(event) => {
+        if (event.target === dialog.current) onClose();
+      }}
+    >
+      <h2>{unit.title}</h2>
+      <p>
+        {statusLabel(unit)} · {finished} of {total} blocks
+      </p>
+      {blocks.length ? (
+        <ul>
+          {blocks.map((block) => (
+            <li key={block.id}>
+              <strong>{block.type_label || block.type}</strong>
+              {block.status === "active" ? <span>Active</span> : null}
+              {block.outcome ? <span>{block.outcome}</span> : null}
+              {typeof block.attempts === "number" ? <span>{attemptLabel(block.attempts)}</span> : null}
+              {block.rubric?.trim() ? <span>{block.rubric}</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {close?.strong?.trim() ? <p>What was strong. {close.strong}</p> : null}
+      {close?.work_on?.trim() ? <p>What to work on. {close.work_on}</p> : null}
+      {close?.justification?.trim() ? <p>Score justification. {close.justification}</p> : null}
+      <button className="button" type="button" onClick={onClose}>
+        Close
+      </button>
+    </dialog>
+  );
+}
+
 export function KcCourseProgress({
   students,
   courses,
@@ -118,6 +186,7 @@ export function KcCourseProgress({
   const router = useRouter();
   const [student, setStudent] = useState(studentId);
   const [course, setCourse] = useState(courseId);
+  const [openUnit, setOpenUnit] = useState<KcProgressUnit | null>(null);
 
   useEffect(() => {
     setStudent(studentId);
@@ -136,6 +205,11 @@ export function KcCourseProgress({
   const groups = progress ? unitsByStatus(progress.units) : null;
   const show = Boolean(studentId && courseId && progress && network && groups);
   const finished = progress ? finishedTargets(progress) : null;
+  const score = progress ? courseScore(progress.units, progress.known) : null;
+
+  useEffect(() => {
+    setOpenUnit(null);
+  }, [studentId, courseId]);
 
   return (
     <main className="ds-shell kc-screen kc-progress">
@@ -202,9 +276,12 @@ export function KcCourseProgress({
         {show && progress && network && groups ? (
           <>
             <p className="kc-progress-score">
-              <strong>{progress.percent}%</strong>
-              <span>{progress.count_label}</span>
+              <strong>{score?.percent ?? progress.percent}%</strong>
+              <span>
+                {score ? `${score.finished} of ${score.total}` : progress.count_label}
+              </span>
             </p>
+            <p className="kc-progress-known">{progress.known} known</p>
             {finished ? (
               <section className="kc-progress-result" aria-label={finished.gaps ? "Finished with gaps" : "Finished"}>
                 <h2>{finished.gaps ? "Finished with gaps" : "Finished"}</h2>
@@ -263,8 +340,22 @@ export function KcCourseProgress({
                     <ul>
                       {rows.map((unit) => (
                         <li key={unit.id}>
-                          <strong>{unit.title}</strong>
-                          <span>{unitLine(unit)}</span>
+                          {list.status === "not_started" ? (
+                            <>
+                              <strong>{unit.title}</strong>
+                              <span>{unitLine(unit)}</span>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              className="kc-progress-open"
+                              aria-haspopup="dialog"
+                              onClick={() => setOpenUnit(unit)}
+                            >
+                              <strong>{unit.title}</strong>
+                              <span>{unitLine(unit)}</span>
+                            </button>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -274,6 +365,7 @@ export function KcCourseProgress({
             </div>
           </>
         ) : null}
+        {openUnit ? <ComponentPopup unit={openUnit} onClose={() => setOpenUnit(null)} /> : null}
       </section>
     </main>
   );

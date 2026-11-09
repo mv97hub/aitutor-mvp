@@ -1176,6 +1176,12 @@ def _is_known(states: dict[uuid.UUID, KcState], node: KcNode) -> bool:
     return row is not None and row.status == "known"
 
 
+def _is_settled(states: dict[uuid.UUID, KcState], node: KcNode) -> bool:
+    """Known or fragile. Fragile stays fragile; it is still finished for the next course."""
+    row = states.get(node.id)
+    return row is not None and row.status in {"known", "fragile"}
+
+
 def _ring_status(states: dict[uuid.UUID, KcState], node: KcNode) -> str:
     row = states.get(node.id)
     if row is None or row.status == "unknown":
@@ -1187,6 +1193,78 @@ def _percent(known: int, total: int) -> int:
     if total <= 0:
         return 0
     return (known * 100 + total // 2) // total
+
+
+def _rubric_line(block: dict, cfg: dict) -> str:
+    """One rubric line for this block. Curiosity adds none unless that block counts."""
+    if not isinstance(block, dict):
+        return ""
+    kind = str(block.get("type") or "").strip()
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    if kind == "curiosity":
+        curiosity = ((cfg or {}).get("blocks") or {}).get("curiosity") or {}
+        if not bool(curiosity.get("counts_toward_mastery_score", False)):
+            return ""
+        return str(data.get("bridge_to_unit") or data.get("prediction_question") or "").strip()
+    from app.kc_model import derive_rubric_from_blocks
+
+    lines = derive_rubric_from_blocks([block])
+    return lines[0] if lines else ""
+
+
+def _stored_block_rows(
+    node: KcNode, session: KcSession | None, cfg: dict, *, include_active: bool
+) -> list[dict]:
+    """Finished blocks, and the active block when the walk is still open. Empty fields stay off."""
+    blocks = stored_blocks(node)
+    results = session.block_results if session is not None and isinstance(session.block_results, list) else []
+    by_id: dict[str, dict] = {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("id") or item.get("block_id") or "").strip()
+        if key:
+            by_id[key] = item
+    active_index = None
+    if include_active and session is not None and blocks:
+        active_index = min(max(int(session.step or 0), 0), len(blocks) - 1)
+    rows: list[dict] = []
+    for index, block in enumerate(blocks):
+        key = _block_key(block, index)
+        stored = by_id.get(key)
+        finished = stored is not None
+        active = active_index == index and not finished
+        if not finished and not active:
+            continue
+        kind = str(block.get("type") or "").strip()
+        row: dict = {
+            "id": key,
+            "type": kind,
+            "type_label": _BANNER_LABELS.get(kind, kind or "Block"),
+            "status": "completed" if finished else "active",
+        }
+        if stored is not None:
+            outcome = str(stored.get("outcome") or "").strip()
+            if outcome in {"passed", "revealed"}:
+                row["outcome"] = outcome
+            if stored.get("attempts") is not None:
+                row["attempts"] = int(stored.get("attempts") or 0)
+        line = _rubric_line(block, cfg)
+        if line:
+            row["rubric"] = line
+        rows.append(row)
+    return rows
+
+
+def _next_ready_course(db: Session, goal: KcGoal) -> dict | None:
+    ready = db.scalars(select(KcGoal).where(KcGoal.ready.is_(True)).order_by(KcGoal.title, KcGoal.code))
+    seen = False
+    for item in ready:
+        if seen and item.id != goal.id:
+            return {"id": str(item.id), "code": item.code, "title": item.title}
+        if item.id == goal.id:
+            seen = True
+    return None
 
 
 def _sessions_for(
@@ -1365,17 +1443,17 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
         1 for node in targets if node.kc_type == "conceptual" and _is_known(states, node)
     )
 
-    def prerequisites_known(node: KcNode) -> bool:
+    def prerequisites_ready(node: KcNode) -> bool:
         for code in _clean_codes(node.prerequisite_codes):
             other = by_code.get(code) or _nodes_by_code(db).get(code)
-            if other is None or not _is_known(states, other):
+            if other is None or not _is_settled(states, other):
                 return False
         return True
 
     def offered(node: KcNode) -> bool:
-        if _is_known(states, node):
+        if _is_settled(states, node):
             return False
-        if not prerequisites_known(node):
+        if not prerequisites_ready(node):
             return False
         if node.kc_type == "synthesis" and conceptual_known < SYNTHESIS_CONCEPTUAL_MIN:
             return False
@@ -1422,7 +1500,7 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
                 "code": fastest.code,
                 "title": fastest.title,
                 "kc_type": fastest.kc_type,
-                "reason": "Prerequisites are known, and this is the next component on the course.",
+                "reason": "Prerequisites are finished, and this is the next component on the course.",
             }
         )
     if patch is not None and (fastest is None or patch.id != fastest.id):
@@ -1441,7 +1519,7 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
             }
         )
     if stretch is not None:
-        reason = "A later component whose prerequisites are known."
+        reason = "A later component whose prerequisites are finished."
         if stretch.kc_type == "synthesis":
             reason = (
                 "A synthesis component. It waits until "
@@ -1460,10 +1538,14 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
         )
     from app.kc_model import derive_rubric_from_blocks
 
+    course_complete = bool(targets) and all(_is_settled(states, node) for node in targets)
+
     def unit_row(node: KcNode) -> dict:
         node_sessions = sessions.get(node.id, [])
         state = states.get(node.id)
-        done, total = _block_counts(node, _count_session(node, node_sessions))
+        chosen = _count_session(node, node_sessions)
+        done, total = _block_counts(node, chosen)
+        status = _unit_status(state, node, node_sessions)
         return {
             "id": str(node.id),
             "code": node.code,
@@ -1471,10 +1553,11 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
             "kc_type": None,
             "summary": _block_summary(_public_blocks(node)),
             "patch": node.id not in target_ids,
-            "status": _unit_status(state, node, node_sessions),
+            "status": status,
             "mastery": _mastery_label(state, node, node_sessions, cfg),
             "finished_blocks": done,
             "total_blocks": total,
+            "blocks": _stored_block_rows(node, chosen, cfg, include_active=status == "in_progress"),
             "rubric": derive_rubric_from_blocks(stored_blocks(node)),
             "result": None if state is None else state.result,
         }
@@ -1488,6 +1571,8 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
         "total": len(targets),
         "percent": _percent(known, len(targets)),
         "count_label": f"{known} of {len(targets)}",
+        "course_complete": course_complete,
+        "next_course": _next_ready_course(db, goal) if course_complete else None,
         "units": [unit_row(node) for node in everyone],
         "ring": [
             {
@@ -2089,7 +2174,7 @@ def _others_known(db: Session, student: Student | None, goal: KcGoal | None, nod
         if node is not None and target.id == node.id:
             continue
         state = _state_row(db, student, target)
-        if state is None or state.status != "known":
+        if state is None or state.status not in {"known", "fragile"}:
             return False
     return True
 
@@ -2184,8 +2269,9 @@ def _close_flags(
     if btype == "mcq" and substep == "choice" and confirm_why == "on_retry_only" and attempts > 0:
         is_last_substep = False
     may_component = (is_last_block and is_last_substep) or unit_complete
-    already_fragile = unit_complete and not known
-    may_course = may_component and others_known and not already_fragile
+    # Fragile is finished work. It does not block the course outro, and it is not rewritten to known.
+    del known
+    may_course = may_component and others_known
     return ("yes" if may_component else "no", "yes" if may_course else "no")
 
 
@@ -2388,9 +2474,9 @@ def prompt_for(db: Session, session: KcSession) -> dict:
     state = _state_row(db, student, node)
     opening = not any(message.role == "assistant" for message in messages)
     others = _others_known(db, student, goal, node)
-    known = state is not None and state.status == "known"
+    settled = state is not None and state.status in {"known", "fragile"}
     unit_complete = session.status == "completed"
-    course_complete = unit_complete and known and others
+    course_complete = unit_complete and settled and others
     prereq = _prerequisite_status(db, student, node)
     transition = None
     if block is not None and index > 0:
@@ -2628,9 +2714,9 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     _add_message(db, session, "assistant", reply)
     student = _student_or_404(db, session.student_id)
     state = _state_row(db, student, node)
-    known = state is not None and state.status == "known"
+    settled = state is not None and state.status in {"known", "fragile"}
     unit_complete = session.status == "completed"
-    course_complete = bool(unit_complete and known and _others_known(db, student, goal, node))
+    course_complete = bool(unit_complete and settled and _others_known(db, student, goal, node))
     result = session_out(db, session)
     result["reply"] = reply
     result["passed"] = resolution.passed

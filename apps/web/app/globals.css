@@ -3233,6 +3233,13 @@ a.ds-row { text-decoration: none; }
   font-weight: 600;
 }
 
+.kc-progress-known {
+  margin: -8px 0 0;
+  color: rgb(97, 102, 107);
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .kc-progress-map h2,
 .kc-progress-lists h2 {
   margin: 0 0 8px;
@@ -3350,6 +3357,77 @@ a.ds-row { text-decoration: none; }
   color: rgb(97, 102, 107);
   font-size: 12px;
   line-height: 18px;
+}
+
+.kc-progress-open {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kc-progress-open:hover strong {
+  text-decoration: underline;
+}
+
+.kc-progress-popup {
+  width: min(480px, calc(100vw - 32px));
+  margin: auto;
+  padding: 18px;
+  border: 0;
+  border-radius: 16px;
+  background: #fff;
+  color: rgb(15, 17, 21);
+}
+
+.kc-progress-popup::backdrop {
+  background: rgba(15, 17, 21, 0.35);
+}
+
+.kc-progress-popup h2 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.kc-progress-popup p,
+.kc-progress-popup li span {
+  margin: 8px 0 0;
+  color: rgb(97, 102, 107);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.kc-progress-popup ul {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kc-progress-popup li {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0.5px solid rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+}
+
+.kc-progress-popup .button {
+  margin: 16px 0 0;
+}
+
+.kc-next-course {
+  display: inline-block;
+  margin: 8px;
 }
 
 @media (max-width: 800px) {
