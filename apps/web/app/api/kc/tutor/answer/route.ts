@@ -21,6 +21,9 @@ type TurnBundle = KcTutorSession & {
 type Decision = {
   reply: string;
   decision: string;
+  substep_passed: boolean;
+  block_complete: boolean;
+  generated_mcq: Record<string, unknown> | null;
   rubric_met: string[];
   misconception: string | null;
   hint_tier: string;
@@ -28,6 +31,9 @@ type Decision = {
   off_course: boolean;
   affect: string;
   confidence: string;
+  score_justification: string;
+  what_was_strong: string;
+  what_to_work_on: string;
 };
 
 type StoredCall = {
@@ -40,9 +46,16 @@ function asDecision(value: unknown): Decision | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Partial<Decision>;
   if (typeof row.reply !== "string" || typeof row.decision !== "string") return null;
+  const generated = row.generated_mcq;
   return {
     reply: row.reply,
     decision: row.decision,
+    substep_passed: Boolean(row.substep_passed),
+    block_complete: Boolean(row.block_complete),
+    generated_mcq:
+      generated && typeof generated === "object" && !Array.isArray(generated)
+        ? (generated as Record<string, unknown>)
+        : null,
     rubric_met: Array.isArray(row.rubric_met) ? row.rubric_met.map(String) : [],
     misconception: typeof row.misconception === "string" ? row.misconception : null,
     hint_tier: typeof row.hint_tier === "string" ? row.hint_tier : "nudge",
@@ -50,6 +63,9 @@ function asDecision(value: unknown): Decision | null {
     off_course: Boolean(row.off_course),
     affect: typeof row.affect === "string" ? row.affect : "engaged",
     confidence: typeof row.confidence === "string" ? row.confidence : "ok",
+    score_justification: typeof row.score_justification === "string" ? row.score_justification : "",
+    what_was_strong: typeof row.what_was_strong === "string" ? row.what_was_strong : "",
+    what_to_work_on: typeof row.what_to_work_on === "string" ? row.what_to_work_on : "",
   };
 }
 

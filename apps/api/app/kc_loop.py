@@ -83,6 +83,168 @@ def match_mcq_choice_index(answer: str, choices: list[dict]) -> int | None:
     return None
 
 
+def _words(text: str) -> list[str]:
+    return [word for word in "".join(ch.lower() if ch.isalnum() else " " for ch in (text or "")).split() if word]
+
+
+def _matches(answer: str, phrase: str) -> bool:
+    from app.kc import matches_phrase
+
+    return matches_phrase(answer, phrase)
+
+
+def _substantive(answer: str, minimum_words: int = 2) -> bool:
+    return len((answer or "").split()) >= minimum_words
+
+
+def _precise(answer: str, phrase: str) -> bool:
+    needed = [word for word in _words(phrase) if len(word) > 3]
+    if not needed:
+        return _matches(answer, phrase)
+    have = set(_words(answer))
+    return all(word in have for word in needed)
+
+
+def _strict_fact(answer: str, phrase: str) -> bool:
+    left = " ".join(_words(answer))
+    right = " ".join(_words(phrase))
+    return bool(left and right and (right in left or left in right))
+
+
+def _data(block: dict) -> dict:
+    raw = block.get("data")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _bcfg(block: dict, cfg: dict) -> dict:
+    btype = str(block.get("type") or "topic_goal").strip()
+    found = ((cfg or {}).get("blocks") or {}).get(btype)
+    return found if isinstance(found, dict) else {}
+
+
+def mcq_payload(block: dict, state: dict | None) -> tuple[list[dict], int]:
+    """Choices and the correct index. Dynamic items come from generated_mcq."""
+    data = _data(block)
+    mode = str(data.get("mode") or "static").strip()
+    stored = state if isinstance(state, dict) else {}
+    if mode == "dynamic":
+        generated = stored.get("generated_mcq") if isinstance(stored.get("generated_mcq"), dict) else None
+        if not generated:
+            return [], 0
+        raw = generated.get("choices") if isinstance(generated.get("choices"), list) else []
+        choices = [
+            {"id": str(item.get("id") or chr(ord("a") + index)), "text": str(item.get("text") or "")}
+            for index, item in enumerate(raw)
+            if isinstance(item, dict)
+        ]
+        return choices, int(generated.get("correct_index") or 0)
+    raw = data.get("choices") if isinstance(data.get("choices"), list) else []
+    choices: list[dict] = []
+    correct = 0
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        if item.get("is_correct"):
+            correct = len(choices)
+        choices.append(
+            {"id": str(item.get("id") or chr(ord("a") + len(choices))), "text": str(item.get("text") or "")}
+        )
+    return choices, correct
+
+
+def answer_addresses_substep(
+    block: dict,
+    substep: str,
+    answer: str,
+    state: dict | None,
+    cfg: dict | None,
+) -> bool:
+    """The learner's words cover this substep. A model flag is not enough."""
+    btype = str(block.get("type") or "topic_goal").strip()
+    data = _data(block)
+    bcfg = _bcfg(block, cfg or {})
+    stored = state if isinstance(state, dict) else {}
+    if btype == "mcq" and substep == "choice":
+        choices, correct = mcq_payload(block, stored)
+        if not choices:
+            return False
+        picked = match_mcq_choice_index(answer, choices)
+        return picked is not None and picked == correct
+    if btype == "mcq" and substep == "awaiting_why":
+        explanation = str(data.get("correct_explanation") or "").strip()
+        if explanation:
+            return _matches(answer, explanation)
+        return _substantive(answer, 4)
+    if btype == "topic_goal":
+        required = str(data.get("acceptance_criteria") or data.get("goal") or "").strip()
+        if not required:
+            return _substantive(answer)
+        strictness = str(bcfg.get("goal_evaluation_strictness") or "conceptual_gist")
+        if strictness == "precise_vocabulary":
+            return _precise(answer, required)
+        if strictness == "applied_transfer":
+            return _matches(answer, required) and len((answer or "").split()) >= len(required.split()) + 3
+        return _matches(answer, required)
+    if btype == "case_study" and substep == "predict":
+        lowered = (answer or "").strip().lower()
+        if lowered in {"case-a", "case-b"}:
+            return True
+        return _matches(answer, str(data.get("case_a") or "")) or _matches(answer, str(data.get("case_b") or ""))
+    if btype == "case_study" and substep == "contrast_and_rule":
+        return _matches(answer, str(data.get("invariant_principle") or ""))
+    if btype == "case_study" and substep == "transfer":
+        expected = str(data.get("transfer_expected") or data.get("invariant_principle") or "")
+        return _matches(answer, expected)
+    if btype == "socratic" and substep == "initial_thesis":
+        return _substantive(answer)
+    if btype == "socratic" and substep == "counterexample_probe":
+        return _matches(answer, str(data.get("target_synthesis") or ""))
+    if btype == "curiosity":
+        minimum = 2 if bool(bcfg.get("require_initial_prediction", True)) else 1
+        return _substantive(answer, minimum)
+    if btype == "worked_example" and substep == "faded_step":
+        steps = data.get("steps") if isinstance(data.get("steps"), list) else []
+        index = int(data.get("faded_step_index") or 0)
+        step = steps[index] if 0 <= index < len(steps) else ""
+        text = step.get("step_text") if isinstance(step, dict) else str(step)
+        if not str(text or "").strip():
+            return _substantive(answer)
+        ok = _matches(answer, str(text))
+        if ok and bool(bcfg.get("require_step_self_explanation", True)):
+            return _substantive(answer, 4)
+        return ok
+    if btype == "worked_example" and substep == "solo_solve":
+        expected = str(data.get("solo_expected_answer") or "")
+        return _matches(answer, expected) if expected else _substantive(answer)
+    if btype == "spot_the_flaw":
+        flaw = str(data.get("flaw_description") or "")
+        corrected = str(data.get("corrected_version") or "")
+        found = _matches(answer, flaw) if flaw else _substantive(answer)
+        if str(bcfg.get("critique_depth") or "identify_and_correct") == "identify_only":
+            return found
+        fixed = _matches(answer, corrected) if corrected else found
+        return found and fixed
+    if btype == "teach_back":
+        required = [str(item).strip() for item in (data.get("required_concepts") or []) if str(item).strip()]
+        if not required:
+            return _substantive(answer)
+        hits = sum(1 for item in required if _matches(answer, item))
+        if str(bcfg.get("evaluation_strictness") or "") == "all_required_concepts_exact":
+            return hits == len(required)
+        return hits >= max(1, (len(required) + 1) // 2)
+    if btype == "retrieval_check" and substep == "recall":
+        fact = str(data.get("expected_fact") or "")
+        if not fact:
+            return _substantive(answer)
+        if bool(bcfg.get("accept_paraphrase", True)):
+            return _matches(answer, fact)
+        return _strict_fact(answer, fact)
+    if btype == "retrieval_check" and substep == "elaborate_why":
+        rationale = str(data.get("expected_why_rationale") or "")
+        return _matches(answer, rationale) if rationale else _substantive(answer)
+    return _substantive(answer)
+
+
 def _block_title(block: dict, step_index: int) -> str:
     btype = str(block.get("type") or "topic_goal").strip()
     data = block.get("data") if isinstance(block.get("data"), dict) else {}
@@ -128,6 +290,8 @@ def resolve_block_turn(
     last_misconception: str,
     answer: str,
     fragment: bool = False,
+    strong: str = "",
+    work_on: str = "",
 ) -> BlockResolution:
     tier = hint_tier if hint_tier in HINTS else "nudge"
     fresh = _clean_ids(list(rubric_met))
@@ -159,12 +323,14 @@ def resolve_block_turn(
         if should_redirect:
             results.append(
                 {
+                    "id": bid,
                     "block_id": bid,
                     "block_type": btype,
                     "title": _block_title(block, index),
                     "attempts": move_attempts + 1,
-                    "hints_used": reveals + 1,
-                    "outcome": "fragile",
+                    "outcome": "revealed",
+                    "strong": "",
+                    "work_on": matched_wrong,
                     "summary": f"Redirected on misconception: {matched_wrong}",
                 }
             )
@@ -212,283 +378,141 @@ def resolve_block_turn(
         )
 
     ev_id = block_evidence_id(block, index, substep)
-    proposed = decision if decision in {"stay", "advance", "complete", "redirect"} else "stay"
-    if proposed == "redirect":
-        proposed = "stay"
+    strong_text = (strong or "").strip()
+    work_text = (work_on or "").strip()
+    addressed = answer_addresses_substep(block, substep, answer, state, cfg)
 
-    # Deterministic MCQ grading on the choice substep
-    if btype == "mcq" and substep == "choice":
-        mcq_state = dict(state.get("mcq") or {})
-        choices = mcq_state.get("choices")
-        if not isinstance(choices, list) or not choices:
-            raw_choices = data.get("choices") if isinstance(data.get("choices"), list) else []
-            choices = [
-                {"id": str(c.get("id") or chr(ord("a") + i)), "text": str(c.get("text") or "")}
-                for i, c in enumerate(raw_choices)
-                if isinstance(c, dict)
-            ]
-            correct_idx = next(
-                (i for i, c in enumerate(raw_choices) if isinstance(c, dict) and c.get("is_correct")),
-                0,
-            )
-            mcq_state = {
-                "question_stem": str(data.get("question_stem") or ""),
-                "choices": choices,
-                "correct_index": correct_idx,
-                "eliminated_indices": list(mcq_state.get("eliminated_indices") or []),
+    def note_try() -> int:
+        total = int(state.get("block_attempts") or 0) + 1
+        state["block_attempts"] = total
+        return total
+
+    def stay(attempts: int, hint: str, *, reveals_now: int | None = None) -> BlockResolution:
+        return BlockResolution(
+            decision="stay",
+            hint_tier=hint if hint in HINTS else "nudge",
+            move_attempts=attempts,
+            reveals=reveals if reveals_now is None else reveals_now,
+            enrichment_turns=enrichment_turns,
+            rubric_met=met,
+            misconception="",
+            next_step=index,
+            next_block_id=bid,
+            next_block_state=state,
+            block_results=results,
+            mark_known=False,
+            mark_fragile=False,
+            redirect=False,
+            unit_complete=False,
+            advance_block=False,
+            passed=False,
+        )
+
+    def finish(outcome: str, attempts: int, reveals_now: int) -> BlockResolution:
+        title = _block_title(block, index)
+        noted_strong = strong_text or (title if outcome == "passed" else "")
+        noted_work = work_text or ("" if outcome == "passed" else f"Look again at {title}.")
+        results.append(
+            {
+                "id": bid,
+                "block_id": bid,
+                "block_type": btype,
+                "title": title,
+                "outcome": outcome,
+                "attempts": attempts,
+                "strong": noted_strong,
+                "work_on": noted_work,
+                "summary": f"{outcome} {btype} after {attempts} tries",
             }
-        correct_idx = int(mcq_state.get("correct_index") or 0)
-        picked_idx = match_mcq_choice_index(answer, choices)
-        is_correct = picked_idx == correct_idx if picked_idx is not None else False
-        if is_correct:
-            confirm_mode = str(bcfg.get("confirm_why_on_correct") or "on_retry_only")
-            need_why = confirm_mode == "always" or (confirm_mode == "on_retry_only" and move_attempts > 0)
-            if ev_id not in met:
-                met.append(ev_id)
-            if need_why:
-                state["substep"] = "awaiting_why"
-                state["mcq"] = mcq_state
-                return BlockResolution(
-                    decision="stay",
-                    hint_tier="nudge",
-                    move_attempts=0,
-                    reveals=reveals,
-                    enrichment_turns=0,
-                    rubric_met=met,
-                    misconception="",
-                    next_step=index,
-                    next_block_id=bid,
-                    next_block_state=state,
-                    block_results=results,
-                    mark_known=False,
-                    mark_fragile=False,
-                    redirect=False,
-                    unit_complete=False,
-                    advance_block=False,
-                    passed=True,
-                )
-            substep_passed = True
-            block_complete = True
-            proposed = "complete" if index >= len(blocks) - 1 else "advance"
-        else:
-            elim = list(mcq_state.get("eliminated_indices") or [])
-            if picked_idx is not None and picked_idx not in elim:
-                elim.append(picked_idx)
-            mcq_state["eliminated_indices"] = elim
-            state["mcq"] = mcq_state
-            substep_passed = False
-            block_complete = False
-            proposed = "stay"
-
-    # Curiosity block: never penalizes wild guesses
-    elif btype == "curiosity":
-        max_wonder = int(bcfg.get("max_wonder_turns", 2) or 2)
-        if substep_passed or block_complete or proposed in {"advance", "complete"} or dialogue_turns >= max_wonder:
-            substep_passed = True
-            block_complete = True
-            if ev_id not in met:
-                met.append(ev_id)
-            proposed = "complete" if index >= len(blocks) - 1 else "advance"
-
-    # Topic / Goal fragment self-explanation guard
-    elif btype == "topic_goal":
-        frag_guard = bool(bcfg.get("fragment_self_explanation", True))
-        if fragment and frag_guard and move_attempts == 0 and not state.get("fragment_prompted"):
-            state["fragment_prompted"] = True
-            return BlockResolution(
-                decision="stay",
-                hint_tier=tier,
-                move_attempts=move_attempts,
-                reveals=reveals,
-                enrichment_turns=enrichment_turns,
-                rubric_met=met,
-                misconception="",
-                next_step=index,
-                next_block_id=bid,
-                next_block_state=state,
-                block_results=results,
-                mark_known=False,
-                mark_fragile=False,
-                redirect=False,
-                unit_complete=False,
-                advance_block=False,
-                passed=False,
-            )
-
-    # Evaluate whether the active substep passed
-    passed_substep = (
-        substep_passed
-        or block_complete
-        or ev_id in met
-        or bid in fresh
-        or proposed in {"advance", "complete"}
-    )
-    if btype == "mcq" and substep == "choice" and proposed == "stay":
-        passed_substep = False
-
-    if passed_substep:
+        )
         if ev_id not in met:
             met.append(ev_id)
-        if bid not in met:
-            met.append(bid)
+        return _advance_or_close_component(
+            blocks=blocks,
+            index=index,
+            results=results,
+            met=met,
+            reveals=reveals_now,
+            cfg=cfg,
+        )
 
-        # Check if there is a next substep within this block
-        if btype == "socratic" and substep == "counterexample_probe":
-            req_turns = int(bcfg.get("dialogue_depth_turns", 2) or 2)
-            # Complete as soon as block_complete is True or synthesis is met
-            can_finish_socratic = block_complete or proposed in {"advance", "complete"} or dialogue_turns >= req_turns
-            if not can_finish_socratic:
-                return BlockResolution(
-                    decision="stay",
-                    hint_tier="nudge",
-                    move_attempts=0,
-                    reveals=reveals,
-                    enrichment_turns=0,
-                    rubric_met=met,
-                    misconception="",
-                    next_step=index,
-                    next_block_id=bid,
-                    next_block_state=state,
-                    block_results=results,
-                    mark_known=False,
-                    mark_fragile=False,
-                    redirect=False,
-                    unit_complete=False,
-                    advance_block=False,
-                    passed=True,
-                )
+    if (
+        btype == "topic_goal"
+        and bool(bcfg.get("fragment_self_explanation", True))
+        and fragment
+        and not state.get("fragment_prompted")
+    ):
+        state["fragment_prompted"] = True
+        return stay(move_attempts, tier)
 
-        if btype == "teach_back" and substep == "initial_explanation":
-            f_count = int(bcfg.get("follow_up_questions_count", 1) or 0)
-            if f_count == 0 or block_complete:
-                substeps = ["initial_explanation"]
+    if btype == "mcq" and substep == "choice":
+        choices, correct_idx = mcq_payload(block, state)
+        if not choices:
+            return stay(move_attempts, tier)
+        picked = match_mcq_choice_index(answer, choices)
+        mcq_state = dict(state.get("mcq") or {})
+        mcq_state["choices"] = choices
+        mcq_state["correct_index"] = correct_idx
+        if picked is not None and picked == correct_idx:
+            tries = note_try()
+            confirm_mode = str(bcfg.get("confirm_why_on_correct") or "on_retry_only")
+            need_why = confirm_mode == "always" or (confirm_mode == "on_retry_only" and move_attempts > 0)
+            state["mcq"] = mcq_state
+            if need_why:
+                state["substep"] = "awaiting_why"
+                return stay(0, "nudge")
+            outcome = "revealed" if state.get("revealed_substep") else "passed"
+            return finish(outcome, tries, reveals)
+        eliminated = list(mcq_state.get("eliminated_indices") or [])
+        if picked is not None and picked not in eliminated:
+            eliminated.append(picked)
+        mcq_state["eliminated_indices"] = eliminated
+        state["mcq"] = mcq_state
+        tries = note_try()
+        if move_attempts + 1 >= max_retries:
+            return finish("revealed", tries, reveals + 1)
+        bumped = _next_tier(tier)
+        if bumped == "reveal":
+            bumped = "scaffold"
+        return stay(move_attempts + 1, bumped)
 
-        if btype == "retrieval_check" and substep == "recall" and block_complete:
-            # Learner already explained the why in their recall answer
-            substeps = ["recall"]
+    if btype == "socratic" and substep == "counterexample_probe" and addressed:
+        depth = max(1, int(bcfg.get("dialogue_depth_turns", 2) or 2))
+        probes = int(state.get("probe_turns") or 0) + 1
+        state["probe_turns"] = probes
+        if probes < depth:
+            note_try()
+            return stay(move_attempts, "nudge")
 
+    if addressed:
+        note_try()
         if substep in substeps:
-            sub_idx = substeps.index(substep)
-            if sub_idx < len(substeps) - 1:
-                next_sub = substeps[sub_idx + 1]
-                state["substep"] = next_sub
-                return BlockResolution(
-                    decision="stay",
-                    hint_tier="nudge",
-                    move_attempts=0,
-                    reveals=reveals,
-                    enrichment_turns=0,
-                    rubric_met=met,
-                    misconception="",
-                    next_step=index,
-                    next_block_id=bid,
-                    next_block_state=state,
-                    block_results=results,
-                    mark_known=False,
-                    mark_fragile=False,
-                    redirect=False,
-                    unit_complete=False,
-                    advance_block=False,
-                    passed=True,
-                )
+            position = substeps.index(substep)
+            if position < len(substeps) - 1:
+                state["substep"] = substeps[position + 1]
+                state["probe_turns"] = 0
+                return stay(0, "nudge")
+        outcome = "revealed" if state.get("revealed_substep") else "passed"
+        return finish(outcome, int(state.get("block_attempts") or 1), reveals)
 
-        # Final substep of the active block is complete!
-        outcome = "engaged" if btype == "curiosity" and not bool(bcfg.get("counts_toward_mastery_score", False)) else "known"
-        results.append(
-            {
-                "block_id": bid,
-                "block_type": btype,
-                "title": _block_title(block, index),
-                "attempts": move_attempts + 1,
-                "hints_used": 0 if tier == "nudge" else 1,
-                "outcome": outcome,
-                "summary": f"Completed {btype} block",
-            }
-        )
-        return _advance_or_close_component(
-            blocks=blocks,
-            index=index,
-            results=results,
-            met=met,
-            reveals=reveals,
-            cfg=cfg,
-        )
-
-    # Active substep did NOT pass -> increment attempts and step up hint ladder or reveal
-    attempts = move_attempts + 1
-    if attempts >= max_retries:
-        # Reveal and advance (or close fragile if final block)
-        new_reveals = reveals + 1
-        counts_mastery = True
-        if btype == "curiosity":
-            counts_mastery = bool(bcfg.get("counts_toward_mastery_score", False))
-        outcome = "fragile" if counts_mastery else "engaged"
-        # If there is another substep (e.g. faded_step -> solo_solve), reveal faded_step and move to solo_solve
-        if btype == "worked_example" and substep == "faded_step":
+    tries = note_try()
+    if move_attempts + 1 >= max_retries:
+        if btype == "worked_example" and substep == "faded_step" and "solo_solve" in substeps:
             state["substep"] = "solo_solve"
-            state["faded_revealed"] = True
-            return BlockResolution(
-                decision="stay",
-                hint_tier="reveal",
-                move_attempts=0,
-                reveals=new_reveals,
-                enrichment_turns=0,
-                rubric_met=met,
-                misconception="",
-                next_step=index,
-                next_block_id=bid,
-                next_block_state=state,
-                block_results=results,
-                mark_known=False,
-                mark_fragile=True,
-                redirect=False,
-                unit_complete=False,
-                advance_block=False,
-                passed=False,
-            )
-        results.append(
-            {
-                "block_id": bid,
-                "block_type": btype,
-                "title": _block_title(block, index),
-                "attempts": attempts,
-                "hints_used": attempts,
-                "outcome": outcome,
-                "summary": f"Revealed {btype} after {attempts} attempts",
-            }
-        )
-        return _advance_or_close_component(
-            blocks=blocks,
-            index=index,
-            results=results,
-            met=met,
-            reveals=new_reveals,
-            cfg=cfg,
-            revealed_this_turn=counts_mastery,
-        )
-
+            state["revealed_substep"] = True
+            return stay(0, "reveal", reveals_now=reveals + 1)
+        return finish("revealed", tries, reveals + 1)
     bumped = _next_tier(tier)
     if bumped == "reveal":
         bumped = "scaffold"
-    return BlockResolution(
-        decision="stay",
-        hint_tier=bumped,
-        move_attempts=attempts,
-        reveals=reveals,
-        enrichment_turns=enrichment_turns,
-        rubric_met=met,
-        misconception="",
-        next_step=index,
-        next_block_id=bid,
-        next_block_state=state,
-        block_results=results,
-        mark_known=False,
-        mark_fragile=False,
-        redirect=False,
-        unit_complete=False,
-        advance_block=False,
-        passed=False,
-    )
+    return stay(move_attempts + 1, bumped)
+
+
+def _counts_toward_mastery(block: dict, cfg: dict) -> bool:
+    if str(block.get("type") or "").strip() != "curiosity":
+        return True
+    bcfg = ((cfg or {}).get("blocks") or {}).get("curiosity") or {}
+    return bool(bcfg.get("counts_toward_mastery_score", False))
 
 
 def _advance_or_close_component(
@@ -499,17 +523,11 @@ def _advance_or_close_component(
     met: list[str],
     reveals: int,
     cfg: dict,
-    revealed_this_turn: bool = False,
 ) -> BlockResolution:
-    has_fragile = revealed_this_turn or reveals > 0 or any(r.get("outcome") == "fragile" for r in results)
     if index < len(blocks) - 1:
         next_idx = index + 1
         next_blk = blocks[next_idx]
         next_id = str(next_blk.get("id") or f"blk_{next_idx + 1}").strip()
-        next_state = {
-            "substep": default_substep_for_block(next_blk, cfg),
-            "dialogue_turns": 0,
-        }
         return BlockResolution(
             decision="advance",
             hint_tier="nudge",
@@ -520,20 +538,39 @@ def _advance_or_close_component(
             misconception="",
             next_step=next_idx,
             next_block_id=next_id,
-            next_block_state=next_state,
+            next_block_state={
+                "substep": default_substep_for_block(next_blk, cfg),
+                "dialogue_turns": 0,
+            },
             block_results=results,
             mark_known=False,
-            mark_fragile=revealed_this_turn,
+            mark_fragile=False,
             redirect=False,
             unit_complete=False,
             advance_block=True,
-            passed=not revealed_this_turn,
+            passed=False,
         )
 
-    # Last block finished -> complete unit
+    by_id = {
+        str(row.get("id") or row.get("block_id") or ""): row
+        for row in results
+        if isinstance(row, dict)
+    }
+    fragile = False
+    counted = False
+    for position, block in enumerate(blocks):
+        if not _counts_toward_mastery(block, cfg):
+            continue
+        counted = True
+        key = str(block.get("id") or f"blk_{position + 1}").strip()
+        row = by_id.get(key)
+        if row is None or row.get("outcome") != "passed":
+            fragile = True
+    if not counted:
+        fragile = False
     return BlockResolution(
         decision="complete",
-        hint_tier="reveal" if revealed_this_turn else "nudge",
+        hint_tier="reveal" if fragile else "nudge",
         move_attempts=0,
         reveals=reveals,
         enrichment_turns=0,
@@ -543,14 +580,13 @@ def _advance_or_close_component(
         next_block_id=str(blocks[index].get("id") or f"blk_{index + 1}").strip(),
         next_block_state={"substep": "done", "dialogue_turns": 0},
         block_results=results,
-        mark_known=not has_fragile,
-        mark_fragile=has_fragile,
+        mark_known=not fragile,
+        mark_fragile=fragile,
         redirect=False,
         unit_complete=True,
         advance_block=False,
-        passed=not has_fragile,
+        passed=not fragile,
     )
-
 @dataclass(frozen=True)
 class Resolution:
     decision: str

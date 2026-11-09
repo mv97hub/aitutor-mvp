@@ -154,7 +154,6 @@ def test_prompt_tester_matches_build_kc_prompt_and_writes_nothing() -> None:
         direct = _direct(taught)
         assert second.json()["system_prompt"] == direct["system_prompt"]
         assert second.json()["system_prompt"] != first.json()["system_prompt"]
-        assert "explanation_depth=5" in second.json()["system_prompt"]
         assert "Teach thoroughly with step-by-step scaffolding" in second.json()["system_prompt"]
         assert "Ask the question first with almost no preliminary explanation" not in second.json()["system_prompt"]
         closed = _body(instructive=5, unit_close="yes")
@@ -173,8 +172,8 @@ def test_prompt_tester_matches_build_kc_prompt_and_writes_nothing() -> None:
         assert timed.status_code == 200, timed.text
         timed_direct = _direct(boxed)
         assert timed.json()["system_prompt"] == timed_direct["system_prompt"]
-        assert "max_retries_before_reveal=1" in timed.json()["system_prompt"]
-        assert "enrichment_mode=direct" in timed.json()["system_prompt"]
+        assert "Reveal the goal after one missed answer." in timed.json()["system_prompt"]
+        assert "Do not wait to be asked." in timed.json()["system_prompt"]
         assert "Course kind is time_boxed" in timed.json()["system_prompt"]
         unknown = _body(persona="wizard")
         rejected = client.post("/kc/prompt-tester", json=unknown)
