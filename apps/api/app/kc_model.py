@@ -262,31 +262,43 @@ _MISCONCEPTION = {
     "required": ["wrong_move", "broken_kc"],
 }
 
-def _object_schema(properties: dict, required: list[str]) -> dict:
+def _object_schema(properties: dict) -> dict:
+    """Strict structured output lists every property in required."""
     return {
         "type": "object",
         "additionalProperties": False,
         "properties": properties,
-        "required": required,
+        "required": list(properties),
     }
 
 
+def _nullable(schema: dict) -> dict:
+    """A catalog-optional field stays required and may be null."""
+    spec = dict(schema)
+    kind = spec.get("type")
+    if isinstance(kind, str):
+        spec["type"] = [kind, "null"]
+    enum = spec.get("enum")
+    if isinstance(enum, list) and None not in enum:
+        spec["enum"] = [*enum, None]
+    return spec
+
+
 _STRING = {"type": "string"}
+_NULLABLE_STRING = _nullable(_STRING)
 
 _MCQ_CHOICE_SCHEMA = _object_schema(
     {
         "id": _STRING,
         "text": _STRING,
         "is_correct": {"type": "boolean"},
-        "distractor_rationale": _STRING,
-        "misconception_code": _STRING,
+        "distractor_rationale": _NULLABLE_STRING,
+        "misconception_code": _NULLABLE_STRING,
     },
-    ["id", "text", "is_correct"],
 )
 
 _WORKED_STEP_SCHEMA = _object_schema(
-    {"step_text": _STRING, "rationale": _STRING},
-    ["step_text"],
+    {"step_text": _STRING, "rationale": _NULLABLE_STRING},
 )
 
 _MCQ_STATIC_SCHEMA = _object_schema(
@@ -294,9 +306,8 @@ _MCQ_STATIC_SCHEMA = _object_schema(
         "mode": {"type": "string", "enum": ["static"]},
         "question_stem": _STRING,
         "choices": {"type": "array", "minItems": 2, "maxItems": 5, "items": _MCQ_CHOICE_SCHEMA},
-        "correct_explanation": _STRING,
+        "correct_explanation": _NULLABLE_STRING,
     },
-    ["mode", "question_stem", "choices"],
 )
 
 _MCQ_DYNAMIC_SCHEMA = _object_schema(
@@ -304,24 +315,22 @@ _MCQ_DYNAMIC_SCHEMA = _object_schema(
         "mode": {"type": "string", "enum": ["dynamic"]},
         "target_skill": _STRING,
         "distractor_guidance": _STRING,
-        "difficulty": {"type": "string", "enum": ["foundation", "standard", "stretch"]},
-        "num_choices": {"type": "integer", "minimum": 3, "maximum": 5},
-        "stem_constraints": _STRING,
+        "difficulty": _nullable({"type": "string", "enum": ["foundation", "standard", "stretch"]}),
+        "num_choices": _nullable({"type": "integer", "minimum": 3, "maximum": 5}),
+        "stem_constraints": _NULLABLE_STRING,
     },
-    ["mode", "target_skill", "distractor_guidance"],
 )
 
-# One data object per block type. Required keys are the catalog's required fields.
-# Optional catalog fields stay on the object and are omitted from required.
+# One data object per block type. Every property is required.
+# Catalog-optional fields are nullable. Catalog-required fields are not.
 _BLOCK_DATA_SCHEMAS: dict[str, dict] = {
     "topic_goal": _object_schema(
         {
             "topic": _STRING,
             "goal": _STRING,
-            "acceptance_criteria": _STRING,
-            "teaching_notes": _STRING,
+            "acceptance_criteria": _NULLABLE_STRING,
+            "teaching_notes": _NULLABLE_STRING,
         },
-        ["topic", "goal"],
     ),
     "mcq": {"anyOf": [_MCQ_STATIC_SCHEMA, _MCQ_DYNAMIC_SCHEMA]},
     "case_study": _object_schema(
@@ -330,10 +339,9 @@ _BLOCK_DATA_SCHEMAS: dict[str, dict] = {
             "case_b": _STRING,
             "prediction_prompt": _STRING,
             "invariant_principle": _STRING,
-            "transfer_prompt": _STRING,
-            "transfer_expected": _STRING,
+            "transfer_prompt": _NULLABLE_STRING,
+            "transfer_expected": _NULLABLE_STRING,
         },
-        ["case_a", "case_b", "prediction_prompt", "invariant_principle"],
     ),
     "socratic": _object_schema(
         {
@@ -342,26 +350,23 @@ _BLOCK_DATA_SCHEMAS: dict[str, dict] = {
             "counterexamples": {"type": "array", "minItems": 1, "maxItems": 3, "items": _STRING},
             "target_synthesis": _STRING,
         },
-        ["central_dilemma", "initial_probe", "counterexamples", "target_synthesis"],
     ),
     "curiosity": _object_schema(
         {
             "phenomenon_hook": _STRING,
             "prediction_question": _STRING,
             "bridge_to_unit": _STRING,
-            "wonder_branches": {"type": "array", "maxItems": 3, "items": _STRING},
+            "wonder_branches": _nullable({"type": "array", "maxItems": 3, "items": _STRING}),
         },
-        ["phenomenon_hook", "prediction_question", "bridge_to_unit"],
     ),
     "worked_example": _object_schema(
         {
             "problem_statement": _STRING,
             "steps": {"type": "array", "minItems": 2, "maxItems": 6, "items": _WORKED_STEP_SCHEMA},
-            "faded_step_index": {"type": "integer", "minimum": 0},
+            "faded_step_index": _nullable({"type": "integer", "minimum": 0}),
             "solo_problem": _STRING,
             "solo_expected_answer": _STRING,
         },
-        ["problem_statement", "steps", "solo_problem", "solo_expected_answer"],
     ),
     "spot_the_flaw": _object_schema(
         {
@@ -370,7 +375,6 @@ _BLOCK_DATA_SCHEMAS: dict[str, dict] = {
             "underlying_misconception": _STRING,
             "corrected_version": _STRING,
         },
-        ["rookie_work", "flaw_description", "underlying_misconception", "corrected_version"],
     ),
     "teach_back": _object_schema(
         {
@@ -378,7 +382,6 @@ _BLOCK_DATA_SCHEMAS: dict[str, dict] = {
             "required_concepts": {"type": "array", "minItems": 1, "maxItems": 4, "items": _STRING},
             "peer_follow_up_question": _STRING,
         },
-        ["peer_persona_prompt", "required_concepts", "peer_follow_up_question"],
     ),
     "retrieval_check": _object_schema(
         {
@@ -387,7 +390,6 @@ _BLOCK_DATA_SCHEMAS: dict[str, dict] = {
             "elaborative_why_prompt": _STRING,
             "expected_why_rationale": _STRING,
         },
-        ["recall_prompt", "expected_fact", "elaborative_why_prompt", "expected_why_rationale"],
     ),
 }
 
