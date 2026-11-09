@@ -56,10 +56,11 @@ export default function KcCreatorDocsPage() {
         </p>
         <p>
           Fast Create All fills every empty component of the selected course, pushes the draft, and marks the component
-          complete. Empty means the component has no blocks. A component that has not been given a block list yet is
-          empty when it also has no older type. The button walks those components in course order and uses the same AI
-          Block Scope. The count beside it is how many of them are done. A push that still has a gap stops on that
-          component and shows the gap text.
+          complete. Empty means the component has no blocks, or every block is still a topic and goal copied from the
+          course. A filled acceptance criterion or teaching note, a core truth, another block type, or a pushed draft
+          means it is no longer empty. The button walks those components in course order and uses the same AI Block
+          Scope. The count beside it is how many of them are done. A push that still has a gap stops on that component
+          and shows the gap text.
         </p>
 
         <h2>Settings you can change</h2>
@@ -440,7 +441,10 @@ export default function KcCreatorDocsPage() {
         <h2>What to know when using it</h2>
         <ul>
           <li>Choose a course, then a component. With neither selected, the page says to choose a component.</li>
-          <li>Fast Create All fills components that have no blocks. It skips a component that already has one.</li>
+          <li>
+            Fast Create All fills components that have no blocks, and components whose blocks are still the course
+            topic and goal. It skips a component that already has another block, a filled note, or a core truth.
+          </li>
           <li>AI Block Scope limits what the chat and Fast Create All recommend. It does not delete blocks already on the canvas.</li>
           <li>The chat draft is not the saved component until Push.</li>
           <li>Push and Save both clear Mark complete and mark the course not ready.</li>

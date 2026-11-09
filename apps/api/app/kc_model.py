@@ -125,7 +125,9 @@ CREATOR_RULES = (
     "misconceptions, prerequisites, and encompasses. "
     "Use the course kind. Mastery is the fuller rigorous breakdown. "
     "Time boxed fits the minutes. Curiosity is a path through the subject. "
-    "Go into the topic before you fill the outline, the core truth, the blocks, and the links. "
+    "The discussion answers the latest user message. "
+    "On a follow-up, say what to add or change and why, and revise only the blocks that message is about. "
+    "Still return the full draft so Push draft stays a straight copy. "
     "Do not change how an answer is scored. "
     "Other components stay as they are."
 )
@@ -1269,12 +1271,18 @@ def creator_bundle(
         )
         block_lines.append(f"- Block {idx}: {btype} ({BLOCK_LABELS.get(btype, btype)}) — {focus}".rstrip(" —"))
     stored_blocks = "\n".join(block_lines) if block_lines else "- None yet."
-    previous_line = "There is no draft yet. Go into the topic, then fill the fields."
+    previous_line = (
+        "There is no draft yet. Answer the latest message. "
+        "Go into the topic before you fill the outline, the core truth, the blocks, and the links."
+    )
     if previous:
         prev_blocks = previous.get("blocks") or []
         prev_summary = ", ".join(str(b.get("type")) for b in prev_blocks if isinstance(b, dict)) or "none"
         previous_line = (
-            "A draft is already in the thread. Revise it. Still go into the topic before the fields. "
+            "A draft is already in the thread. This message is a follow-up. "
+            "The discussion answers it: say what to add or change and why. "
+            "Revise only the blocks that message is about. "
+            "Still return the full draft so Push draft stays a straight copy. "
             f"Current blocks: {prev_summary}. "
             f"Current core truth: {previous.get('core_truth') or 'none'}."
         )
@@ -1303,8 +1311,10 @@ def creator_bundle(
             scope_instruction,
             "Allowed block type specifications:",
             allowed_rules,
-            "The discussion comes first and goes into the topic. "
-            "Then recommend every enterable field from the brief. "
+            "The discussion answers the latest user message. "
+            "On a first draft, go into the topic, then recommend every enterable field from the brief. "
+            "On a follow-up, say what to add or change and why, and revise only the blocks that message is about. "
+            "Still return the full draft so Push draft stays a straight copy. "
             "The description is a short summary. Do not fold the outline or the blocks into it. "
             "Return the outline in the outline field. "
             "Return an ordered blocks[] array of 1 to 6 blocks using only the allowed block types, "
@@ -1321,13 +1331,11 @@ def creator_bundle(
 
 
 def checked_discussion(discussion: str, title: str) -> str:
+    """Keep a real follow-up. Reject an empty reply and a reply that is only Title:."""
+    del title
     text = (discussion or "").strip()
-    if len(text) < 80:
-        raise ValueError(
-            "Go into the topic before you fill the outline, the core truth, the blocks, and the checks."
-        )
-    if text.lower().startswith("title:"):
+    if not text:
+        raise ValueError("Answer the latest message.")
+    if text.lower() == "title:":
         raise ValueError("Go into the topic before you fill the fields.")
-    if title and title.lower() not in text.lower() and len(text) < 160:
-        raise ValueError(f"Go into {title} before you fill the fields.")
     return text

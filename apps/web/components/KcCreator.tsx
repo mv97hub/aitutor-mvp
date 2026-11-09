@@ -26,6 +26,7 @@ import {
   type FastAction,
   type FastRecord,
 } from "@/lib/kc-fast-create";
+import { creatorBubbleText } from "@/lib/kc-draft-text";
 import { creatorPushPayload } from "@/lib/kc-creator-push";
 import { kcModel } from "@/lib/kc-models";
 
@@ -316,7 +317,11 @@ function CreatorChat({
           </div>
           {thread.messages.map((message) => (
             <div key={message.id} className={`bubble ${message.role === "user" ? "user" : "assistant"}`}>
-              <p className="kc-reply">{message.content}</p>
+              <p className="kc-reply">
+                {message.role === "assistant" && message.draft
+                  ? creatorBubbleText(message.content, message.draft)
+                  : message.content}
+              </p>
             </div>
           ))}
         </div>

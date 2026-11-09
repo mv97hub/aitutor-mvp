@@ -36,6 +36,30 @@ test("empty components are the ones with no blocks, in list order", () => {
   );
 });
 
+test("course topic and goal blocks are blank until a field, another type, or a core truth is filled", () => {
+  const pairs = [
+    { topic: "color", goal: "Recall the color" },
+    { topic: "banks", goal: "Name a bank" },
+  ];
+  const defaults = pairs.map((pair, index) => ({
+    id: `blk_${index + 1}`,
+    type: "topic_goal",
+    data: { topic: pair.topic, goal: pair.goal, acceptance_criteria: "", teaching_notes: null },
+  }));
+  assert.deepEqual(
+    emptyComponentIds([
+      { id: "seeded", topics: pairs, blocks: defaults, core_truth: "" },
+      { id: "noted", topics: pairs, blocks: [{ ...defaults[0], data: { ...defaults[0].data, teaching_notes: "Use the banks." } }] },
+      { id: "checked", topics: pairs, blocks: [{ ...defaults[0], data: { ...defaults[0].data, acceptance_criteria: "names blue" } }] },
+      { id: "other", topics: pairs, blocks: [{ id: "m", type: "mcq", data: { question_stem: "What color?" } }] },
+      { id: "truth", topics: pairs, blocks: defaults, core_truth: "The river is blue." },
+      { id: "pushed", topics: pairs, blocks: [{ id: "p", type: "topic_goal", data: { topic: "current", goal: "Explain the flow" } }] },
+      { id: "bare", topics: pairs, blocks: [] },
+    ]),
+    ["seeded", "bare"],
+  );
+});
+
 test("the gap line is the structure row's missing text", () => {
   assert.equal(gapLabel(["no truth", "no rubric check"]), "no truth, no rubric check");
   assert.equal(gapLabel([]), "");

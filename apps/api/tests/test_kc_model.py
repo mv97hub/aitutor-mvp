@@ -319,16 +319,169 @@ def test_creator_prompt_goes_deep_before_the_fields() -> None:
     assert blocks["type"] == "array"
     assert "topics" not in bundle["schema"]["properties"]
     assert "Go into the topic before you fill the outline, the core truth, the blocks, and the links." in prompt
+    assert "The discussion answers the latest user message." in prompt
     assert "Do not change how an answer is scored" in prompt
     assert CREATOR_RULES.split(".")[0] in prompt
+    assert checked_discussion("Here is the draft.", "Triangle angle sum") == "Here is the draft."
     with pytest.raises(ValueError, match="before you fill"):
-        checked_discussion("Here is the draft.", "Triangle angle sum")
+        checked_discussion("Title:", "Triangle angle sum")
+    with pytest.raises(ValueError, match="latest message"):
+        checked_discussion("  ", "Triangle angle sum")
     kept = checked_discussion(
         "Triangle angle sum is the fact that the three interior angles make a straight line, "
         "which is why a missing angle is the rest of 180 degrees.",
         "Triangle angle sum",
     )
     assert kept.startswith("Triangle angle sum")
+
+
+def test_a_follow_up_answers_the_message_and_revises_only_those_blocks() -> None:
+    bundle = creator_bundle(
+        course_title="Euclidean geometry",
+        course_description=GEOMETRY,
+        audience="12-14",
+        kind="mastery",
+        minutes=None,
+        node_title="Triangle angle sum",
+        node_code="angle-sum",
+        node_description="Outline: The interior angles.\nTopics: 180 degrees\nGoals: State the sum",
+        other_codes=["missing-angle"],
+        previous={
+            "core_truth": "Angles sum to 180.",
+            "blocks": [{"id": "blk_1", "type": "topic_goal", "data": {"topic": "sum", "goal": "State it"}}],
+        },
+        message="what else should this course cover?",
+        model="gpt-4.1",
+    )
+    prompt = bundle["system_prompt"]
+    assert bundle["user_prompt"] == "what else should this course cover?"
+    assert "This message is a follow-up." in prompt
+    assert "say what to add or change and why" in prompt
+    assert "Revise only the blocks that message is about." in prompt
+    assert "Still return the full draft so Push draft stays a straight copy." in prompt
+    assert "Current blocks: topic_goal." in prompt
+    assert checked_discussion("Cover congruence next.", "Triangle angle sum") == "Cover congruence next."
+
+
+def test_draft_reply_lists_filled_block_fields() -> None:
+    from app.kc import _draft_reply
+
+    text = _draft_reply(
+        {
+            "title": "River fact",
+            "description": "The river is blue.",
+            "outline": "How the river looks.",
+            "topics": [{"topic": "color", "goal": "Recall the color"}],
+            "kc_type": "factual",
+            "type_fields": {"fact": "The river is blue.", "retrieval_question": "What color?"},
+            "core_truth": "The river is blue.",
+            "rubric": ["Recall the color"],
+            "blocks": [
+                {
+                    "id": "blk_1",
+                    "type": "topic_goal",
+                    "data": {
+                        "topic": "color",
+                        "goal": "Recall the color",
+                        "acceptance_criteria": "",
+                        "teaching_notes": "Use the banks.",
+                    },
+                },
+                {
+                    "id": "blk_2",
+                    "type": "mcq",
+                    "data": {
+                        "mode": "static",
+                        "question_stem": "What color is the river?",
+                        "choices": [
+                            {
+                                "id": "a",
+                                "text": "blue",
+                                "is_correct": True,
+                                "distractor_rationale": "",
+                                "misconception_code": "",
+                            },
+                            {
+                                "id": "b",
+                                "text": "red",
+                                "is_correct": False,
+                                "distractor_rationale": "the banks look red",
+                                "misconception_code": "zz-other",
+                            },
+                        ],
+                        "correct_explanation": "It is blue.",
+                        "target_skill": None,
+                    },
+                },
+                {
+                    "id": "blk_3",
+                    "type": "socratic",
+                    "data": {
+                        "central_dilemma": "Why is it blue?",
+                        "initial_probe": "What do you think?",
+                        "counterexamples": ["A muddy river", ""],
+                        "target_synthesis": "Depth and sky.",
+                    },
+                },
+                {
+                    "id": "blk_4",
+                    "type": "worked_example",
+                    "data": {
+                        "problem_statement": "Name the color",
+                        "steps": [
+                            {"step_text": "Look", "rationale": "the water"},
+                            {"step_text": "Name it", "rationale": None},
+                        ],
+                        "faded_step_index": 1,
+                        "solo_problem": "A new river",
+                        "solo_expected_answer": "blue",
+                    },
+                },
+            ],
+            "misconceptions": [{"wrong_move": "It is red", "broken_kc": "zz-other"}],
+            "prerequisite_codes": ["zz-other"],
+            "encompasses_codes": [],
+        }
+    )
+    assert text == (
+        "Draft for River fact only. Other components stay as they are.\n"
+        "Description: The river is blue.\n"
+        "Outline: How the river looks.\n"
+        "1. Topic / Goal\n"
+        "Topic: color\n"
+        "Goal: Recall the color\n"
+        "Teaching notes: Use the banks.\n"
+        "2. Multiple Choice Question\n"
+        "Mode: static\n"
+        "Question stem: What color is the river?\n"
+        "Choices:\n"
+        "- a. blue (correct)\n"
+        "- b. red (trap: the banks look red; misconception: zz-other)\n"
+        "Correct explanation: It is blue.\n"
+        "3. Socratic Discussion\n"
+        "Central dilemma: Why is it blue?\n"
+        "Opening probe: What do you think?\n"
+        "Counterexamples: A muddy river\n"
+        "Target synthesis: Depth and sky.\n"
+        "4. Worked Example + Faded Step\n"
+        "Problem statement: Name the color\n"
+        "Steps:\n"
+        "- Look (the water)\n"
+        "- Name it\n"
+        "Faded step: 1\n"
+        "Solo problem: A new river\n"
+        "Solo expected answer: blue\n"
+        "Core truth: The river is blue.\n"
+        "Misconceptions: It is red (zz-other)\n"
+        "Prerequisites: zz-other\n"
+        "Encompasses: none\n"
+        "Nothing is saved until you push it."
+    )
+    assert "\nTopics:" not in text
+    assert "\nType:" not in text
+    assert "Fact:" not in text
+    assert "Retrieval question:" not in text
+    assert "Rubric:" not in text
 
 
 def test_creator_schema_limits_broken_kc_to_the_other_codes() -> None:
