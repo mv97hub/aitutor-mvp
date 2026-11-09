@@ -154,6 +154,10 @@ export type KcProgress = {
     summary?: string;
     patch: boolean;
     status: "completed" | "in_progress" | "not_started";
+    mastery?: "" | "known" | "fragile";
+    finished_blocks?: number;
+    total_blocks?: number;
+    rubric?: string[];
     result?: {
       status: "known" | "fragile";
       rubric_met: string[];

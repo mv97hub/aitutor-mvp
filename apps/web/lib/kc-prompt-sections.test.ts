@@ -6,7 +6,7 @@ const page = readFileSync(new URL("../app/documentation/kc-prompt-layers/page.ts
 
 test("the layers page explains the model prompt at the bottom", () => {
   const start = page.indexOf("How the prompt is written");
-  assert.ok(start > page.indexOf("LAYER_HEADINGS.map"));
+  assert.ok(start > page.indexOf("Variables panel keeps the seven headings"));
   const section = page.slice(start);
   for (const heading of [
     "This turn",
@@ -19,9 +19,10 @@ test("the layers page explains the model prompt at the bottom", () => {
   ]) {
     assert.equal(section.split(heading).length - 1, 1, heading);
   }
-  assert.match(section, /debug Variables panel still groups/);
-  assert.match(section, /written once, as/);
-  assert.match(section, /seven layers above/);
+  assert.match(page, /only when this turn reads it/);
+  assert.match(page, /active block only/);
+  assert.match(page, /Close component/);
+  assert.match(page, /Close course/);
   assert.doesNotMatch(section, /You are the knowledge-component tutor/);
   assert.doesNotMatch(section, /Grade the answer against this core truth/);
 });

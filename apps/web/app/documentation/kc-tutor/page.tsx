@@ -93,9 +93,11 @@ export default function KcTutorDocsPage() {
           The tutor asks about the active block only. A multiple-choice block and a case-study choice use the choice
           widget. Every other block is typed in the same thread. While a choice is unanswered, the composer says
           &quot;Choose an answer above&quot; and does not send. The model writes the reply and a structured decision.
-          The app checks that decision. A block can finish known, fragile, or engaged. The component is known when the
-          walk finishes without a reveal that leaves it fragile. A fragile block pauses the component and can point at
-          the broken component. Known still raises stability, and each encompassed component gains 0.25.
+          The app checks that decision. A block can finish known, fragile, or engaged. Known means every counting block
+          passed. A required reveal finishes the component as fragile. A curiosity block counts only when that setting
+          is on. Course progress marks that finished component completed. In progress is only an open session whose
+          last block has not finished. A fragile result can still point at the broken component. Known still raises
+          stability, and each encompassed component gains 0.25.
         </p>
         <p>What the learner does on each block:</p>
         <ul>
@@ -110,8 +112,10 @@ export default function KcTutorDocsPage() {
           is reserved for the last block. The course outro follows only when every target component is known.
         </p>
         <p>
-          Debug, on the right, opens a panel beside the lesson. Variables groups the stored settings under the seven
-          layer headings. Prompts lists each request and response for this session, oldest first.
+          Debug, on the right, opens a panel beside the lesson. Variables keeps the seven headings. A row is shown only
+          when this turn reads it, and an empty value stays. The first heading shows the active block only: its index,
+          its type, its substep, whether a choice is on screen, and that block&apos;s fields. Prompts lists each request
+          and response for this session, oldest first.
         </p>
 
         <h2>Settings you can change</h2>
