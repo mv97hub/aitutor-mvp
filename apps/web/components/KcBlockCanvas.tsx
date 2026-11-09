@@ -1,20 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useId, useRef, useState, useTransition } from "react";
 
 import { saveKcBlockScope } from "@/lib/kc-actions";
 import {
   BLOCK_LABELS,
   BLOCK_TYPES,
   blankBlock,
+  blankChoice,
   blankData,
   newBlockId,
   scopeFromCourse,
   toggleScope,
+  type McqChoice,
+  type WorkedStep,
 } from "@/lib/kc-blocks";
 import type { KcBlock, KcBlockType } from "@/lib/kc";
-
-type Step = { action: string; reason: string };
 
 export function KcBlockScope({
   courseId,
@@ -200,7 +201,7 @@ export function KcBlockCanvas({ initial }: { initial: KcBlock[] }) {
               </div>
               {collapsed[block.id] ? null : (
                 <div className="kc-block-body">
-                  <BlockFields
+                  <BlockDataEditor
                     block={block}
                     onChange={(data) => update(index, { ...block, data })}
                   />
@@ -243,14 +244,19 @@ function InsertBar({ onAdd }: { onAdd: (type: KcBlockType) => void }) {
   );
 }
 
-function BlockFields({ block, onChange }: { block: KcBlock; onChange: (data: Record<string, unknown>) => void }) {
+export function BlockDataEditor({
+  block,
+  onChange,
+}: {
+  block: KcBlock;
+  onChange: (data: Record<string, unknown>) => void;
+}) {
   const data = block.data;
   function set(key: string, value: unknown) {
     onChange({ ...data, [key]: value });
   }
   if (block.type === "mcq") return <McqFields data={data} set={set} />;
   if (block.type === "worked_example") return <WorkedFields data={data} set={set} />;
-  if (block.type === "case_study") return <CaseFields data={data} set={set} />;
   return (
     <>
       {fieldsFor(block.type).map((field) => (
@@ -260,58 +266,63 @@ function BlockFields({ block, onChange }: { block: KcBlock; onChange: (data: Rec
   );
 }
 
-type TextField = { key: string; label: string; kind: "text" | "lines" | "number" | "check" };
+type TextField = { key: string; label: string; kind: "text" | "lines" | "number" | "enum"; options?: readonly string[] };
 
 function fieldsFor(type: KcBlockType): TextField[] {
   if (type === "topic_goal") {
     return [
       { key: "topic", label: "Topic", kind: "text" },
       { key: "goal", label: "Goal", kind: "text" },
-      { key: "reveal_after_recall", label: "Reveal after recall", kind: "check" },
-      { key: "contrast_note", label: "Contrast note", kind: "text" },
-      { key: "common_mixup", label: "Common mix-up", kind: "text" },
-      { key: "why_it_matters", label: "Why it matters", kind: "text" },
+      { key: "acceptance_criteria", label: "Acceptance criteria", kind: "text" },
+      { key: "teaching_notes", label: "Teaching notes", kind: "text" },
+    ];
+  }
+  if (type === "case_study") {
+    return [
+      { key: "case_a", label: "Case A", kind: "text" },
+      { key: "case_b", label: "Case B", kind: "text" },
+      { key: "prediction_prompt", label: "Prediction prompt", kind: "text" },
+      { key: "invariant_principle", label: "Invariant principle", kind: "text" },
+      { key: "transfer_prompt", label: "Transfer prompt", kind: "text" },
+      { key: "transfer_expected", label: "Transfer expected", kind: "text" },
     ];
   }
   if (type === "socratic") {
     return [
-      { key: "opening_question", label: "Opening question", kind: "text" },
-      { key: "probe_if_shallow", label: "Probe if shallow", kind: "text" },
-      { key: "probe_if_close", label: "Probe if close", kind: "text" },
-      { key: "target_insight", label: "Target insight", kind: "text" },
-      { key: "max_exchanges", label: "Max exchanges", kind: "number" },
+      { key: "central_dilemma", label: "Central dilemma", kind: "text" },
+      { key: "initial_probe", label: "Opening probe", kind: "text" },
+      { key: "counterexamples", label: "Counterexamples, one per line", kind: "lines" },
+      { key: "target_synthesis", label: "Target synthesis", kind: "text" },
     ];
   }
   if (type === "curiosity") {
     return [
-      { key: "hook_question", label: "Hook question", kind: "text" },
-      { key: "expected_hunch", label: "Expected hunch", kind: "text" },
-      { key: "reveal", label: "Reveal", kind: "text" },
-      { key: "why_surprising", label: "Why it is surprising", kind: "text" },
-      { key: "bridge_to_goal", label: "Bridge to the goal", kind: "text" },
+      { key: "phenomenon_hook", label: "Phenomenon hook", kind: "text" },
+      { key: "prediction_question", label: "Prediction question", kind: "text" },
+      { key: "bridge_to_unit", label: "Bridge to unit", kind: "text" },
+      { key: "wonder_branches", label: "Wonder branches, one per line", kind: "lines" },
     ];
   }
   if (type === "spot_the_flaw") {
     return [
-      { key: "artifact", label: "Artifact", kind: "text" },
-      { key: "flaw_location", label: "Flaw location", kind: "text" },
-      { key: "why_its_wrong", label: "Why it is wrong", kind: "text" },
-      { key: "fix", label: "Fix", kind: "text" },
-      { key: "transfer_question", label: "Transfer question", kind: "text" },
+      { key: "rookie_work", label: "Rookie work", kind: "text" },
+      { key: "flaw_description", label: "Flaw description", kind: "text" },
+      { key: "underlying_misconception", label: "Underlying misconception", kind: "text" },
+      { key: "corrected_version", label: "Corrected version", kind: "text" },
     ];
   }
   if (type === "teach_back") {
     return [
-      { key: "prompt", label: "Prompt", kind: "text" },
-      { key: "must_include", label: "Must include, one per line", kind: "lines" },
-      { key: "rubric_note", label: "Rubric note", kind: "text" },
-      { key: "follow_up_if_thin", label: "Follow up if thin", kind: "text" },
+      { key: "peer_persona_prompt", label: "Peer prompt", kind: "text" },
+      { key: "required_concepts", label: "Required concepts, one per line", kind: "lines" },
+      { key: "peer_follow_up_question", label: "Peer follow-up", kind: "text" },
     ];
   }
   return [
-    { key: "prompt", label: "Prompt", kind: "text" },
-    { key: "acceptable_points", label: "Acceptable points, one per line", kind: "lines" },
-    { key: "partial_credit_note", label: "Partial credit note", kind: "text" },
+    { key: "recall_prompt", label: "Recall prompt", kind: "text" },
+    { key: "expected_fact", label: "Expected fact", kind: "text" },
+    { key: "elaborative_why_prompt", label: "Elaborative why prompt", kind: "text" },
+    { key: "expected_why_rationale", label: "Expected why rationale", kind: "text" },
   ];
 }
 
@@ -324,19 +335,6 @@ function Field({
   data: Record<string, unknown>;
   set: (key: string, value: unknown) => void;
 }) {
-  if (field.kind === "check") {
-    return (
-      <label className="kc-check">
-        <input
-          type="checkbox"
-          aria-label={field.label}
-          checked={data[field.key] !== false}
-          onChange={(event) => set(field.key, event.target.checked)}
-        />
-        {field.label}
-      </label>
-    );
-  }
   if (field.kind === "number") {
     return (
       <label>
@@ -347,6 +345,21 @@ function Field({
           value={String(data[field.key] ?? 0)}
           onChange={(event) => set(field.key, Number(event.target.value || 0))}
         />
+      </label>
+    );
+  }
+  if (field.kind === "enum" && field.options) {
+    const current = typeof data[field.key] === "string" ? String(data[field.key]) : field.options[0];
+    return (
+      <label>
+        {field.label}
+        <select aria-label={field.label} value={current} onChange={(event) => set(field.key, event.target.value)}>
+          {field.options.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
       </label>
     );
   }
@@ -377,10 +390,24 @@ function Field({
   );
 }
 
+function asChoices(value: unknown): McqChoice[] {
+  if (!Array.isArray(value) || value.length === 0) return [blankChoice(0, true), blankChoice(1)];
+  return value.map((item, index) => {
+    const choice = item && typeof item === "object" ? (item as Partial<McqChoice>) : {};
+    return {
+      id: typeof choice.id === "string" && choice.id ? choice.id : blankChoice(index).id,
+      text: typeof choice.text === "string" ? choice.text : "",
+      is_correct: choice.is_correct === true,
+      distractor_rationale: typeof choice.distractor_rationale === "string" ? choice.distractor_rationale : "",
+      misconception_code: typeof choice.misconception_code === "string" ? choice.misconception_code : "",
+    };
+  });
+}
+
 function McqFields({ data, set }: { data: Record<string, unknown>; set: (key: string, value: unknown) => void }) {
+  const correctGroup = useId();
   const mode = data.mode === "dynamic" ? "dynamic" : "static";
-  const options = four(data.options);
-  const whyWrong = four(data.why_wrong);
+  const choices = asChoices(data.choices);
   return (
     <>
       <label>
@@ -392,148 +419,142 @@ function McqFields({ data, set }: { data: Record<string, unknown>; set: (key: st
       </label>
       {mode === "static" ? (
         <>
-          <Field field={{ key: "question", label: "Question", kind: "text" }} data={data} set={set} />
-          {options.map((option, index) => (
-            <label key={index}>
-              {`Option ${index + 1}`}
+          <Field field={{ key: "question_stem", label: "Question stem", kind: "text" }} data={data} set={set} />
+          {choices.map((choice, index) => (
+            <div className="kc-pair" key={choice.id}>
               <input
-                aria-label={`Option ${index + 1}`}
-                value={option}
+                aria-label={`Choice ${choice.id} text`}
+                value={choice.text}
+                placeholder={`Choice ${choice.id}`}
                 onChange={(event) => {
-                  const next = options.slice();
-                  next[index] = event.target.value;
-                  set("options", next);
+                  const next = choices.slice();
+                  next[index] = { ...choice, text: event.target.value };
+                  set("choices", next);
                 }}
               />
-            </label>
-          ))}
-          <label>
-            Correct option
-            <select
-              aria-label="Correct option"
-              value={String(data.correct_index ?? 0)}
-              onChange={(event) => set("correct_index", Number(event.target.value))}
-            >
-              {options.map((_, index) => (
-                <option key={index} value={index}>
-                  {index + 1}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Field field={{ key: "why_correct", label: "Why it is correct", kind: "text" }} data={data} set={set} />
-          {whyWrong.map((reason, index) => (
-            <label key={index}>
-              {`Why option ${index + 1} is wrong`}
+              <label className="kc-check">
+                <input
+                  type="radio"
+                  name={correctGroup}
+                  aria-label={`Choice ${choice.id} is correct`}
+                  checked={choice.is_correct}
+                  onChange={() => set("choices", choices.map((item, itemIndex) => ({ ...item, is_correct: itemIndex === index })))}
+                />
+                Correct
+              </label>
               <textarea
-                aria-label={`Why option ${index + 1} is wrong`}
+                aria-label={`Choice ${choice.id} distractor rationale`}
                 rows={2}
-                value={reason}
+                value={choice.distractor_rationale}
+                placeholder="Distractor rationale"
                 onChange={(event) => {
-                  const next = whyWrong.slice();
-                  next[index] = event.target.value;
-                  set("why_wrong", next);
+                  const next = choices.slice();
+                  next[index] = { ...choice, distractor_rationale: event.target.value };
+                  set("choices", next);
                 }}
               />
-            </label>
+              <input
+                aria-label={`Choice ${choice.id} misconception code`}
+                value={choice.misconception_code}
+                placeholder="Misconception code"
+                onChange={(event) => {
+                  const next = choices.slice();
+                  next[index] = { ...choice, misconception_code: event.target.value };
+                  set("choices", next);
+                }}
+              />
+            </div>
           ))}
+          {choices.length < 5 ? (
+            <button className="ghost" type="button" onClick={() => set("choices", [...choices, blankChoice(choices.length)])}>
+              Add choice
+            </button>
+          ) : null}
+          <Field field={{ key: "correct_explanation", label: "Correct explanation", kind: "text" }} data={data} set={set} />
         </>
       ) : (
         <>
-          <Field field={{ key: "generation_prompt", label: "Generation prompt", kind: "text" }} data={data} set={set} />
-          <Field field={{ key: "why_correct_guidance", label: "Why-correct guidance", kind: "text" }} data={data} set={set} />
-          <Field field={{ key: "why_wrong_guidance", label: "Why-wrong guidance", kind: "text" }} data={data} set={set} />
+          <Field field={{ key: "target_skill", label: "Target skill", kind: "text" }} data={data} set={set} />
+          <Field field={{ key: "distractor_guidance", label: "Distractor guidance", kind: "text" }} data={data} set={set} />
+          <Field
+            field={{ key: "difficulty", label: "Difficulty", kind: "enum", options: ["foundation", "standard", "stretch"] }}
+            data={data}
+            set={set}
+          />
+          <Field field={{ key: "num_choices", label: "Number of choices", kind: "number" }} data={data} set={set} />
+          <Field field={{ key: "stem_constraints", label: "Stem constraints", kind: "text" }} data={data} set={set} />
         </>
       )}
     </>
   );
 }
 
-function CaseFields({ data, set }: { data: Record<string, unknown>; set: (key: string, value: unknown) => void }) {
-  const options = Array.isArray(data.decision_options) ? (data.decision_options as string[]) : ["", ""];
-  return (
-    <>
-      <Field field={{ key: "scenario", label: "Scenario", kind: "text" }} data={data} set={set} />
-      <Field field={{ key: "decision_point", label: "Decision point", kind: "text" }} data={data} set={set} />
-      {options.map((option, index) => (
-        <label key={index}>
-          {`Decision option ${index + 1}`}
-          <input
-            aria-label={`Decision option ${index + 1}`}
-            value={option}
-            onChange={(event) => {
-              const next = options.slice();
-              next[index] = event.target.value;
-              set("decision_options", next);
-            }}
-          />
-        </label>
-      ))}
-      <button className="ghost" type="button" onClick={() => set("decision_options", [...options, ""])}>
-        Add decision option
-      </button>
-      <label>
-        Best option
-        <select
-          aria-label="Best option"
-          value={String(data.best_option_index ?? 0)}
-          onChange={(event) => set("best_option_index", Number(event.target.value))}
-        >
-          {options.map((_, index) => (
-            <option key={index} value={index}>
-              {index + 1}
-            </option>
-          ))}
-        </select>
-      </label>
-      <Field field={{ key: "why_best", label: "Why it is best", kind: "text" }} data={data} set={set} />
-      <Field field={{ key: "why_others", label: "Why the others fall short", kind: "text" }} data={data} set={set} />
-      <Field field={{ key: "follow_up_question", label: "Follow-up question", kind: "text" }} data={data} set={set} />
-      <Field field={{ key: "what_transfers", label: "What transfers", kind: "text" }} data={data} set={set} />
-    </>
-  );
+function asSteps(value: unknown): WorkedStep[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    return [
+      { step_text: "", rationale: "" },
+      { step_text: "", rationale: "" },
+    ];
+  }
+  return value.map((item) => {
+    const step = item && typeof item === "object" ? (item as Partial<WorkedStep>) : {};
+    return {
+      step_text: typeof step.step_text === "string" ? step.step_text : "",
+      rationale: typeof step.rationale === "string" ? step.rationale : "",
+    };
+  });
 }
 
 function WorkedFields({ data, set }: { data: Record<string, unknown>; set: (key: string, value: unknown) => void }) {
-  const steps = Array.isArray(data.steps) ? (data.steps as Step[]) : [{ action: "", reason: "" }];
+  const steps = asSteps(data.steps);
+  const faded = typeof data.faded_step_index === "number" ? data.faded_step_index : Math.max(steps.length - 1, 0);
   return (
     <>
-      <Field field={{ key: "problem", label: "Problem", kind: "text" }} data={data} set={set} />
+      <Field field={{ key: "problem_statement", label: "Problem statement", kind: "text" }} data={data} set={set} />
       {steps.map((step, index) => (
         <div className="kc-pair" key={index}>
           <input
-            aria-label={`Step ${index + 1} action`}
-            value={step.action}
-            placeholder="Action"
+            aria-label={`Step ${index + 1} text`}
+            value={step.step_text}
+            placeholder="Step text"
             onChange={(event) => {
               const next = steps.slice();
-              next[index] = { ...step, action: event.target.value };
+              next[index] = { ...step, step_text: event.target.value };
               set("steps", next);
             }}
           />
           <input
-            aria-label={`Step ${index + 1} reason`}
-            value={step.reason}
-            placeholder="Reason"
+            aria-label={`Step ${index + 1} rationale`}
+            value={step.rationale}
+            placeholder="Rationale"
             onChange={(event) => {
               const next = steps.slice();
-              next[index] = { ...step, reason: event.target.value };
+              next[index] = { ...step, rationale: event.target.value };
               set("steps", next);
             }}
           />
         </div>
       ))}
-      <button className="ghost" type="button" onClick={() => set("steps", [...steps, { action: "", reason: "" }])}>
-        Add step
-      </button>
-      <Field field={{ key: "faded_step_index", label: "Faded step, starting at 0", kind: "number" }} data={data} set={set} />
+      {steps.length < 6 ? (
+        <button
+          className="ghost"
+          type="button"
+          onClick={() => set("steps", [...steps, { step_text: "", rationale: "" }])}
+        >
+          Add step
+        </button>
+      ) : null}
+      <label>
+        Faded step, starting at 0
+        <input
+          aria-label="Faded step, starting at 0"
+          inputMode="numeric"
+          value={String(faded)}
+          onChange={(event) => set("faded_step_index", Number(event.target.value || 0))}
+        />
+      </label>
       <Field field={{ key: "solo_problem", label: "Solo problem", kind: "text" }} data={data} set={set} />
-      <Field field={{ key: "solo_check", label: "Solo check", kind: "text" }} data={data} set={set} />
+      <Field field={{ key: "solo_expected_answer", label: "Solo expected answer", kind: "text" }} data={data} set={set} />
     </>
   );
-}
-
-function four(value: unknown): string[] {
-  const items = Array.isArray(value) ? value.map((item) => String(item ?? "")) : [];
-  return [0, 1, 2, 3].map((index) => items[index] ?? "");
 }

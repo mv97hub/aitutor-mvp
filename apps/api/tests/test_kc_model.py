@@ -429,12 +429,56 @@ def test_creator_schema_limits_each_mix_to_a_different_other_code() -> None:
     assert "mix_a" not in props
     assert "mix_b" not in props
     assert props["blocks"]["type"] == "array"
-    assert "topic_goal" in props["blocks"]["items"]["properties"]["type"]["enum"]
+    variants = props["blocks"]["items"]["anyOf"]
+    assert "topic_goal" in [item["properties"]["type"]["enum"][0] for item in variants]
     assert "allOf" not in bundle["schema"]
     prompt = bundle["system_prompt"]
     assert "ordered blocks[] array" in prompt
     assert "Do not ask for two mixes." not in prompt
     assert "history" not in props
+
+
+def test_creator_schema_keeps_each_block_type_on_its_own_fields() -> None:
+    bundle = creator_bundle(
+        course_title="Euclidean geometry",
+        course_description=GEOMETRY,
+        audience="12-14",
+        kind="mastery",
+        minutes=None,
+        node_title="Triangle angle sum",
+        node_code="angle-sum",
+        node_description="The interior angles add to a straight line.",
+        allowed_block_types=["topic_goal", "mcq"],
+        other_codes=["missing-angle"],
+        previous=None,
+        message="Draft this component.",
+        model="gpt-4.1",
+    )
+    prompt = bundle["system_prompt"]
+    assert "You may ONLY generate blocks" in prompt
+    assert "topic_goal" in prompt
+    assert "mcq" in prompt
+    assert "socratic" not in prompt
+    variants = bundle["schema"]["properties"]["blocks"]["items"]["anyOf"]
+    assert [item["properties"]["type"]["enum"] for item in variants] == [["topic_goal"], ["mcq"]]
+    topic = variants[0]["properties"]["data"]
+    assert topic["required"] == ["topic", "goal"]
+    assert "acceptance_criteria" in topic["properties"]
+    assert "acceptance_criteria" not in topic["required"]
+    assert "question_stem" not in topic["properties"]
+    assert "case_a" not in topic["properties"]
+    modes = variants[1]["properties"]["data"]["anyOf"]
+    static, dynamic = modes
+    assert static["required"] == ["mode", "question_stem", "choices"]
+    assert "correct_explanation" not in static["required"]
+    assert "target_skill" not in static["properties"]
+    choice = static["properties"]["choices"]["items"]
+    assert choice["required"] == ["id", "text", "is_correct"]
+    assert "distractor_rationale" not in choice["required"]
+    assert dynamic["required"] == ["mode", "target_skill", "distractor_guidance"]
+    assert dynamic["properties"]["num_choices"]["minimum"] == 3
+    assert dynamic["properties"]["num_choices"]["maximum"] == 5
+    assert "question_stem" not in dynamic["required"]
 
 
 def test_creator_schema_does_not_ask_for_two_mixes_without_two_siblings() -> None:

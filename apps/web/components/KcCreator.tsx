@@ -415,7 +415,11 @@ function ComponentEditor({
           Recommended blocks: {component.recommended_blocks.map((item) => BLOCK_LABELS[item.type] ?? item.type).join(", ")}
         </p>
       ) : null}
-      <KcBlockCanvas key={component.id} initial={component.blocks ?? []} />
+      {/* Remount when Push draft replaces the saved blocks. Edits stay until that list changes. */}
+      <KcBlockCanvas
+        key={`${component.id}:${JSON.stringify(component.blocks ?? [])}`}
+        initial={component.blocks ?? []}
+      />
       <label title={TIPS.core_truth}>
         Core truth
         <textarea
