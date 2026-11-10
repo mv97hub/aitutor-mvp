@@ -2,36 +2,100 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { kcAndAdminPages, olderPages } from "./menu-pages.ts";
+import { knownStudentId, menuSections, menuSectionsFor } from "./menu-pages.ts";
 
-test("KC and admin links sit above the older pages, with Course Progress in the top group", () => {
+const previousDestinations = [
+  ["/admin", "Admin"],
+  ["/admin/agent-customizations", "AI Tutor Configurations"],
+  ["/kc-studio", "KC Course Creator"],
+  ["/manage-kc-courses", "Manage KC courses"],
+  ["/kc-creator", "KC Creator"],
+  ["/kc-tutor", "KC Tutor"],
+  ["/kc-prompt-tester", "KC Prompt Tester"],
+  ["/kc-progress", "KC Course Progress"],
+  ["/viewkcchats", "View KC chats"],
+  ["/documentation", "Documentation"],
+  ["/", "Home"],
+  ["/create-course", "Create course"],
+  ["/manage-courses", "Manage courses"],
+  ["/viewchats", "View chats"],
+] as const;
+
+test("menu sections keep every destination under the five headers", () => {
   assert.deepEqual(
-    kcAndAdminPages.map((page) => page.label),
-    [
-      "Admin",
-      "Agent customizations",
-      "KC Course Creator",
-      "Manage KC courses",
-      "KC Creator",
-      "KC Tutor",
-      "KC Prompt Tester",
-      "KC Course Progress",
-      "View KC chats",
-      "Documentation",
-    ],
+    menuSections.map((section) => section.title),
+    ["Kids Portal", "Administration", "KC course creation", "Testing pages", "Deprecated Pages"],
   );
-  assert.equal(kcAndAdminPages.find((page) => page.label === "KC Course Progress")?.href, "/kc-progress");
-  assert.equal(kcAndAdminPages.find((page) => page.label === "KC Prompt Tester")?.href, "/kc-prompt-tester");
-  const labels = kcAndAdminPages.map((page) => page.label);
-  assert.equal(labels.indexOf("KC Prompt Tester"), labels.indexOf("KC Tutor") + 1);
-  assert.deepEqual(
-    olderPages.map((page) => page.label),
-    ["Home", "Create course", "Manage courses", "View chats"],
+
+  const links = menuSections.flatMap((section) => section.links.map((link) => [link.href, link.label]));
+  for (const [href, label] of previousDestinations) {
+    assert.ok(
+      links.some((link) => link[0] === href && link[1] === label),
+      `${label} ${href} stays on the menu`,
+    );
+  }
+
+  const byTitle = Object.fromEntries(
+    menuSections.map((section) => [section.title, section.links.map((link) => [link.label, link.href])]),
   );
+  assert.deepEqual(byTitle["Kids Portal"], [["Child chooser", "/learn"]]);
+  assert.deepEqual(byTitle["Administration"], [
+    ["Admin", "/admin"],
+    ["KC View Chats", "/admin/kc-chats"],
+    ["View KC chats", "/viewkcchats"],
+    ["AI Tutor Configurations", "/admin/agent-customizations"],
+    ["Documentation", "/documentation"],
+  ]);
+  assert.deepEqual(byTitle["KC course creation"], [
+    ["KC Course Creator", "/kc-studio"],
+    ["KC Creator", "/kc-creator"],
+    ["Manage KC courses", "/manage-kc-courses"],
+  ]);
+  assert.deepEqual(byTitle["Testing pages"], [
+    ["KC Tutor", "/kc-tutor"],
+    ["KC Prompt Tester", "/kc-prompt-tester"],
+    ["KC Course Progress", "/kc-progress"],
+  ]);
   assert.equal(
-    olderPages.some((page) => page.href === "/kc-progress"),
+    byTitle["Testing pages"].findIndex((link) => link[0] === "KC Prompt Tester"),
+    byTitle["Testing pages"].findIndex((link) => link[0] === "KC Tutor") + 1,
+  );
+  assert.deepEqual(byTitle["Deprecated Pages"], [
+    ["Lesson Desk", "/admin/lessons"],
+    ["Home", "/"],
+    ["Create course", "/create-course"],
+    ["Manage courses", "/manage-courses"],
+    ["View chats", "/viewchats"],
+  ]);
+  assert.equal(
+    menuSections.find((section) => section.title === "Deprecated Pages")?.links.some((link) => link.href === "/kc-progress"),
     false,
   );
+});
+
+test("child home is linked only when a student id is already known", () => {
+  assert.equal(knownStudentId(undefined), null);
+  assert.equal(knownStudentId("  "), null);
+  assert.equal(knownStudentId("not-a-student"), null);
+  const id = "11111111-2222-3333-4444-555555555555";
+  assert.equal(knownStudentId(`  ${id}  `), id);
+
+  assert.deepEqual(
+    menuSectionsFor(null)[0].links.map((link) => link.href),
+    ["/learn"],
+  );
+  assert.deepEqual(
+    menuSectionsFor("sam")[0].links.map((link) => [link.label, link.href]),
+    [["Child chooser", "/learn"]],
+  );
+  assert.deepEqual(
+    menuSectionsFor(id)[0].links.map((link) => [link.label, link.href]),
+    [
+      ["Child chooser", "/learn"],
+      ["Child home", `/learn/${id}`],
+    ],
+  );
+  assert.equal(menuSectionsFor(id).length, menuSections.length);
 });
 
 test("the learner header links to the child experience and keeps creator and admin off it", () => {

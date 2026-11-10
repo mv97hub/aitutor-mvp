@@ -2,13 +2,14 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
-import Link from "next/link";
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { BrandMark } from "@/components/BrandMark";
 import { ChatBox } from "@/components/ChatBox";
 import { ChoiceWidget } from "@/components/LessonBlocks";
+import { MenuSections } from "@/components/MenuSections";
 import { api } from "@/lib/api";
+import { menuSectionsFor } from "@/lib/menu-pages";
 import { KICKOFF } from "@/lib/kickoff";
 import type {
   Board,
@@ -722,14 +723,10 @@ export function KidSession({
 
   if (!learner) {
     return (
-      <main className="ds-landing">
-        <nav className="ds-landing-links" aria-label="Administration">
-          <Link href="/admin" className="ds-top-btn">Administration</Link>
-          <Link href="/kc-studio" className="ds-top-btn">KC Course Creator</Link>
-          <Link href="/kc-creator" className="ds-top-btn">KC Creator</Link>
-          <Link href="/kc-tutor" className="ds-top-btn">KC Tutor</Link>
-          <Link href="/kc-progress" className="ds-top-btn">KC Progress</Link>
-        </nav>
+      <main className="ds-landing has-menu">
+        <div className="menu-board">
+          <MenuSections sections={menuSectionsFor(null)} />
+        </div>
         <section className="ds-landing-card">
           <BrandMark />
           <h1>Who&apos;s learning today?</h1>
