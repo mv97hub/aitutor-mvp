@@ -102,37 +102,28 @@ export function ViewKcChats({
   }, [sessionId]);
 
   return (
-    <AdminFrame current="kc-chats">
-      <div className="kc-chats-admin-workspace">
-        <section className="kc-chats-toolbar" aria-label="KC Chat Sessions">
-          <div className="kc-chats-toolbar-top">
-            <div>
-              <p className="eyebrow">Administration</p>
-              <h2>KC View Chats</h2>
-              <p className="help">
-                Inspect learner component transcripts, scores, and full system prompts sent to the model.
-              </p>
-            </div>
-            <label className="kc-chats-student-filter">
-              Student
-              <select value={studentFilter} onChange={(event) => setStudentFilter(event.target.value)}>
-                <option value="">Everyone</option>
-                {students.map((student) => (
-                  <option key={student.id} value={student.id}>
-                    {student.display_name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <ul className="ds-list kc-chats-session-strip" aria-label="KC chats">
+    <AdminFrame
+      current="kc-chats"
+      sidebar={
+        <>
+          <label>
+            Student
+            <select value={studentFilter} onChange={(event) => setStudentFilter(event.target.value)}>
+              <option value="">Everyone</option>
+              {students.map((student) => (
+                <option key={student.id} value={student.id}>
+                  {student.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <ul className="ds-list" aria-label="KC chats">
             {sessions.length === 0 ? <li className="ds-quiet">No chats yet. Open a learner on KC Tutor.</li> : null}
             {sessions.map((item) => (
               <li key={item.id}>
                 <button
                   type="button"
-                  className={`ds-row kc-chat-pill-row ${item.id === sessionId ? "is-on" : ""}`}
+                  className={`ds-row ${item.id === sessionId ? "is-on" : ""}`}
                   onClick={() => setSessionId(item.id)}
                 >
                   <strong>{item.student_display_name}</strong>
@@ -146,22 +137,22 @@ export function ViewKcChats({
               </li>
             ))}
           </ul>
-        </section>
-
-        {error ? (
-          <div className="banner" role="alert" style={{ margin: "18px 0" }}>
-            <p>{error}</p>
-          </div>
-        ) : null}
-        {session ? (
-          <SessionView session={session} />
-        ) : (
-          <article className="transcript-view">
-            <h2>Pick a chat</h2>
-            <p className="help">The transcript opens here. This page does not edit components.</p>
-          </article>
-        )}
-      </div>
+        </>
+      }
+    >
+      {error ? (
+        <div className="banner" role="alert" style={{ margin: 18 }}>
+          <p>{error}</p>
+        </div>
+      ) : null}
+      {session ? (
+        <SessionView session={session} />
+      ) : (
+        <article className="transcript-view">
+          <h2>Pick a chat</h2>
+          <p className="help">The transcript opens here. This page does not edit components.</p>
+        </article>
+      )}
     </AdminFrame>
   );
 }
