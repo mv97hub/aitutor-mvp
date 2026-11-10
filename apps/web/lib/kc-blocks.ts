@@ -10,6 +10,7 @@ export const BLOCK_TYPES: KcBlockType[] = [
   "spot_the_flaw",
   "teach_back",
   "retrieval_check",
+  "explanation",
 ];
 
 export const BLOCK_LABELS: Record<KcBlockType, string> = {
@@ -22,6 +23,7 @@ export const BLOCK_LABELS: Record<KcBlockType, string> = {
   spot_the_flaw: "Spot the flaw",
   teach_back: "Teach back",
   retrieval_check: "Retrieval check",
+  explanation: "Explanatory walkthrough",
 };
 
 const SHORT_LABELS: Record<KcBlockType, [string, string]> = {
@@ -34,6 +36,7 @@ const SHORT_LABELS: Record<KcBlockType, [string, string]> = {
   spot_the_flaw: ["Spot the flaw", "Spot the flaw"],
   teach_back: ["Teach back", "Teach backs"],
   retrieval_check: ["Retrieval", "Retrievals"],
+  explanation: ["Explanation", "Explanations"],
 };
 
 export function isBlockType(value: string): value is KcBlockType {
@@ -43,6 +46,24 @@ export function isBlockType(value: string): value is KcBlockType {
 export function newBlockId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return `blk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export type ExplanationTopic = {
+  id: string;
+  title: string;
+  explanation: string;
+  key_points: string;
+  examples_or_analogies: string;
+};
+
+export function blankExplanationTopic(index: number): ExplanationTopic {
+  return {
+    id: `top_${index}`,
+    title: "",
+    explanation: "",
+    key_points: "",
+    examples_or_analogies: "",
+  };
 }
 
 export function blankBlock(type: KcBlockType, id = newBlockId()): KcBlock {
@@ -122,6 +143,13 @@ export function blankData(type: KcBlockType): Record<string, unknown> {
   }
   if (type === "teach_back") {
     return { peer_persona_prompt: "", required_concepts: [""], peer_follow_up_question: "" };
+  }
+  if (type === "explanation") {
+    return {
+      block_title: "",
+      topics: [blankExplanationTopic(1)],
+      summary_takeaway: "",
+    };
   }
   return {
     recall_prompt: "",

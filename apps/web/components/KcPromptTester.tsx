@@ -6,8 +6,8 @@ import { KcBanner } from "@/components/KcBanner";
 import { BlockDataEditor } from "@/components/KcBlockCanvas";
 import { ConfigControl } from "@/components/admin/KcTutorConfigFields";
 import { api } from "@/lib/api";
-import type { KcBlock, KcCourse } from "@/lib/kc";
-import { BLOCK_LABELS } from "@/lib/kc-blocks";
+import type { KcBlock, KcBlockType, KcCourse } from "@/lib/kc";
+import { BLOCK_LABELS, BLOCK_TYPES, blankData } from "@/lib/kc-blocks";
 import { hoverFor } from "@/lib/kc-layer-fields";
 import {
   DEFAULT_TUTOR_PROFILE,
@@ -208,6 +208,27 @@ export function KcPromptTester({
                     <p>
                       Block {activeIndex + 1} of {blocks.length}: {BLOCK_LABELS[activeBlock.type]}
                     </p>
+                    <label>
+                      Block type
+                      <select
+                        aria-label="Active block type"
+                        value={activeBlock.type}
+                        onChange={(event) => {
+                          const type = event.target.value as KcBlockType;
+                          setBlocks((current) =>
+                            current.map((item, index) =>
+                              index === activeIndex ? { ...item, type, data: blankData(type) } : item,
+                            ),
+                          );
+                        }}
+                      >
+                        {BLOCK_TYPES.map((type) => (
+                          <option key={type} value={type}>
+                            {BLOCK_LABELS[type]}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <BlockDataEditor
                       block={activeBlock}
                       onChange={(data) =>

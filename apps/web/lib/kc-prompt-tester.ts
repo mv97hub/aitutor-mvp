@@ -91,6 +91,7 @@ const NUMBER_FIELDS = new Set([
   "Reveals used",
   "Off-course count",
   "Enrichment turns",
+  "Topic index",
 ]);
 
 const UNIT_FIELDS = [
@@ -118,6 +119,27 @@ export const FIELD_OPTIONS: Record<string, readonly (readonly [string, string])[
   Audience: AUDIENCES.map((band) => [band, band] as const),
   Kind: KINDS.map((kind) => [kind.id, kind.label] as const),
   Type: [["", "Unset"], ...BLOCK_TYPES.map((type) => [type, BLOCK_LABELS[type]] as const)],
+  Substep: [
+    ["", "Default"],
+    ["main", "Main"],
+    ["choice", "Choose option"],
+    ["awaiting_why", "Explain why"],
+    ["predict", "Predict"],
+    ["contrast_and_rule", "Contrast and rule"],
+    ["transfer", "Transfer"],
+    ["initial_thesis", "Initial position"],
+    ["counterexample_probe", "Counterexample probe"],
+    ["hook_and_predict", "Wonder and predict"],
+    ["faded_step", "Faded step"],
+    ["solo_solve", "Solo problem"],
+    ["critique", "Identify and fix"],
+    ["initial_explanation", "Peer explanation"],
+    ["peer_follow_up", "Peer follow-up"],
+    ["recall", "Cued recall"],
+    ["elaborate_why", "Elaborative why"],
+    ["explain_topic", "Explain topic"],
+    ["summary_check", "Summary and final questions"],
+  ],
   Persona: PERSONA_OPTIONS,
   "Vocabulary register": VOCABULARY_REGISTER_OPTIONS,
   "Interest weaving": INTEREST_WEAVING_OPTIONS,
@@ -187,6 +209,8 @@ export type PromptTesterRequest = {
   type_fields: Record<string, unknown>;
   blocks: KcBlock[];
   move_index: number;
+  active_substep: string;
+  topic_index: number;
   choice_on_screen: string;
   prerequisite_status: string;
   course_position: string;
@@ -574,6 +598,8 @@ export function testerPayload(
     type_fields: typeFields,
     blocks,
     move_index: whole(values["Move index"] ?? "", 1),
+    active_substep: values.Substep ?? "",
+    topic_index: whole(values["Topic index"] ?? "", 0),
     choice_on_screen: values["Choice widget"] === "yes" ? "yes" : "no",
     prerequisite_status: values["Prerequisite status"] ?? "",
     course_position: values["Course position"] ?? "",

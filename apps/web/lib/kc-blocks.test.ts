@@ -6,7 +6,7 @@ import { blankBlock, blankData, blockSummary, orderScope, recommendedChips, scop
 test("an empty scope falls back to topic and goal, in canvas order", () => {
   assert.deepEqual(orderScope([]), ["topic_goal"]);
   assert.deepEqual(orderScope(["retrieval_check", "curiosity", "nope"]), ["curiosity", "retrieval_check"]);
-  assert.deepEqual(scopeFromCourse(undefined).length, 9);
+  assert.deepEqual(scopeFromCourse(undefined).length, 10);
   assert.deepEqual(scopeFromCourse([]), ["topic_goal"]);
 });
 
@@ -54,6 +54,10 @@ test("blank blocks use the field catalog keys", () => {
     "elaborative_why_prompt",
     "expected_why_rationale",
   ]);
+  const explanation = blankData("explanation");
+  assert.deepEqual(Object.keys(explanation), ["block_title", "topics", "summary_takeaway"]);
+  const topics = explanation.topics as { id: string; title: string; explanation: string }[];
+  assert.equal(topics[0]?.id, "top_1");
 });
 
 test("the block summary groups a run of the same type", () => {

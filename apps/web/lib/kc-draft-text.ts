@@ -11,6 +11,7 @@ const TYPE_LABELS: Record<string, string> = {
   spot_the_flaw: "Spot the Flaw / Buggy Rule",
   teach_back: "Teach-Back / Feynman",
   retrieval_check: "Retrieval & Elaborative Interrogation",
+  explanation: "Explanatory Walkthrough",
 };
 
 const CATALOG_FIELDS: Record<string, [string, string][]> = {
@@ -75,6 +76,11 @@ const CATALOG_FIELDS: Record<string, [string, string][]> = {
     ["elaborative_why_prompt", "Elaborative why prompt"],
     ["expected_why_rationale", "Expected why rationale"],
   ],
+  explanation: [
+    ["block_title", "Block title"],
+    ["topics", "Topics"],
+    ["summary_takeaway", "Summary takeaway"],
+  ],
 };
 
 type DraftBlock = { type?: string; data?: Record<string, unknown> };
@@ -88,6 +94,7 @@ function textOf(value: unknown): string {
 function fieldLines(key: string, label: string, value: unknown): string[] {
   if (key === "choices") return choiceLines(value);
   if (key === "steps") return stepLines(value);
+  if (key === "topics") return topicLines(value);
   if (Array.isArray(value)) {
     const items = value
       .filter((item) => item != null && (typeof item !== "object" || item === null))
@@ -136,6 +143,24 @@ function stepLines(value: unknown): string[] {
     else if (why) rows.push(`- ${why}`);
   }
   return rows.length ? ["Steps:", ...rows] : [];
+}
+
+function topicLines(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const rows: string[] = [];
+  value.forEach((item, index) => {
+    if (!item || typeof item !== "object") return;
+    const topic = item as Record<string, unknown>;
+    const title = textOf(topic.title) || `Topic ${index + 1}`;
+    rows.push(`${index + 1}. ${title}`);
+    const explanation = textOf(topic.explanation);
+    const points = textOf(topic.key_points);
+    const examples = textOf(topic.examples_or_analogies);
+    if (explanation) rows.push(`Explanation: ${explanation}`);
+    if (points) rows.push(`Key points: ${points}`);
+    if (examples) rows.push(`Examples: ${examples}`);
+  });
+  return rows.length ? ["Topics:", ...rows] : [];
 }
 
 function blockLines(raw: unknown): string[] {

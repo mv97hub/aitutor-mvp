@@ -37,6 +37,7 @@ BLOCK_LABELS: dict[str, str] = {
     "spot_the_flaw": "Spot the Flaw / Buggy Rule",
     "teach_back": "Teach-Back / Feynman",
     "retrieval_check": "Retrieval & Elaborative Interrogation",
+    "explanation": "Explanatory Walkthrough",
 }
 
 BLOCK_SHORT_LABELS: dict[str, str] = {
@@ -49,6 +50,7 @@ BLOCK_SHORT_LABELS: dict[str, str] = {
     "spot_the_flaw": "Spot the Flaw",
     "teach_back": "Teach-Back",
     "retrieval_check": "Retrieval Check",
+    "explanation": "Explanation",
 }
 
 BLOCK_AUTHORING_RULES: dict[str, str] = {
@@ -92,6 +94,11 @@ BLOCK_AUTHORING_RULES: dict[str, str] = {
     "retrieval_check": (
         "- retrieval_check (Retrieval & Elaborative Interrogation): Provide recall_prompt, "
         "expected_fact, elaborative_why_prompt, and expected_why_rationale."
+    ),
+    "explanation": (
+        "- explanation (Explanatory Walkthrough): Provide 1 to 8 topics. Each topic needs id, title, "
+        "and explanation. key_points and examples_or_analogies are optional. "
+        "block_title and summary_takeaway are optional. Do not write a quiz, a correct answer, or a score."
     ),
 }
 
@@ -393,6 +400,26 @@ _BLOCK_DATA_SCHEMAS: dict[str, dict] = {
             "expected_why_rationale": _STRING,
         },
     ),
+    "explanation": _object_schema(
+        {
+            "block_title": _NULLABLE_STRING,
+            "topics": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": _object_schema(
+                    {
+                        "id": _STRING,
+                        "title": _STRING,
+                        "explanation": _STRING,
+                        "key_points": _NULLABLE_STRING,
+                        "examples_or_analogies": _NULLABLE_STRING,
+                    },
+                ),
+            },
+            "summary_takeaway": _NULLABLE_STRING,
+        },
+    ),
 }
 
 
@@ -488,6 +515,8 @@ def derive_rubric_from_blocks(blocks: list[dict]) -> list[str]:
                 criterion = "; ".join(cleaned)
         elif btype == "retrieval_check":
             criterion = str(data.get("expected_fact") or "").strip()
+        elif btype == "explanation":
+            criterion = ""
         if criterion and criterion not in rubric:
             rubric.append(criterion)
     return rubric[:16]
@@ -569,6 +598,7 @@ BLOCK_PLURAL_SHORT_LABELS: dict[str, str] = {
     "spot_the_flaw": "Spot the Flaw",
     "teach_back": "Teach-Backs",
     "retrieval_check": "Retrieval Checks",
+    "explanation": "Explanations",
 }
 
 
@@ -728,6 +758,20 @@ def seed_skeleton_blocks_from_recommendations(
                 "expected_fact": pair_goal or focus,
                 "elaborative_why_prompt": f"Why does {focus} make sense?",
                 "expected_why_rationale": pair_goal or f"Causal explanation for {focus}.",
+            }
+        elif btype == "explanation":
+            data = {
+                "block_title": focus,
+                "topics": [
+                    {
+                        "id": "top_1",
+                        "title": focus,
+                        "explanation": pair_goal or f"Explain {focus} in plain language.",
+                        "key_points": "",
+                        "examples_or_analogies": "",
+                    }
+                ],
+                "summary_takeaway": pair_goal or f"The idea to keep from {focus}.",
             }
         else:
             btype = "topic_goal"
@@ -1267,6 +1311,12 @@ def creator_bundle(
             or bdata.get("rookie_work")
             or bdata.get("peer_persona_prompt")
             or bdata.get("recall_prompt")
+            or bdata.get("block_title")
+            or (
+                (bdata.get("topics") or [{}])[0].get("title")
+                if isinstance(bdata.get("topics"), list) and bdata.get("topics") and isinstance(bdata["topics"][0], dict)
+                else ""
+            )
             or ""
         )
         block_lines.append(f"- Block {idx}: {btype} ({BLOCK_LABELS.get(btype, btype)}) — {focus}".rstrip(" —"))

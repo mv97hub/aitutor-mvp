@@ -689,6 +689,7 @@ def test_creator_schema_accepts_strict_structured_output() -> None:
         "spot_the_flaw",
         "teach_back",
         "retrieval_check",
+        "explanation",
     ]
     topic = by_type["topic_goal"]
     assert "acceptance_criteria" in topic["required"]

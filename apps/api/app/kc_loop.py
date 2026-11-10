@@ -14,6 +14,9 @@ from app.kc_prompt import (
     HINTS,
     block_evidence_id,
     default_substep_for_block,
+    explanation_topic_index,
+    explanation_topics,
+    initial_block_state,
     max_retries_for_block,
     substeps_for_block,
 )
@@ -152,6 +155,67 @@ def mcq_payload(block: dict, state: dict | None) -> tuple[list[dict], int]:
     return choices, correct
 
 
+_PROCEED_EXACT = {
+    "good to proceed",
+    "no questions",
+    "no question",
+    "next topic",
+    "next",
+    "got it",
+    "ready",
+    "move on",
+    "lets continue",
+    "no final questions",
+    "no final questions lets continue",
+    "got it ready for the next topic",
+}
+
+
+def _proceed_text(answer: str) -> str:
+    text = (answer or "").lower().replace("—", " ").replace("–", " ").replace("'", "")
+    text = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text)
+    return " ".join(text.split())
+
+
+def learner_ready_to_proceed(answer: str, flagged: bool) -> bool:
+    """True when the learner wants the next topic or the block summary to finish."""
+    if flagged:
+        return True
+    raw = answer or ""
+    lowered = raw.lower()
+    if "?" in raw or "elaborat" in lowered:
+        return False
+    text = _proceed_text(raw)
+    if not text:
+        return False
+    if text in _PROCEED_EXACT:
+        return True
+    words = text.split()
+    if len(words) > 14:
+        return False
+    if words[0] in {"what", "why", "how", "when", "where", "who", "can", "could", "would", "explain", "tell"}:
+        return False
+    if any(token in words for token in ("not", "wrong", "dont", "confused")):
+        return False
+    for phrase in (
+        "good to proceed",
+        "no questions",
+        "no question",
+        "no final questions",
+        "next topic",
+        "move on",
+        "lets continue",
+        "got it ready for the next topic",
+    ):
+        if phrase in text:
+            return True
+    if text in {"ready", "next"} or text.endswith(" ready"):
+        return True
+    if "got it" in text:
+        return True
+    return False
+
+
 def answer_addresses_substep(
     block: dict,
     substep: str,
@@ -242,6 +306,8 @@ def answer_addresses_substep(
     if btype == "retrieval_check" and substep == "elaborate_why":
         rationale = str(data.get("expected_why_rationale") or "")
         return _matches(answer, rationale) if rationale else _substantive(answer)
+    if btype == "explanation":
+        return False
     return _substantive(answer)
 
 
@@ -266,7 +332,143 @@ def _block_title(block: dict, step_index: int) -> str:
         return str(data.get("peer_persona_prompt") or f"Block {step_index + 1}").strip()
     if btype == "retrieval_check":
         return str(data.get("recall_prompt") or f"Block {step_index + 1}").strip()
+    if btype == "explanation":
+        title = str(data.get("block_title") or "").strip()
+        if title:
+            return title
+        topics = data.get("topics") if isinstance(data.get("topics"), list) else []
+        if topics and isinstance(topics[0], dict):
+            topic_title = str(topics[0].get("title") or "").strip()
+            if topic_title:
+                return topic_title
     return f"Block {step_index + 1}"
+
+
+def _explanation_stay(
+    *,
+    state: dict,
+    index: int,
+    bid: str,
+    results: list[dict],
+    met: list[str],
+    reveals: int,
+    move_attempts: int,
+    enrichment_turns: int,
+) -> BlockResolution:
+    return BlockResolution(
+        decision="stay",
+        hint_tier="nudge",
+        move_attempts=move_attempts,
+        reveals=reveals,
+        enrichment_turns=enrichment_turns,
+        rubric_met=met,
+        misconception="",
+        next_step=index,
+        next_block_id=bid,
+        next_block_state=state,
+        block_results=results,
+        mark_known=False,
+        mark_fragile=False,
+        redirect=False,
+        unit_complete=False,
+        advance_block=False,
+        passed=False,
+    )
+
+
+def _resolve_explanation_turn(
+    *,
+    answer: str,
+    substep_passed: bool,
+    block_complete: bool,
+    block: dict,
+    blocks: list[dict],
+    index: int,
+    bid: str,
+    state: dict,
+    substep: str,
+    results: list[dict],
+    met: list[str],
+    reveals: int,
+    move_attempts: int,
+    cfg: dict,
+    strong_text: str,
+    work_text: str,
+    enrichment_turns: int = 0,
+) -> BlockResolution:
+    """Walk topics, then the summary. Questions stay. Ready moves on. Never quizzes."""
+    topics = explanation_topics(block)
+    topic_index = explanation_topic_index(block, state)
+    if substep not in {"explain_topic", "summary_check"}:
+        substep = "explain_topic"
+    state["substep"] = substep
+    state["topic_index"] = topic_index
+    ready = learner_ready_to_proceed(answer, bool(substep_passed) or bool(block_complete))
+    if not ready:
+        state["elaboration_turns"] = int(state.get("elaboration_turns") or 0) + 1
+        return _explanation_stay(
+            state=state,
+            index=index,
+            bid=bid,
+            results=results,
+            met=met,
+            reveals=reveals,
+            move_attempts=move_attempts,
+            enrichment_turns=enrichment_turns,
+        )
+    tries = int(state.get("block_attempts") or 0) + 1
+    state["block_attempts"] = tries
+    state["elaboration_turns"] = 0
+    if substep == "explain_topic" and topics and topic_index < len(topics) - 1:
+        state["topic_index"] = topic_index + 1
+        state["substep"] = "explain_topic"
+        return _explanation_stay(
+            state=state,
+            index=index,
+            bid=bid,
+            results=results,
+            met=met,
+            reveals=reveals,
+            move_attempts=0,
+            enrichment_turns=enrichment_turns,
+        )
+    if substep == "explain_topic":
+        state["substep"] = "summary_check"
+        return _explanation_stay(
+            state=state,
+            index=index,
+            bid=bid,
+            results=results,
+            met=met,
+            reveals=reveals,
+            move_attempts=0,
+            enrichment_turns=enrichment_turns,
+        )
+    title = _block_title(block, index)
+    ev_id = block_evidence_id(block, index, "summary_check")
+    if ev_id not in met:
+        met.append(ev_id)
+    results.append(
+        {
+            "id": bid,
+            "block_id": bid,
+            "block_type": "explanation",
+            "title": title,
+            "outcome": "engaged",
+            "attempts": tries,
+            "strong": strong_text or title,
+            "work_on": work_text,
+            "summary": f"engaged explanation after {tries} tries",
+        }
+    )
+    return _advance_or_close_component(
+        blocks=blocks,
+        index=index,
+        results=results,
+        met=met,
+        reveals=reveals,
+        cfg=cfg,
+    )
 
 
 def resolve_block_turn(
@@ -315,6 +517,26 @@ def resolve_block_turn(
     state["substep"] = substep
 
     results = [dict(r) for r in (block_results or []) if isinstance(r, dict)]
+    if btype == "explanation":
+        return _resolve_explanation_turn(
+            answer=answer,
+            substep_passed=substep_passed,
+            block_complete=block_complete,
+            block=block,
+            blocks=blocks,
+            index=index,
+            bid=bid,
+            state=state,
+            substep=substep,
+            results=results,
+            met=met,
+            reveals=reveals,
+            move_attempts=move_attempts,
+            cfg=cfg,
+            strong_text=(strong or "").strip(),
+            work_text=(work_on or "").strip(),
+            enrichment_turns=enrichment_turns,
+        )
     max_retries = max_retries_for_block(block, cfg, goal)
 
     # Misconception handling
@@ -509,10 +731,17 @@ def resolve_block_turn(
 
 
 def _counts_toward_mastery(block: dict, cfg: dict) -> bool:
-    if str(block.get("type") or "").strip() != "curiosity":
+    kind = str(block.get("type") or "").strip()
+    if kind not in {"curiosity", "explanation"}:
         return True
-    bcfg = ((cfg or {}).get("blocks") or {}).get("curiosity") or {}
+    bcfg = ((cfg or {}).get("blocks") or {}).get(kind) or {}
     return bool(bcfg.get("counts_toward_mastery_score", False))
+
+
+def _outcome_succeeded(row: dict | None) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return str(row.get("outcome") or "") in {"passed", "engaged"}
 
 
 def _advance_or_close_component(
@@ -538,10 +767,7 @@ def _advance_or_close_component(
             misconception="",
             next_step=next_idx,
             next_block_id=next_id,
-            next_block_state={
-                "substep": default_substep_for_block(next_blk, cfg),
-                "dialogue_turns": 0,
-            },
+            next_block_state=initial_block_state(next_blk, cfg),
             block_results=results,
             mark_known=False,
             mark_fragile=False,
@@ -564,7 +790,7 @@ def _advance_or_close_component(
         counted = True
         key = str(block.get("id") or f"blk_{position + 1}").strip()
         row = by_id.get(key)
-        if row is None or row.get("outcome") != "passed":
+        if not _outcome_succeeded(row):
             fragile = True
     if not counted:
         fragile = False

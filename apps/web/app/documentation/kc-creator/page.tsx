@@ -36,12 +36,12 @@ export default function KcCreatorDocsPage() {
         <p>
           The block canvas is the ordered lesson. Each card is one block: its place in the sequence, its type, and the
           fields for that type. Up and Down move a card. Duplicate copies it under the original. Collapse hides the
-          fields. Delete removes the card. Add block, above the list and between cards, inserts any of the nine types.
+          fields. Delete removes the card. Add block, above the list and between cards, inserts any of the ten types.
           Changing a card&apos;s type starts that type&apos;s empty fields and keeps the card&apos;s place.
         </p>
         <p>
-          AI Block Scope sits at the top right, beside Fast Create All. It is a multi-select of the nine block types,
-          labeled with how many are on, or All 9 blocks when every type is on. Select All checks every type. Topic +
+          AI Block Scope sits at the top right, beside Fast Create All. It is a multi-select of the ten block types,
+          labeled with how many are on, or All 10 blocks when every type is on. Select All checks every type. Topic +
           MCQ Only leaves Topic / Goal and Multiple choice. Clearing the last checked type leaves Topic / Goal. The
           choice is saved on the course and is sent with the component chat, so the draft stays inside that scope. The
           canvas can still hold any type you add by hand.
@@ -125,7 +125,7 @@ export default function KcCreatorDocsPage() {
             static. A case study contributes its invariant principle. A Socratic block contributes its target
             synthesis. A worked example contributes its solo expected answer. Spot the flaw contributes its corrected
             version. Teach-back contributes its required concepts. A retrieval check contributes its expected fact. A
-            curiosity block contributes no line.
+            curiosity block contributes no line. An explanation block contributes no line.
           </li>
         </ul>
 
@@ -442,6 +442,31 @@ export default function KcCreatorDocsPage() {
           <li>
             <strong>Expected why rationale</strong> (expected_why_rationale). Required. The causal or conceptual
             explanation for the why question. That reply is the acceptance check on the why step.
+          </li>
+        </ul>
+
+        <h3>
+          {BLOCK_CONFIG_TITLES.explanation} (explanation)
+        </h3>
+        <p>
+          The tutor explains one topic at a time, then asks whether the learner has questions or wants that topic
+          elaborated. A question stays on the same topic. The next topic starts only when the learner is ready. After
+          the last topic, the tutor summarizes every topic and asks if there are final questions. This block never
+          quizzes. Ready when it has one to eight topics and every topic has a title and an explanation. Completing it
+          does not mark the component fragile.
+        </p>
+        <ul>
+          <li>
+            <strong>Block title</strong> (block_title). Optional. The name of the whole walkthrough.
+          </li>
+          <li>
+            <strong>Topics</strong> (topics). Required. One to eight entries. Each needs a title and a detailed
+            explanation. Key points and examples or analogies are optional. Add topic appends an entry. Up and Down
+            reorder the entries.
+          </li>
+          <li>
+            <strong>Summary takeaway</strong> (summary_takeaway). Optional. The sentence the summary uses after the
+            last topic. When it is empty, the tutor synthesizes the topics.
           </li>
         </ul>
 

@@ -545,6 +545,32 @@ BLOCK_CONFIG_SPECS: dict[str, dict[str, tuple]] = {
         "max_retries_before_reveal": ("int", 1, 4),
         "accept_paraphrase": ("bool",),
     },
+    "explanation": {
+        "explanation_depth": ("int", 1, 5),
+        "allow_depth_override_student_length": ("bool",),
+        "elaboration_style_on_question": (
+            "enum",
+            {
+                "fresh_analogy_and_example",
+                "step_by_step_breakdown",
+                "zoom_out_big_picture",
+                "adaptive_to_question",
+            },
+        ),
+        "check_in_prompt_style": (
+            "enum",
+            {"questions_or_elaborate", "curiosity_invitation", "brief_ready_check"},
+        ),
+        "end_of_block_summary_style": (
+            "enum",
+            {
+                "bulleted_recap_with_takeaway",
+                "connected_narrative_synthesis",
+                "concise_takeaway_only",
+            },
+        ),
+        "counts_toward_mastery_score": ("bool",),
+    },
 }
 
 
@@ -557,7 +583,7 @@ def normalize_kc_tutor_config(
     *,
     strict: bool = False,
 ) -> dict:
-    """Merge and validate overarching + 9 block-type tutor configurations."""
+    """Merge and validate overarching and per-block tutor configurations."""
     base = default_kc_tutor_config()
     if not isinstance(raw, dict):
         return base

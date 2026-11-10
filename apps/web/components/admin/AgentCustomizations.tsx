@@ -31,10 +31,12 @@ import type { TutorProfile } from "@/lib/types";
 
 type SectionTab = "voice" | "overarching" | "blocks" | "all";
 
+const BLOCK_SECTION = `Block Teaching Rules (Layer 4 — ${BLOCK_TYPES.length} Block Types)`;
+
 const SECTION_TABS: readonly { id: SectionTab; label: string }[] = [
   { id: "voice", label: "Voice & Persona (Layer 3)" },
   { id: "overarching", label: "Overarching Teaching Policy (Layer 4)" },
-  { id: "blocks", label: "Block Teaching Rules (Layer 4 — 9 Block Types)" },
+  { id: "blocks", label: BLOCK_SECTION },
   { id: "all", label: "Show All" },
 ];
 
@@ -48,6 +50,7 @@ const BLOCK_PILL_LABELS: Record<KcBlockType, string> = {
   spot_the_flaw: "Spot the Flaw",
   teach_back: "Teach-Back",
   retrieval_check: "Retrieval Check",
+  explanation: "Explanatory",
 };
 
 type VoiceFieldSpec = {
@@ -894,7 +897,7 @@ export function AgentCustomizations() {
             ) : (
               <p className="agent-search-banner">
                 Showing matching controls for <strong>&ldquo;{searchQuery.trim()}&rdquo;</strong> across Layer 3,
-                Overarching Policy, and the 9 Block Types.
+                Overarching Policy, and the {BLOCK_TYPES.length} Block Types.
               </p>
             )}
 
@@ -1007,12 +1010,12 @@ export function AgentCustomizations() {
             {showBlocksSection ? (
               <section
                 className="agent-config-section"
-                aria-label="Block Teaching Rules (Layer 4 — 9 Block Types)"
+                aria-label={BLOCK_SECTION}
               >
                 <div className="agent-section-heading">
-                  <h3 className="agent-layer">Block Teaching Rules (Layer 4 — 9 Block Types)</h3>
+                  <h3 className="agent-layer">{BLOCK_SECTION}</h3>
                   <p className="help">
-                    Specialized teaching mechanics, retry caps, and scaffolding rules for each of the nine block types.
+                    Specialized teaching mechanics, retry caps, and scaffolding rules for each of the {BLOCK_TYPES.length} block types.
                   </p>
                 </div>
 
@@ -1047,7 +1050,7 @@ export function AgentCustomizations() {
                       aria-pressed={showAllBlocks}
                       onClick={() => setShowAllBlocks((prev) => !prev)}
                     >
-                      Show All 9
+                      Show All {BLOCK_TYPES.length}
                     </button>
                   </div>
                 ) : null}

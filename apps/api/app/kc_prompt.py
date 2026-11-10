@@ -61,7 +61,95 @@ SUBSTEP_LABELS: dict[str, str] = {
     "peer_follow_up": "Peer Follow-Up",
     "recall": "Cued Recall",
     "elaborate_why": "Elaborative Why",
+    "explain_topic": "Explain Topic",
+    "summary_check": "Summary & Final Questions",
 }
+
+
+def explanation_topics(block: dict) -> list[dict]:
+    """Ordered topic entries on an explanation block."""
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    raw = data.get("topics") if isinstance(data.get("topics"), list) else []
+    topics: list[dict] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        topics.append(
+            {
+                "id": str(item.get("id") or f"top_{index}").strip() or f"top_{index}",
+                "title": str(item.get("title") or "").strip(),
+                "explanation": str(item.get("explanation") or "").strip(),
+                "key_points": str(item.get("key_points") or "").strip(),
+                "examples_or_analogies": str(item.get("examples_or_analogies") or "").strip(),
+            }
+        )
+    return topics
+
+
+def explanation_topic_index(block: dict, state: dict | None) -> int:
+    topics = explanation_topics(block)
+    if not topics:
+        return 0
+    try:
+        index = int((state or {}).get("topic_index") or 0)
+    except (TypeError, ValueError):
+        index = 0
+    return min(max(index, 0), len(topics) - 1)
+
+
+def initial_block_state(block: dict, cfg: dict | None = None) -> dict:
+    """State written when a block is entered."""
+    state = {"substep": default_substep_for_block(block, cfg), "dialogue_turns": 0}
+    if str(block.get("type") or "").strip() == "explanation":
+        state["topic_index"] = 0
+        state["elaboration_turns"] = 0
+    return state
+
+
+def _explanation_depth(cfg: dict | None) -> int:
+    bcfg = ((cfg or {}).get("blocks") or {}).get("explanation") or {}
+    try:
+        depth = int(bcfg.get("explanation_depth", 4) or 4)
+    except (TypeError, ValueError):
+        depth = 4
+    return min(5, max(1, depth))
+
+
+def _topic_is_rich(block: dict, state: dict | None) -> bool:
+    topics = explanation_topics(block)
+    if not topics:
+        return False
+    topic = topics[explanation_topic_index(block, state)]
+    return len(f"{topic['explanation']} {topic['key_points']}".strip()) >= 180
+
+
+def explanation_length_override(
+    block: dict,
+    cfg: dict | None,
+    *,
+    response_length: str,
+    reading_level: str,
+    explanation_style: str,
+    active_block_state: dict | None = None,
+) -> str:
+    """The cross-layer length sentence, or empty when this turn keeps response_length."""
+    if str(block.get("type") or "").strip() != "explanation":
+        return ""
+    bcfg = ((cfg or {}).get("blocks") or {}).get("explanation") or {}
+    if not bool(bcfg.get("allow_depth_override_student_length", True)):
+        return ""
+    depth = _explanation_depth(cfg)
+    elaborating = int((active_block_state or {}).get("elaboration_turns") or 0) > 0
+    if depth < 3 and not _topic_is_rich(block, active_block_state) and not elaborating:
+        return ""
+    return (
+        "CROSS-LAYER LENGTH OVERRIDE FOR EXPLANATORY BLOCK: Because this is a dedicated Explanatory Block "
+        f"at depth {depth}/5, do NOT truncate your explanation to fit the learner's general `response_length` "
+        f"(`{response_length}`) when the topic requires more sentences to explain clearly and completely. "
+        "Use as many sentences or short paragraphs as needed to explain the topic well, while still keeping "
+        f"each individual sentence at the learner's reading level (`{reading_level}`) and using their preferred "
+        f"explanation style (`{explanation_style}`)."
+    )
 
 _GENERATED_MCQ_SCHEMA = {
     "type": ["object", "null"],
@@ -238,6 +326,8 @@ def default_substep_for_block(block: dict, cfg: dict | None = None) -> str:
         return "initial_explanation"
     if btype == "retrieval_check":
         return "recall"
+    if btype == "explanation":
+        return "explain_topic"
     return "main"
 
 
@@ -279,15 +369,31 @@ def substeps_for_block(block: dict, cfg: dict | None = None) -> list[str]:
         if bool(bcfg.get("require_elaborative_why", True)):
             return ["recall", "elaborate_why"]
         return ["recall"]
+    if btype == "explanation":
+        return ["explain_topic", "summary_check"]
     return ["main"]
 
 
-def format_active_substep_label(block: dict, substep: str, cfg: dict | None = None) -> str:
+def format_active_substep_label(
+    block: dict,
+    substep: str,
+    cfg: dict | None = None,
+    active_block_state: dict | None = None,
+) -> str:
     """Human-readable label for multi-step blocks (e.g. 'Contrast & Rule · Substep 2 of 2')."""
     if not block or not isinstance(block, dict):
         return ""
-    substeps = substeps_for_block(block, cfg)
     btype = str(block.get("type") or "topic_goal").strip()
+    if btype == "explanation":
+        topics = explanation_topics(block)
+        if (substep or "explain_topic") == "summary_check":
+            return "Block Summary & Final Questions"
+        index = explanation_topic_index(block, active_block_state)
+        total = max(len(topics), 1)
+        title = topics[index]["title"] if topics else ""
+        head = f"Topic {index + 1} of {total}"
+        return f"{head}: {title}" if title else head
+    substeps = substeps_for_block(block, cfg)
     if btype == "mcq" and substep == "awaiting_why" and "awaiting_why" not in substeps:
         eff_substeps = ["choice", "awaiting_why"]
     else:
@@ -302,12 +408,21 @@ def format_active_substep_label(block: dict, substep: str, cfg: dict | None = No
     return f"Substep {pos} of {total_sub}"
 
 
-def block_step_label(block: dict, step_index: int, total_blocks: int, substep: str = "") -> str:
+def block_step_label(
+    block: dict,
+    step_index: int,
+    total_blocks: int,
+    substep: str = "",
+    active_block_state: dict | None = None,
+) -> str:
     """Format 'Block {k} of {N}: {Block Type Label}' (with substep label when multi-part)."""
     btype = str(block.get("type") or "topic_goal").strip()
     type_label = BLOCK_LABELS.get(btype, btype)
-    sub_label = SUBSTEP_LABELS.get(substep or "", "")
     base = f"Block {step_index + 1} of {max(1, total_blocks)}: {type_label}"
+    if btype == "explanation":
+        detail = format_active_substep_label(block, substep or "explain_topic", None, active_block_state)
+        return f"{base} · {detail}" if detail else base
+    sub_label = SUBSTEP_LABELS.get(substep or "", "")
     if sub_label:
         return f"{base} · {sub_label}"
     return base
@@ -402,7 +517,7 @@ def on_screen_choice(
 def block_evidence_id(block: dict, step_index: int, substep: str = "") -> str:
     bid = str(block.get("id") or f"blk_{step_index + 1}").strip()
     btype = str(block.get("type") or "topic_goal").strip()
-    if btype == "curiosity":
+    if btype in {"curiosity", "explanation"}:
         return f"{bid}:engaged"
     if substep and substep not in {"main", "choice", "critique"}:
         return f"{bid}:{substep}"
@@ -418,6 +533,8 @@ def max_retries_for_block(block: dict, cfg: dict, goal: KcGoal | None = None) ->
         return max(1, int(bcfg.get("max_retry_attempts", 2) or 2))
     if btype == "curiosity":
         return max(1, int(bcfg.get("max_wonder_turns", 2) or 2))
+    if btype == "explanation":
+        return 99
     return max(1, int(bcfg.get("max_retries_before_reveal", 2) or 2))
 
 
@@ -451,6 +568,14 @@ def block_material_summary(block: dict, substep: str = "") -> str:
         return f"Peer prompt: {data.get('peer_persona_prompt') or ''}"
     if btype == "retrieval_check":
         return f"Recall: {data.get('recall_prompt') or ''} | Fact: {data.get('expected_fact') or ''}"
+    if btype == "explanation":
+        topics = explanation_topics(block)
+        first = topics[0]["title"] if topics else ""
+        heading = str(data.get("block_title") or first or "Explanatory walkthrough").strip()
+        return (
+            f"Explanatory walkthrough: {heading}. Topic 1 of {max(len(topics), 1)}: {first or 'the first topic'}. "
+            "Do not quiz."
+        )
     return str(data)
 
 
@@ -733,6 +858,8 @@ def _who_you_are_talking_to(
     profile: TutorProfile,
     block: dict,
     interests: str,
+    cfg: dict | None = None,
+    active_block_state: dict | None = None,
 ) -> list[str]:
     cp = effective_child_profile(student)
     parts = [f"Speak to {student.display_name}."]
@@ -766,7 +893,28 @@ def _who_you_are_talking_to(
     elif not (early and young):
         parts.append(_READING_LEVEL_LINES.get(read_lvl, _READING_LEVEL_LINES["on_grade"]))
 
-    parts.append(_RESPONSE_LENGTH_LINES.get(cp["response_length"], _RESPONSE_LENGTH_LINES["balanced"]))
+    length_override = explanation_length_override(
+        block,
+        cfg,
+        response_length=str(cp["response_length"]),
+        reading_level=str(cp["reading_level"]),
+        explanation_style=str(cp["explanation_style"]),
+        active_block_state=active_block_state,
+    )
+    if length_override:
+        parts.append(length_override)
+    else:
+        parts.append(_RESPONSE_LENGTH_LINES.get(cp["response_length"], _RESPONSE_LENGTH_LINES["balanced"]))
+        bcfg = ((cfg or {}).get("blocks") or {}).get("explanation") or {}
+        if (
+            str(block.get("type") or "").strip() == "explanation"
+            and bool(bcfg.get("allow_depth_override_student_length", True))
+        ):
+            parts.append(
+                "If the learner asks to elaborate, do NOT truncate that elaboration to fit "
+                f"`response_length` (`{cp['response_length']}`). Keep each sentence at reading level "
+                f"`{cp['reading_level']}` and use explanation style `{cp['explanation_style']}`."
+            )
     parts.append(_EXPRESSION_STYLE_LINES.get(cp["expression_style"], _EXPRESSION_STYLE_LINES["short_phrases"]))
 
     raw_modality = (student.modality or "").strip()
@@ -820,8 +968,12 @@ def _learner_sentence(
     profile: TutorProfile,
     block: dict,
     interests: str,
+    cfg: dict | None = None,
+    active_block_state: dict | None = None,
 ) -> str:
-    return " ".join(_who_you_are_talking_to(student, profile, block, interests))
+    return " ".join(
+        _who_you_are_talking_to(student, profile, block, interests, cfg, active_block_state)
+    )
 
 
 def _close_summary_sentence(close_depth: str, kind: str) -> str:
@@ -921,8 +1073,9 @@ def _this_turn(
     challenge_appetite: str = "steady",
     learning_support: str = "none",
     communication_tone: str = "warm_and_encouraging",
+    active_block_state: dict | None = None,
 ) -> list[str]:
-    label = block_step_label(block, step_index, total_blocks, substep)
+    label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     mode_note = "The child will pick on screen." if choice_on_screen else "The child will type."
     lines = [
         "You are the knowledge-component tutor.",
@@ -1025,8 +1178,116 @@ def _this_turn(
             is_final_block_and_substep=is_final_block_and_substep,
         )
     )
+    if str(block.get("type") or "") == "explanation":
+        if opening:
+            lines.append(
+                "This is the opening of the explanatory block. Explain only the current topic in detail, "
+                "then ask if the learner has questions or wants you to elaborate. Do not quiz, and do not start the next topic yet."
+            )
+        elif substep == "summary_check":
+            lines.append(
+                "The learner is on the block summary. If they ask a final question, answer it and ask whether they have any other final questions. "
+                "If they have no final questions or are ready to continue, complete the block. That completing reply asks no new question. "
+                "Do not quiz."
+            )
+        else:
+            lines.append(
+                "The learner has replied on the current topic. If they have a question or want elaboration, stay on this topic and answer. "
+                "If they are ready, follow the move-on instruction in What to teach and explain the next topic, or summarize when this was the last topic. "
+                "Do not quiz."
+            )
     del misconception_policy
     del prerequisite_support_policy
+    return lines
+
+
+def _explanation_teach_lines(block: dict, substep: str, state: dict, *, opening: bool) -> list[str]:
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    topics = explanation_topics(block)
+    total = max(len(topics), 1)
+    index = explanation_topic_index(block, state)
+    lines = [
+        "Do NOT quiz or test the learner on this block. Never ask them to solve, recall for a grade, or prove they know it.",
+        "Explain the topic clearly, then ask if they have any questions or would like you to elaborate.",
+    ]
+    title = str(data.get("block_title") or "").strip()
+    if title:
+        lines.append(f"Block title: {_finish(title)}")
+    covered = [item["title"] for item in topics[:index] if item["title"]]
+    if substep == "summary_check":
+        lines.append(
+            "Active substep: summary_check. The learner has finished every topic and is ready for the block summary."
+        )
+        lines.append("Covered topics:")
+        if topics:
+            for position, topic in enumerate(topics, start=1):
+                detail = topic["explanation"] or "Synthesize from the title."
+                if topic["key_points"]:
+                    detail = f"{detail} Key points: {topic['key_points']}."
+                lines.append(f"{position}. {topic['title'] or 'Untitled'}: {detail}")
+        else:
+            lines.append("No topic entries were stored. Synthesize the block title.")
+        takeaway = str(data.get("summary_takeaway") or "").strip()
+        if takeaway:
+            lines.append(f"Summary takeaway to anchor the recap: {_finish(takeaway)}")
+        else:
+            lines.append("No stored summary takeaway. Synthesize across the topic titles and explanations.")
+        lines.append(
+            "Give a cohesive summary of every topic discussed in this block, then ask if the learner has any final questions. "
+            "If they ask a final question, set substep_passed=false, answer it, and ask again. "
+            "If they have no final questions or are ready to continue, set substep_passed=true and block_complete=true."
+        )
+        return lines
+    topic = topics[index] if topics else {
+        "title": "",
+        "explanation": "",
+        "key_points": "",
+        "examples_or_analogies": "",
+    }
+    lines.append(
+        f"Active substep: explain_topic. Topic {index + 1} of {total}: {topic['title'] or 'this topic'}."
+    )
+    if covered:
+        lines.append("Already covered topic titles: " + "; ".join(covered) + ".")
+    if topic["explanation"]:
+        lines.append(f"Explain this topic from: {_finish(topic['explanation'])}")
+    if topic["key_points"]:
+        lines.append(f"Key points to weave in: {_finish(topic['key_points'])}")
+    if topic["examples_or_analogies"]:
+        lines.append(f"Example or analogy to use: {_finish(topic['examples_or_analogies'])}")
+    if opening:
+        lines.append(
+            "This is the opening turn. Explain only this topic at the configured depth, then ask if they have questions or want elaboration. "
+            "Do not start a later topic yet."
+        )
+        return lines
+    lines.append(
+        "If the learner asks a question or wants elaboration, set substep_passed=false, stay on this topic, "
+        "answer with a fresh angle, and check in again. Do not move on while they still have questions."
+    )
+    if topics and index < len(topics) - 1:
+        nxt = topics[index + 1]
+        lines.append(
+            "If the learner is good to proceed, set substep_passed=true and, in this same reply, explain the next topic: "
+            f"Topic {index + 2} of {total}: {nxt['title'] or 'the next topic'}. {_finish(nxt['explanation'])}"
+        )
+        if nxt["key_points"]:
+            lines.append(f"Next topic key points: {_finish(nxt['key_points'])}")
+        if nxt["examples_or_analogies"]:
+            lines.append(f"Next topic example or analogy: {_finish(nxt['examples_or_analogies'])}")
+        lines.append("After that explanation, ask if they have questions or want elaboration. Do not quiz.")
+        return lines
+    takeaway = str(data.get("summary_takeaway") or "").strip()
+    lines.append(
+        "This is the last topic. If the learner is good to proceed, set substep_passed=true and, in this same reply, "
+        "summarize every topic in the block and ask if they have any final questions. Do not quiz."
+    )
+    if takeaway:
+        lines.append(f"Summary takeaway: {_finish(takeaway)}")
+    if topics:
+        lines.append("Topics to include in that summary:")
+        for position, item in enumerate(topics, start=1):
+            lines.append(f"{position}. {item['title'] or 'Untitled'}: {item['explanation']}")
     return lines
 
 
@@ -1038,6 +1299,7 @@ def _what_to_teach(
     substep: str,
     active_block_state: dict,
     next_block: dict | None = None,
+    opening: bool = False,
 ) -> list[str]:
     """Strict block isolation: injects ONLY the currently active block and its active substep."""
     btype = str(block.get("type") or "topic_goal").strip()
@@ -1225,6 +1487,9 @@ def _what_to_teach(
                     f"When the learner recalls the fact (substep_passed=true) and elaborative why is enabled, "
                     f"affirm the fact and ask: {_finish(why_p)}"
                 )
+
+    elif btype == "explanation":
+        lines.extend(_explanation_teach_lines(block, substep, active_block_state, opening=opening))
 
     lines.append(f"Evidence id for this active step: {ev_id}. Include '{ev_id}' in rubric_met when satisfied.")
     if next_block is not None and isinstance(next_block, dict):
@@ -1486,7 +1751,107 @@ def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> l
         else:
             lines.append("The fact has to be stated in the stored words. A loose paraphrase does not count.")
 
+    elif btype == "explanation":
+        depth = _explanation_depth(cfg)
+        allow_override = bool(bcfg.get("allow_depth_override_student_length", True))
+        elaboration = str(bcfg.get("elaboration_style_on_question") or "fresh_analogy_and_example")
+        check_in = str(bcfg.get("check_in_prompt_style") or "questions_or_elaborate")
+        summary_style = str(bcfg.get("end_of_block_summary_style") or "bulleted_recap_with_takeaway")
+        counts = bool(bcfg.get("counts_toward_mastery_score", False))
+        lines.append(
+            "This block is a guided explanation, not a quiz. There is no miss, no retry, and no reveal. "
+            "Ignore miss, retry, scaffold, and reveal instructions."
+        )
+        lines.append(_explanation_depth_line(depth))
+        if allow_override and depth >= 3:
+            lines.append(
+                "Length override is on. Do not cut the explanation down to the learner's response_length "
+                "when the topic needs more sentences. Still match their reading level and explanation style."
+            )
+        elif allow_override:
+            lines.append(
+                "Stay inside the learner's response_length unless they ask you to elaborate. "
+                "An elaboration request may run longer, still at their reading level and explanation style."
+            )
+        else:
+            lines.append(
+                "Stay strictly inside the learner's response_length. Use a later elaboration turn if they ask for more."
+            )
+        elaborations = {
+            "step_by_step_breakdown": (
+                "When the learner asks a question or wants elaboration, break the topic into a new step-by-step sequence. "
+                "Do not repeat the same paragraph."
+            ),
+            "zoom_out_big_picture": (
+                "When the learner asks a question or wants elaboration, zoom out to the big picture and how this topic fits the block. "
+                "Do not repeat the same paragraph."
+            ),
+            "adaptive_to_question": (
+                "When the learner asks a question or wants elaboration, answer the question they actually asked, from a new angle. "
+                "Do not repeat the same paragraph."
+            ),
+        }
+        lines.append(
+            elaborations.get(
+                elaboration,
+                "When the learner asks a question or wants elaboration, answer with a fresh analogy and a new example. "
+                "Do not repeat the same paragraph.",
+            )
+        )
+        check_ins = {
+            "curiosity_invitation": (
+                "Close each topic by inviting a curiosity or what-if question, and also offer to elaborate or move on."
+            ),
+            "brief_ready_check": (
+                "Close each topic with a short check-in: Any questions on this part, or are you ready for the next topic?"
+            ),
+        }
+        lines.append(
+            check_ins.get(
+                check_in,
+                "Close each topic by asking whether they have any questions, or would like you to elaborate before the next part.",
+            )
+        )
+        summaries = {
+            "connected_narrative_synthesis": (
+                "On the summary step, summarize every topic as one connected narrative that shows how they fit together, "
+                "then ask if there are any final questions."
+            ),
+            "concise_takeaway_only": (
+                "On the summary step, give one concise takeaway that covers every topic, then ask if there are any final questions."
+            ),
+        }
+        lines.append(
+            summaries.get(
+                summary_style,
+                "On the summary step, recap every topic in short bullets, add one takeaway sentence, "
+                "and ask if there are any final questions.",
+            )
+        )
+        if substep == "summary_check":
+            lines.append("You are on the summary step now. Summarize every topic before you ask about final questions.")
+        if counts:
+            lines.append(
+                "Completing this walkthrough counts toward whether the component is known. "
+                "It still never marks the component fragile, because the learner is not quizzed."
+            )
+        else:
+            lines.append(
+                "This block does not count toward known or fragile. Completing the walkthrough is engaged, never a miss."
+            )
+
     return lines
+
+
+def _explanation_depth_line(depth: int) -> str:
+    lines = {
+        1: "Explanation depth 1 of 5 (Concise Overview): use 2 to 3 clear sentences that hit the core idea. Strictly obey response_length.",
+        2: "Explanation depth 2 of 5 (Focused Explanation): use one short paragraph of 3 to 4 sentences with one quick example. Respect response_length.",
+        3: "Explanation depth 3 of 5 (Balanced Explanation + Example): give a clear explanation plus a concrete example in 4 to 6 sentences. You may exceed bite_sized by 1 or 2 sentences when clarity needs it.",
+        4: "Explanation depth 4 of 5 (Detailed Multi-Angle Walkthrough): explain the topic in 1 to 2 well-structured paragraphs (5 to 8 sentences) with an example and why-it-works intuition.",
+        5: "Explanation depth 5 of 5 (Comprehensive Deep Dive): give a rich multi-paragraph breakdown with intuition, the step-by-step mechanism, and a real-world example or analogy. Never cut a complex topic short.",
+    }
+    return lines.get(depth, lines[4])
 
 
 def _how_to_teach(
@@ -1635,7 +2000,12 @@ def _how_to_teach(
             + reassurance_note
         )
 
-    if not choice_on_screen:
+    if str(block.get("type") or "") == "explanation":
+        lines.append(
+            "Explanatory block override: do not quiz, score, or reveal an answer. "
+            "The only questions you ask are whether the learner has questions, wants elaboration, or is ready to continue."
+        )
+    elif not choice_on_screen:
         q_line = "End a teaching or probing turn with a single clear question."
         if include_close:
             q_line += " A unit close or course outro asks no new question."
@@ -1673,6 +2043,13 @@ def _what_happened(
         f"Active substep: {substep}.",
         f"Attempts on this block/substep so far: {attempts}.",
         f"Dialogue turns on this block: {dialogue_turns}.",
+    ]
+    if substep in {"explain_topic", "summary_check"}:
+        lines.append(f"Topic index: {int(active_block_state.get('topic_index') or 0)}.")
+        lines.append(
+            f"Elaboration turns on this topic: {int(active_block_state.get('elaboration_turns') or 0)}."
+        )
+    lines.extend([
         f"The last answer was: {last_answer or 'none yet'}.",
         f"The hint tier already given is: {hint_tier or 'nudge'}.",
         f"Eliminated MCQ choice indices: {eliminated if eliminated else 'none'}.",
@@ -1689,7 +2066,7 @@ def _what_happened(
         f"Extra enrichment turns so far: {enrichment_turns}.",
         "Evidence points already met: " + (", ".join(rubric_met) if rubric_met else "none") + ".",
         "A redirect is already pending." if redirect_pending else "No redirect is pending.",
-    ]
+    ])
     if (component_status or "").strip():
         lines.append(f"This component status is {component_status}.")
     earlier = [item for item in (block_results or []) if isinstance(item, dict)]
@@ -1709,7 +2086,7 @@ def _what_happened(
     return lines
 
 
-def _what_to_return(*, needs_dynamic_mcq: bool = False) -> list[str]:
+def _what_to_return(*, needs_dynamic_mcq: bool = False, block_type: str = "") -> list[str]:
     lines = [
         "Return reply, decision, substep_passed, block_complete, generated_mcq, rubric_met, misconception, hint_tier, help_requested, off_course, affect, confidence, score_justification, what_was_strong, and what_to_work_on.",
         "reply is the only text the child reads.",
@@ -1725,6 +2102,12 @@ def _what_to_return(*, needs_dynamic_mcq: bool = False) -> list[str]:
         "On unit close, populate score_justification, what_was_strong, and what_to_work_on; otherwise return empty strings for those three fields.",
         "You do not set the block order, the edges, or the final mastery score.",
     ]
+    if block_type == "explanation":
+        lines.append(
+            "On an explanation block, set substep_passed=false when the learner asks a question or wants elaboration, "
+            "and substep_passed=true when they are ready to proceed. "
+            "Set block_complete=true only on the summary check when they have no final questions. Never quiz."
+        )
     if needs_dynamic_mcq:
         lines.append(
             "Because the active block is a dynamic MCQ without a cached question, you MUST populate generated_mcq with question_stem, choices, correct_index, and distractor_rationales."
@@ -1883,6 +2266,7 @@ def build_kc_prompt(
                     challenge_appetite=str(cp.get("challenge_appetite") or "steady"),
                     learning_support=str(cp.get("learning_support") or "none"),
                     communication_tone=str(cp.get("communication_tone") or "warm_and_encouraging"),
+                    active_block_state=state_dict,
                 ),
             ),
             (
@@ -1894,9 +2278,13 @@ def build_kc_prompt(
                 substep=substep,
                 active_block_state=state_dict,
                 next_block=blocks[index + 1] if (is_last_substep and index + 1 < len(blocks)) else None,
+                opening=opening,
             ),
             ),
-            ("Who you are talking to", _who_you_are_talking_to(student, profile, active_block, interests)),
+            (
+                "Who you are talking to",
+                _who_you_are_talking_to(student, profile, active_block, interests, cfg, state_dict),
+            ),
             (
                 "How to teach",
                 _how_to_teach(
@@ -1935,7 +2323,7 @@ def build_kc_prompt(
                     block_results=block_results,
                 ),
             ),
-            ("What to return", _what_to_return(needs_dynamic_mcq=needs_dynamic_mcq)),
+            ("What to return", _what_to_return(needs_dynamic_mcq=needs_dynamic_mcq, block_type=btype)),
         ]
     )
     return {
