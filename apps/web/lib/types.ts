@@ -45,6 +45,9 @@ export type TutorProfile = {
   instructive: number;
   persona: string;
   lexicon: string;
+  vocabulary_register?: string;
+  interest_weaving?: string;
+  humor_and_wit?: string;
   voice_override: boolean;
   metaphors: string;
   sidekick: string;

@@ -468,6 +468,12 @@ def post_prompt_tester(body: PromptTesterIn) -> dict:
     return preview_kc_prompt(body)
 
 
+@router.post("/kc/admin/prompt-preview")
+def post_admin_prompt_preview(body: PromptTesterIn) -> dict:
+    """Alias for previewing the KC tutor prompt from admin tools."""
+    return preview_kc_prompt(body)
+
+
 @router.post("/kc/sessions/{session_id}/model-prompts", response_model=ModelPromptOut)
 def post_kc_model_prompt(
     session_id: uuid.UUID, body: ModelPromptIn, db: Session = Depends(get_db)

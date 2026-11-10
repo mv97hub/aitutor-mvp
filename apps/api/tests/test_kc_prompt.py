@@ -534,3 +534,114 @@ def test_an_empty_pair_is_skipped_and_the_description_is_not_the_walk() -> None:
     assert [move.key for move in moves] == ["orient", "topic-1"]
     assert moves[1].name == "banks"
     assert moves[1].evidence == ("goal-1",)
+
+
+def test_layer_3_and_layer_4_revamp_and_precedence_contract() -> None:
+    from app.tutor_profile import map_legacy_lexicon, normalize_kc_tutor_config, normalize_profile
+
+    assert map_legacy_lexicon(1) == "everyday_conversational"
+    assert map_legacy_lexicon(2) == "everyday_conversational"
+    assert map_legacy_lexicon(3) == "adaptive_to_child"
+    assert map_legacy_lexicon(4) == "academic_precision"
+    assert map_legacy_lexicon(5) == "story_rich_expressive"
+    assert map_legacy_lexicon("match_child") == "adaptive_to_child"
+
+    norm_off = normalize_profile({"lexicon": 4, "use_interests": False})
+    assert norm_off["vocabulary_register"] == "academic_precision"
+    assert norm_off["interest_weaving"] == "off"
+    assert norm_off["use_interests"] is False
+
+    norm_on = normalize_profile({"lexicon": 2, "use_interests": True})
+    assert norm_on["vocabulary_register"] == "everyday_conversational"
+    assert norm_on["interest_weaving"] == "subtle_natural"
+    assert norm_on["use_interests"] is True
+
+    cfg = normalize_kc_tutor_config(
+        {
+            "overarching": {
+                "orient_framing": "brief_hook",
+                "instructional_stance": "direct_instruction_first",
+                "scaffolding_escalation": "worked_example_on_first_miss",
+                "stay_on_course": "strict",
+                "misconception_policy": "nudge_without_naming",
+                "prerequisite_support_policy": "scaffold_heavily",
+                "encouragement_style": "brief_confirm",
+                "close_summary_depth": "elaborate_strengths_and_weaknesses",
+            },
+            "voice": {
+                "persona": "socratic_mentor",
+                "vocabulary_register": "academic_precision",
+                "interest_weaving": "frequent_thematic",
+                "metaphors": "scifi",
+                "humor_and_wit": "playful_banter",
+                "sidekick": "pixel",
+            },
+        },
+        strict=True,
+    )
+    assert cfg["overarching"]["encouragement_style"] == "matter_of_fact_confirm"
+    assert cfg["overarching"]["close_summary_depth"] == "diagnostic_strengths_and_gaps"
+    assert cfg["overarching"]["instructional_stance"] == "direct_instruction_first"
+    assert cfg["overarching"]["scaffolding_escalation"] == "worked_example_on_first_miss"
+    assert cfg["overarching"]["misconception_policy"] == "nudge_without_naming"
+    assert cfg["overarching"]["prerequisite_support_policy"] == "scaffold_heavily"
+
+    prof = _profile(
+        persona="socratic_mentor",
+        lexicon="academic_precision",
+        metaphors="scifi",
+        sidekick="pixel",
+        use_interests=True,
+        kc_tutor_config=cfg,
+    )
+    student = _student(
+        child_profile={
+            "grade_band": "middle_school",
+            "reading_level": "on_grade",
+            "response_length": "bite_sized",
+            "expression_style": "conversational",
+            "explanation_style": "step_by_step",
+            "challenge_appetite": "needs_reassurance",
+            "communication_tone": "warm_and_encouraging",
+            "learning_support": "none",
+            "interest_tags": ["space_and_science"],
+            "interests": "Saturn rings",
+        }
+    )
+    orient_text = _text(profile=prof, student=student, opening=True, attempts=0)
+    assert "calm, respectful academic mentor" in orient_text
+    assert "exclusively owns sentence length, reading complexity" in orient_text
+    assert "vocabulary_register is academic_precision" in orient_text
+    assert "interest_weaving is frequent_thematic" in orient_text
+    assert "Fallback analogy domain (space & sci-fi)" in orient_text
+    assert "Pixel the Robot may voice at most one short line" in orient_text
+    assert "Instructional stance (direct_instruction_first)" in orient_text
+    assert "Scaffolding escalation (worked_example_on_first_miss)" in orient_text
+    assert "Prerequisite support policy (scaffold_heavily)" in orient_text
+    assert "Encouragement style (matter_of_fact_confirm)" in orient_text
+    assert "Representation harmony:" in orient_text
+    assert "explanation_style (step_by_step)" in orient_text
+
+    miss_text = _text(profile=prof, student=student, opening=False, attempts=1, hint_tier="nudge")
+    assert "Active turn kind: nudge." in miss_text
+    assert "Turn Escalation (worked_example_on_first_miss)" in miss_text
+    assert "Reassurance on miss (challenge_appetite=needs_reassurance)" in miss_text
+    assert "suppress jokes and banter on this turn (an incorrect attempt (nudge/scaffold/reveal))" in miss_text
+
+    anxious_student = _student(
+        child_profile={
+            "grade_band": "middle_school",
+            "reading_level": "on_grade",
+            "response_length": "balanced",
+            "expression_style": "short_phrases",
+            "explanation_style": "concrete_examples",
+            "challenge_appetite": "steady",
+            "communication_tone": "calm_and_gentle",
+            "learning_support": "math_or_test_anxiety",
+            "interest_tags": [],
+            "interests": "",
+        }
+    )
+    anxious_text = _text(profile=prof, student=anxious_student, opening=True, attempts=0)
+    assert "suppress jokes and banter on this turn (math_or_test_anxiety or calm_and_gentle tone)" in anxious_text
+

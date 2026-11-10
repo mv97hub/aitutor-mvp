@@ -3621,3 +3621,192 @@ a.ds-row { text-decoration: none; }
   color: rgb(25, 72, 176);
   font-weight: 600;
 }
+
+.agent-config-editor {
+  max-width: 1120px;
+}
+
+.agent-form.agent-config-form {
+  max-width: 100%;
+  display: grid;
+  gap: 18px;
+}
+
+.agent-sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
+}
+
+.agent-search-wrap {
+  display: flex;
+  flex: 1 1 320px;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-search-input {
+  width: 100%;
+  padding: 7px 11px;
+  border: 0.5px solid rgba(0, 0, 0, 0.18);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.agent-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-status-badge.is-unsaved {
+  background: rgba(230, 163, 23, 0.18);
+  color: #8a5a00;
+}
+
+.agent-status-badge.is-clean {
+  background: rgba(29, 107, 69, 0.12);
+  color: #1d6b45;
+}
+
+.agent-section-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+
+.agent-section-tab {
+  appearance: none;
+  border: 0.5px solid rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  background: #fff;
+  padding: 7px 13px;
+  color: rgb(45, 50, 58);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.agent-section-tab.is-active {
+  border-color: rgb(65, 118, 230);
+  background: rgba(65, 118, 230, 0.12);
+  color: rgb(25, 72, 176);
+  font-weight: 600;
+}
+
+.agent-search-banner {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(65, 118, 230, 0.08);
+  color: rgb(25, 72, 176);
+  font-size: 13px;
+}
+
+.agent-config-section {
+  display: grid;
+  gap: 14px;
+}
+
+.agent-section-heading .agent-layer {
+  margin: 8px 0 4px;
+}
+
+.agent-harmony-note {
+  padding: 10px 14px;
+  border-left: 3px solid rgb(65, 118, 230);
+  border-radius: 8px;
+  background: rgba(65, 118, 230, 0.06);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agent-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.agent-config-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.agent-config-card h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.agent-block-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-block-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-pill-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgb(65, 118, 230);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.agent-block-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-custom-badge {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(230, 163, 23, 0.16);
+  color: #8a5a00;
+  font-size: 11px;
+  font-weight: 600;
+}
+

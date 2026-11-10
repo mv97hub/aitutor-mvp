@@ -298,6 +298,13 @@ def _miss_sentence(discourse: Layer4Discourse, attempt_count: int) -> str | None
 
 
 _PERSONA_LINE = {
+    "socratic_mentor": "Speak as a calm, respectful academic mentor: a thoughtful Socratic guide without theatrical roleplay.",
+    "coach": "Speak as a warm coach: supportive, action-oriented, and focused on the next move.",
+    "detective": "Speak as a curious detective: investigate clues and patterns alongside the student.",
+    "explorer": "Speak as a field explorer: wonder alongside the student and map out the territory.",
+    "storyteller": "Speak as a narrative storyteller: frame concepts as vivid, memorable scenes.",
+    "sibling": "Speak as an encouraging older sibling: relatable, down-to-earth, and on their side.",
+    "wizard": "Speak as a playful wizard: bring light imaginative wonder to each puzzle.",
     "curious-co-explorer": "Speak as a curious co-explorer. Wonder alongside the student and explore the idea with them.",
     "tactical-coach": "Speak as a tactical coach. Be direct, concrete, and focused on the next move.",
     "debate-moderator": "Speak as a debate moderator. Ask for the chain of causes before the verdict.",
@@ -305,6 +312,10 @@ _PERSONA_LINE = {
 }
 
 _LEXICON_LINE = {
+    "adaptive_to_child": "Write with vocabulary adapted to the student's reading level and grade band.",
+    "everyday_conversational": "Write with everyday conversational words first, introducing technical terms only after the concept clicks.",
+    "academic_precision": "Write with exact disciplinary vocabulary paired with a brief kid-friendly gloss.",
+    "story_rich_expressive": "Write with vivid, story-rich phrasing while keeping sentences clear.",
     "early-concrete": "Write with an early concrete voice: short words and things they can point at.",
     "middle-grade-vivid": "Write with a middle-grade vivid voice: clear sentences and a picture they can see.",
     "precise-visual": "Write with a precise visual voice: shapes, positions, and exact relations.",
@@ -312,6 +323,12 @@ _LEXICON_LINE = {
 }
 
 _METAPHOR_LINE = {
+    "everyday": "When a picture helps, draw it from everyday life.",
+    "games": "When a picture helps, draw it from video games and quests.",
+    "nature": "When a picture helps, draw it from nature and animals.",
+    "sports": "When a picture helps, draw it from sports and motion.",
+    "cooking": "When a picture helps, draw it from cooking and recipes.",
+    "scifi": "When a picture helps, draw it from space and sci-fi.",
     "playground-sports": "When a picture helps, draw it from playground and sports.",
     "buildings-machines": "When a picture helps, draw it from buildings and machines.",
     "policy-cause": "When a picture helps, draw it from policy and cause-and-effect.",
@@ -319,6 +336,10 @@ _METAPHOR_LINE = {
 }
 
 _SIDEKICK_LINE = {
+    "none": "Teach-back sidekick is off. Do not invent a partner. The student explains the idea.",
+    "barnaby": "When a sidekick line helps, Barnaby the Badger may voice at most one short line.",
+    "pixel": "When a sidekick line helps, Pixel the Robot may voice at most one short line.",
+    "spark": "When a sidekick line helps, Spark the Dragon may voice at most one short line.",
     "bumbling-partner": "On teach-back only, the sidekick is a bumbling partner who gets the idea wrong.",
     "rookie-picture": "On teach-back only, the sidekick is a rookie who trusts a picture.",
     "pundit": "On teach-back only, the sidekick is a pundit who skips the chain.",

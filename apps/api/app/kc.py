@@ -19,7 +19,15 @@ from fastapi import HTTPException
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, VOICES
+from app.engine.choices import (
+    HUMOR_MODES,
+    INTEREST_WEAVING_MODES,
+    METAPHORS,
+    PERSONAS,
+    SIDEKICKS,
+    VOCABULARY_REGISTERS,
+    VOICES,
+)
 from app.kc_loop import resolve_block_turn
 from app.kc_prompt import (
     AFFECTS,
@@ -27,16 +35,23 @@ from app.kc_prompt import (
     build_kc_prompt,
     block_step_label,
     block_uses_choice_widget,
+    compute_turn_kind,
     default_substep_for_block,
     format_active_substep_label,
     is_fragment,
     labeled_choice,
+    max_retries_for_block,
     on_screen_choice,
     stored_blocks,
     substeps_for_block,
     topic_goal,
 )
-from app.tutor_profile import BLOCK_CONFIG_SPECS, effective_kc_tutor_config, load_profile
+from app.tutor_profile import (
+    BLOCK_CONFIG_SPECS,
+    effective_kc_tutor_config,
+    effective_voice_settings,
+    load_profile,
+)
 from app.kc_syllabus import component_fields, planning_context
 from app.models import (
     ALL_BLOCK_TYPES,
@@ -2398,6 +2413,76 @@ def tutor_variables(
     ]
     for name, value in _active_catalog_rows(block):
         rows.append(_row(name, value, _LAYER_1))
+    voice = effective_voice_settings(profile)
+    persona_val = str(voice.get("persona") or profile.persona or "coach")
+    vocab_reg = str(voice.get("vocabulary_register") or "adaptive_to_child")
+    weaving_val = str(voice.get("interest_weaving") or "subtle_natural")
+    meta_val = str(voice.get("metaphors") or profile.metaphors or "everyday")
+    humor_val = str(voice.get("humor_and_wit") or "light_warm")
+    sidekick_val = str(voice.get("sidekick") or profile.sidekick or "none")
+
+    has_child_interests = bool(
+        (cp and (cp.get("interest_tags") or cp.get("interests"))) or interests
+    )
+    eff_analogy_source = (
+        "child_interests" if weaving_val != "off" and has_child_interests else "fallback_metaphors"
+    )
+    read_lvl_val = str(cp["reading_level"]) if cp is not None else "on_grade"
+    resp_len_val = str(cp["response_length"]) if cp is not None else "balanced"
+    support_val = str(cp["learning_support"]) if cp is not None else "none"
+    tone_val = str(cp["communication_tone"]) if cp is not None else "warm_and_encouraging"
+    eff_vocab_rule = (
+        f"{vocab_reg} terminology + Layer 2 reading_level={read_lvl_val}, response_length={resp_len_val}"
+        + (f", learning_support={support_val}" if support_val != "none" else "")
+    )
+    opening_turn = session is None or not any(message.role == "assistant" for message in messages)
+    turn_kind_val = (
+        compute_turn_kind(
+            opening=opening_turn,
+            unit_complete=unit_complete,
+            course_complete=close_course == "yes" and unit_complete,
+            transition_from_block=None,
+            attempts=attempts,
+            hint_tier=session.hint_tier or "nudge" if session is not None else "nudge",
+            reveals=int(session.reveals or 0) if session is not None else 0,
+        )
+        if session is not None or block is not None
+        else "orient"
+    )
+    if turn_kind_val in {"nudge", "scaffold", "reveal"}:
+        eff_humor_rule = f"suppressed (missed attempt: {turn_kind_val})"
+    elif support_val == "math_or_test_anxiety" or tone_val == "calm_and_gentle":
+        eff_humor_rule = f"suppressed (Layer 2 {support_val if support_val == 'math_or_test_anxiety' else tone_val})"
+    elif humor_val == "none_straightforward":
+        eff_humor_rule = "none_straightforward (disabled)"
+    else:
+        eff_humor_rule = f"{humor_val} (active on hooks and passes)"
+
+    orient_raw = str(over.get("orient_framing") or "elaborate_outline")
+    eff_orient = (
+        "brief_hook (time_boxed override)"
+        if goal is not None and goal.kind == "time_boxed" and orient_raw != "brief_hook"
+        else orient_raw
+    )
+    close_raw = str(over.get("close_summary_depth") or "diagnostic_strengths_and_gaps")
+    eff_close_depth = (
+        "concise (time_boxed override)"
+        if goal is not None and goal.kind == "time_boxed" and close_raw != "concise"
+        else close_raw
+    )
+    active_bcfg_summary = ""
+    if block is not None:
+        btype_key = str(block.get("type") or "topic_goal").strip()
+        bcfg_dict = (cfg.get("blocks") or {}).get(btype_key) or {}
+        active_bcfg_summary = ", ".join(f"{k}={v}" for k, v in bcfg_dict.items())
+    nine_blocks_summary = " | ".join(
+        f"{bt}: " + ", ".join(f"{k}={v}" for k, v in ((cfg.get("blocks") or {}).get(bt) or {}).items())
+        for bt in ALL_BLOCK_TYPES
+    )
+    max_retries_val = (
+        str(max_retries_for_block(block, cfg, goal)) if block is not None else ""
+    )
+
     rows.extend(
         [
             _row("Display name", student.display_name if student is not None else "", _LAYER_2),
@@ -2422,14 +2507,31 @@ def tutor_variables(
             _row("Last misconception", "" if session is None else (session.last_misconception or ""), _LAYER_2),
             _row("Minutes used", _minutes_used(db, student, goal), _LAYER_2),
             _row("Support band", band, _LAYER_2),
-            _row("Persona", labeled_choice(PERSONAS, profile.persona), _LAYER_3),
-            _row("Lexicon", labeled_choice(VOICES, profile.lexicon), _LAYER_3),
-            _row("Metaphors", labeled_choice(METAPHORS, profile.metaphors), _LAYER_3),
-            _row("Sidekick", labeled_choice(SIDEKICKS, profile.sidekick), _LAYER_3),
-            _row("Use interests", "yes" if profile.use_interests else "no", _LAYER_3),
-            _row("Orient framing", str(over.get("orient_framing") or ""), _LAYER_4),
+            _row("Persona", labeled_choice(PERSONAS, persona_val), _LAYER_3),
+            _row("Vocabulary register", labeled_choice(VOCABULARY_REGISTERS, vocab_reg), _LAYER_3),
+            _row("Interest weaving", labeled_choice(INTEREST_WEAVING_MODES, weaving_val), _LAYER_3),
+            _row("Metaphors", labeled_choice(METAPHORS, meta_val), _LAYER_3),
+            _row("Humor and wit", labeled_choice(HUMOR_MODES, humor_val), _LAYER_3),
+            _row("Sidekick", labeled_choice(SIDEKICKS, sidekick_val), _LAYER_3),
+            _row("Effective analogy source", eff_analogy_source, _LAYER_3),
+            _row("Effective vocabulary rule", eff_vocab_rule, _LAYER_3),
+            _row("Effective humor rule", eff_humor_rule, _LAYER_3),
+            _row("Orient framing", eff_orient, _LAYER_4),
+            _row("Instructional stance", str(over.get("instructional_stance") or "guided_discovery"), _LAYER_4),
+            _row(
+                "Scaffolding escalation",
+                str(over.get("scaffolding_escalation") or "progressive_nudge_then_scaffold"),
+                _LAYER_4,
+            ),
             _row("Stay on course", str(over.get("stay_on_course") or ""), _LAYER_4),
             _row("Misconception policy", str(over.get("misconception_policy") or ""), _LAYER_4),
+            _row(
+                "Prerequisite support policy",
+                str(over.get("prerequisite_support_policy") or "inline_micro_recap"),
+                _LAYER_4,
+            ),
+            _row("Active block config", active_bcfg_summary, _LAYER_4),
+            _row("All 9 block configs", nine_blocks_summary, _LAYER_4),
         ]
     )
     for name, value in _active_setting_rows(block, cfg):
@@ -2437,8 +2539,10 @@ def tutor_variables(
     rows.extend(
         [
             _row("Encouragement style", str(over.get("encouragement_style") or ""), _LAYER_5),
-            _row("Close summary depth", str(over.get("close_summary_depth") or ""), _LAYER_6),
+            _row("Close summary depth", eff_close_depth, _LAYER_6),
+            _row("Turn kind", "" if session is None and block is None else turn_kind_val, _LAYER_7),
             _row("Attempts", "" if session is None else str(attempts), _LAYER_7),
+            _row("Max retries", max_retries_val, _LAYER_7),
             _row(
                 "Dialogue turns",
                 "" if session is None else str(int(block_state.get("dialogue_turns") or 0)),

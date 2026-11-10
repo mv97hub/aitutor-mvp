@@ -473,7 +473,7 @@ def test_one_tutor_profile_applies_to_every_student() -> None:
     current = client.get("/tutor-profile")
     assert current.status_code == 200
     assert current.json()["instructive"] == 3
-    rejected = client.put("/tutor-profile", json=_profile(persona="wizard"))
+    rejected = client.put("/tutor-profile", json=_profile(persona="not-a-persona"))
     assert rejected.status_code == 422
     try:
         tree = _publish("ZZVOICE", goals=[_goals()[0]], title="Voice")

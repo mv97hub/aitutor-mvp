@@ -7,10 +7,16 @@ import {
   EXPLANATION_STYLE_OPTIONS,
   EXPRESSION_STYLE_OPTIONS,
   GRADE_BAND_OPTIONS,
+  HUMOR_AND_WIT_OPTIONS,
   INTEREST_TAG_OPTIONS,
+  INTEREST_WEAVING_OPTIONS,
   LEARNING_SUPPORT_OPTIONS,
+  METAPHOR_OPTIONS,
+  PERSONA_OPTIONS,
   READING_LEVEL_OPTIONS,
   RESPONSE_LENGTH_OPTIONS,
+  SIDEKICK_OPTIONS,
+  VOCABULARY_REGISTER_OPTIONS,
 } from "@/lib/kc-layer-fields";
 import {
   BLOCK_CONFIG_FIELDS,
@@ -95,14 +101,86 @@ const LAYER_2_SETTINGS = [
   {
     name: "Interest tags",
     options: `0 to 4 multi-select chips: ${INTEREST_TAG_OPTIONS.map(([id, label]) => `${id} (${label})`).join(", ")}`,
-    description: "Curated interest categories that give the prompt reliable anchors when Use interests is enabled.",
-    effect: "Combined with Specific favorites and woven into examples when Use interests is on, or held back when off.",
+    description: "Curated interest categories that give the prompt reliable anchors when Interest weaving is active.",
+    effect: "Combined with Specific favorites and woven into examples when Interest weaving is not off.",
   },
   {
     name: "Specific favorites (Interests)",
     options: "Optional short text up to 120 characters (e.g. Minecraft redstone, golden retrievers, soccer goalie)",
     description: "Captures specific kid passions alongside the structured interest tags.",
-    effect: "Passed with Interest tags into 'Who you are talking to' so analogies can reference the child's exact favorites when Use interests is on.",
+    effect: "Passed with Interest tags into 'Who you are talking to' so analogies can reference the child's exact favorites when Interest weaving is active.",
+  },
+];
+
+const LAYER_3_SETTINGS = [
+  {
+    name: "Persona (persona)",
+    options: pairsLine(PERSONA_OPTIONS),
+    description: "Tutor archetype framing metaphor (default: coach). Includes socratic_mentor for calm academic guidance without theatrical roleplay.",
+    effect: "Sets the framing metaphor in 'How to sound' while Layer 2 communication_tone governs emotional intensity.",
+  },
+  {
+    name: "Vocabulary register (vocabulary_register)",
+    options: pairsLine(VOCABULARY_REGISTER_OPTIONS),
+    description: "Subject terminology register (default: adaptive_to_child; backward-compatible with legacy lexicon 1..5).",
+    effect: "Governs when disciplinary terms are introduced, while Layer 2 exclusively owns sentence length, reading complexity, and paragraph density.",
+  },
+  {
+    name: "Interest weaving (interest_weaving)",
+    options: pairsLine(INTEREST_WEAVING_OPTIONS),
+    description: "How often to weave the child's Layer 2 interests into hooks and examples (default: subtle_natural; backward-compatible with boolean use_interests).",
+    effect: "Subtle natural weaves into a hook or 1 example when natural; frequent thematic frames scenarios around child interests; off uses neutral curriculum examples or the fallback metaphors domain.",
+  },
+  {
+    name: "Fallback analogy domain (metaphors)",
+    options: pairsLine(METAPHOR_OPTIONS),
+    description: "Fallback analogy domain (default: everyday).",
+    effect: "Used when interest_weaving is off, when the child has no Layer 2 interests set, or when personal interests do not fit the concept cleanly.",
+  },
+  {
+    name: "Humor & wit (humor_and_wit)",
+    options: pairsLine(HUMOR_AND_WIT_OPTIONS),
+    description: "Humor and levity guardrail (default: light_warm).",
+    effect: "Allows gentle wit or playful banter on hooks and passes, and automatically suppresses jokes on missed attempts (nudge/scaffold/reveal) or when Layer 2 learning_support is math_or_test_anxiety or communication_tone is calm_and_gentle.",
+  },
+  {
+    name: "Sidekick (sidekick)",
+    options: pairsLine(SIDEKICK_OPTIONS),
+    description: "Optional sidekick character (default: none).",
+    effect: "When enabled, voices at most one short line on hooks or hints and never asks a second competing question.",
+  },
+];
+
+const OWNERSHIP_MATRIX = [
+  {
+    dimension: "Sentence Length, Reading Complexity & Accessibility Layout",
+    owner: "Layer 2 (reading_level, response_length, learning_support)",
+    contract: "Exclusively owned by Layer 2. Never overridden by Layer 3.",
+  },
+  {
+    dimension: "Technical Vocabulary Introduction",
+    owner: "Layer 3 (vocabulary_register)",
+    contract: "Controls whether disciplinary terms are introduced upfront with a gloss (academic_precision), after plain-language intuition (everyday_conversational), or matched to the child (adaptive_to_child).",
+  },
+  {
+    dimension: "Representation Format of Explanations",
+    owner: "Layer 2 (explanation_style)",
+    contract: "Whenever Layer 4 triggers an explanation, scaffold, or reveal, it is formatted in the child's Layer 2 explanation_style.",
+  },
+  {
+    dimension: "Analogy Topic Selection",
+    owner: "Layer 2 (interest_tags / interests) + Layer 3 (interest_weaving + metaphors)",
+    contract: "Layer 2 provides the child's personal interests; Layer 3 interest_weaving decides how often to weave them in; Layer 3 metaphors provides the fallback analogy domain.",
+  },
+  {
+    dimension: "Emotional Warmth vs. Character Framing vs. Praise Rule",
+    owner: "Layer 2 (communication_tone, challenge_appetite) + Layer 3 (persona, humor_and_wit, sidekick) + Layer 4 (encouragement_style)",
+    contract: "Layer 2 owns emotional warmth and softens first-miss transitions for needs_reassurance; Layer 3 owns the character archetype and light levity on hooks/passes; Layer 4 owns the pedagogical feedback rule on task attempts.",
+  },
+  {
+    dimension: "Teaching Timing, Hint Escalation, Retry Caps & Block Mechanics",
+    owner: "Layer 4 (kc_tutor_config.overarching + kc_tutor_config.blocks)",
+    contract: "Owned exclusively by Layer 4. Legacy duplicate sliders (instructive, struggle_window, enrichment, anti_spoiler, one_question, growth_praise) are retired from the UI and Debug panel.",
   },
 ];
 
@@ -116,26 +194,83 @@ export default function KcPromptLayersPage() {
         <h1>KC prompt layers</h1>
         <p>
           The tutor prompt is built for the active block only. The model writes the reply. The app sets the blocks, the
-          edges, the score, the unit close, and the course outro. The same overarching settings and the nine block-type
-          settings are edited on <Link href="/admin/agent-customizations">Agent customizations</Link>. The debug
-          Variables panel keeps the seven headings and shows a row only when this turn reads it. It shows the active
-          block only. The text sent to the model is the seven sections at the end of this page.
+          edges, the score, the unit close, and the course outro. Layer 3 (Voice &amp; Persona), the 8 Layer 4
+          overarching teaching policies, and the 9 block-type settings are edited on{" "}
+          <Link href="/admin/agent-customizations">AI Tutor Configuration</Link>. The debug Variables panel keeps the
+          seven headings and shows a row only when this turn reads it. It shows the active block only, along with Layer
+          2 child persona settings, Layer 3 voice and effective rules, and Layer 4 overarching + active block configs.
+          The text sent to the model is the seven sections at the end of this page.
         </p>
 
-        <h2>Overarching tutor configurations</h2>
-        <p>These apply on every block.</p>
+        <h2>Cross-Layer Ownership Matrix</h2>
+        <p>
+          Every aspect of the tutor&apos;s behavior has a single authoritative layer so settings never collide:
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Behavioral dimension</th>
+              <th>Owning layer &amp; settings</th>
+              <th>Precedence contract</th>
+            </tr>
+          </thead>
+          <tbody>
+            {OWNERSHIP_MATRIX.map((row) => (
+              <tr key={row.dimension}>
+                <td>
+                  <strong>{row.dimension}</strong>
+                </td>
+                <td>{row.owner}</td>
+                <td>{row.contract}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <h2>Layer 3, voice &amp; persona (6 orthogonal settings)</h2>
+        <p>
+          Edited on <Link href="/admin/agent-customizations">AI Tutor Configuration</Link> under{" "}
+          <strong>Voice &amp; Persona (Layer 3)</strong> and inspected live in Debug Variables together with{" "}
+          <code>Effective analogy source</code>, <code>Effective vocabulary rule</code>, and{" "}
+          <code>Effective humor rule</code>.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Setting</th>
+              <th>Field options</th>
+              <th>Description</th>
+              <th>How it changes the prompt &amp; child experience</th>
+            </tr>
+          </thead>
+          <tbody>
+            {LAYER_3_SETTINGS.map((row) => (
+              <tr key={row.name}>
+                <td>
+                  <strong>{row.name}</strong>
+                </td>
+                <td>{row.options}</td>
+                <td>{row.description}</td>
+                <td>{row.effect}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <h2>Layer 4, overarching teaching policies (8 dropdowns)</h2>
+        <p>These eight overarching policies apply across every block while the tutor walks a knowledge component:</p>
         <ul>
           {OVERARCHING_FIELDS.map((field) => (
             <li key={field.key}>
-              <strong>{field.label}.</strong> {field.help} Choices: {optionLine(field)}.
+              <strong>
+                {field.label} (<code>{field.key}</code>).
+              </strong>{" "}
+              {field.help} Choices: {optionLine(field)}.
             </li>
           ))}
         </ul>
-        <p>
-          Voice and persona stay beside those settings: persona, lexicon, metaphors, sidekick, and use interests.
-        </p>
 
-        <h2>Per-block-type configurations</h2>
+        <h2>Layer 4, per-block-type configurations (9 block types)</h2>
         {BLOCK_TYPES.map((type) => (
           <section key={type}>
             <h3>{BLOCK_CONFIG_TITLES[type]}</h3>
@@ -196,11 +331,11 @@ export default function KcPromptLayersPage() {
 
         <h2>Layer 7, block state</h2>
         <p>
-          Layers 4, 5, and 6 show orient framing, stay on course, misconception policy, encouragement style, and close
-          summary depth, plus only the active block type&apos;s settings. Layer 7 is the block session.
+          Layers 4, 5, and 6 show all 8 overarching teaching policies (including any effective <code>time_boxed</code>{" "}
+          course override), the active block config, and the 9-block config summary. Layer 7 is the block session.
         </p>
         <ul>
-          <li>The active block&apos;s substep is listed with that block. Attempts count the tries on this block.</li>
+          <li>The active block&apos;s substep and turn kind are listed with that block. Attempts and max retries track progress on this block.</li>
           <li>Eliminated choices are the wrong multiple-choice options already picked.</li>
           <li>Finished blocks list each completed block, its outcome, and how many tries it took.</li>
           <li>Close component is yes when this turn may finish the component. Close course is yes when this turn may finish the course.</li>
@@ -215,9 +350,10 @@ export default function KcPromptLayersPage() {
         <section>
           <h3>This turn</h3>
           <p>
-            Who is speaking, which block and substep this is, and the one job of the reply. The opening, the unit close,
-            and the course outro are here only when they change that job. The unit close is the last block. The course
-            outro follows when every target is known or fragile. A fragile result stays fragile.
+            Who is speaking, which block, substep, and turn kind this is, and the one job of the reply. Includes the
+            opening orientation, instructional stance or scaffolding escalation for the turn, humor suppression
+            guardrails on misses, encouragement style on feedback turns, the unit close, and the course outro when
+            every target is known or fragile. A fragile result stays fragile.
           </p>
         </section>
         <section>
@@ -232,23 +368,25 @@ export default function KcPromptLayersPage() {
           <p>
             One learner profile built from Layer 2: display name, age, grade band, reading level, response length,
             expression style, explanation style, challenge appetite, communication tone, learning support, and interest
-            tags plus specific favorites. Each setting is stated as a direct behavioral instruction. Interests are used
-            as an example only when Use interests is on.
+            tags plus specific favorites. Each setting is stated as a direct behavioral instruction.
           </p>
         </section>
         <section>
           <h3>How to teach</h3>
           <p>
-            The overarching rules, plus only the active block type&apos;s configuration. A multiple-choice turn uses that
-            type&apos;s retry count, wrong-answer depth, and whether a correct retry must explain why. A Socratic turn
-            uses that type&apos;s dialogue depth and challenge. Settings for the other eight types are not printed.
+            The 8 overarching pedagogical rules (including representation harmony with Layer 2{" "}
+            <code>explanation_style</code>, <code>instructional_stance</code>, <code>scaffolding_escalation</code>,{" "}
+            <code>stay_on_course</code>, <code>misconception_policy</code>, <code>prerequisite_support_policy</code>,
+            and <code>encouragement_style</code>), plus only the active block type&apos;s configuration. Settings for
+            the other eight types are not printed.
           </p>
         </section>
         <section>
           <h3>How to sound</h3>
           <p>
-            Persona, lexicon, metaphors, and sidekick collapse into one voice paragraph. That voice does not change the
-            block, the expected answer, or the score.
+            Persona, vocabulary register (with explicit Layer 2 reading/length ownership), interest weaving, fallback
+            metaphors domain, humor &amp; wit (with automatic suppression on misses and anxiety/calm profiles), and
+            sidekick rules. That voice does not change the block, the expected answer, or the score.
           </p>
         </section>
         <section>

@@ -1,86 +1,256 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { AdminFrame } from "@/components/admin/AdminFrame";
-import { KcTutorConfigFields } from "@/components/admin/KcTutorConfigFields";
+import { ConfigControl } from "@/components/admin/KcTutorConfigFields";
 import { api } from "@/lib/api";
-import { hoverFor } from "@/lib/kc-layer-fields";
-import { kcTutorConfigFrom } from "@/lib/kc-tutor-config";
+import { BLOCK_TYPES } from "@/lib/kc-blocks";
+import type { KcBlockType } from "@/lib/kc";
+import {
+  HUMOR_AND_WIT_OPTIONS,
+  INTEREST_WEAVING_OPTIONS,
+  METAPHOR_OPTIONS,
+  PERSONA_OPTIONS,
+  SIDEKICK_OPTIONS,
+  VOCABULARY_REGISTER_OPTIONS,
+  hoverFor,
+} from "@/lib/kc-layer-fields";
+import {
+  BLOCK_CONFIG_FIELDS,
+  BLOCK_CONFIG_TITLES,
+  DEFAULT_KC_TUTOR_CONFIG,
+  OVERARCHING_FIELDS,
+  kcTutorConfigFrom,
+  type ConfigField,
+  type KcTutorConfig,
+} from "@/lib/kc-tutor-config";
 import type { TutorProfile } from "@/lib/types";
 
-const PERSONAS = [
-  ["curious-co-explorer", "Curious co-explorer"],
-  ["tactical-coach", "Tactical coach"],
-  ["debate-moderator", "Debate moderator"],
-  ["patient-explainer", "Patient explainer"],
-] as const;
+type SectionTab = "voice" | "overarching" | "blocks" | "all";
 
-const VOICES = [
-  ["early-concrete", "Early concrete"],
-  ["middle-grade-vivid", "Middle-grade vivid"],
-  ["precise-visual", "Precise visual"],
-  ["analytical-high-school", "Analytical high-school"],
-] as const;
+const SECTION_TABS: readonly { id: SectionTab; label: string }[] = [
+  { id: "voice", label: "Voice & Persona (Layer 3)" },
+  { id: "overarching", label: "Overarching Teaching Policy (Layer 4)" },
+  { id: "blocks", label: "Block Teaching Rules (Layer 4 — 9 Block Types)" },
+  { id: "all", label: "Show All" },
+];
 
-const METAPHORS = [
-  ["playground-sports", "Playground and sports"],
-  ["buildings-machines", "Buildings and machines"],
-  ["policy-cause", "Policy and cause-and-effect"],
-  ["none", "None (plain language only)"],
-] as const;
-
-const SIDEKICKS = [
-  ["bumbling-partner", "Bumbling partner"],
-  ["rookie-picture", "Rookie who trusts a picture"],
-  ["pundit", "Pundit who skips the chain"],
-  ["off", "Off"],
-] as const;
-
-const WINDOWS = [
-  ["short", "Minimum (1 try)"],
-  ["standard", "Standard (2 tries)"],
-  ["long", "Wide (3 tries)"],
-] as const;
-
-const POLICIES = [["retry_once", "Retry once"]] as const;
-
-const ENRICHMENT = [
-  ["direct", "Direct"],
-  ["on_request", "On request"],
-  ["offer", "Offer"],
-] as const;
-
-const VOICE_FOR: Record<string, string> = {
-  "curious-co-explorer": "middle-grade-vivid",
-  "tactical-coach": "precise-visual",
-  "debate-moderator": "analytical-high-school",
-  "patient-explainer": "early-concrete",
+const BLOCK_PILL_LABELS: Record<KcBlockType, string> = {
+  topic_goal: "Topic / Goal",
+  mcq: "MCQ",
+  case_study: "Case Study",
+  socratic: "Socratic",
+  curiosity: "Curiosity",
+  worked_example: "Worked Example",
+  spot_the_flaw: "Spot the Flaw",
+  teach_back: "Teach-Back",
+  retrieval_check: "Retrieval Check",
 };
 
-const INSTRUCTIVE: Record<number, { label: string; detail: string }> = {
-  1: {
-    label: "Socratic",
-    detail: "One short question. Almost no explanation until they try.",
-  },
-  2: {
-    label: "Mostly questions",
-    detail: "One short question. A real explanation starts after two misses.",
-  },
-  3: {
-    label: "Balanced",
-    detail: "A short explanation, then one question. Today's teach-then-ask.",
-  },
-  4: {
-    label: "Mostly instructive",
-    detail: "The fact and why it matters, then one question. The first miss gets the longer explanation.",
-  },
-  5: {
-    label: "Instructive",
-    detail:
-      "A fuller lesson first: the fact, a picture, why it matters, then one question. Stuck students get the longer explanation sooner.",
-  },
+type VoiceFieldSpec = {
+  key: "persona" | "humor_and_wit" | "sidekick" | "vocabulary_register" | "interest_weaving" | "metaphors";
+  label: string;
+  hoverName: string;
+  options: readonly (readonly [string, string])[];
+  group: "character" | "terminology";
+  keywords: string;
 };
+
+const VOICE_FIELDS: readonly VoiceFieldSpec[] = [
+  {
+    key: "persona",
+    label: "Persona (Framing Archetype)",
+    hoverName: "Persona",
+    options: PERSONA_OPTIONS,
+    group: "character",
+    keywords: "persona voice character archetype socratic mentor coach detective explorer storyteller sibling wizard",
+  },
+  {
+    key: "humor_and_wit",
+    label: "Humor & Wit",
+    hoverName: "Humor and wit",
+    options: HUMOR_AND_WIT_OPTIONS,
+    group: "character",
+    keywords: "humor wit joke banter light warm playful straightforward anxiety guardrail",
+  },
+  {
+    key: "sidekick",
+    label: "Sidekick",
+    hoverName: "Sidekick",
+    options: SIDEKICK_OPTIONS,
+    group: "character",
+    keywords: "sidekick companion barnaby pixel spark none",
+  },
+  {
+    key: "vocabulary_register",
+    label: "Vocabulary Register (Subject Terminology)",
+    hoverName: "Vocabulary register",
+    options: VOCABULARY_REGISTER_OPTIONS,
+    group: "terminology",
+    keywords: "vocabulary register terminology lexicon adaptive everyday conversational academic precision story expressive",
+  },
+  {
+    key: "interest_weaving",
+    label: "Interest Weaving",
+    hoverName: "Interest weaving",
+    options: INTEREST_WEAVING_OPTIONS,
+    group: "terminology",
+    keywords: "interest weaving personalization hobbies subtle natural frequent thematic off",
+  },
+  {
+    key: "metaphors",
+    label: "Fallback Analogy Domain (Metaphors)",
+    hoverName: "Metaphors",
+    options: METAPHOR_OPTIONS,
+    group: "terminology",
+    keywords: "metaphors analogy fallback domain everyday games nature sports cooking scifi",
+  },
+];
+
+const OVERARCHING_CARDS: readonly {
+  title: string;
+  subtitle: string;
+  keys: readonly string[];
+}[] = [
+  {
+    title: "Opening & Teaching Philosophy",
+    subtitle: "How components open, how concepts are introduced, and how off-topic tangents are handled.",
+    keys: ["orient_framing", "instructional_stance", "stay_on_course"],
+  },
+  {
+    title: "Scaffolding, Misconceptions & Prerequisites",
+    subtitle: "How hints escalate on misses, how traps are addressed, and how fragile prerequisites are supported.",
+    keys: ["scaffolding_escalation", "misconception_policy", "prerequisite_support_policy"],
+  },
+  {
+    title: "Praise & Component Close",
+    subtitle: "How effort and reasoning moves are praised and how finished components are synthesized.",
+    keys: ["encouragement_style", "close_summary_depth"],
+  },
+];
+
+const RESEARCH_DEFAULT_VOICE = {
+  persona: "coach",
+  vocabulary_register: "adaptive_to_child",
+  interest_weaving: "subtle_natural",
+  metaphors: "everyday",
+  humor_and_wit: "light_warm",
+  sidekick: "none",
+} as const;
+
+const LEGACY_LEXICON_MAP: Record<string, string> = {
+  "1": "everyday_conversational",
+  "2": "everyday_conversational",
+  "3": "adaptive_to_child",
+  "4": "academic_precision",
+  "5": "story_rich_expressive",
+  match_child: "adaptive_to_child",
+  "early-concrete": "everyday_conversational",
+  "middle-grade-vivid": "adaptive_to_child",
+  "precise-visual": "academic_precision",
+  "analytical-high-school": "academic_precision",
+};
+
+const LEGACY_PERSONA_MAP: Record<string, string> = {
+  "curious-co-explorer": "explorer",
+  "tactical-coach": "coach",
+  "debate-moderator": "socratic_mentor",
+  "patient-explainer": "coach",
+};
+
+const LEGACY_METAPHOR_MAP: Record<string, string> = {
+  "playground-sports": "sports",
+  "buildings-machines": "everyday",
+  "policy-cause": "everyday",
+  none: "everyday",
+};
+
+const LEGACY_SIDEKICK_MAP: Record<string, string> = {
+  off: "none",
+  "bumbling-partner": "barnaby",
+  "rookie-picture": "pixel",
+  pundit: "spark",
+};
+
+function normalizeVoiceDraft(profile: TutorProfile): TutorProfile {
+  const personaRaw = profile.persona || RESEARCH_DEFAULT_VOICE.persona;
+  const persona = PERSONA_OPTIONS.some(([id]) => id === personaRaw)
+    ? personaRaw
+    : (LEGACY_PERSONA_MAP[personaRaw] ?? RESEARCH_DEFAULT_VOICE.persona);
+
+  const regRaw = profile.vocabulary_register || profile.lexicon || RESEARCH_DEFAULT_VOICE.vocabulary_register;
+  const vocabulary_register = VOCABULARY_REGISTER_OPTIONS.some(([id]) => id === regRaw)
+    ? regRaw
+    : (LEGACY_LEXICON_MAP[regRaw] ?? RESEARCH_DEFAULT_VOICE.vocabulary_register);
+
+  const weavingRaw =
+    profile.interest_weaving ||
+    (profile.use_interests === false ? "off" : RESEARCH_DEFAULT_VOICE.interest_weaving);
+  const interest_weaving = INTEREST_WEAVING_OPTIONS.some(([id]) => id === weavingRaw)
+    ? weavingRaw
+    : RESEARCH_DEFAULT_VOICE.interest_weaving;
+
+  const metaRaw = profile.metaphors || RESEARCH_DEFAULT_VOICE.metaphors;
+  const metaphors = METAPHOR_OPTIONS.some(([id]) => id === metaRaw)
+    ? metaRaw
+    : (LEGACY_METAPHOR_MAP[metaRaw] ?? RESEARCH_DEFAULT_VOICE.metaphors);
+
+  const humorRaw = profile.humor_and_wit || RESEARCH_DEFAULT_VOICE.humor_and_wit;
+  const humor_and_wit = HUMOR_AND_WIT_OPTIONS.some(([id]) => id === humorRaw)
+    ? humorRaw
+    : RESEARCH_DEFAULT_VOICE.humor_and_wit;
+
+  const sideRaw = profile.sidekick || RESEARCH_DEFAULT_VOICE.sidekick;
+  const sidekick = SIDEKICK_OPTIONS.some(([id]) => id === sideRaw)
+    ? sideRaw
+    : (LEGACY_SIDEKICK_MAP[sideRaw] ?? RESEARCH_DEFAULT_VOICE.sidekick);
+
+  return {
+    ...profile,
+    persona,
+    vocabulary_register,
+    lexicon: vocabulary_register,
+    interest_weaving,
+    use_interests: interest_weaving !== "off",
+    metaphors,
+    humor_and_wit,
+    sidekick,
+    kc_tutor_config: kcTutorConfigFrom(profile.kc_tutor_config),
+  };
+}
+
+function serializeProfileState(profile: TutorProfile | null): string {
+  if (!profile) return "";
+  const cfg = kcTutorConfigFrom(profile.kc_tutor_config);
+  return JSON.stringify({
+    persona: profile.persona,
+    vocabulary_register: profile.vocabulary_register,
+    interest_weaving: profile.interest_weaving,
+    metaphors: profile.metaphors,
+    humor_and_wit: profile.humor_and_wit,
+    sidekick: profile.sidekick,
+    overarching: cfg.overarching,
+    blocks: cfg.blocks,
+  });
+}
+
+function blockModifiedCount(config: KcTutorConfig, type: KcBlockType): number {
+  const current = config.blocks[type] ?? {};
+  const base = DEFAULT_KC_TUTOR_CONFIG.blocks[type] ?? {};
+  let diff = 0;
+  for (const field of BLOCK_CONFIG_FIELDS[type]) {
+    if (current[field.key] !== base[field.key]) diff += 1;
+  }
+  return diff;
+}
+
+function matchesQuery(query: string, ...parts: (string | undefined)[]): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = parts.filter(Boolean).join(" ").toLowerCase();
+  return q.split(/\s+/).every((token) => haystack.includes(token));
+}
 
 function Choice({
   label,
@@ -114,17 +284,24 @@ function Choice({
 
 export function AgentCustomizations() {
   const [draft, setDraft] = useState<TutorProfile | null>(null);
+  const [baseline, setBaseline] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<SectionTab>("voice");
+  const [selectedBlock, setSelectedBlock] = useState<KcBlockType>("topic_goal");
+  const [showAllBlocks, setShowAllBlocks] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     api<TutorProfile>("/tutor-profile")
       .then((profile) => {
         if (!cancelled) {
-          setDraft({ ...profile, kc_tutor_config: kcTutorConfigFrom(profile.kc_tutor_config) });
+          const normalized = normalizeVoiceDraft(profile);
+          setDraft(normalized);
+          setBaseline(serializeProfileState(normalized));
           setError(null);
         }
       })
@@ -139,23 +316,103 @@ export function AgentCustomizations() {
     };
   }, []);
 
-  function setPersona(persona: string) {
+  const hasUnsavedChanges = useMemo(() => {
+    if (!draft || !baseline) return false;
+    return serializeProfileState(draft) !== baseline;
+  }, [draft, baseline]);
+
+  const config = useMemo(
+    () => kcTutorConfigFrom(draft?.kc_tutor_config),
+    [draft?.kc_tutor_config],
+  );
+
+  function updateVoiceField(key: VoiceFieldSpec["key"], value: string) {
     setSaved(false);
     setDraft((current) => {
       if (!current) return current;
-      if (current.voice_override) return { ...current, persona };
-      return { ...current, persona, lexicon: VOICE_FOR[persona] ?? current.lexicon };
+      const next: TutorProfile = { ...current, [key]: value };
+      if (key === "vocabulary_register") {
+        next.lexicon = value;
+      }
+      if (key === "interest_weaving") {
+        next.use_interests = value !== "off";
+      }
+      return next;
     });
   }
 
-  function setVoice(lexicon: string) {
+  function updateOverarching(key: string, value: string) {
     setSaved(false);
     setDraft((current) => {
       if (!current) return current;
+      const cfg = kcTutorConfigFrom(current.kc_tutor_config);
       return {
         ...current,
-        lexicon,
-        voice_override: lexicon !== VOICE_FOR[current.persona],
+        stay_on_course: key === "stay_on_course" ? value !== "exploratory" : current.stay_on_course,
+        misconception_policy:
+          key === "misconception_policy" ? value : current.misconception_policy,
+        kc_tutor_config: {
+          ...cfg,
+          overarching: { ...cfg.overarching, [key]: value },
+        },
+      };
+    });
+  }
+
+  function updateBlockField(type: KcBlockType, key: string, value: string | number | boolean) {
+    setSaved(false);
+    setDraft((current) => {
+      if (!current) return current;
+      const cfg = kcTutorConfigFrom(current.kc_tutor_config);
+      return {
+        ...current,
+        kc_tutor_config: {
+          ...cfg,
+          blocks: {
+            ...cfg.blocks,
+            [type]: { ...cfg.blocks[type], [key]: value },
+          },
+        },
+      };
+    });
+  }
+
+  function resetBlockToDefault(type: KcBlockType) {
+    setSaved(false);
+    setDraft((current) => {
+      if (!current) return current;
+      const cfg = kcTutorConfigFrom(current.kc_tutor_config);
+      return {
+        ...current,
+        kc_tutor_config: {
+          ...cfg,
+          blocks: {
+            ...cfg.blocks,
+            [type]: { ...DEFAULT_KC_TUTOR_CONFIG.blocks[type] },
+          },
+        },
+      };
+    });
+  }
+
+  function resetToResearchDefaults() {
+    setSaved(false);
+    setDraft((current) => {
+      if (!current) return current;
+      const freshConfig = kcTutorConfigFrom(DEFAULT_KC_TUTOR_CONFIG);
+      return {
+        ...current,
+        persona: RESEARCH_DEFAULT_VOICE.persona,
+        vocabulary_register: RESEARCH_DEFAULT_VOICE.vocabulary_register,
+        lexicon: RESEARCH_DEFAULT_VOICE.vocabulary_register,
+        interest_weaving: RESEARCH_DEFAULT_VOICE.interest_weaving,
+        use_interests: true,
+        metaphors: RESEARCH_DEFAULT_VOICE.metaphors,
+        humor_and_wit: RESEARCH_DEFAULT_VOICE.humor_and_wit,
+        sidekick: RESEARCH_DEFAULT_VOICE.sidekick,
+        stay_on_course: true,
+        misconception_policy: freshConfig.overarching.misconception_policy,
+        kc_tutor_config: freshConfig,
       };
     });
   }
@@ -167,28 +424,34 @@ export function AgentCustomizations() {
     setError(null);
     setSaved(false);
     try {
+      const cfg = kcTutorConfigFrom(draft.kc_tutor_config);
       const savedProfile = await api<TutorProfile>("/tutor-profile", {
         method: "PUT",
         body: JSON.stringify({
-          instructive: draft.instructive,
+          instructive: draft.instructive || 3,
           persona: draft.persona,
-          lexicon: draft.lexicon,
-          voice_override: draft.voice_override,
+          lexicon: draft.vocabulary_register || draft.lexicon || "adaptive_to_child",
+          vocabulary_register: draft.vocabulary_register || "adaptive_to_child",
+          interest_weaving: draft.interest_weaving || "subtle_natural",
+          humor_and_wit: draft.humor_and_wit || "light_warm",
+          voice_override: true,
           metaphors: draft.metaphors,
           sidekick: draft.sidekick,
-          struggle_window: draft.struggle_window,
-          anti_spoiler: draft.anti_spoiler,
-          one_question: draft.one_question,
-          use_interests: draft.use_interests,
-          stay_on_course: draft.stay_on_course,
-          growth_praise: draft.growth_praise,
-          misconception_policy: draft.misconception_policy || "retry_once",
-          self_explanation: draft.self_explanation !== false,
-          enrichment: draft.enrichment || "on_request",
-          kc_tutor_config: kcTutorConfigFrom(draft.kc_tutor_config),
+          struggle_window: draft.struggle_window || "standard",
+          anti_spoiler: true,
+          one_question: true,
+          use_interests: (draft.interest_weaving || "subtle_natural") !== "off",
+          stay_on_course: cfg.overarching.stay_on_course !== "exploratory",
+          growth_praise: cfg.overarching.encouragement_style === "process_praise",
+          misconception_policy: cfg.overarching.misconception_policy || "explain_and_retry_once",
+          self_explanation: true,
+          enrichment: String(cfg.blocks.topic_goal?.enrichment_mode || "on_request"),
+          kc_tutor_config: cfg,
         }),
       });
-      setDraft({ ...savedProfile, kc_tutor_config: kcTutorConfigFrom(savedProfile.kc_tutor_config) });
+      const normalized = normalizeVoiceDraft(savedProfile);
+      setDraft(normalized);
+      setBaseline(serializeProfileState(normalized));
       setSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the tutor profile.");
@@ -197,185 +460,359 @@ export function AgentCustomizations() {
     }
   }
 
-  const level = draft ? INSTRUCTIVE[draft.instructive] ?? INSTRUCTIVE[3] : INSTRUCTIVE[3];
+  const isSearching = searchQuery.trim().length > 0;
+
+  const matchingVoiceFields = useMemo(
+    () =>
+      VOICE_FIELDS.filter((field) =>
+        matchesQuery(
+          searchQuery,
+          field.label,
+          field.key,
+          field.keywords,
+          hoverFor(field.hoverName),
+          field.options.map(([id, text]) => `${id} ${text}`).join(" "),
+        ),
+      ),
+    [searchQuery],
+  );
+
+  const matchingOverarchingFields = useMemo(
+    () =>
+      OVERARCHING_FIELDS.filter((field) =>
+        matchesQuery(
+          searchQuery,
+          field.label,
+          field.key,
+          field.help,
+          field.kind === "enum" ? field.options.map(([id, text]) => `${id} ${text}`).join(" ") : "",
+        ),
+      ),
+    [searchQuery],
+  );
+
+  const matchingBlocks = useMemo(() => {
+    const out: { type: KcBlockType; fields: ConfigField[] }[] = [];
+    for (const type of BLOCK_TYPES) {
+      const title = BLOCK_CONFIG_TITLES[type];
+      const pill = BLOCK_PILL_LABELS[type];
+      const blockMatchesDirectly = matchesQuery(searchQuery, type, title, pill);
+      const fields = BLOCK_CONFIG_FIELDS[type].filter(
+        (field) =>
+          blockMatchesDirectly ||
+          matchesQuery(
+            searchQuery,
+            type,
+            title,
+            pill,
+            field.label,
+            field.key,
+            field.help,
+            field.kind === "enum" ? field.options.map(([id, text]) => `${id} ${text}`).join(" ") : "",
+          ),
+      );
+      if (fields.length > 0) {
+        out.push({ type, fields });
+      }
+    }
+    return out;
+  }, [searchQuery]);
+
+  const showVoiceSection = isSearching
+    ? matchingVoiceFields.length > 0
+    : activeTab === "voice" || activeTab === "all";
+
+  const showOverarchingSection = isSearching
+    ? matchingOverarchingFields.length > 0
+    : activeTab === "overarching" || activeTab === "all";
+
+  const showBlocksSection = isSearching
+    ? matchingBlocks.length > 0
+    : activeTab === "blocks" || activeTab === "all";
 
   return (
     <AdminFrame current="customizations" sidebar={<div className="ds-side-spacer" />}>
-      <article className="editor">
+      <article className="editor agent-config-editor">
         <p className="eyebrow">Administration</p>
-        <h2>Agent Customizations</h2>
+        <h2>AI Tutor Configuration</h2>
         <p className="help">
-          One tutor profile for every student. The component, the child, and the feedback loop are not settings on this
-          screen. Name, age, reading level, modality, and interests stay on the child.
+          One shared tutor profile for every student across Layer 3 (Voice &amp; Persona) and Layer 4 (Overarching
+          Teaching Policy &amp; 9 Block Types). Child-specific reading level, response length, explanation format, and
+          interests stay on Layer 2.
         </p>
         {loading ? <p className="help">Loading the profile.</p> : null}
         {draft ? (
-          <form className="agent-form" onSubmit={(event) => void onSubmit(event)}>
-            <h3 className="agent-layer">Layer 3, Voice</h3>
-            <Choice
-              label="Persona"
-              value={draft.persona}
-              options={PERSONAS}
-              title={hoverFor("Persona")}
-              help={hoverFor("Persona")}
-              onChange={setPersona}
-            />
-            <Choice
-              label="Reading voice"
-              value={draft.lexicon}
-              options={VOICES}
-              title={hoverFor("Lexicon")}
-              help={hoverFor("Lexicon")}
-              onChange={setVoice}
-            />
-            <Choice
-              label="Metaphor set"
-              value={draft.metaphors}
-              options={METAPHORS}
-              title={hoverFor("Metaphors")}
-              help={hoverFor("Metaphors")}
-              onChange={(metaphors) => {
-                setSaved(false);
-                setDraft({ ...draft, metaphors });
-              }}
-            />
-            <Choice
-              label="Sidekick"
-              value={draft.sidekick}
-              options={SIDEKICKS}
-              title={hoverFor("Sidekick")}
-              help={hoverFor("Sidekick")}
-              onChange={(sidekick) => {
-                setSaved(false);
-                setDraft({ ...draft, sidekick });
-              }}
-            />
-            <label className="check" title={hoverFor("Use interests")}>
-              <input
-                type="checkbox"
-                checked={draft.use_interests}
-                title={hoverFor("Use interests")}
-                onChange={(event) => {
-                  setSaved(false);
-                  setDraft({ ...draft, use_interests: event.target.checked });
-                }}
-              />
-              <span>
-                Use interests
-                <span className="help">{hoverFor("Use interests")}</span>
-              </span>
-            </label>
-            <KcTutorConfigFields
-              config={kcTutorConfigFrom(draft.kc_tutor_config)}
-              onChange={(kc_tutor_config) => {
-                setSaved(false);
-                setDraft({ ...draft, kc_tutor_config });
-              }}
-            />
-            <h3 className="agent-layer">Layer 4, Guidance</h3>
-            <label title={hoverFor("Instructive")}>
-              How instructive
-              <span className="agent-level">
-                {draft.instructive} · {level.label}
-              </span>
-              <input
-                type="range"
-                min={1}
-                max={5}
-                step={1}
-                value={draft.instructive}
-                title={hoverFor("Instructive")}
-                aria-valuemin={1}
-                aria-valuemax={5}
-                aria-valuenow={draft.instructive}
-                aria-valuetext={`${draft.instructive} ${level.label}. ${hoverFor("Instructive")}`}
-                onChange={(event) => {
-                  setSaved(false);
-                  setDraft({ ...draft, instructive: Number(event.target.value) });
-                }}
-              />
-              <span className="agent-scale">
-                <span>1 Asks first</span>
-                <span>3 Short lead-in</span>
-                <span>5 Explains more</span>
-              </span>
-              <span className="help">{hoverFor("Instructive")}</span>
-            </label>
-            <Choice
-              label="Struggle window"
-              value={draft.struggle_window}
-              options={WINDOWS}
-              title={hoverFor("Struggle window")}
-              help={hoverFor("Struggle window")}
-              onChange={(struggle_window) => {
-                setSaved(false);
-                setDraft({ ...draft, struggle_window });
-              }}
-            />
-            <label className="check" title={hoverFor("Stay on course")}>
-              <input
-                type="checkbox"
-                checked={draft.stay_on_course}
-                title={hoverFor("Stay on course")}
-                onChange={(event) => {
-                  setSaved(false);
-                  setDraft({ ...draft, stay_on_course: event.target.checked });
-                }}
-              />
-              <span>
-                Stay on course
-                <span className="help">{hoverFor("Stay on course")}</span>
-              </span>
-            </label>
-            <Choice
-              label="Misconception policy"
-              value={draft.misconception_policy || "retry_once"}
-              options={POLICIES}
-              title={hoverFor("Misconception policy")}
-              help={hoverFor("Misconception policy")}
-              onChange={(misconception_policy) => {
-                setSaved(false);
-                setDraft({ ...draft, misconception_policy });
-              }}
-            />
-            <Choice
-              label="Enrichment"
-              value={draft.enrichment || "on_request"}
-              options={ENRICHMENT}
-              title={hoverFor("Enrichment")}
-              help={hoverFor("Enrichment")}
-              onChange={(enrichment) => {
-                setSaved(false);
-                setDraft({ ...draft, enrichment });
-              }}
-            />
-            <h3 className="agent-layer">Layer 6, Metacognition</h3>
-            <label className="check" title={hoverFor("Self-explanation")}>
-              <input
-                type="checkbox"
-                checked={draft.self_explanation !== false}
-                title={hoverFor("Self-explanation")}
-                onChange={(event) => {
-                  setSaved(false);
-                  setDraft({ ...draft, self_explanation: event.target.checked });
-                }}
-              />
-              <span>
-                Self-explanation
-                <span className="help">{hoverFor("Self-explanation")}</span>
-              </span>
-            </label>
+          <form className="agent-form agent-config-form" onSubmit={(event) => void onSubmit(event)}>
+            <header className="agent-sticky-header" aria-label="Search and configuration actions">
+              <div className="agent-search-wrap">
+                <input
+                  type="search"
+                  className="agent-search-input"
+                  aria-label="Search settings"
+                  placeholder="Search settings by name, block, or keyword (e.g. retry, mcq, vocabulary, praise)..."
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                />
+                {isSearching ? (
+                  <button
+                    type="button"
+                    className="ghost agent-search-clear"
+                    onClick={() => setSearchQuery("")}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+              <div className="agent-header-actions">
+                <span
+                  className={`agent-status-badge${hasUnsavedChanges ? " is-unsaved" : " is-clean"}`}
+                  role="status"
+                >
+                  {hasUnsavedChanges ? "Unsaved changes" : saved ? "Saved" : "All changes saved"}
+                </span>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={resetToResearchDefaults}
+                >
+                  Reset to Research Defaults
+                </button>
+                <button className="button" type="submit" disabled={saving}>
+                  {saving ? "Saving..." : "Save configuration"}
+                </button>
+              </div>
+            </header>
+
+            {!isSearching ? (
+              <nav className="agent-section-tabs" aria-label="Configuration sections">
+                {SECTION_TABS.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={`agent-section-tab${activeTab === tab.id ? " is-active" : ""}`}
+                    aria-pressed={activeTab === tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </nav>
+            ) : (
+              <p className="agent-search-banner">
+                Showing matching controls for <strong>&ldquo;{searchQuery.trim()}&rdquo;</strong> across Layer 3,
+                Overarching Policy, and the 9 Block Types.
+              </p>
+            )}
+
+            {isSearching && !showVoiceSection && !showOverarchingSection && !showBlocksSection ? (
+              <p className="help">No settings matched &ldquo;{searchQuery.trim()}&rdquo;.</p>
+            ) : null}
+
+            {showVoiceSection ? (
+              <section className="agent-config-section" aria-label="Voice & Persona (Layer 3)">
+                <div className="agent-section-heading">
+                  <h3 className="agent-layer">Voice &amp; Persona (Layer 3)</h3>
+                  <p className="help">
+                    Six orthogonal voice controls governing framing archetype, terminology register, interest weaving,
+                    fallback analogies, humor guardrails, and sidekick presence.
+                  </p>
+                </div>
+
+                <aside className="agent-harmony-note" aria-label="Cross-Layer Harmony">
+                  <strong>Cross-Layer Harmony:</strong> Sentence length, reading complexity, paragraph density, and
+                  explanation representation format are governed per-child by <strong>Layer 2</strong> (
+                  <code>reading_level</code>, <code>response_length</code>, <code>learning_support</code>,{" "}
+                  <code>explanation_style</code>). Layer 3 never overrides a child&apos;s reading level or emotional
+                  safety settings.
+                </aside>
+
+                <div className="agent-card-grid">
+                  {(["character", "terminology"] as const).map((groupKey) => {
+                    const groupFields = (isSearching ? matchingVoiceFields : VOICE_FIELDS).filter(
+                      (field) => field.group === groupKey,
+                    );
+                    if (groupFields.length === 0) return null;
+                    const cardTitle =
+                      groupKey === "character"
+                        ? "Character, Humor & Sidekick"
+                        : "Terminology & Personalization";
+                    const cardSub =
+                      groupKey === "character"
+                        ? "Framing metaphor, warm levity with automatic miss/anxiety suppression, and optional sidekick."
+                        : "Subject terminology introduction, Layer 2 interest weaving frequency, and fallback analogy domain.";
+                    return (
+                      <div key={groupKey} className="agent-config-card">
+                        <h4>{cardTitle}</h4>
+                        <p className="help">{cardSub}</p>
+                        {groupFields.map((field) => {
+                          const currentVal = String(
+                            draft[field.key] ?? RESEARCH_DEFAULT_VOICE[field.key],
+                          );
+                          return (
+                            <Choice
+                              key={field.key}
+                              label={field.label}
+                              value={currentVal}
+                              options={field.options}
+                              title={hoverFor(field.hoverName)}
+                              help={hoverFor(field.hoverName)}
+                              onChange={(val) => updateVoiceField(field.key, val)}
+                            />
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
+
+            {showOverarchingSection ? (
+              <section
+                className="agent-config-section"
+                aria-label="Overarching Teaching Policy (Layer 4)"
+              >
+                <div className="agent-section-heading">
+                  <h3 className="agent-layer">Overarching Teaching Policy (Layer 4)</h3>
+                  <p className="help">
+                    Eight overarching pedagogical policies applied across every block type while the tutor walks a
+                    knowledge component.
+                  </p>
+                </div>
+
+                <div className="agent-card-grid">
+                  {OVERARCHING_CARDS.map((card) => {
+                    const cardFields = card.keys
+                      .map((key) => OVERARCHING_FIELDS.find((f) => f.key === key))
+                      .filter((f): f is ConfigField => Boolean(f))
+                      .filter((f) =>
+                        isSearching
+                          ? matchingOverarchingFields.some((mf) => mf.key === f.key)
+                          : true,
+                      );
+                    if (cardFields.length === 0) return null;
+                    return (
+                      <div key={card.title} className="agent-config-card">
+                        <h4>{card.title}</h4>
+                        <p className="help">{card.subtitle}</p>
+                        {cardFields.map((field) => (
+                          <ConfigControl
+                            key={field.key}
+                            field={field}
+                            value={config.overarching[field.key]}
+                            onChange={(val) => updateOverarching(field.key, String(val))}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
+
+            {showBlocksSection ? (
+              <section
+                className="agent-config-section"
+                aria-label="Block Teaching Rules (Layer 4 — 9 Block Types)"
+              >
+                <div className="agent-section-heading">
+                  <h3 className="agent-layer">Block Teaching Rules (Layer 4 — 9 Block Types)</h3>
+                  <p className="help">
+                    Specialized teaching mechanics, retry caps, and scaffolding rules for each of the nine block types.
+                  </p>
+                </div>
+
+                {!isSearching ? (
+                  <div className="agent-block-pills" role="group" aria-label="9-Block Pill Selector Bar">
+                    {BLOCK_TYPES.map((type) => {
+                      const diffCount = blockModifiedCount(config, type);
+                      const isSelected = !showAllBlocks && selectedBlock === type;
+                      return (
+                        <button
+                          key={type}
+                          type="button"
+                          className={`kc-chip agent-block-pill${isSelected ? " is-active" : ""}`}
+                          aria-pressed={isSelected}
+                          onClick={() => {
+                            setShowAllBlocks(false);
+                            setSelectedBlock(type);
+                          }}
+                        >
+                          <span>{BLOCK_PILL_LABELS[type]}</span>
+                          {diffCount > 0 ? (
+                            <span className="agent-pill-badge" title={`${diffCount} customized setting(s)`}>
+                              {diffCount}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      className={`kc-chip agent-block-pill${showAllBlocks ? " is-active" : ""}`}
+                      aria-pressed={showAllBlocks}
+                      onClick={() => setShowAllBlocks((prev) => !prev)}
+                    >
+                      Show All 9
+                    </button>
+                  </div>
+                ) : null}
+
+                <div className="agent-card-grid">
+                  {(isSearching
+                    ? matchingBlocks
+                    : showAllBlocks || activeTab === "all"
+                      ? BLOCK_TYPES.map((type) => ({ type, fields: BLOCK_CONFIG_FIELDS[type] }))
+                      : [{ type: selectedBlock, fields: BLOCK_CONFIG_FIELDS[selectedBlock] }]
+                  ).map(({ type, fields }) => {
+                    const diffCount = blockModifiedCount(config, type);
+                    return (
+                      <section
+                        key={type}
+                        className="agent-config-card"
+                        aria-label={BLOCK_CONFIG_TITLES[type]}
+                      >
+                        <div className="agent-block-card-header">
+                          <div>
+                            <h4>{BLOCK_CONFIG_TITLES[type]}</h4>
+                            {diffCount > 0 ? (
+                              <span className="agent-custom-badge">
+                                {diffCount} customized
+                              </span>
+                            ) : (
+                              <span className="help">Using research defaults</span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            className="ghost"
+                            disabled={diffCount === 0}
+                            onClick={() => resetBlockToDefault(type)}
+                          >
+                            Reset block to default
+                          </button>
+                        </div>
+                        {fields.map((field) => (
+                          <ConfigControl
+                            key={`${type}-${field.key}`}
+                            field={field}
+                            value={config.blocks[type]?.[field.key]}
+                            onChange={(value) => updateBlockField(type, field.key, value)}
+                          />
+                        ))}
+                      </section>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
+
             {error ? (
               <div className="banner" role="alert">
                 <p>{error}</p>
               </div>
             ) : null}
             {saved ? <p className="note">Saved. This profile applies to every student.</p> : null}
-            <div className="rail-actions">
-              <button className="button" type="submit" disabled={saving}>
-                {saving ? "Saving" : "Save profile"}
-              </button>
-            </div>
           </form>
         ) : null}
         {!loading && !draft && error ? (

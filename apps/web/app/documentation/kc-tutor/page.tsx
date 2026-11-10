@@ -186,9 +186,20 @@ export default function KcTutorDocsPage() {
             <code>animals_and_nature</code>, <code>space_and_science</code>, <code>art_and_design</code>,{" "}
             <code>music_and_dance</code>, <code>building_and_coding</code>, <code>cooking_and_food</code>,{" "}
             <code>cars_and_trains</code>, <code>stories_and_comics</code>) and <strong>Specific favorites</strong> (up
-            to 120 characters): Anchors examples and analogies when Use interests is enabled on Agent customizations.
+            to 120 characters): Anchors examples and analogies when <code>interest_weaving</code> is active on{" "}
+            <Link href="/admin/agent-customizations">AI Tutor Configuration</Link>.
           </li>
         </ul>
+        <p>
+          Shared Layer 3 (Voice &amp; Persona: <code>persona</code>, <code>vocabulary_register</code>,{" "}
+          <code>interest_weaving</code>, <code>metaphors</code>, <code>humor_and_wit</code>, <code>sidekick</code>) and
+          Layer 4 (Overarching Teaching Policy: <code>orient_framing</code>, <code>instructional_stance</code>,{" "}
+          <code>scaffolding_escalation</code>, <code>stay_on_course</code>, <code>misconception_policy</code>,{" "}
+          <code>prerequisite_support_policy</code>, <code>encouragement_style</code>, <code>close_summary_depth</code>,
+          plus the 9 per-block teaching configurations) live on{" "}
+          <Link href="/admin/agent-customizations">AI Tutor Configuration</Link> and are documented with the Cross-Layer
+          Ownership Matrix on <Link href="/documentation/kc-prompt-layers">KC prompt layers</Link>.
+        </p>
 
         <h2>What to know when using it</h2>
         <ul>

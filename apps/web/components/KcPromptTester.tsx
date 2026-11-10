@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 
 import { KcBanner } from "@/components/KcBanner";
 import { BlockDataEditor } from "@/components/KcBlockCanvas";
+import { ConfigControl } from "@/components/admin/KcTutorConfigFields";
 import { api } from "@/lib/api";
 import type { KcBlock, KcCourse } from "@/lib/kc";
 import { BLOCK_LABELS } from "@/lib/kc-blocks";
@@ -13,6 +14,7 @@ import {
   FIELD_OPTIONS,
   INTEREST_TAG_OPTIONS,
   LAYER_HEADINGS,
+  activeBlockTypeFor,
   applyChild,
   applyResult,
   applyUnit,
@@ -30,6 +32,12 @@ import {
   type PromptTesterResult,
   type TesterValues,
 } from "@/lib/kc-prompt-tester";
+import {
+  BLOCK_CONFIG_FIELDS,
+  BLOCK_CONFIG_TITLES,
+  kcTutorConfigFrom,
+  type KcTutorConfig,
+} from "@/lib/kc-tutor-config";
 import type { Student, TutorProfile } from "@/lib/types";
 
 export function KcPromptTester({
@@ -49,6 +57,9 @@ export function KcPromptTester({
   const [typeFields, setTypeFields] = useState<Record<string, unknown>>({});
   const [blocks, setBlocks] = useState<KcBlock[]>([]);
   const [values, setValues] = useState<TesterValues>(() => emptyTesterValues(profile ?? DEFAULT_TUTOR_PROFILE));
+  const [tutorConfig, setTutorConfig] = useState<KcTutorConfig>(() =>
+    kcTutorConfigFrom(profile?.kc_tutor_config),
+  );
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState<string | null>(loadError);
   const [submitting, setSubmitting] = useState(false);
@@ -58,9 +69,23 @@ export function KcPromptTester({
   const moveIndex = Number(values["Move index"] || "1");
   const activeIndex = blocks.length ? Math.min(Math.max(Number.isFinite(moveIndex) ? moveIndex : 1, 1), blocks.length) - 1 : 0;
   const activeBlock = blocks[activeIndex];
+  const activeBlockType = activeBlockTypeFor(values, blocks);
 
   function setField(name: string, value: string) {
     setValues((current) => ({ ...current, [name]: value }));
+  }
+
+  function setActiveBlockConfig(key: string, value: string | number | boolean) {
+    setTutorConfig((current) => ({
+      ...current,
+      blocks: {
+        ...current.blocks,
+        [activeBlockType]: {
+          ...current.blocks[activeBlockType],
+          [key]: value,
+        },
+      },
+    }));
   }
 
   function onCourse(nextId: string) {
@@ -97,7 +122,7 @@ export function KcPromptTester({
     try {
       const result = await api<PromptTesterResult>("/kc/prompt-tester", {
         method: "POST",
-        body: JSON.stringify(testerPayload(values, typeFields, blocks)),
+        body: JSON.stringify(testerPayload(values, typeFields, blocks, tutorConfig)),
       });
       setPrompt(result.system_prompt);
       setValues((current) => applyResult(current, result));
@@ -198,6 +223,21 @@ export function KcPromptTester({
                 </label>
               );
             })}
+            {heading === "Layer 4, Guidance" ? (
+              <div className="kc-block-body" aria-label={`Active block rules: ${BLOCK_CONFIG_TITLES[activeBlockType]}`}>
+                <p>
+                  <strong>Active block rules ({BLOCK_CONFIG_TITLES[activeBlockType]})</strong>
+                </p>
+                {BLOCK_CONFIG_FIELDS[activeBlockType].map((bfield) => (
+                  <ConfigControl
+                    key={`${activeBlockType}-${bfield.key}`}
+                    field={bfield}
+                    value={tutorConfig.blocks[activeBlockType]?.[bfield.key]}
+                    onChange={(next) => setActiveBlockConfig(bfield.key, next)}
+                  />
+                ))}
+              </div>
+            ) : null}
           </section>
         ))}
         <button className="button" type="submit" disabled={submitting}>
