@@ -9,7 +9,7 @@ const previousDestinations = [
   ["/admin/agent-customizations", "AI Tutor Configurations"],
   ["/kc-studio", "KC Course Creator"],
   ["/manage-kc-courses", "Manage KC courses"],
-  ["/kc-creator", "KC Creator"],
+  ["/kc-creator", "KC Topic Creator"],
   ["/kc-tutor", "KC Tutor"],
   ["/kc-prompt-tester", "KC Prompt Tester"],
   ["/kc-progress", "KC Course Progress"],
@@ -48,7 +48,7 @@ test("menu sections keep every destination under the five headers", () => {
   ]);
   assert.deepEqual(byTitle["KC course creation"], [
     ["KC Course Creator", "/kc-studio"],
-    ["KC Creator", "/kc-creator"],
+    ["KC Topic Creator", "/kc-creator"],
     ["Manage KC courses", "/manage-kc-courses"],
   ]);
   assert.deepEqual(byTitle["Testing pages"], [

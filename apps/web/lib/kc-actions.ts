@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import type { KcCourse } from "@/lib/kc";
 import { draftKcComponent } from "@/lib/kc-draft";
 import { kcModel } from "@/lib/kc-models";
+import { KcDraftError, promptTurnId, rememberCreatorPrompts } from "@/lib/kc-prompt-log";
 
 function bounce(path: string, error: unknown): never {
   const message = error instanceof Error ? error.message : "That did not save.";
@@ -128,19 +129,25 @@ export async function postKcCreatorMessage(formData: FormData) {
   const courseId = String(formData.get("course_id") || "");
   const nodeId = String(formData.get("node_id") || "");
   const model = kcModel(String(formData.get("model") || ""));
+  const message = String(formData.get("message") || "");
   const back = `/kc-creator?course=${courseId}&kc=${nodeId}&model=${encodeURIComponent(model)}`;
+  const turnId = promptTurnId([nodeId, message, String(Date.now()), String(Math.random())]);
   try {
     const allowed = String(formData.get("allowed_block_types") || "")
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
-    await draftKcComponent({
+    const prompts = await draftKcComponent({
       nodeId,
-      message: String(formData.get("message") || ""),
+      message,
       model,
       allowedBlockTypes: allowed,
     });
+    rememberCreatorPrompts(nodeId, { id: turnId, prompts });
   } catch (error) {
+    if (error instanceof KcDraftError && error.prompts.length > 0) {
+      rememberCreatorPrompts(nodeId, { id: turnId, prompts: error.prompts });
+    }
     bounce(back, error);
   }
   redirect(back);
