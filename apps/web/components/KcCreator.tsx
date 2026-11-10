@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 
+import { CreatorDebugButton, CreatorDebugShell } from "@/components/CreatorDebug";
 import { KcBanner } from "@/components/KcBanner";
 import { KcBlockCanvas, KcBlockScope } from "@/components/KcBlockCanvas";
 import { KcCreatorComposer } from "@/components/KcComposer";
@@ -29,6 +30,7 @@ import {
 import { creatorBubbleText } from "@/lib/kc-draft-text";
 import { creatorPushPayload } from "@/lib/kc-creator-push";
 import { kcModel } from "@/lib/kc-models";
+import type { PromptTurn } from "@/lib/kc-prompt-log";
 
 const acted = new Set<string>();
 
@@ -48,6 +50,8 @@ export function KcCreator({
   thread,
   model,
   error,
+  promptScope,
+  promptTurn,
 }: {
   courses: KcCourse[];
   course: KcCourse | null;
@@ -55,6 +59,8 @@ export function KcCreator({
   thread: KcCreatorThread | null;
   model: string;
   error: string | null;
+  promptScope: string;
+  promptTurn: PromptTurn | null;
 }) {
   const router = useRouter();
   const rows = course ? [...course.components, ...course.patches] : [];
@@ -176,8 +182,8 @@ export function KcCreator({
   }
 
   return (
-    <main className="ds-shell studio-shell kc-screen kc-creator">
-      <KcBanner name="KC Creator">
+    <CreatorDebugShell className="ds-shell studio-shell kc-screen kc-creator" scope={promptScope} turn={promptTurn}>
+      <KcBanner name="KC Topic Creator" learnerNav={false}>
         <div className="kc-fast">
           {course ? (
             course.ready ? (
@@ -211,6 +217,7 @@ export function KcCreator({
           <button className="button" type="button" onClick={startFastCreate} disabled={!course || Boolean(record?.active)}>
             Fast Create All
           </button>
+          <CreatorDebugButton />
         </div>
       </KcBanner>
       <aside className="ds-side">
@@ -296,7 +303,7 @@ export function KcCreator({
           </div>
         </div>
       </section>
-    </main>
+    </CreatorDebugShell>
   );
 }
 

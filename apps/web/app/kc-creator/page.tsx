@@ -2,10 +2,11 @@ import { KcCreator } from "@/components/KcCreator";
 import { api } from "@/lib/api";
 import type { KcCourse, KcCreatorThread } from "@/lib/kc";
 import { kcModel } from "@/lib/kc-models";
+import { readCreatorPrompts } from "@/lib/kc-prompt-log";
 
 export const dynamic = "force-dynamic";
 
-export const metadata = { title: "KC Creator · AI Tutor" };
+export const metadata = { title: "KC Topic Creator · AI Tutor" };
 
 export default async function KcCreatorPage({
   searchParams,
@@ -43,6 +44,8 @@ export default async function KcCreatorPage({
       thread={component ? thread : null}
       model={model}
       error={error}
+      promptScope={params.kc ? `topic:${params.kc}` : ""}
+      promptTurn={params.kc ? readCreatorPrompts(params.kc) : null}
     />
   );
 }

@@ -9,12 +9,9 @@ export const VISIBLE_ADMIN_SECTIONS = ADMIN_SECTIONS;
 
 export type AdminSection = "kc-chats" | "customizations" | "lessons" | "chats";
 
-export const TOP_NAV_LINKS = [
-  { href: "/kc-tutor", label: "KC Tutor" },
-  { href: "/kc-progress", label: "KC Progress" },
+const CREATOR_LINKS = [
   { href: "/kc-studio", label: "KC Course Creator" },
-  { href: "/kc-creator", label: "KC Creator" },
-  { href: "/admin", label: "Administration" },
+  { href: "/kc-creator", label: "KC Topic Creator" },
 ] as const;
 
 export function AdminMenu({ current }: { current: AdminSection }) {
@@ -37,10 +34,8 @@ export function AdminMenu({ current }: { current: AdminSection }) {
             </Link>
           );
         })}
-      </nav>
-      <nav className="ds-admin-shortcuts" aria-label="Workspace navigation">
-        {TOP_NAV_LINKS.filter((link) => link.href !== "/admin").map((link) => (
-          <Link key={link.href} href={link.href} className="ds-top-btn is-shortcut">
+        {CREATOR_LINKS.map((link) => (
+          <Link key={link.href} href={link.href} className="ds-top-btn">
             {link.label}
           </Link>
         ))}

@@ -4,6 +4,14 @@ import { api } from "@/lib/api";
 import type { KcDraft } from "@/lib/kc";
 import { languageModel } from "@/lib/language-model";
 import { isKcModel, missingKeyMessage, modelForCall, usesOpenRouter, type KcModel } from "@/lib/kc-models";
+import {
+  KcDraftError,
+  promptTurnId,
+  releaseRecord,
+  shareInFlight,
+  takeComponentRows,
+  type SentPrompt,
+} from "@/lib/kc-prompt-log";
 
 type PromptBundle = {
   model: string;
@@ -27,7 +35,12 @@ type CourseResult = {
   draft: Extract<KcDraft, { kind: "course" }>;
 };
 
-const cache = new Map<string, CourseResult>();
+export type DraftedCourse = CourseResult & {
+  prompts: SentPrompt[];
+  promptTurnId: string;
+};
+
+const inflight = new Map<string, Promise<DraftedCourse>>();
 
 function requireKey(model: string) {
   const missing = missingKeyMessage(model);
@@ -42,8 +55,24 @@ function requireModel(model: string): KcModel {
   return called;
 }
 
-async function completeObject(model: KcModel, instructions: string, prompt: string, schema: JSONSchema7) {
-  const result = streamText({
+function turnIdFor(courseId: string, message: string, prompts: SentPrompt[]) {
+  return promptTurnId([
+    courseId,
+    message,
+    ...prompts.flatMap((item) => [item.label, item.instructions, item.prompt]),
+  ]);
+}
+
+async function completeObject(
+  model: KcModel,
+  instructions: string,
+  prompt: string,
+  schema: JSONSchema7,
+  sent: SentPrompt[],
+  label: string,
+) {
+  sent.push({ label, instructions, prompt });
+  const output = await streamText({
     model: languageModel(model),
     output: Output.object({
       schema: jsonSchema(schema),
@@ -53,8 +82,7 @@ async function completeObject(model: KcModel, instructions: string, prompt: stri
     instructions,
     prompt,
     ...(model.startsWith("gpt-4") || usesOpenRouter(model) ? { temperature: 0.3 } : {}),
-  });
-  const output = await result.output;
+  }).output;
   if (!output || typeof output !== "object") {
     throw new Error("The model reply could not be read.");
   }
@@ -65,6 +93,8 @@ async function withModel<T>(
   model: KcModel,
   bundle: PromptBundle,
   finish: (proposal: Record<string, unknown>) => Promise<T>,
+  sent: SentPrompt[],
+  label: string,
 ): Promise<T> {
   let note = "";
   let last = "The model reply could not be read.";
@@ -72,17 +102,23 @@ async function withModel<T>(
     try {
       const proposal = await completeObject(
         model,
-        note ? `${bundle.system_prompt}\n${note}` : bundle.system_prompt,
+        noted(bundle.system_prompt, note),
         bundle.user_prompt,
         bundle.schema,
+        sent,
+        label,
       );
-      return await finish(proposal);
+      try {
+        return await finish(proposal);
+      } finally {
+        releaseRecord(proposal);
+      }
     } catch (error) {
       last = error instanceof Error ? error.message : last;
       note = `The previous reply was rejected. ${last}`;
     }
   }
-  throw new Error(last);
+  throw new KcDraftError(last, sent);
 }
 
 function noted(prompt: string, note: string) {
@@ -94,14 +130,16 @@ function stringList(value: unknown): string[] {
   return value.map((item) => String(item ?? "").trim()).filter(Boolean);
 }
 
-function componentRows(proposal: Record<string, unknown>): Record<string, unknown>[] {
-  const raw = proposal.components;
-  if (!Array.isArray(raw)) return [];
-  return raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
-}
-
 function scopeBody(allowedBlockTypes?: string[]) {
   return allowedBlockTypes && allowedBlockTypes.length ? { allowed_block_types: allowedBlockTypes } : {};
+}
+
+function readTitlePass(proposal: Record<string, unknown>) {
+  const titles = stringList(proposal.titles);
+  const subject = typeof proposal.subject === "string" ? proposal.subject : "";
+  const majorIdeas = stringList(proposal.major_ideas);
+  releaseRecord(proposal);
+  return { titles, subject, majorIdeas };
 }
 
 async function draftLongCourse(
@@ -109,44 +147,88 @@ async function draftLongCourse(
   message: string,
   model: KcModel,
   bundle: PromptBundle,
-  allowedBlockTypes?: string[],
+  allowedBlockTypes: string[] | undefined,
+  sent: SentPrompt[],
 ): Promise<CourseResult> {
   let note = "";
   let last = "The model reply could not be read.";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const titlesProposal = await completeObject(
+      const titleCall = await completeObject(
         model,
         noted(bundle.system_prompt, note),
         bundle.user_prompt,
         bundle.schema,
+        sent,
+        "Title pass",
       );
-      const titles = stringList(titlesProposal.titles);
-      const subject = typeof titlesProposal.subject === "string" ? titlesProposal.subject : "";
-      const majorIdeas = stringList(titlesProposal.major_ideas);
+      const { titles, subject, majorIdeas } = readTitlePass(titleCall);
       const plan = await api<SlicePlan>(`/kc/courses/${courseId}/draft-slices`, {
         method: "POST",
         body: JSON.stringify({ message, model, titles, subject, major_ideas: majorIdeas, ...scopeBody(allowedBlockTypes) }),
       });
       const components: Record<string, unknown>[] = [];
-      for (const slice of plan.slices) {
-        const piece = await completeObject(model, noted(slice.system_prompt, note), slice.user_prompt, slice.schema);
-        components.push(...componentRows(piece));
+      const slices: Array<SliceBundle | undefined> = plan.slices.splice(0, plan.slices.length);
+      for (let index = 0; index < slices.length; index += 1) {
+        const slice = slices[index];
+        if (!slice) continue;
+        const instructions = noted(slice.system_prompt, note);
+        const prompt = slice.user_prompt;
+        const schema = slice.schema;
+        slices[index] = undefined;
+        const piece = await completeObject(model, instructions, prompt, schema, sent, `Slice ${index + 1}`);
+        components.push(...takeComponentRows(piece));
       }
+      const body = JSON.stringify({
+        message,
+        proposal: { subject, major_ideas: majorIdeas, components },
+        ...scopeBody(allowedBlockTypes),
+      });
+      components.length = 0;
       return await api<CourseResult>(`/kc/courses/${courseId}/draft-finish`, {
         method: "POST",
-        body: JSON.stringify({
-          message,
-          proposal: { subject, major_ideas: majorIdeas, components },
-          ...scopeBody(allowedBlockTypes),
-        }),
+        body,
       });
     } catch (error) {
       last = error instanceof Error ? error.message : last;
       note = `The previous reply was rejected. ${last}`;
     }
   }
-  throw new Error(last);
+  throw new KcDraftError(last, sent);
+}
+
+async function draftCourseCall(input: {
+  courseId: string;
+  message: string;
+  model: KcModel;
+  allowedBlockTypes?: string[];
+}): Promise<DraftedCourse> {
+  const sent: SentPrompt[] = [];
+  try {
+    const bundle = await api<PromptBundle>(`/kc/courses/${input.courseId}/draft-prompt`, {
+      method: "POST",
+      body: JSON.stringify({ message: input.message, model: input.model, ...scopeBody(input.allowedBlockTypes) }),
+    });
+    const finished =
+      bundle.pass === "titles"
+        ? await draftLongCourse(input.courseId, input.message, input.model, bundle, input.allowedBlockTypes, sent)
+        : await withModel(
+            input.model,
+            bundle,
+            (proposal) =>
+              api<CourseResult>(`/kc/courses/${input.courseId}/draft-finish`, {
+                method: "POST",
+                body: JSON.stringify({ message: input.message, proposal, ...scopeBody(input.allowedBlockTypes) }),
+              }),
+            sent,
+            "Draft",
+          );
+    return { ...finished, prompts: sent, promptTurnId: turnIdFor(input.courseId, input.message, sent) };
+  } catch (error) {
+    const prompts = error instanceof KcDraftError ? error.prompts : sent;
+    const message = error instanceof Error ? error.message : "The model reply could not be read.";
+    throw new KcDraftError(message, prompts, turnIdFor(input.courseId, input.message, prompts));
+  }
 }
 
 export async function draftKcCourse(input: {
@@ -154,30 +236,21 @@ export async function draftKcCourse(input: {
   message: string;
   model: string;
   allowedBlockTypes?: string[];
-}): Promise<CourseResult> {
+}): Promise<DraftedCourse> {
   const model = requireModel(input.model);
   requireKey(model);
   const message = input.message.trim();
   if (!message) throw new Error("Write a message first.");
   const scope = (input.allowedBlockTypes ?? []).join(",");
   const key = `${input.courseId}\n${model}\n${scope}\n${message}`;
-  const cached = cache.get(key);
-  if (cached) return cached;
-  const bundle = await api<PromptBundle>(`/kc/courses/${input.courseId}/draft-prompt`, {
-    method: "POST",
-    body: JSON.stringify({ message, model, ...scopeBody(input.allowedBlockTypes) }),
-  });
-  const finished =
-    bundle.pass === "titles"
-      ? await draftLongCourse(input.courseId, message, model, bundle, input.allowedBlockTypes)
-      : await withModel(model, bundle, (proposal) =>
-          api<CourseResult>(`/kc/courses/${input.courseId}/draft-finish`, {
-            method: "POST",
-            body: JSON.stringify({ message, proposal, ...scopeBody(input.allowedBlockTypes) }),
-          }),
-        );
-  cache.set(key, finished);
-  return finished;
+  return shareInFlight(inflight, key, () =>
+    draftCourseCall({
+      courseId: input.courseId,
+      message,
+      model,
+      allowedBlockTypes: input.allowedBlockTypes,
+    }),
+  );
 }
 
 export async function draftKcComponent(input: {
@@ -185,20 +258,28 @@ export async function draftKcComponent(input: {
   message: string;
   model: string;
   allowedBlockTypes?: string[];
-}): Promise<void> {
+}): Promise<SentPrompt[]> {
   const model = requireModel(input.model);
   requireKey(model);
   const message = input.message.trim();
   if (!message) throw new Error("Write a message first.");
+  const sent: SentPrompt[] = [];
   const bundle = await api<PromptBundle>(`/kc/nodes/${input.nodeId}/creator-prompt`, {
     method: "POST",
     body: JSON.stringify({ message, model, ...scopeBody(input.allowedBlockTypes) }),
   });
-  await withModel(model, bundle, async (proposal) => {
-    const discussion = typeof proposal.discussion === "string" ? proposal.discussion : "";
-    await api(`/kc/nodes/${input.nodeId}/model-turn`, {
-      method: "POST",
-      body: JSON.stringify({ message, discussion, draft: proposal, ...scopeBody(input.allowedBlockTypes) }),
-    });
-  });
+  await withModel(
+    model,
+    bundle,
+    async (proposal) => {
+      const discussion = typeof proposal.discussion === "string" ? proposal.discussion : "";
+      await api(`/kc/nodes/${input.nodeId}/model-turn`, {
+        method: "POST",
+        body: JSON.stringify({ message, discussion, draft: proposal, ...scopeBody(input.allowedBlockTypes) }),
+      });
+    },
+    sent,
+    "Draft",
+  );
+  return sent;
 }

@@ -9,26 +9,36 @@ const LEARNER_BANNER_LINKS = [
   { href: "/kc-progress", label: "KC Course Progress", match: "KC Course Progress" },
 ] as const;
 
-export function KcBanner({ name, children }: { name: string; children?: ReactNode }) {
+export function KcBanner({
+  name,
+  children,
+  learnerNav = true,
+}: {
+  name: string;
+  children?: ReactNode;
+  learnerNav?: boolean;
+}) {
   return (
     <header className="kc-banner">
       <BrandMark />
       <h1>{name}</h1>
-      <nav className="kc-banner-nav" aria-label="Primary navigation">
-        {LEARNER_BANNER_LINKS.map((item) => {
-          const isCurrent = name === item.match;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`ds-top-btn is-on-banner${isCurrent ? " is-active" : ""}`}
-              aria-current={isCurrent ? "page" : undefined}
-            >
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
+      {learnerNav ? (
+        <nav className="kc-banner-nav" aria-label="Primary navigation">
+          {LEARNER_BANNER_LINKS.map((item) => {
+            const isCurrent = name === item.match;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`ds-top-btn is-on-banner${isCurrent ? " is-active" : ""}`}
+                aria-current={isCurrent ? "page" : undefined}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+      ) : null}
       {children}
     </header>
   );

@@ -3,6 +3,7 @@ import { api } from "@/lib/api";
 import { draftKcCourse } from "@/lib/kc-draft";
 import type { KcCourse, KcDraft, KcNetwork, KcStructure } from "@/lib/kc";
 import { kcModel } from "@/lib/kc-models";
+import { KcDraftError, type PromptTurn } from "@/lib/kc-prompt-log";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,7 @@ export default async function KcStudioPage({
   let network: KcNetwork | null = null;
   let draft: KcDraft | null = null;
   let reply = "";
+  let promptTurn: PromptTurn | null = null;
   let error: string | null = params.error ? decodeURIComponent(params.error) : null;
   try {
     courses = await api<KcCourse[]>("/kc/courses");
@@ -41,8 +43,14 @@ export default async function KcStudioPage({
           });
           draft = result.draft;
           reply = result.reply;
+          if (result.prompts.length > 0) {
+            promptTurn = { id: result.promptTurnId, prompts: result.prompts };
+          }
         } catch (err) {
           error = err instanceof Error ? err.message : "The model did not answer.";
+          if (err instanceof KcDraftError && err.prompts.length > 0) {
+            promptTurn = { id: err.promptTurnId, prompts: err.prompts };
+          }
         }
       }
     }
@@ -60,6 +68,8 @@ export default async function KcStudioPage({
       initialMessage={params.message ?? ""}
       initialModel={model}
       initialError={error}
+      promptScope={selected ? `course:${selected.id}` : ""}
+      promptTurn={promptTurn}
     />
   );
 }

@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { CreatorDebugButton, CreatorDebugShell } from "@/components/CreatorDebug";
 import { KcBanner } from "@/components/KcBanner";
 import { KcBlockScope } from "@/components/KcBlockCanvas";
 import { KcCourseHistory } from "@/components/KcCourseHistory";
@@ -25,6 +26,7 @@ import {
   type KcNetwork,
   type KcStructure,
 } from "@/lib/kc";
+import type { PromptTurn } from "@/lib/kc-prompt-log";
 
 export function KcStudio({
   initialCourses,
@@ -36,6 +38,8 @@ export function KcStudio({
   initialMessage,
   initialModel,
   initialError,
+  promptScope,
+  promptTurn,
 }: {
   initialCourses: KcCourse[];
   initialCourse: KcCourse | null;
@@ -46,16 +50,18 @@ export function KcStudio({
   initialMessage: string;
   initialModel: string;
   initialError: string | null;
+  promptScope: string;
+  promptTurn: PromptTurn | null;
 }) {
   const course = initialCourse;
   const order = course?.components.map((item) => item.id) ?? [];
   const courseDraft = initialDraft?.kind === "course" ? initialDraft : null;
 
   return (
-    <main className="ds-shell studio-shell kc-screen">
-      <KcBanner name="KC Course Creator">
-        {course ? (
-          <div className="kc-fast">
+    <CreatorDebugShell className="ds-shell studio-shell kc-screen" scope={promptScope} turn={promptTurn}>
+      <KcBanner name="KC Course Creator" learnerNav={false}>
+        <div className="kc-fast">
+          {course ? (
             <KcBlockScope
               courseId={course.id}
               nodeId=""
@@ -63,8 +69,9 @@ export function KcStudio({
               allowed={course.allowed_block_types}
               surface="studio"
             />
-          </div>
-        ) : null}
+          ) : null}
+          <CreatorDebugButton />
+        </div>
       </KcBanner>
       <aside className="ds-side">
         <Link href="/manage-kc-courses" className="studio-manage-link">
@@ -206,7 +213,7 @@ export function KcStudio({
       {initialNetwork && course ? (
         <NetworkModal title={course.title} network={initialNetwork} closeHref={`/kc-studio?course=${course.id}`} />
       ) : null}
-    </main>
+    </CreatorDebugShell>
   );
 }
 

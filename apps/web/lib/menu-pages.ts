@@ -36,7 +36,7 @@ export const menuSections: readonly MenuSection[] = [
     title: "KC course creation",
     links: [
       { href: "/kc-studio", label: "KC Course Creator" },
-      { href: "/kc-creator", label: "KC Creator" },
+      { href: "/kc-creator", label: "KC Topic Creator" },
       { href: "/manage-kc-courses", label: "Manage KC courses" },
     ],
   },
