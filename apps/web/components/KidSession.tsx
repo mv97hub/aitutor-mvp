@@ -724,10 +724,11 @@ export function KidSession({
     return (
       <main className="ds-landing">
         <nav className="ds-landing-links" aria-label="Administration">
-          <Link href="/admin">Administration</Link>
-          <Link href="/kc-studio">KC Course Creator</Link>
-          <Link href="/kc-creator">KC Creator</Link>
-          <Link href="/kc-tutor">KC Tutor</Link>
+          <Link href="/admin" className="ds-top-btn">Administration</Link>
+          <Link href="/kc-studio" className="ds-top-btn">KC Course Creator</Link>
+          <Link href="/kc-creator" className="ds-top-btn">KC Creator</Link>
+          <Link href="/kc-tutor" className="ds-top-btn">KC Tutor</Link>
+          <Link href="/kc-progress" className="ds-top-btn">KC Progress</Link>
         </nav>
         <section className="ds-landing-card">
           <BrandMark />

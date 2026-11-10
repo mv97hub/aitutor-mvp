@@ -71,7 +71,12 @@ export function ViewKcChats({
     let cancelled = false;
     api<KcChatSummary[]>(`/kc/sessions${query}`)
       .then((next) => {
-        if (!cancelled) setSessions(next);
+        if (!cancelled) {
+          setSessions(next);
+          if (next.length > 0 && (!sessionId || !next.some((item) => item.id === sessionId))) {
+            setSessionId(next[0].id);
+          }
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(messageOf(err));
@@ -79,7 +84,7 @@ export function ViewKcChats({
     return () => {
       cancelled = true;
     };
-  }, [studentFilter]);
+  }, [studentFilter, sessionId]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -97,51 +102,66 @@ export function ViewKcChats({
   }, [sessionId]);
 
   return (
-    <AdminFrame
-      current="kc-chats"
-      sidebar={
-        <>
-        <label>
-          Student
-          <select value={studentFilter} onChange={(event) => setStudentFilter(event.target.value)}>
-            <option value="">Everyone</option>
-            {students.map((student) => (
-              <option key={student.id} value={student.id}>{student.display_name}</option>
+    <AdminFrame current="kc-chats">
+      <div className="kc-chats-admin-workspace">
+        <section className="kc-chats-toolbar" aria-label="KC Chat Sessions">
+          <div className="kc-chats-toolbar-top">
+            <div>
+              <p className="eyebrow">Administration</p>
+              <h2>KC View Chats</h2>
+              <p className="help">
+                Inspect learner component transcripts, scores, and full system prompts sent to the model.
+              </p>
+            </div>
+            <label className="kc-chats-student-filter">
+              Student
+              <select value={studentFilter} onChange={(event) => setStudentFilter(event.target.value)}>
+                <option value="">Everyone</option>
+                {students.map((student) => (
+                  <option key={student.id} value={student.id}>
+                    {student.display_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <ul className="ds-list kc-chats-session-strip" aria-label="KC chats">
+            {sessions.length === 0 ? <li className="ds-quiet">No chats yet. Open a learner on KC Tutor.</li> : null}
+            {sessions.map((item) => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  className={`ds-row kc-chat-pill-row ${item.id === sessionId ? "is-on" : ""}`}
+                  onClick={() => setSessionId(item.id)}
+                >
+                  <strong>{item.student_display_name}</strong>
+                  <small>
+                    {item.kc_title} · {item.course_title} · {item.status.replace("_", " ")} · {when(item.updated_at)}
+                  </small>
+                  <small>
+                    {item.message_count} messages · {item.score == null ? "no score" : "1 score"}
+                  </small>
+                </button>
+              </li>
             ))}
-          </select>
-        </label>
-        <ul className="ds-list" aria-label="KC chats">
-          {sessions.length === 0 ? <li className="ds-quiet">No chats yet. Open a learner on KC Tutor.</li> : null}
-          {sessions.map((item) => (
-            <li key={item.id}>
-              <button
-                type="button"
-                className={`ds-row ${item.id === sessionId ? "is-on" : ""}`}
-                onClick={() => setSessionId(item.id)}
-              >
-                <strong>{item.student_display_name}</strong>
-                <small>
-                  {item.kc_title} · {item.course_title} · {item.status.replace("_", " ")} · {when(item.updated_at)}
-                </small>
-                <small>{item.message_count} messages · {item.score == null ? "no score" : "1 score"}</small>
-              </button>
-            </li>
-          ))}
-        </ul>
-        </>
-      }
-    >
+          </ul>
+        </section>
+
         {error ? (
-          <div className="banner" role="alert" style={{ margin: 18 }}>
+          <div className="banner" role="alert" style={{ margin: "18px 0" }}>
             <p>{error}</p>
           </div>
         ) : null}
-        {session ? <SessionView session={session} /> : (
+        {session ? (
+          <SessionView session={session} />
+        ) : (
           <article className="transcript-view">
             <h2>Pick a chat</h2>
             <p className="help">The transcript opens here. This page does not edit components.</p>
           </article>
         )}
+      </div>
     </AdminFrame>
   );
 }
@@ -177,7 +197,9 @@ function PromptDialog({
             <h2 id="kc-prompt-title">View full prompt to debug</h2>
             <p>{subtitle}</p>
           </div>
-          <button type="button" className="ghost" onClick={onClose}>Close</button>
+          <button type="button" className="ghost" onClick={onClose}>
+            Close
+          </button>
         </header>
         <div className="prompt-body">
           <p className="meta">
@@ -190,19 +212,23 @@ function PromptDialog({
             <p className="help">No messages were attached to this call.</p>
           ) : null}
           <ol className="prompt-messages">
-            {prompt.messages.filter((message) => !isRequestNote(message)).map((message, index) => (
-              <li key={`${prompt.id}-${index}`}>
-                <strong>{messageRole(message)}</strong>
-                <pre className="prompt-pre">{messageBody(message)}</pre>
-              </li>
-            ))}
+            {prompt.messages
+              .filter((message) => !isRequestNote(message))
+              .map((message, index) => (
+                <li key={`${prompt.id}-${index}`}>
+                  <strong>{messageRole(message)}</strong>
+                  <pre className="prompt-pre">{messageBody(message)}</pre>
+                </li>
+              ))}
           </ol>
-          {prompt.messages.filter(isRequestNote).map((message, index) => (
-            <div key={`${prompt.id}-request-${index}`}>
-              <h3>Also sent to the model</h3>
-              <pre className="prompt-pre">{messageBody(message)}</pre>
-            </div>
-          ))}
+          {prompt.messages
+            .filter(isRequestNote)
+            .map((message, index) => (
+              <div key={`${prompt.id}-request-${index}`}>
+                <h3>Also sent to the model</h3>
+                <pre className="prompt-pre">{messageBody(message)}</pre>
+              </div>
+            ))}
           {prompt.rubric_met && prompt.rubric_met.length > 0 ? (
             <p className="meta">Rubric points met: {prompt.rubric_met.join(", ")}</p>
           ) : null}
@@ -231,7 +257,8 @@ function SessionView({ session }: { session: KcChatDetail }) {
       <p className="eyebrow">{session.student.display_name}</p>
       <h2>{session.component.title}</h2>
       <p className="meta">
-        {session.component.code} · {session.course.title} · {session.status.replaceAll("_", " ")} · opened {when(session.created_at)}
+        {session.component.code} · {session.course.title} · {session.status.replaceAll("_", " ")} · opened{" "}
+        {when(session.created_at)}
         {` · ${now}`}
       </p>
       <div className="score-fold">
@@ -247,12 +274,16 @@ function SessionView({ session }: { session: KcChatDetail }) {
             <span className="score-toggle-meta">
               {scoreCountLabel(session.score)}
               <span className="score-toggle-action">{scoresOpen ? "Hide" : "Show"}</span>
-              <span className="score-chevron" aria-hidden="true">{scoresOpen ? "▴" : "▾"}</span>
+              <span className="score-chevron" aria-hidden="true">
+                {scoresOpen ? "▴" : "▾"}
+              </span>
             </span>
           </button>
         </h3>
         <div id="kc-session-scores" hidden={!scoresOpen}>
-          {session.score == null ? <p className="help">No scores stored yet.</p> : (
+          {session.score == null ? (
+            <p className="help">No scores stored yet.</p>
+          ) : (
             <ul className="score-list">
               <li>
                 <strong className={session.score >= 100 ? "pass" : "miss"}>
@@ -280,11 +311,7 @@ function SessionView({ session }: { session: KcChatDetail }) {
                   <p style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{message.content}</p>
                 </div>
                 {turnPrompt ? (
-                  <button
-                    type="button"
-                    className="ds-debug"
-                    onClick={() => setPrompt(turnPrompt)}
-                  >
+                  <button type="button" className="ds-debug" onClick={() => setPrompt(turnPrompt)}>
                     View full prompt to debug
                   </button>
                 ) : null}
@@ -302,7 +329,9 @@ function SessionView({ session }: { session: KcChatDetail }) {
                 <button type="button" className="ds-debug" onClick={() => setPrompt(item)}>
                   View full prompt to debug
                 </button>
-                <span className="quiet">{item.model || "Model"} · {when(item.created_at)}</span>
+                <span className="quiet">
+                  {item.model || "Model"} · {when(item.created_at)}
+                </span>
               </li>
             ))}
           </ul>

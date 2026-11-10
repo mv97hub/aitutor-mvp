@@ -531,7 +531,7 @@ export function AgentCustomizations() {
     : activeTab === "blocks" || activeTab === "all";
 
   return (
-    <AdminFrame current="customizations" sidebar={<div className="ds-side-spacer" />}>
+    <AdminFrame current="customizations">
       <article className="editor agent-config-editor">
         <p className="eyebrow">Administration</p>
         <h2>AI Tutor Configuration</h2>
