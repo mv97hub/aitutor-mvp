@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "re
 import { KcBanner } from "@/components/KcBanner";
 import { KcDebugPanel } from "@/components/KcDebugPanel";
 import { ChoiceWidget } from "@/components/LessonBlocks";
+import { LearnCourseBar, LearnQuestPanel, type TutorMood } from "@/components/learn/LearnQuestPanel";
 import { TutorAvatar } from "@/components/TutorAvatar";
 import { api } from "@/lib/api";
 import type { KcBlockProgress, KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
@@ -26,6 +27,8 @@ import {
 } from "@/lib/kc-layer-fields";
 import { KC_MODELS, kcModel, type KcModel } from "@/lib/kc-models";
 import { tutorPath } from "@/lib/kc-tutor-path";
+import { displayChildStatus, friendlyStrength, learnCoursePath, starBurst, topicStars } from "@/lib/learn";
+import { getTutorAvatarPreset } from "@/lib/tutor-avatars";
 import type { KidQuiz, Student, TutorProfile } from "@/lib/types";
 import { useRouter } from "next/navigation";
 
@@ -161,6 +164,7 @@ export function KcTutor({
   error,
   variables,
   turns,
+  variant = "workbench",
 }: {
   students: Student[];
   courses: KcTutorCourse[];
@@ -174,8 +178,12 @@ export function KcTutor({
   error: string | null;
   variables: KcDebugVariable[];
   turns: KcDebugTurn[];
+  variant?: "workbench" | "learn";
 }) {
+  const learnMode = variant === "learn";
   const [debugOpen, setDebugOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [mood, setMood] = useState<TutorMood>("ready");
   const course = courses.find((item) => item.id === courseId) ?? null;
   const learner = students.find((item) => item.id === studentId) ?? null;
   const router = useRouter();
@@ -424,9 +432,36 @@ export function KcTutor({
   const components = progress?.ring ?? [];
   const openKc = session?.kc_id || kcId;
   const jumpValue = components.some((item) => item.id === openKc) ? openKc : "";
+  const topics = (progress?.units ?? []).filter((unit) => !unit.patch);
+  const topicIndex = topics.findIndex((unit) => unit.id === (session?.kc_id || openKc));
+  const nextTopic =
+    topicIndex >= 0
+      ? topics.slice(topicIndex + 1).find((unit) => displayChildStatus(unit.child_status, unit.status, unit.mastery) !== "Locked")
+      : null;
+  const currentTopic = topicIndex >= 0 ? topics[topicIndex] : null;
+  const homeHref = `/learn/${studentId}`;
+
+  function openLearnTopic(nextKc: string) {
+    router.push(learnCoursePath(studentId, courseId, { kc: nextKc }));
+    router.refresh();
+  }
 
   return (
-    <main className={`ds-shell kc-screen${debugOpen ? " is-debug" : ""}`}>
+    <main className={`ds-shell kc-screen${learnMode ? " learn-course" : ""}${debugOpen ? " is-debug" : ""}${panelOpen ? " is-panel" : ""}`}>
+      {learnMode ? (
+        <LearnCourseBar
+          homeHref={homeHref}
+          title={course?.title || progress?.title || "Course"}
+          done={progress?.completed_count ?? course?.completed_count ?? 0}
+          total={progress?.total_count ?? course?.component_count ?? 0}
+          stars={course?.stars ?? progress?.stars ?? 0}
+          tutor={activeTutor}
+          debugOpen={debugOpen}
+          panelOpen={panelOpen}
+          onDebug={() => setDebugOpen((open) => !open)}
+          onPanel={() => setPanelOpen((open) => !open)}
+        />
+      ) : (
       <KcBanner name="KC Tutor">
         <div className="kc-fast">
           <button
@@ -441,7 +476,19 @@ export function KcTutor({
           </button>
         </div>
       </KcBanner>
-      <aside className="ds-side kc-tutor-side">
+      )}
+      <aside className={learnMode ? "ds-side learn-quest" : "ds-side kc-tutor-side"}>
+        {learnMode ? (
+          <LearnQuestPanel
+            tutor={activeTutor}
+            mood={mood}
+            progress={progress}
+            session={session}
+            activeId={session?.kc_id || openKc}
+            onOpenTopic={openLearnTopic}
+          />
+        ) : (
+        <>
         {error && !session ? (
           <div className="banner" role="alert">
             <p>{error}</p>
@@ -622,9 +669,16 @@ export function KcTutor({
             onClose={() => setAddOpen(false)}
           />
         ) : null}
+        </>
+        )}
       </aside>
       <section className="ds-stage">
-        {session ? (
+        {learnMode && error ? (
+          <div className="banner" role="alert">
+            <p>{error}</p>
+          </div>
+        ) : null}
+        {session && !learnMode ? (
           <header className="ds-header">
             <BlockProgressBanner session={session} />
             <p className="kc-step">
@@ -633,10 +687,47 @@ export function KcTutor({
             </p>
           </header>
         ) : null}
-        {session?.redirect ? <p className="kc-redirect">Next card: {session.redirect.title}</p> : null}
-        {!session ? <div className="ds-empty"><p>A card opens one component.</p></div> : null}
+        {session && learnMode ? (
+          <header className="ds-header learn-topic-head">
+            <TutorAvatar
+              preset={session.avatar_preset || activeTutor.avatar_preset}
+              avatarUrl={session.avatar_url ?? activeTutor.avatar_url}
+              name={session.tutor_name || activeTutor.name}
+              size="sm"
+            />
+            <div>
+              <strong>{session.title}</strong>
+              <span>
+                Step {Math.min((session.active_block_index ?? session.step) + 1, session.total_blocks || 1)} of{" "}
+                {session.total_blocks || 1}
+              </span>
+              <span className="learn-step-bar" aria-hidden="true">
+                <i style={{ width: `${session.completion_pct ?? 0}%` }} />
+              </span>
+            </div>
+          </header>
+        ) : null}
+        {session?.redirect && !learnMode ? <p className="kc-redirect">Next card: {session.redirect.title}</p> : null}
+        {!session ? (
+          <div className="ds-empty">
+            <p>{error || (learnMode ? "This course is opening." : "A card opens one component.")}</p>
+          </div>
+        ) : null}
         {session ? (
-          <KcLesson key={session.id} session={session} model={model} activeTutor={activeTutor} />
+          <KcLesson
+            key={session.id}
+            session={session}
+            model={model}
+            activeTutor={activeTutor}
+            learnMode={learnMode}
+            onActivity={setMood}
+            nextTopic={nextTopic ? { id: nextTopic.id, title: nextTopic.title } : null}
+            homeHref={homeHref}
+            topicCompleteStars={currentTopic ? topicStars(currentTopic) : 0}
+            topicStrength={friendlyStrength(currentTopic?.what_was_strong)}
+            onOpenTopic={openLearnTopic}
+            courseDone={Boolean(progress?.course_complete) && session.status === "completed" && !nextTopic}
+          />
         ) : null}
       </section>
       {debugOpen ? <KcDebugPanel variables={variables} turns={turns} /> : null}
@@ -694,10 +785,26 @@ function KcLesson({
   session,
   model,
   activeTutor,
+  learnMode = false,
+  onActivity,
+  nextTopic = null,
+  homeHref = "/learn",
+  topicCompleteStars = 0,
+  topicStrength = "You finished this topic.",
+  onOpenTopic,
+  courseDone = false,
 }: {
   session: KcTutorSession;
   model: string;
   activeTutor: TutorProfile;
+  learnMode?: boolean;
+  onActivity?: (mood: TutorMood) => void;
+  nextTopic?: { id: string; title: string } | null;
+  homeHref?: string;
+  topicCompleteStars?: number;
+  topicStrength?: string;
+  onOpenTopic?: (kcId: string) => void;
+  courseDone?: boolean;
 }) {
   const router = useRouter();
   const routerRef = useRef(router);
@@ -715,6 +822,9 @@ function KcLesson({
   const [replyError, setReplyError] = useState<string | null>(null);
   const [pendingLine, setPendingLine] = useState<{ text: string; priorMatches: number } | null>(null);
   const [settled, setSettled] = useState<{ anchorId: string; ids: string[]; note: string } | null>(null);
+  const [burst, setBurst] = useState<{ award: number; firstTry: boolean; revealed: boolean } | null>(null);
+  const seenBlocks = useRef<string[] | null>(null);
+  const tutorFace = getTutorAvatarPreset(session.avatar_preset || activeTutor.avatar_preset);
   const anchor = [...session.messages].reverse().find((message) => message.role === "assistant");
   const quiz = session.choice ? quizFor(session.choice) : null;
   const activeSettled = settled && anchor && settled.anchorId === anchor.id ? settled : null;
@@ -799,6 +909,35 @@ function KcLesson({
     };
   }, [attempt, model, session.id, session.needs_speech, session.step]);
 
+  useEffect(() => {
+    if (!learnMode) return;
+    const blocks = session.block_progress ?? [];
+    if (seenBlocks.current === null) {
+      seenBlocks.current = blocks.filter((block) => block.status === "completed").map((block) => block.id);
+      return;
+    }
+    const result = starBurst(seenBlocks.current, blocks);
+    seenBlocks.current = result.seen;
+    if (result.award <= 0) return;
+    setBurst({ award: result.award, firstTry: result.firstTry, revealed: result.revealed });
+    const timer = window.setTimeout(() => setBurst(null), 2200);
+    return () => window.clearTimeout(timer);
+  }, [learnMode, session.block_progress]);
+
+  useEffect(() => {
+    if (!learnMode || !onActivity) return;
+    if (speaking || answering) {
+      onActivity("thinking");
+      return;
+    }
+    if (burst?.firstTry) {
+      onActivity("first_try");
+      return;
+    }
+    const active = (session.block_progress ?? []).find((block) => block.status === "active");
+    onActivity(active && (active.attempts ?? 0) > 0 ? "retry" : "ready");
+  }, [answering, burst, learnMode, onActivity, session.block_progress, speaking]);
+
   async function sendAnswer(answer: string) {
     const cleaned = answer.trim();
     if (!cleaned || sending.current) return;
@@ -833,18 +972,42 @@ function KcLesson({
 
   return (
     <div className="kc-lesson">
+      {burst ? (
+        <p className="learn-star-burst" role="status">
+          +{burst.award} ★
+          {burst.firstTry ? " · first try" : ""}
+          {burst.revealed && !burst.firstTry ? " · Guided Walkthrough Complete" : ""}
+        </p>
+      ) : null}
       <div ref={threadRef} className="ds-scroll" role="log" aria-live="polite" aria-relevant="additions">
         <div className="ds-column">
+          {learnMode && (session.completed_blocks ?? 0) === 0 && session.status !== "completed" ? (
+            <article className="learn-topic-banner">
+              <TutorAvatar
+                preset={session.avatar_preset || activeTutor.avatar_preset}
+                avatarUrl={session.avatar_url ?? activeTutor.avatar_url}
+                name={session.tutor_name || activeTutor.name}
+                size="md"
+              />
+              <div>
+                <strong>{session.tutor_name || activeTutor.name || "Your tutor"} is ready</strong>
+                <p>Let&apos;s explore {session.title}, one step at a time.</p>
+              </div>
+            </article>
+          ) : null}
           {session.messages.map((message) => (
             <div key={message.id}>
-              <div className={`bubble ${message.role === "user" ? "user" : "assistant"}`}>
+              <div
+                className={`bubble ${message.role === "user" ? "user" : "assistant"}${learnMode && message.role === "assistant" ? " learn-tutor-bubble" : ""}`}
+                style={learnMode && message.role === "assistant" ? { borderColor: tutorFace.fg } : undefined}
+              >
                 {message.role === "assistant" ? (
                   <div className="bubble-tutor-head">
                     <TutorAvatar
                       preset={session.avatar_preset || activeTutor.avatar_preset}
                       avatarUrl={session.avatar_url ?? activeTutor.avatar_url}
                       name={session.tutor_name || activeTutor.name || "Default"}
-                      size="sm"
+                      size={learnMode ? "md" : "sm"}
                     />
                     <strong className="bubble-tutor-name">
                       {session.tutor_name || activeTutor.name || "Default"}
@@ -877,9 +1040,26 @@ function KcLesson({
               <p>{pendingLine.text}</p>
             </div>
           ) : null}
+          {learnMode && session.status === "completed" ? (
+            <article className="learn-next-card">
+              <p>Topic complete! · ★ {topicCompleteStars}</p>
+              <p>{topicStrength}</p>
+              {nextTopic ? (
+                <button type="button" className="learn-btn primary" onClick={() => onOpenTopic?.(nextTopic.id)}>
+                  Continue to Next Topic → {nextTopic.title}
+                </button>
+              ) : courseDone ? (
+                <a className="learn-btn primary" href={homeHref}>
+                  Course complete! View my trophy card →
+                </a>
+              ) : (
+                <p>The next topic opens when this one is finished.</p>
+              )}
+            </article>
+          ) : null}
         </div>
       </div>
-      {speaking || answering ? <p className="ds-typing">Tutor is writing…</p> : null}
+      {speaking || answering ? <p className="ds-typing">{learnMode ? "Tutor is thinking…" : "Tutor is writing…"}</p> : null}
       {speakError ? (
         <div className="banner" role="alert">
           <p>{speakError}</p>

@@ -1,9 +1,12 @@
-import Link from "next/link";
+import { redirect } from "next/navigation";
 
-import { TutorAvatar } from "@/components/TutorAvatar";
+import { KcTutor } from "@/components/KcTutor";
 import { api } from "@/lib/api";
-import type { KcTutorCourse } from "@/lib/kc";
-import type { Student } from "@/lib/types";
+import type { KcChatDetail, KcChatSummary, KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
+import { debugTurns, type KcDebugTurn } from "@/lib/kc-debug";
+import { kcModel } from "@/lib/kc-models";
+import { learnCoursePath } from "@/lib/learn";
+import type { Student, TutorProfile } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -11,50 +14,92 @@ export const metadata = { title: "Course tutor · AI Tutor" };
 
 export default async function CourseTutorPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ studentId: string; courseId: string }>;
+  searchParams: Promise<{ session?: string; kc?: string; model?: string; error?: string }>;
 }) {
   const { studentId, courseId } = await params;
-  let student: Student | null = null;
-  let course: KcTutorCourse | null = null;
-  let error: string | null = null;
+  const query = await searchParams;
+  let students: Student[] = [];
+  let courses: KcTutorCourse[] = [];
+  let tutorProfiles: TutorProfile[] = [];
+  let progress: KcProgress | null = null;
+  let session: KcTutorSession | null = null;
+  let variables: KcDebugVariable[] = [];
+  let turns: KcDebugTurn[] = [];
+  let error: string | null = query.error ? decodeURIComponent(query.error) : null;
+  let redirectTo: string | null = null;
   try {
-    const [students, courses] = await Promise.all([
+    [students, courses, tutorProfiles] = await Promise.all([
       api<Student[]>("/students"),
       api<KcTutorCourse[]>(`/kc/tutor/courses?student_id=${encodeURIComponent(studentId)}`),
+      api<TutorProfile[]>("/tutor-profiles").catch(() => []),
     ]);
-    student = students.find((item) => item.id === studentId) ?? null;
-    course = courses.find((item) => item.id === courseId) ?? null;
+    progress = await api<KcProgress>(`/kc/tutor/courses/${courseId}?student_id=${encodeURIComponent(studentId)}`);
+    const course = courses.find((item) => item.id === courseId) ?? null;
+    const tutorId = course?.tutor?.id;
+    if (query.session && !query.kc) {
+      session = await api<KcTutorSession>(`/kc/tutor/sessions/${query.session}`);
+      if (session.course_id !== courseId) {
+        session = null;
+        error = "That session belongs to another course.";
+      }
+    } else if (query.kc) {
+      const chats = await api<KcChatSummary[]>(`/kc/sessions?student_id=${encodeURIComponent(studentId)}`);
+      const matches = chats
+        .filter((chat) => chat.kc_id === query.kc && chat.course_id === courseId)
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      const existing = matches.find((chat) => chat.status === "in_progress") ?? matches[0];
+      if (existing && existing.status === "completed") {
+        session = await api<KcTutorSession>(`/kc/tutor/sessions/${existing.id}`);
+      } else {
+        session = await api<KcTutorSession>("/kc/tutor/sessions", {
+          method: "POST",
+          body: JSON.stringify({
+            student_id: studentId,
+            course_id: courseId,
+            kc_id: query.kc,
+            tutor_profile_id: tutorId,
+          }),
+        });
+      }
+      redirectTo = learnCoursePath(studentId, courseId, { session: session.id });
+    } else {
+      session = await api<KcTutorSession>("/kc/tutor/start", {
+        method: "POST",
+        body: JSON.stringify({ student_id: studentId, course_id: courseId }),
+      });
+      redirectTo = learnCoursePath(studentId, courseId, { session: session.id });
+    }
+    if (!redirectTo && session) {
+      const [variableBody, detail] = await Promise.all([
+        api<{ variables: KcDebugVariable[] }>(`/kc/tutor/variables?session_id=${session.id}`),
+        api<KcChatDetail>(`/kc/sessions/${session.id}`),
+      ]);
+      variables = variableBody.variables;
+      turns = debugTurns(detail);
+    }
   } catch (err) {
     error = err instanceof Error ? err.message : "The tutor service is not reachable.";
+    redirectTo = null;
   }
+  if (redirectTo) redirect(redirectTo);
   return (
-    <main className="learn-shell">
-      <Link href={`/learn/${studentId}`} className="learn-switch">
-        ← Back to My Courses
-      </Link>
-      <h1>{course?.title || "Course"}</h1>
-      {error ? (
-        <div className="banner" role="alert">
-          <p>{error}</p>
-        </div>
-      ) : null}
-      {course?.tutor ? (
-        <p className="learn-guided">
-          <TutorAvatar
-            preset={course.tutor.avatar_preset}
-            avatarUrl={course.tutor.avatar_url}
-            name={course.tutor.name}
-            size="lg"
-          />
-          {course.tutor.name} is ready for {student?.display_name || "you"}.
-        </p>
-      ) : (
-        <p className="lede">This course is opening.</p>
-      )}
-      <p className="learn-meta">
-        {course?.completed_count ?? 0} of {course?.component_count ?? 0} topics · ★ {course?.stars ?? 0}
-      </p>
-    </main>
+    <KcTutor
+      variant="learn"
+      students={students}
+      courses={courses}
+      tutorProfiles={tutorProfiles}
+      studentId={studentId}
+      courseId={courseId}
+      kcId={query.kc ?? session?.kc_id ?? ""}
+      model={kcModel(query.model)}
+      progress={progress}
+      session={session}
+      error={error}
+      variables={variables}
+      turns={turns}
+    />
   );
 }

@@ -6,7 +6,11 @@ import {
   childWriteBody,
   displayChildStatus,
   explorerFor,
+  friendlyStrength,
   initials,
+  learnCoursePath,
+  starBurst,
+  topicStars,
   blankChildDraft,
 } from "./learn.ts";
 
@@ -47,6 +51,36 @@ test("a new learner write includes the avatar and the twelve persona fields", ()
   assert.deepEqual(profile.interest_tags, ["space_and_science", "video_games"]);
   assert.equal(profile.interests, "rockets");
   assert.equal(Object.keys(profile).length, 12);
+});
+
+test("topic stars and a passed block use the child star rules", () => {
+  assert.equal(
+    topicStars({
+      status: "completed",
+      mastery: "known",
+      completed_blocks: 1,
+      first_try_blocks_count: 1,
+      revealed_blocks_count: 0,
+    }),
+    55,
+  );
+  assert.equal(
+    topicStars({
+      status: "completed",
+      mastery: "fragile",
+      completed_blocks: 1,
+      first_try_blocks_count: 0,
+      revealed_blocks_count: 1,
+    }),
+    35,
+  );
+  const first = starBurst([], [{ id: "a", status: "completed", outcome: "passed", attempts: 1 }]);
+  assert.equal(first.award, 15);
+  assert.equal(first.firstTry, true);
+  const again = starBurst(first.seen, [{ id: "a", status: "completed", outcome: "passed", attempts: 1 }]);
+  assert.equal(again.award, 0);
+  assert.equal(friendlyStrength("A required block was revealed."), "You finished this topic.");
+  assert.equal(learnCoursePath("stu", "course", { kc: "topic" }).includes("/kc-tutor"), false);
 });
 
 test("initials fall back when a child has not picked an icon", () => {
