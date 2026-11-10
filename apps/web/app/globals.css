@@ -4589,4 +4589,215 @@ a.ds-row { text-decoration: none; }
   margin-top: 4px;
 }
 
+/* Admin Navigation Cleanup, Full-Width Workspace & Prominent Top Buttons */
+.ds-admin.no-sidebar {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ds-admin-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  min-height: 60px;
+  padding: 10px 20px;
+  background: #102a4c;
+  color: #ffffff;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.ds-admin-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ds-admin-label {
+  margin: 0;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ds-admin-bar .ds-switch {
+  flex: 0 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.ds-admin-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* Prominent Top Navigation Buttons across the app */
+.ds-top-btn,
+.ds-switch a,
+.ds-landing-links a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 7px 14px;
+  border-radius: 9px;
+  border: 1.5px solid #1d4ed8;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 18px;
+  text-decoration: none;
+  box-shadow: 0 2px 5px rgba(29, 78, 216, 0.22);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+}
+
+.ds-top-btn:hover,
+.ds-switch a:hover,
+.ds-landing-links a:hover {
+  background: #1d4ed8;
+  border-color: #1e40af;
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(29, 78, 216, 0.3);
+}
+
+.ds-top-btn.is-active,
+.ds-switch a[aria-current="page"] {
+  background: #f59e0b;
+  border-color: #d97706;
+  color: #111827;
+  font-weight: 700;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35), 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+
+.ds-top-btn.is-shortcut {
+  background: #1e3a8a;
+  border-color: #60a5fa;
+  color: #f8fafc;
+}
+
+.ds-top-btn.is-shortcut:hover {
+  background: #2563eb;
+  border-color: #93c5fd;
+  color: #ffffff;
+}
+
+/* Prominent Top Buttons on KC Banner */
+.kc-banner {
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  padding: 8px 18px;
+}
+
+.kc-banner-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: 8px;
+}
+
+.ds-top-btn.is-on-banner {
+  background: #1e3a8a;
+  border: 1.5px solid rgba(255, 255, 255, 0.65);
+  color: #ffffff;
+  box-shadow: 0 2px 5px rgba(15, 23, 42, 0.24);
+}
+
+.ds-top-btn.is-on-banner:hover {
+  background: #0f172a;
+  border-color: #ffffff;
+  color: #ffffff;
+}
+
+.ds-top-btn.is-on-banner.is-active {
+  background: #f59e0b;
+  border-color: #fde68a;
+  color: #111827;
+  font-weight: 700;
+}
+
+/* Full-width KC View Chats workspace on /admin and /admin/kc-chats */
+.kc-chats-admin-workspace {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 20px 24px 44px;
+  display: grid;
+  gap: 18px;
+}
+
+.kc-chats-toolbar {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 16px;
+  background: #f8fafc;
+}
+
+.kc-chats-toolbar-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.kc-chats-toolbar-top h2 {
+  margin: 2px 0 4px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.kc-chats-student-filter {
+  display: grid;
+  gap: 4px;
+  min-width: 220px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.kc-chats-student-filter select {
+  padding: 7px 11px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.kc-chats-session-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kc-chat-pill-row {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.kc-chat-pill-row.is-on {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
+}
+
+
 
