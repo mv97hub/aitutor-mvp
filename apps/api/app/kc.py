@@ -1161,10 +1161,288 @@ def mark_ready(db: Session, goal: KcGoal) -> KcGoal:
     return goal
 
 
-def tutor_courses(db: Session) -> list[dict]:
-    goals = db.scalars(select(KcGoal).where(KcGoal.ready.is_(True)).order_by(KcGoal.title))
-    return [
-        {
+def _iso(moment: datetime | None) -> str | None:
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.isoformat()
+
+
+def _block_counts_toward_mastery(block: dict, cfg: dict) -> bool:
+    if not isinstance(block, dict):
+        return True
+    kind = str(block.get("type") or "").strip()
+    if kind == "curiosity":
+        curiosity = ((cfg or {}).get("blocks") or {}).get("curiosity") or {}
+        return bool(curiosity.get("counts_toward_mastery_score", False))
+    return True
+
+
+def _student_misconceptions_for(
+    state: KcState | None, sessions: list[KcSession]
+) -> list[str]:
+    found: list[str] = []
+    if state is not None and isinstance(state.result, dict):
+        raw_list = state.result.get("misconceptions")
+        if isinstance(raw_list, list):
+            for item in raw_list:
+                text = str(item or "").strip()
+                if text and text not in found:
+                    found.append(text)
+        single = str(state.result.get("misconception") or "").strip()
+        if single and single not in found:
+            found.append(single)
+    for row in sessions:
+        last = str(row.last_misconception or "").strip()
+        if last and last not in found:
+            found.append(last)
+    return found
+
+
+def _build_block_details(
+    node: KcNode,
+    session: KcSession | None,
+    cfg: dict,
+    goal: KcGoal,
+    *,
+    unit_status: str,
+) -> list[dict]:
+    blocks = stored_blocks(node)
+    results = (
+        session.block_results
+        if session is not None and isinstance(session.block_results, list)
+        else []
+    )
+    by_id: dict[str, dict] = {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("id") or item.get("block_id") or "").strip()
+        if key:
+            by_id[key] = item
+
+    active_index = None
+    if unit_status == "in_progress" and session is not None and blocks:
+        active_index = min(max(int(session.step or 0), 0), len(blocks) - 1)
+
+    state_dict = (
+        session.active_block_state
+        if session is not None and isinstance(session.active_block_state, dict)
+        else {}
+    )
+    mcq_state = state_dict.get("mcq") if isinstance(state_dict.get("mcq"), dict) else {}
+    raw_elim = mcq_state.get("eliminated_indices") if isinstance(mcq_state, dict) else []
+
+    details: list[dict] = []
+    for index, block in enumerate(blocks):
+        key = _block_key(block, index)
+        stored = by_id.get(key)
+        kind = str(block.get("type") or "topic_goal").strip()
+        data = block.get("data") if isinstance(block.get("data"), dict) else {}
+        label = _BANNER_LABELS.get(kind, kind or "Block")
+        prompt_preview = _block_title(data, node.title)
+        rubric_line = _rubric_line(block, cfg)
+        counts = _block_counts_toward_mastery(block, cfg)
+        max_ret = max_retries_for_block(block, cfg, goal)
+
+        outcome: str | None = None
+        attempts = 0
+        if stored is not None:
+            raw_out = str(stored.get("outcome") or "passed").strip()
+            outcome = raw_out if raw_out in {"passed", "revealed"} else "passed"
+            attempts = int(stored.get("attempts") or 0)
+            b_status = outcome
+        elif active_index == index:
+            b_status = "active"
+            attempts = int(session.move_attempts or 0) if session is not None else 0
+        else:
+            b_status = "upcoming"
+
+        passed_first = bool(outcome == "passed" and attempts <= 1)
+
+        elim_labels: list[str] = []
+        if kind == "mcq":
+            stored_elim = (
+                stored.get("eliminated_choices")
+                if isinstance(stored, dict) and isinstance(stored.get("eliminated_choices"), list)
+                else (raw_elim if active_index == index and isinstance(raw_elim, list) else [])
+            )
+            choices = data.get("choices") if isinstance(data.get("choices"), list) else []
+            for item in stored_elim or []:
+                try:
+                    c_idx = int(item)
+                    if 0 <= c_idx < len(choices) and isinstance(choices[c_idx], dict):
+                        cid = str(choices[c_idx].get("id") or chr(ord("a") + c_idx))
+                        ctext = str(choices[c_idx].get("text") or "").strip()
+                        elim_labels.append(f"{cid}: {ctext}" if ctext else cid)
+                    else:
+                        elim_labels.append(str(item))
+                except (TypeError, ValueError):
+                    elim_labels.append(str(item))
+
+        details.append(
+            {
+                "index": index + 1,
+                "block_id": key,
+                "block_type": kind,
+                "label": label,
+                "prompt_preview": prompt_preview,
+                "rubric_line": rubric_line,
+                "counts_toward_mastery": counts,
+                "status": b_status,
+                "outcome": outcome,
+                "attempts": attempts,
+                "max_retries": max_ret,
+                "passed_on_first_try": passed_first,
+                "eliminated_choices": elim_labels,
+            }
+        )
+    return details
+
+
+def _synthesize_course_insights(
+    units: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    accomplishments: list[dict] = []
+    opportunities: list[dict] = []
+    unit_by_code = {u["code"]: u for u in units}
+
+    for u in units:
+        if u.get("patch"):
+            continue
+        cid = str(u["id"])
+        ccode = str(u["code"])
+        ctitle = str(u["title"])
+        mastery = str(u.get("mastery") or "")
+        status = str(u.get("status") or "not_started")
+        strong = str(u.get("what_was_strong") or "").strip()
+        work_on = str(u.get("what_to_work_on") or "").strip()
+        core_truth = str(u.get("core_truth") or "").strip()
+        b_details = u.get("block_details") or []
+
+        # Accomplishments
+        if strong and strong not in {"The finished blocks held.", "A required block was revealed.", "None stored."}:
+            accomplishments.append(
+                {
+                    "component_id": cid,
+                    "component_code": ccode,
+                    "component_title": ctitle,
+                    "kind": "strength",
+                    "summary": strong,
+                    "detail": core_truth or None,
+                }
+            )
+        if mastery == "known" and int(u.get("revealed_blocks_count") or 0) == 0:
+            first_try_cnt = int(u.get("first_try_blocks_count") or 0)
+            total_b = int(u.get("total_blocks") or 0)
+            accomplishments.append(
+                {
+                    "component_id": cid,
+                    "component_code": ccode,
+                    "component_title": ctitle,
+                    "kind": "mastered",
+                    "summary": f"Mastered {ctitle} with zero reveals ({first_try_cnt}/{total_b} blocks passed on first try).",
+                    "detail": core_truth or None,
+                }
+            )
+        if int(u.get("first_try_blocks_count") or 0) >= 2:
+            accomplishments.append(
+                {
+                    "component_id": cid,
+                    "component_code": ccode,
+                    "component_title": ctitle,
+                    "kind": "first_try_streak",
+                    "summary": f"{u['first_try_blocks_count']} blocks passed on the first try in {ctitle}.",
+                    "detail": None,
+                }
+            )
+
+        # Opportunities
+        if work_on and work_on not in {"Use this on the next piece.", "None stored."}:
+            opportunities.append(
+                {
+                    "component_id": cid,
+                    "component_code": ccode,
+                    "component_title": ctitle,
+                    "kind": "weakness",
+                    "summary": work_on,
+                    "detail": str(u.get("score_justification") or "") or None,
+                }
+            )
+        for blk in b_details:
+            if blk.get("outcome") == "revealed":
+                opportunities.append(
+                    {
+                        "component_id": cid,
+                        "component_code": ccode,
+                        "component_title": ctitle,
+                        "kind": "revealed_block",
+                        "summary": f"Block {blk['index']} ({blk['label']}) was revealed after {blk['attempts']} attempts.",
+                        "detail": blk.get("rubric_line") or blk.get("prompt_preview") or None,
+                    }
+                )
+            elif blk.get("outcome") == "passed" and int(blk.get("attempts") or 0) >= 2:
+                opportunities.append(
+                    {
+                        "component_id": cid,
+                        "component_code": ccode,
+                        "component_title": ctitle,
+                        "kind": "revealed_block",
+                        "summary": f"Block {blk['index']} ({blk['label']}) needed {blk['attempts']} attempts before passing.",
+                        "detail": blk.get("rubric_line") or blk.get("prompt_preview") or None,
+                    }
+                )
+        for misc in u.get("student_misconceptions") or []:
+            opportunities.append(
+                {
+                    "component_id": cid,
+                    "component_code": ccode,
+                    "component_title": ctitle,
+                    "kind": "misconception",
+                    "summary": f"Captured misconception on {ctitle}: {misc}",
+                    "detail": core_truth or None,
+                }
+            )
+        for pcode in u.get("prerequisite_codes") or []:
+            punit = unit_by_code.get(pcode)
+            if punit and (punit.get("mastery") == "fragile" or punit.get("status") != "completed"):
+                if punit.get("mastery") == "fragile":
+                    opportunities.append(
+                        {
+                            "component_id": str(punit["id"]),
+                            "component_code": str(punit["code"]),
+                            "component_title": str(punit["title"]),
+                            "kind": "fragile_prerequisite",
+                            "summary": f"Prerequisite {punit['title']} is fragile and supports {ctitle}.",
+                            "detail": str(punit.get("core_truth") or "") or None,
+                        }
+                    )
+        if status == "in_progress":
+            done_b = int(u.get("completed_blocks") or 0)
+            tot_b = int(u.get("total_blocks") or 0)
+            opportunities.append(
+                {
+                    "component_id": cid,
+                    "component_code": ccode,
+                    "component_title": ctitle,
+                    "kind": "in_progress",
+                    "summary": f"{ctitle} is in progress ({done_b} of {tot_b} blocks completed).",
+                    "detail": str(u.get("outline") or u.get("description") or "") or None,
+                }
+            )
+
+    return accomplishments, opportunities
+
+
+def tutor_courses(db: Session, *, student_id: uuid.UUID | None = None) -> list[dict]:
+    goals = list(db.scalars(select(KcGoal).where(KcGoal.ready.is_(True)).order_by(KcGoal.title)))
+    student = db.get(Student, student_id) if student_id is not None else None
+    if student is None:
+        student = db.scalar(select(Student).order_by(Student.created_at))
+    out: list[dict] = []
+    for goal in goals:
+        base = {
             "id": str(goal.id),
             "code": goal.code,
             "title": goal.title,
@@ -1173,8 +1451,53 @@ def tutor_courses(db: Session) -> list[dict]:
             "kind": goal.kind,
             "minutes": goal.minutes if goal.kind == "time_boxed" else None,
         }
-        for goal in goals
-    ]
+        if student is not None:
+            prog = progress(db, goal, student)
+            base.update(
+                {
+                    "component_count": prog["total_count"],
+                    "completed_count": prog["completed_count"],
+                    "known_count": prog["known_count"],
+                    "fragile_count": prog["fragile_count"],
+                    "in_progress_count": prog["in_progress_count"],
+                    "not_started_count": prog["not_started_count"],
+                    "percent": prog["completion_percent"],
+                    "known_percent": prog["percent"],
+                    "prerequisite_codes": prog["prerequisite_codes"],
+                    "unlocked": prog["unlocked"],
+                    "total_blocks_count": prog["total_blocks_count"],
+                    "completed_blocks_count": prog["completed_blocks_count"],
+                    "first_try_pass_count": prog["first_try_pass_count"],
+                    "last_active_at": prog["last_active_at"],
+                    "accomplishments_preview": (prog.get("accomplishments") or [])[:3],
+                    "opportunities_preview": (prog.get("opportunities") or [])[:3],
+                }
+            )
+        else:
+            targets = load_targets(db, goal)
+            total_blocks = sum(len(stored_blocks(node)) for node in targets)
+            base.update(
+                {
+                    "component_count": len(targets),
+                    "completed_count": 0,
+                    "known_count": 0,
+                    "fragile_count": 0,
+                    "in_progress_count": 0,
+                    "not_started_count": len(targets),
+                    "percent": 0,
+                    "known_percent": 0,
+                    "prerequisite_codes": [],
+                    "unlocked": True,
+                    "total_blocks_count": total_blocks,
+                    "completed_blocks_count": 0,
+                    "first_try_pass_count": 0,
+                    "last_active_at": None,
+                    "accomplishments_preview": [],
+                    "opportunities_preview": [],
+                }
+            )
+        out.append(base)
+    return out
 
 
 def _state_map(db: Session, student_id: uuid.UUID, node_ids: list[uuid.UUID]) -> dict[uuid.UUID, KcState]:
@@ -1554,6 +1877,14 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
     from app.kc_model import derive_rubric_from_blocks
 
     course_complete = bool(targets) and all(_is_settled(states, node) for node in targets)
+    everyone_codes = {node.code for node in everyone}
+    dependents_by_code: dict[str, list[str]] = {node.code: [] for node in everyone}
+    for node in everyone:
+        for pcode in _clean_codes(node.prerequisite_codes):
+            if pcode in dependents_by_code and node.code not in dependents_by_code[pcode]:
+                dependents_by_code[pcode].append(node.code)
+
+    net_data = network(db, goal)
 
     def unit_row(node: KcNode) -> dict:
         node_sessions = sessions.get(node.id, [])
@@ -1561,34 +1892,171 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
         chosen = _count_session(node, node_sessions)
         done, total = _block_counts(node, chosen)
         status = _unit_status(state, node, node_sessions)
+        mastery = _mastery_label(state, node, node_sessions, cfg)
+        b_details = _build_block_details(node, chosen, cfg, goal, unit_status=status)
+        passed_b = sum(1 for b in b_details if b.get("outcome") == "passed")
+        revealed_b = sum(1 for b in b_details if b.get("outcome") == "revealed")
+        first_try_b = sum(1 for b in b_details if b.get("passed_on_first_try"))
+        total_attempts = sum(int(b.get("attempts") or 0) for b in b_details)
+        if chosen is not None and int(chosen.attempts or 0) > total_attempts:
+            total_attempts = int(chosen.attempts or 0)
+
+        res_dict = state.result if state is not None and isinstance(state.result, dict) else {}
+        strong_val = str(res_dict.get("strong") or "").strip()
+        work_on_val = str(res_dict.get("work_on") or "").strip()
+        just_val = str(res_dict.get("justification") or "").strip()
+        close_txt = str(res_dict.get("reply") or "").strip()
+
+        if not just_val:
+            if mastery == "known":
+                just_val = (
+                    f"Known — all {passed_b} counting block(s) passed without requiring a reveal."
+                    if passed_b > 0
+                    else "Known — every counting block in this component passed."
+                )
+            elif mastery == "fragile":
+                just_val = (
+                    f"Fragile — {revealed_b} block(s) required a reveal after max retries."
+                    if revealed_b > 0
+                    else "Fragile — a counting block was revealed during practice."
+                )
+            elif status == "in_progress":
+                just_val = f"In progress — {done} of {total} block(s) completed so far."
+            else:
+                just_val = f"Not started — {total} block(s) queued in this component."
+
+        p_known_val = (
+            round(max(float(state.stability or 0.0), 0.95), 2)
+            if mastery == "known" and state is not None
+            else (
+                round(max(float(state.stability or 0.0), 0.45), 2)
+                if mastery == "fragile" and state is not None
+                else (0.25 if status == "in_progress" else 0.0)
+            )
+        )
+
+        started_iso = _iso(chosen.created_at) if chosen is not None else None
+        completed_iso = (
+            _iso(chosen.updated_at if chosen is not None and chosen.status == "completed" else (state.last_practiced if state is not None and status == "completed" else None))
+        )
+        updated_iso = _iso(
+            (chosen.updated_at if chosen is not None else None)
+            or (state.last_practiced if state is not None else None)
+        )
+        prereqs_in_course = [c for c in _clean_codes(node.prerequisite_codes) if c in everyone_codes]
+        authored_misc = [
+            {"wrong_move": str(m.get("wrong_move") or "").strip(), "broken_kc": str(m.get("broken_kc") or "").strip()}
+            for m in (node.misconceptions or [])
+            if isinstance(m, dict) and str(m.get("wrong_move") or "").strip()
+        ]
+        student_misc = _student_misconceptions_for(state, node_sessions)
+
         return {
             "id": str(node.id),
             "code": node.code,
             "title": node.title,
+            "description": node.description or "",
+            "outline": node.outline or "",
+            "core_truth": node.core_truth or "",
             "kc_type": None,
             "summary": _block_summary(_public_blocks(node)),
             "patch": node.id not in target_ids,
             "status": status,
-            "mastery": _mastery_label(state, node, node_sessions, cfg),
+            "mastery": mastery,
+            "p_known": p_known_val,
             "finished_blocks": done,
+            "completed_blocks": done,
             "total_blocks": total,
+            "passed_blocks_count": passed_b,
+            "revealed_blocks_count": revealed_b,
+            "first_try_blocks_count": first_try_b,
+            "total_attempts": total_attempts,
+            "started_at": started_iso,
+            "completed_at": completed_iso,
+            "updated_at": updated_iso,
+            "strengths": strong_val,
+            "what_was_strong": strong_val,
+            "weaknesses": work_on_val,
+            "what_to_work_on": work_on_val,
+            "close_text": close_txt,
+            "score_justification": just_val,
+            "prerequisite_codes": prereqs_in_course,
+            "dependent_codes": dependents_by_code.get(node.code, []),
+            "misconceptions": authored_misc,
+            "student_misconceptions": student_misc,
             "blocks": _stored_block_rows(node, chosen, cfg, include_active=status == "in_progress"),
+            "block_details": b_details,
             "rubric": derive_rubric_from_blocks(stored_blocks(node)),
             "result": None if state is None else state.result,
         }
 
+    unit_rows = [unit_row(node) for node in everyone]
+    target_units = [u for u in unit_rows if not u["patch"]]
+    known_cnt = sum(1 for u in target_units if u["status"] == "completed" and u["mastery"] == "known")
+    fragile_cnt = sum(1 for u in target_units if u["status"] == "completed" and u["mastery"] == "fragile")
+    completed_cnt = sum(1 for u in target_units if u["status"] == "completed")
+    in_progress_cnt = sum(1 for u in target_units if u["status"] == "in_progress")
+    not_started_cnt = sum(1 for u in target_units if u["status"] == "not_started")
+    total_cnt = len(target_units)
+    completion_pct = _percent(completed_cnt, total_cnt)
+
+    total_blocks_cnt = sum(int(u["total_blocks"] or 0) for u in target_units)
+    completed_blocks_cnt = sum(int(u["completed_blocks"] or 0) for u in target_units)
+    first_try_pass_cnt = sum(int(u["first_try_blocks_count"] or 0) for u in target_units)
+
+    timestamps = [
+        u["updated_at"]
+        for u in unit_rows
+        if isinstance(u.get("updated_at"), str) and u["updated_at"]
+    ]
+    last_active_iso = max(timestamps) if timestamps else None
+    accomplishments, opportunities = _synthesize_course_insights(unit_rows)
+
+    external_prereqs: list[str] = []
+    for node in targets:
+        for pcode in _clean_codes(node.prerequisite_codes):
+            if pcode not in everyone_codes and pcode not in external_prereqs:
+                external_prereqs.append(pcode)
+
     return {
         "course_id": str(goal.id),
         "title": goal.title,
+        "description": goal.description or "",
+        "audience": goal.audience,
         "kind": goal.kind,
         "minutes": goal.minutes if goal.kind == "time_boxed" else None,
+        "course": {
+            "id": str(goal.id),
+            "code": goal.code,
+            "title": goal.title,
+            "description": goal.description or "",
+            "audience": goal.audience,
+            "kind": goal.kind,
+            "minutes": goal.minutes if goal.kind == "time_boxed" else None,
+        },
         "known": known,
         "total": len(targets),
+        "total_count": total_cnt,
+        "completed_count": completed_cnt,
+        "known_count": known_cnt,
+        "fragile_count": fragile_cnt,
+        "in_progress_count": in_progress_cnt,
+        "not_started_count": not_started_cnt,
         "percent": _percent(known, len(targets)),
+        "completion_percent": completion_pct,
         "count_label": f"{known} of {len(targets)}",
         "course_complete": course_complete,
         "next_course": _next_ready_course(db, goal) if course_complete else None,
-        "units": [unit_row(node) for node in everyone],
+        "prerequisite_codes": external_prereqs,
+        "unlocked": True,
+        "total_blocks_count": total_blocks_cnt,
+        "completed_blocks_count": completed_blocks_cnt,
+        "first_try_pass_count": first_try_pass_cnt,
+        "last_active_at": last_active_iso,
+        "accomplishments": accomplishments,
+        "opportunities": opportunities,
+        "edges": net_data["edges"],
+        "units": unit_rows,
         "ring": [
             {
                 "id": str(node.id),

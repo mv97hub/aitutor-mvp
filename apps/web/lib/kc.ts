@@ -147,29 +147,113 @@ export type KcProgressBlock = {
   rubric?: string;
 };
 
+export type KcBlockDetail = {
+  index: number;
+  block_id: string;
+  block_type: string;
+  label: string;
+  prompt_preview: string;
+  rubric_line: string;
+  counts_toward_mastery: boolean;
+  status: "passed" | "revealed" | "active" | "upcoming";
+  outcome: "passed" | "revealed" | null;
+  attempts: number;
+  max_retries: number | null;
+  passed_on_first_try: boolean;
+  eliminated_choices: string[];
+};
+
+export type KcAccomplishmentItem = {
+  component_id: string | number;
+  component_code: string;
+  component_title: string;
+  kind: "strength" | "mastered" | "first_try_streak";
+  summary: string;
+  detail: string | null;
+};
+
+export type KcOpportunityItem = {
+  component_id: string | number;
+  component_code: string;
+  component_title: string;
+  kind: "weakness" | "revealed_block" | "misconception" | "fragile_prerequisite" | "in_progress";
+  summary: string;
+  detail: string | null;
+};
+
 export type KcProgress = {
   course_id: string;
   title: string;
+  description?: string;
+  audience?: string;
   kind: string;
   minutes: number | null;
+  course?: {
+    id: string;
+    code: string;
+    title: string;
+    description: string;
+    audience: string;
+    kind: string;
+    minutes: number | null;
+  };
   known: number;
   total: number;
+  total_count?: number;
+  completed_count?: number;
+  known_count?: number;
+  fragile_count?: number;
+  in_progress_count?: number;
+  not_started_count?: number;
   percent: number;
+  completion_percent?: number;
   count_label: string;
   course_complete?: boolean;
   next_course?: { id: string; code: string; title: string } | null;
+  prerequisite_codes?: string[];
+  unlocked?: boolean;
+  total_blocks_count?: number;
+  completed_blocks_count?: number;
+  first_try_pass_count?: number;
+  last_active_at?: string | null;
+  accomplishments?: KcAccomplishmentItem[];
+  opportunities?: KcOpportunityItem[];
+  edges?: { from_code: string; to_code: string; kind: "prerequisite_of" | "encompasses" }[];
   units: {
     id: string;
     code: string;
     title: string;
+    description?: string;
+    outline?: string;
+    core_truth?: string;
     kc_type: string | null;
     summary?: string;
     patch: boolean;
     status: "completed" | "in_progress" | "not_started";
     mastery?: "" | "known" | "fragile";
+    p_known?: number;
     finished_blocks?: number;
+    completed_blocks?: number;
     total_blocks?: number;
+    passed_blocks_count?: number;
+    revealed_blocks_count?: number;
+    first_try_blocks_count?: number;
+    total_attempts?: number;
+    started_at?: string | null;
+    completed_at?: string | null;
+    updated_at?: string | null;
+    strengths?: string;
+    what_was_strong?: string;
+    weaknesses?: string;
+    what_to_work_on?: string;
+    close_text?: string;
+    score_justification?: string;
+    prerequisite_codes?: string[];
+    dependent_codes?: string[];
+    misconceptions?: KcMisconception[];
+    student_misconceptions?: string[];
     blocks?: KcProgressBlock[];
+    block_details?: KcBlockDetail[];
     rubric?: string[];
     result?: {
       status: "known" | "fragile";
@@ -191,6 +275,22 @@ export type KcTutorCourse = {
   audience: string;
   kind: string;
   minutes: number | null;
+  component_count?: number;
+  completed_count?: number;
+  known_count?: number;
+  fragile_count?: number;
+  in_progress_count?: number;
+  not_started_count?: number;
+  percent?: number;
+  known_percent?: number;
+  prerequisite_codes?: string[];
+  unlocked?: boolean;
+  total_blocks_count?: number;
+  completed_blocks_count?: number;
+  first_try_pass_count?: number;
+  last_active_at?: string | null;
+  accomplishments_preview?: KcAccomplishmentItem[];
+  opportunities_preview?: KcOpportunityItem[];
 };
 
 export type KcChatSummary = {
