@@ -3353,6 +3353,13 @@ def test_kc_progress_analytics_and_accomplishments_opportunities() -> None:
         assert tile["total_blocks_count"] == 3
         assert tile["completed_blocks_count"] == 2
         assert tile["first_try_pass_count"] == 1
+        assert tile["stars"] == 90
+        assert tile["star_block"] == 20
+        assert tile["star_first_try"] == 5
+        assert tile["star_topic"] == 50
+        assert tile["star_crown"] == 15
+        assert tile["started"] is True
+        assert tile["course_complete"] is False
         assert tile["last_active_at"] is not None
         assert len(tile["accomplishments_preview"]) >= 1
         assert len(tile["opportunities_preview"]) >= 1
@@ -3364,6 +3371,7 @@ def test_kc_progress_analytics_and_accomplishments_opportunities() -> None:
         assert detail["total_blocks_count"] == 3
         assert detail["completed_blocks_count"] == 2
         assert detail["first_try_pass_count"] == 1
+        assert detail["stars"] == 90
         assert detail["last_active_at"] is not None
         assert any(a["kind"] == "strength" for a in detail["accomplishments"])
         assert any(a["kind"] == "mastered" for a in detail["accomplishments"])
@@ -3373,6 +3381,8 @@ def test_kc_progress_analytics_and_accomplishments_opportunities() -> None:
 
         units_by_code = {u["code"]: u for u in detail["units"]}
         ku = units_by_code["zz-an-known"]
+        assert ku["child_status"] == "Mastered"
+        assert ku["practice_bonus"] is False
         assert ku["dependent_codes"] == ["zz-an-fragile"]
         assert ku["passed_blocks_count"] == 1
         assert ku["first_try_blocks_count"] == 1
@@ -3381,11 +3391,15 @@ def test_kc_progress_analytics_and_accomplishments_opportunities() -> None:
         assert ku["what_was_strong"] == "Explained the core mechanism on the first try."
 
         fu = units_by_code["zz-an-fragile"]
+        assert fu["child_status"] == "Completed"
+        assert "fragile" not in fu["child_status"].lower()
+        assert fu["practice_bonus"] is True
         assert fu["prerequisite_codes"] == ["zz-an-known"]
         assert fu["dependent_codes"] == ["zz-an-open"]
         assert fu["revealed_blocks_count"] == 1
         assert fu["block_details"][0]["outcome"] == "revealed"
         assert fu["what_to_work_on"] == "Practice stating the rule without a prompt."
+        assert units_by_code["zz-an-open"]["child_status"] == "In Progress"
     finally:
         _clear_progress(storm.id)
         _wipe_zz()
@@ -3532,6 +3546,199 @@ def test_multi_tutor_profiles_catalog_and_student_session_resolution() -> None:
         assert fallback_sess["tutor_profile_id"] == "default"
         assert fallback_sess["tutor_name"] == "Default"
     finally:
+        client.put(f"/students/{storm.id}/tutor-profile", json={"tutor_profile_id": None})
+        for pid in created_ids:
+            client.delete(f"/tutor-profiles/{pid}")
+        _clear_progress(storm.id)
+        _wipe_zz()
+
+
+def test_child_avatar_stars_and_per_course_tutor() -> None:
+    from app.learn_stars import child_status_label, explorer_progress, stars_from_units
+
+    assert child_status_label("completed", "known") == "Mastered"
+    assert child_status_label("completed", "fragile") == "Completed"
+    assert "fragile" not in child_status_label("completed", "fragile").lower()
+    assert child_status_label("in_progress", "") == "In Progress"
+    assert child_status_label("not_started", "", locked=True) == "Locked"
+    rolled = stars_from_units(
+        [
+            {
+                "patch": False,
+                "status": "completed",
+                "mastery": "known",
+                "completed_blocks": 2,
+                "first_try_blocks_count": 1,
+                "revealed_blocks_count": 0,
+            },
+            {
+                "patch": False,
+                "status": "completed",
+                "mastery": "fragile",
+                "completed_blocks": 1,
+                "first_try_blocks_count": 0,
+                "revealed_blocks_count": 1,
+            },
+            {
+                "patch": True,
+                "status": "completed",
+                "mastery": "known",
+                "completed_blocks": 9,
+                "first_try_blocks_count": 9,
+                "revealed_blocks_count": 0,
+            },
+        ]
+    )
+    assert rolled["stars"] == 100
+    assert explorer_progress(0)["explorer_rank"] == "Curious Spark"
+    assert explorer_progress(74)["explorer_level"] == 1
+    assert explorer_progress(75)["explorer_rank"] == "Concept Builder"
+    assert explorer_progress(600)["explorer_rank"] == "Grand Scholar"
+    assert explorer_progress(600)["explorer_next"] is None
+
+    storm = _storm()
+    _clear_progress(storm.id)
+    created_ids: list[str] = []
+    course_a = _ready(
+        _make("zz-learn-a", title="Fractions Quest", description="Share fairly."),
+        [_spec("zz-learn-a1", "Halves"), _spec("zz-learn-a2", "Thirds")],
+    )
+    try:
+        avatar = client.patch(
+            f"/students/{storm.id}",
+            json={"child_profile": {"avatar_preset": "fox"}},
+        )
+        assert avatar.status_code == 200, avatar.text
+        assert avatar.json()["child_profile"]["avatar_preset"] == "fox"
+        invalid = client.patch(
+            f"/students/{storm.id}",
+            json={"child_profile": {"avatar_preset": "not_a_real_icon"}},
+        )
+        assert invalid.status_code == 200, invalid.text
+        assert invalid.json()["child_profile"]["avatar_preset"] == ""
+
+        owl = client.post(
+            "/tutor-profiles",
+            json={"name": "Coach Owl", "description": "A calm owl.", "avatar_preset": "owl"},
+        )
+        assert owl.status_code == 200, owl.text
+        fox = client.post(
+            "/tutor-profiles",
+            json={"name": "Coach Fox", "description": "A playful fox.", "avatar_preset": "fox"},
+        )
+        assert fox.status_code == 200, fox.text
+        created_ids.extend([owl.json()["id"], fox.json()["id"]])
+
+        started = client.post(
+            "/kc/tutor/start",
+            json={
+                "student_id": str(storm.id),
+                "course_id": course_a["id"],
+                "tutor_profile_id": owl.json()["id"],
+            },
+        )
+        assert started.status_code == 200, started.text
+        assert started.json()["tutor_profile_id"] == owl.json()["id"]
+
+        course_b = client.post(
+            "/kc/courses",
+            json={
+                "code": "zz-learn-b",
+                "title": "Decimal Quest",
+                "description": "Tenths and hundredths.",
+                "audience": "12-14",
+                "kind": "mastery",
+            },
+        )
+        assert course_b.status_code == 200, course_b.text
+        course_b = _ready(course_b.json(), [_spec("zz-learn-b1", "Tenths")])
+        started_b = client.post(
+            "/kc/tutor/start",
+            json={
+                "student_id": str(storm.id),
+                "course_id": course_b["id"],
+                "tutor_profile_id": fox.json()["id"],
+            },
+        )
+        assert started_b.status_code == 200, started_b.text
+        assert started_b.json()["tutor_profile_id"] == fox.json()["id"]
+
+        listed = client.get("/kc/tutor/courses", params={"student_id": str(storm.id)}).json()
+        by_code = {item["code"]: item for item in listed}
+        assert by_code["zz-learn-a"]["tutor"]["id"] == owl.json()["id"]
+        assert by_code["zz-learn-a"]["tutor"]["source"] == "course"
+        assert by_code["zz-learn-a"]["started"] is True
+        assert by_code["zz-learn-b"]["tutor"]["id"] == fox.json()["id"]
+        assert by_code["zz-learn-b"]["tutor"]["source"] == "course"
+
+        lynx = client.post(
+            "/tutor-profiles",
+            json={"name": "Coach Lynx", "description": "A steady guide.", "avatar_preset": "badger"},
+        )
+        assert lynx.status_code == 200, lynx.text
+        created_ids.append(lynx.json()["id"])
+        switched_a = client.post(
+            f"/kc/tutor/courses/{course_a['id']}/tutor",
+            json={"student_id": str(storm.id), "tutor_profile_id": lynx.json()["id"]},
+        )
+        assert switched_a.status_code == 200, switched_a.text
+        listed = client.get("/kc/tutor/courses", params={"student_id": str(storm.id)}).json()
+        by_code = {item["code"]: item for item in listed}
+        assert by_code["zz-learn-a"]["tutor"]["id"] == lynx.json()["id"]
+        assert by_code["zz-learn-b"]["tutor"]["id"] == fox.json()["id"]
+
+        db = SessionLocal()
+        try:
+            row = db.get(Student, storm.id)
+            assert row is not None
+            row.preferred_tutor_profile_id = fox.json()["id"]
+            db.commit()
+        finally:
+            db.close()
+
+        topic_two = _node(course_a, "zz-learn-a2")
+        resumed = client.post(
+            "/kc/tutor/start",
+            json={"student_id": str(storm.id), "course_id": course_a["id"], "kc_id": topic_two["id"]},
+        )
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json()["tutor_profile_id"] == lynx.json()["id"]
+        preferred = next(item for item in client.get("/students").json() if item["id"] == str(storm.id))
+        assert preferred["preferred_tutor_profile_id"] == fox.json()["id"]
+
+        changed = client.post(
+            f"/kc/tutor/courses/{course_b['id']}/tutor",
+            json={"student_id": str(storm.id), "tutor_profile_id": owl.json()["id"]},
+        )
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["id"] == owl.json()["id"]
+        listed = client.get("/kc/tutor/courses", params={"student_id": str(storm.id)}).json()
+        by_code = {item["code"]: item for item in listed}
+        assert by_code["zz-learn-b"]["tutor"]["id"] == owl.json()["id"]
+        assert by_code["zz-learn-a"]["tutor"]["id"] == lynx.json()["id"]
+        reloaded_b = client.get(f"/kc/tutor/sessions/{started_b.json()['id']}").json()
+        assert reloaded_b["tutor_profile_id"] == owl.json()["id"]
+        reloaded_a = client.get(f"/kc/tutor/sessions/{started.json()['id']}").json()
+        assert reloaded_a["tutor_profile_id"] == lynx.json()["id"]
+
+        missing = client.post(
+            "/kc/tutor/start",
+            json={
+                "student_id": str(storm.id),
+                "course_id": course_a["id"],
+                "tutor_profile_id": "missing-tutor",
+            },
+        )
+        assert missing.status_code == 404
+
+        roster = client.get("/kc/tutor/learners")
+        assert roster.status_code == 200, roster.text
+        mine = next(item for item in roster.json() if item["student"]["id"] == str(storm.id))
+        assert mine["in_progress_course_count"] >= 1
+        assert mine["explorer_rank"] == "Curious Spark"
+        assert mine["student"]["child_profile"]["avatar_preset"] == ""
+    finally:
+        client.patch(f"/students/{storm.id}", json={"child_profile": {"avatar_preset": ""}})
         client.put(f"/students/{storm.id}/tutor-profile", json={"tutor_profile_id": None})
         for pid in created_ids:
             client.delete(f"/tutor-profiles/{pid}")

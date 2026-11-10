@@ -37,9 +37,13 @@ from app.kc import (
     network,
     node_out,
     note_component_saved,
+    bind_course_tutor,
+    course_tutor_choice,
+    learner_roster,
     open_session,
     post_creator_turn,
     progress,
+    start_course,
     prompt_for,
     push_course,
     record_ai_push,
@@ -147,6 +151,18 @@ class OpenSessionIn(BaseModel):
     course_id: uuid.UUID
     kc_id: uuid.UUID
     tutor_profile_id: str | int | None = None
+
+
+class StartLearningIn(BaseModel):
+    student_id: uuid.UUID
+    course_id: uuid.UUID
+    kc_id: uuid.UUID | None = None
+    tutor_profile_id: str | int | None = None
+
+
+class BindCourseTutorIn(BaseModel):
+    student_id: uuid.UUID
+    tutor_profile_id: str | int
 
 
 class RestartCourseIn(BaseModel):
@@ -378,6 +394,41 @@ def get_tutor_courses(
     db: Session = Depends(get_db),
 ) -> list[dict]:
     return tutor_courses(db, student_id=student_id)
+
+
+@router.get("/kc/tutor/learners")
+def get_learners(db: Session = Depends(get_db)) -> list[dict]:
+    return learner_roster(db)
+
+
+@router.post("/kc/tutor/start")
+def post_tutor_start(body: StartLearningIn, db: Session = Depends(get_db)) -> dict:
+    student = _student_or_404(db, body.student_id)
+    goal = _course_or_404(db, body.course_id)
+    session = start_course(
+        db,
+        student,
+        goal,
+        tutor_profile_id=body.tutor_profile_id,
+        kc_id=body.kc_id,
+    )
+    out = session_out(db, session)
+    prog = progress(db, goal, student)
+    out["stars"] = prog["stars"]
+    out["course_stars"] = prog["stars"]
+    return out
+
+
+@router.post("/kc/tutor/courses/{course_id}/tutor")
+def post_course_tutor(
+    course_id: uuid.UUID,
+    body: BindCourseTutorIn,
+    db: Session = Depends(get_db),
+) -> dict:
+    student = _student_or_404(db, body.student_id)
+    goal = _course_or_404(db, course_id)
+    bind_course_tutor(db, student, goal, body.tutor_profile_id, update_preferred=True)
+    return course_tutor_choice(db, student, goal.id)
 
 
 @router.get("/kc/tutor/courses/{course_id}")

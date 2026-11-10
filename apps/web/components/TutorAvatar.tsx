@@ -14,6 +14,7 @@ const SIZE_PX = {
   sm: 24,
   md: 36,
   lg: 52,
+  xl: 88,
 } as const;
 
 export function TutorAvatar({
@@ -26,7 +27,7 @@ export function TutorAvatar({
   preset?: string | null;
   avatarUrl?: string | null;
   name?: string;
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "xl";
   className?: string;
 }) {
   const px = SIZE_PX[size];

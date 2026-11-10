@@ -173,7 +173,19 @@ def default_child_profile(age: int | None = 10) -> dict:
         "learning_support": "none",
         "interest_tags": [],
         "interests": "",
+        "avatar_preset": "",
+        "avatar_url": "",
     }
+
+
+def child_avatar_preset(raw: object) -> str:
+    """A blank preset means the child card shows initials. Unknown ids are dropped."""
+    val = str(raw or "").strip()
+    if not val:
+        return ""
+    from app.tutor_profile import AVATAR_PRESET_SET
+
+    return val if val in AVATAR_PRESET_SET else ""
 
 
 def normalize_child_profile(
@@ -225,6 +237,8 @@ def normalize_child_profile(
         elif isinstance(interests, (list, tuple)):
             fav_raw = ", ".join(str(x).strip() for x in interests if str(x).strip())
     base["interests"] = str(fav_raw or "").strip()[:120]
+    base["avatar_preset"] = child_avatar_preset(src.get("avatar_preset"))
+    base["avatar_url"] = str(src.get("avatar_url") or "").strip()[:200_000]
     return base
 
 
