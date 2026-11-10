@@ -881,6 +881,55 @@ body:has(.ds-landing) {
   margin-top: 28px;
 }
 
+.ds-landing.has-menu,
+.ds-landing.menu-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100dvh;
+  overflow: auto;
+  padding: 20px 16px 40px;
+}
+
+.menu-board,
+.menu-page .ds-landing-card {
+  width: min(760px, 100%);
+}
+
+.ds-landing.has-menu .ds-landing-card {
+  width: min(420px, 100%);
+  margin-top: 28px;
+}
+
+.menu-sections {
+  display: grid;
+  gap: 22px;
+}
+
+.menu-section-label {
+  margin: 0 0 8px;
+  color: rgb(71, 85, 105);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.menu-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.menu-links li {
+  margin: 0;
+}
+
 .ds-logo-name {
   overflow: hidden;
   font-size: 16px;

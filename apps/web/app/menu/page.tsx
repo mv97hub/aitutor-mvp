@@ -1,30 +1,21 @@
-import Link from "next/link";
-
-import { kcAndAdminPages, olderPages } from "@/lib/menu-pages";
+import { MenuSections } from "@/components/MenuSections";
+import { menuSectionsFor } from "@/lib/menu-pages";
 
 export const metadata = { title: "Menu · AI Tutor" };
 
-export default function MenuPage() {
+export default async function MenuPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ student?: string | string[] }>;
+}) {
+  const params = await searchParams;
+  const raw = params.student;
+  const studentId = Array.isArray(raw) ? raw[0] : raw;
   return (
-    <main className="ds-landing">
+    <main className="ds-landing menu-page">
       <section className="ds-landing-card">
         <h1>Menu</h1>
-        <nav aria-label="Pages">
-          <ul>
-            {kcAndAdminPages.map((page) => (
-              <li key={page.href}>
-                <Link href={page.href}>{page.label}</Link>
-              </li>
-            ))}
-          </ul>
-          <ul className="menu-older">
-            {olderPages.map((page) => (
-              <li key={page.href}>
-                <Link href={page.href}>{page.label}</Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
+        <MenuSections sections={menuSectionsFor(studentId)} />
       </section>
     </main>
   );
