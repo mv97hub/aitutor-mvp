@@ -5420,7 +5420,7 @@ a.ds-row { text-decoration: none; }
   overflow: hidden;
 }
 .learn-step-bar i { display: block; height: 100%; background: var(--teal); }
-.learn-topic-head { display: flex; align-items: center; gap: 10px; }
+.learn-topic-head { display: flex; align-items: center; justify-content: flex-start; gap: 10px; }
 .learn-topic-head strong,
 .learn-topic-head span { display: block; }
 .learn-topic-banner { grid-template-columns: auto 1fr; align-items: center; margin-bottom: 8px; }

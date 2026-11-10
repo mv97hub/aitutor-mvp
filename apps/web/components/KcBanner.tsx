@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { BrandMark } from "@/components/BrandMark";
 
 const LEARNER_BANNER_LINKS = [
+  { href: "/learn", label: "Child Experience", match: "Child Experience" },
   { href: "/kc-tutor", label: "KC Tutor", match: "KC Tutor" },
   { href: "/kc-progress", label: "KC Course Progress", match: "KC Course Progress" },
 ] as const;
