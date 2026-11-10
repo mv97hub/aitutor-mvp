@@ -76,6 +76,7 @@ class PromptTesterIn(BaseModel):
     active_block_type: str = "topic_goal"
     active_block_data: dict = Field(default_factory=dict)
     active_substep: str = ""
+    topic_index: int = Field(default=0, ge=0)
     block_index: int = Field(default=1, ge=1)
     move_index: int | None = Field(default=None, ge=1)
     dialogue_turns: int = Field(default=0, ge=0)
@@ -394,6 +395,8 @@ def preview_kc_prompt(body: PromptTesterIn) -> dict:
     active_state = {
         "substep": substep,
         "dialogue_turns": body.dialogue_turns,
+        "topic_index": body.topic_index,
+        "elaboration_turns": 0,
         "mcq": {"eliminated_indices": list(body.eliminated_indices)} if body.eliminated_indices else {},
     }
     widget_on = _yes(body.choice_on_screen) or block_uses_choice_widget(active_block, substep)
@@ -430,8 +433,8 @@ def preview_kc_prompt(body: PromptTesterIn) -> dict:
         active_block_state=active_state,
     )
     ev_id = block_evidence_id(active_block, index, substep)
-    step_label = block_step_label(active_block, index, len(blocks), substep)
-    substep_label = format_active_substep_label(active_block, substep, cfg)
+    step_label = block_step_label(active_block, index, len(blocks), substep, active_state)
+    substep_label = format_active_substep_label(active_block, substep, cfg, active_state)
     max_retries = max_retries_for_block(active_block, cfg, goal)
     return {
         "system_prompt": bundle["system_prompt"],

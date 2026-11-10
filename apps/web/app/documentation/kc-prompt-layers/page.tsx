@@ -195,7 +195,7 @@ export default function KcPromptLayersPage() {
         <p>
           The tutor prompt is built for the active block only. The model writes the reply. The app sets the blocks, the
           edges, the score, the unit close, and the course outro. Layer 3 (Voice &amp; Persona), the 8 Layer 4
-          overarching teaching policies, and the 9 block-type settings are edited on{" "}
+          overarching teaching policies, and the 10 block-type settings are edited on{" "}
           <Link href="/admin/agent-customizations">AI Tutor Configuration</Link>. The debug Variables panel keeps the
           seven headings and shows a row only when this turn reads it. It shows the active block only, along with Layer
           2 child persona settings, Layer 3 voice and effective rules, and Layer 4 overarching + active block configs.
@@ -270,7 +270,7 @@ export default function KcPromptLayersPage() {
           ))}
         </ul>
 
-        <h2>Layer 4, per-block-type configurations (9 block types)</h2>
+        <h2>Layer 4, per-block-type configurations ({BLOCK_TYPES.length} block types)</h2>
         {BLOCK_TYPES.map((type) => (
           <section key={type}>
             <h3>{BLOCK_CONFIG_TITLES[type]}</h3>

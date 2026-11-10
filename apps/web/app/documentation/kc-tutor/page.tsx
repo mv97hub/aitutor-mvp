@@ -41,6 +41,10 @@ const LEARNER: { type: keyof typeof BLOCK_CONFIG_TITLES; text: string }[] = [
     type: "retrieval_check",
     text: "The learner recalls the point with little or no cue, and can be asked why it is so.",
   },
+  {
+    type: "explanation",
+    text: "The tutor explains one topic, then offers chips to move on or ask for an example. Questions stay on that topic. After the last topic the tutor summarizes every topic. The walkthrough does not quiz, and it does not mark the component fragile unless counts toward mastery is on.",
+  },
 ];
 
 export default function KcTutorDocsPage() {
@@ -97,8 +101,9 @@ export default function KcTutorDocsPage() {
           widget. Every other block is typed in the same thread. While a choice is unanswered, the composer says
           &quot;Choose an answer above&quot; and does not send. The model writes the reply and a structured decision.
           The app checks that decision. A block can finish known, fragile, or engaged. Known means every counting block
-          passed. A required reveal finishes the component as fragile. A curiosity block counts only when that setting
-          is on. Course progress marks that finished component completed. In progress is only an open session whose
+          passed. A required reveal finishes the component as fragile. A curiosity block and an explanatory walkthrough
+          count only when that setting is on. An explanation still never marks the component fragile. Course progress
+          marks that finished component completed. In progress is only an open session whose
           last block has not finished. A fragile result can still point at the broken component. Known still raises
           stability, and each encompassed component gains 0.25.
         </p>

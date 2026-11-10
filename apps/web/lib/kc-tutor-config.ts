@@ -198,6 +198,35 @@ export const BLOCK_CONFIG_FIELDS: Record<KcBlockType, ConfigField[]> = {
     INT("max_retries_before_reveal", "Retries before reveal", "Attempts before the fact is revealed.", 1, 4),
     BOOL("accept_paraphrase", "Accept a paraphrase", "A restatement counts when it carries the fact."),
   ],
+  explanation: [
+    INT("explanation_depth", "Explanation depth", "How long and layered each topic explanation is, from a short overview to a deep dive.", 1, 5),
+    BOOL(
+      "allow_depth_override_student_length",
+      "Allow depth to override length",
+      "When depth is 3 or more, or the learner asks to elaborate, the explanation may run longer than the child's response length.",
+    ),
+    ENUM("elaboration_style_on_question", "Elaboration style", "How a follow-up question on the same topic is answered.", [
+      ["fresh_analogy_and_example", "Fresh analogy and example"],
+      ["step_by_step_breakdown", "Step-by-step breakdown"],
+      ["zoom_out_big_picture", "Zoom out to the big picture"],
+      ["adaptive_to_question", "Adapt to the question"],
+    ]),
+    ENUM("check_in_prompt_style", "Check-in style", "How the tutor asks whether to stay on this topic or move on.", [
+      ["questions_or_elaborate", "Questions or elaborate"],
+      ["curiosity_invitation", "Curiosity invitation"],
+      ["brief_ready_check", "Brief ready check"],
+    ]),
+    ENUM("end_of_block_summary_style", "End-of-block summary", "How every topic is recapped after the last one.", [
+      ["bulleted_recap_with_takeaway", "Bulleted recap with a takeaway"],
+      ["connected_narrative_synthesis", "Connected narrative"],
+      ["concise_takeaway_only", "Concise takeaway only"],
+    ]),
+    BOOL(
+      "counts_toward_mastery_score",
+      "Counts toward mastery",
+      "Off by default. Completing the walkthrough never marks the component fragile.",
+    ),
+  ],
 };
 
 export const BLOCK_CONFIG_TITLES: Record<KcBlockType, string> = {
@@ -210,6 +239,7 @@ export const BLOCK_CONFIG_TITLES: Record<KcBlockType, string> = {
   spot_the_flaw: "Spot the Flaw / Buggy Rule",
   teach_back: "Teach-Back / Feynman",
   retrieval_check: "Retrieval & Elaborative Interrogation",
+  explanation: "Explanatory Walkthrough",
 };
 
 function fieldDefault(field: ConfigField): string | number | boolean {
@@ -274,6 +304,12 @@ function defaults(): KcTutorConfig {
   blocks.retrieval_check.require_elaborative_why = true;
   blocks.retrieval_check.max_retries_before_reveal = 2;
   blocks.retrieval_check.accept_paraphrase = true;
+  blocks.explanation.explanation_depth = 4;
+  blocks.explanation.allow_depth_override_student_length = true;
+  blocks.explanation.elaboration_style_on_question = "fresh_analogy_and_example";
+  blocks.explanation.check_in_prompt_style = "questions_or_elaborate";
+  blocks.explanation.end_of_block_summary_style = "bulleted_recap_with_takeaway";
+  blocks.explanation.counts_toward_mastery_score = false;
   return { overarching, blocks };
 }
 

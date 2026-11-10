@@ -309,6 +309,7 @@ ALL_BLOCK_TYPES = (
     "spot_the_flaw",
     "teach_back",
     "retrieval_check",
+    "explanation",
 )
 
 
@@ -393,6 +394,14 @@ def default_kc_tutor_config() -> dict:
                 "require_elaborative_why": True,
                 "max_retries_before_reveal": 2,
                 "accept_paraphrase": True,
+            },
+            "explanation": {
+                "explanation_depth": 4,
+                "allow_depth_override_student_length": True,
+                "elaboration_style_on_question": "fresh_analogy_and_example",
+                "check_in_prompt_style": "questions_or_elaborate",
+                "end_of_block_summary_style": "bulleted_recap_with_takeaway",
+                "counts_toward_mastery_score": False,
             },
         },
     }

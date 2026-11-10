@@ -9,6 +9,7 @@ import {
   blankBlock,
   blankChoice,
   blankData,
+  blankExplanationTopic,
   newBlockId,
   scopeFromCourse,
   toggleScope,
@@ -80,8 +81,8 @@ export function KcBlockScope({
         onClick={() => setOpen((value) => !value)}
       >
         {picked.length === BLOCK_TYPES.length
-          ? "AI Block Scope: All 9 blocks ▾"
-          : `AI Block Scope (${picked.length} of 9) ▾`}
+          ? `AI Block Scope: All ${BLOCK_TYPES.length} blocks ▾`
+          : `AI Block Scope (${picked.length} of ${BLOCK_TYPES.length}) ▾`}
       </button>
       {open ? (
         <div className="kc-scope-menu" role="dialog" aria-label="AI Block Scope">
@@ -257,6 +258,7 @@ export function BlockDataEditor({
   }
   if (block.type === "mcq") return <McqFields data={data} set={set} />;
   if (block.type === "worked_example") return <WorkedFields data={data} set={set} />;
+  if (block.type === "explanation") return <ExplanationFields data={data} set={set} />;
   return (
     <>
       {fieldsFor(block.type).map((field) => (
@@ -387,6 +389,137 @@ function Field({
         onChange={(event) => set(field.key, event.target.value)}
       />
     </label>
+  );
+}
+
+type ExplanationTopic = {
+  id: string;
+  title: string;
+  explanation: string;
+  key_points: string;
+  examples_or_analogies: string;
+};
+
+function asTopics(value: unknown): ExplanationTopic[] {
+  if (!Array.isArray(value) || value.length === 0) return [blankExplanationTopic(1)];
+  return value.slice(0, 8).map((item, index) => {
+    const topic = item && typeof item === "object" ? (item as Partial<ExplanationTopic>) : {};
+    return {
+      id: typeof topic.id === "string" && topic.id ? topic.id : `top_${index + 1}`,
+      title: typeof topic.title === "string" ? topic.title : "",
+      explanation: typeof topic.explanation === "string" ? topic.explanation : "",
+      key_points: typeof topic.key_points === "string" ? topic.key_points : "",
+      examples_or_analogies: typeof topic.examples_or_analogies === "string" ? topic.examples_or_analogies : "",
+    };
+  });
+}
+
+function nextTopicId(topics: ExplanationTopic[]): string {
+  const used = new Set(topics.map((topic) => topic.id));
+  let index = topics.length + 1;
+  while (used.has(`top_${index}`)) index += 1;
+  return `top_${index}`;
+}
+
+function ExplanationFields({
+  data,
+  set,
+}: {
+  data: Record<string, unknown>;
+  set: (key: string, value: unknown) => void;
+}) {
+  const topics = asTopics(data.topics);
+  function write(next: ExplanationTopic[]) {
+    set("topics", next);
+  }
+  function update(index: number, patch: Partial<ExplanationTopic>) {
+    write(topics.map((topic, topicIndex) => (topicIndex === index ? { ...topic, ...patch } : topic)));
+  }
+  function move(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= topics.length) return;
+    const next = [...topics];
+    const [item] = next.splice(index, 1);
+    next.splice(target, 0, item);
+    write(next);
+  }
+  return (
+    <>
+      <Field field={{ key: "block_title", label: "Block title", kind: "text" }} data={data} set={set} />
+      {topics.map((topic, index) => (
+        <div className="kc-explain-topic" key={topic.id}>
+          <div className="kc-explain-tools">
+            <strong>
+              Topic {index + 1} of {topics.length}
+            </strong>
+            <button type="button" aria-label={`Move topic ${index + 1} up`} disabled={index === 0} onClick={() => move(index, -1)}>
+              ↑
+            </button>
+            <button
+              type="button"
+              aria-label={`Move topic ${index + 1} down`}
+              disabled={index === topics.length - 1}
+              onClick={() => move(index, 1)}
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              aria-label={`Delete topic ${index + 1}`}
+              disabled={topics.length === 1}
+              onClick={() => write(topics.filter((_, topicIndex) => topicIndex !== index))}
+            >
+              Delete
+            </button>
+          </div>
+          <label>
+            Topic title
+            <textarea
+              aria-label={`Topic ${index + 1} title`}
+              rows={2}
+              value={topic.title}
+              onChange={(event) => update(index, { title: event.target.value })}
+            />
+          </label>
+          <label>
+            Detailed explanation
+            <textarea
+              aria-label={`Topic ${index + 1} explanation`}
+              rows={4}
+              value={topic.explanation}
+              onChange={(event) => update(index, { explanation: event.target.value })}
+            />
+          </label>
+          <label>
+            Key points (optional)
+            <textarea
+              aria-label={`Topic ${index + 1} key points`}
+              rows={2}
+              value={topic.key_points}
+              onChange={(event) => update(index, { key_points: event.target.value })}
+            />
+          </label>
+          <label>
+            Examples / analogies (optional)
+            <textarea
+              aria-label={`Topic ${index + 1} examples`}
+              rows={2}
+              value={topic.examples_or_analogies}
+              onChange={(event) => update(index, { examples_or_analogies: event.target.value })}
+            />
+          </label>
+        </div>
+      ))}
+      <button
+        className="ghost"
+        type="button"
+        disabled={topics.length >= 8}
+        onClick={() => write([...topics, { ...blankExplanationTopic(topics.length + 1), id: nextTopicId(topics) }])}
+      >
+        Add topic
+      </button>
+      <Field field={{ key: "summary_takeaway", label: "Summary takeaway", kind: "text" }} data={data} set={set} />
+    </>
   );
 }
 

@@ -4,7 +4,7 @@ import test from "node:test";
 import { BLOCK_TYPES } from "./kc-blocks.ts";
 import { BLOCK_CONFIG_FIELDS, DEFAULT_KC_TUTOR_CONFIG, kcTutorConfigFrom, OVERARCHING_FIELDS } from "./kc-tutor-config.ts";
 
-test("defaults cover overarching settings and all nine block types", () => {
+test("defaults cover overarching settings and all ten block types", () => {
   assert.equal(OVERARCHING_FIELDS.length, 8);
   assert.equal(DEFAULT_KC_TUTOR_CONFIG.overarching.orient_framing, "elaborate_outline");
   assert.equal(DEFAULT_KC_TUTOR_CONFIG.overarching.instructional_stance, "guided_discovery");
@@ -17,6 +17,12 @@ test("defaults cover overarching settings and all nine block types", () => {
     }
   }
   assert.equal(DEFAULT_KC_TUTOR_CONFIG.blocks.curiosity.counts_toward_mastery_score, false);
+  assert.equal(DEFAULT_KC_TUTOR_CONFIG.blocks.explanation.explanation_depth, 4);
+  assert.equal(DEFAULT_KC_TUTOR_CONFIG.blocks.explanation.allow_depth_override_student_length, true);
+  assert.equal(DEFAULT_KC_TUTOR_CONFIG.blocks.explanation.elaboration_style_on_question, "fresh_analogy_and_example");
+  assert.equal(DEFAULT_KC_TUTOR_CONFIG.blocks.explanation.check_in_prompt_style, "questions_or_elaborate");
+  assert.equal(DEFAULT_KC_TUTOR_CONFIG.blocks.explanation.end_of_block_summary_style, "bulleted_recap_with_takeaway");
+  assert.equal(DEFAULT_KC_TUTOR_CONFIG.blocks.explanation.counts_toward_mastery_score, false);
 });
 
 test("a saved override is kept and an invalid value falls back", () => {

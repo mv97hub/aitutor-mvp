@@ -38,6 +38,7 @@ from app.kc_prompt import (
     compute_turn_kind,
     default_substep_for_block,
     format_active_substep_label,
+    initial_block_state,
     is_fragment,
     labeled_choice,
     max_retries_for_block,
@@ -407,6 +408,7 @@ _BANNER_LABELS = {
     "spot_the_flaw": "Spot the flaw",
     "teach_back": "Teach back",
     "retrieval_check": "Retrieval check",
+    "explanation": "Explanatory walkthrough",
 }
 
 
@@ -426,6 +428,14 @@ def _public_blocks(node: KcNode | None) -> list[dict]:
 
 
 def _block_title(data: dict, fallback: str) -> str:
+    titled = str(data.get("block_title") or "").strip()
+    if titled:
+        return titled
+    topics = data.get("topics")
+    if isinstance(topics, list) and topics and isinstance(topics[0], dict):
+        topic_title = str(topics[0].get("title") or "").strip()
+        if topic_title:
+            return topic_title
     for key in (
         "topic",
         "question_stem",
@@ -607,6 +617,16 @@ def _missing_block_fields(kind: str, data: dict) -> str:
         ):
             return ""
         return "needs a recall prompt and the expected fact"
+    if kind == "explanation":
+        topics = data.get("topics") if isinstance(data.get("topics"), list) else []
+        if len(topics) > 8:
+            return "needs at most 8 topics"
+        if not topics:
+            return "needs at least one topic"
+        for item in topics:
+            if not isinstance(item, dict) or not _has_text(item.get("title")) or not _has_text(item.get("explanation")):
+                return "needs a title and explanation on every topic"
+        return ""
     return ""
 
 
@@ -1178,9 +1198,9 @@ def _block_counts_toward_mastery(block: dict, cfg: dict) -> bool:
     if not isinstance(block, dict):
         return True
     kind = str(block.get("type") or "").strip()
-    if kind == "curiosity":
-        curiosity = ((cfg or {}).get("blocks") or {}).get("curiosity") or {}
-        return bool(curiosity.get("counts_toward_mastery_score", False))
+    if kind in {"curiosity", "explanation"}:
+        block_cfg = ((cfg or {}).get("blocks") or {}).get(kind) or {}
+        return bool(block_cfg.get("counts_toward_mastery_score", False))
     return True
 
 
@@ -1737,6 +1757,11 @@ def _rubric_line(block: dict, cfg: dict) -> str:
         if not bool(curiosity.get("counts_toward_mastery_score", False)):
             return ""
         return str(data.get("bridge_to_unit") or data.get("prediction_question") or "").strip()
+    if kind == "explanation":
+        explanation = ((cfg or {}).get("blocks") or {}).get("explanation") or {}
+        if not bool(explanation.get("counts_toward_mastery_score", False)):
+            return ""
+        return str(data.get("summary_takeaway") or data.get("block_title") or "").strip()
     from app.kc_model import derive_rubric_from_blocks
 
     lines = derive_rubric_from_blocks([block])
@@ -1776,7 +1801,7 @@ def _stored_block_rows(
         }
         if stored is not None:
             outcome = str(stored.get("outcome") or "").strip()
-            if outcome in {"passed", "revealed"}:
+            if outcome in {"passed", "revealed", "engaged"}:
                 row["outcome"] = outcome
             if stored.get("attempts") is not None:
                 row["attempts"] = int(stored.get("attempts") or 0)
@@ -1854,14 +1879,15 @@ def _walk_fragile(blocks: list[dict], results: object, cfg: dict) -> bool:
     fragile = False
     for index, block in enumerate(blocks):
         counts = True
-        if str(block.get("type") or "").strip() == "curiosity":
-            curiosity = ((cfg or {}).get("blocks") or {}).get("curiosity") or {}
-            counts = bool(curiosity.get("counts_toward_mastery_score", False))
+        kind = str(block.get("type") or "").strip()
+        if kind in {"curiosity", "explanation"}:
+            block_cfg = ((cfg or {}).get("blocks") or {}).get(kind) or {}
+            counts = bool(block_cfg.get("counts_toward_mastery_score", False))
         if not counts:
             continue
         counted = True
         row = by_id.get(_block_key(block, index))
-        if row is None or row.get("outcome") != "passed":
+        if row is None or str(row.get("outcome") or "") not in {"passed", "engaged"}:
             fragile = True
     if not counted:
         return False
@@ -2550,12 +2576,15 @@ def _session_block_progress(node: KcNode | None, session: KcSession) -> dict:
     if substep:
         from app.kc_prompt import format_active_substep_label
 
-        sub_label = format_active_substep_label(blocks[active], substep)
+        sub_label = format_active_substep_label(blocks[active], substep, None, state)
+    active_kind = str(blocks[active].get("type") or "")
     return {
         "total_blocks": total,
         "completed_blocks": completed,
         "completion_pct": round(100 * completed / total),
         "active_block_index": active,
+        "active_block_type": active_kind,
+        "active_substep": substep,
         "active_substep_label": sub_label,
         "block_progress": progress,
     }
@@ -2587,7 +2616,7 @@ def session_out(db: Session, session: KcSession) -> dict:
     choice = None
     if block is not None and session.status == "in_progress" and not needs_speech:
         choice = on_screen_choice(block, substep, state, cfg)
-    label = block_step_label(block, index, len(blocks), substep) if block is not None else "This step"
+    label = block_step_label(block, index, len(blocks), substep, state) if block is not None else "This step"
     redirect = db.get(KcNode, session.redirect_kc_id) if session.redirect_kc_id else None
     return {
         "id": str(session.id),
@@ -2661,7 +2690,7 @@ def open_session(
         recipe="block_walk",
         step=0,
         status="in_progress",
-        active_block_state={"substep": substep, "dialogue_turns": 0},
+        active_block_state=initial_block_state(blocks[0], cfg) if blocks else {"substep": substep, "dialogue_turns": 0},
     )
     db.add(session)
     db.flush()
@@ -2773,6 +2802,11 @@ _CATALOG_FIELDS: dict[str, list[tuple[str, str]]] = {
         ("elaborative_why_prompt", "Elaborative why prompt"),
         ("expected_why_rationale", "Expected why rationale"),
     ],
+    "explanation": [
+        ("block_title", "Block title"),
+        ("topics", "Topics"),
+        ("summary_takeaway", "Summary takeaway"),
+    ],
 }
 
 _MCQ_STATIC = {"mode", "question_stem", "choices", "correct_explanation"}
@@ -2817,6 +2851,10 @@ _SETTING_LABELS = {
     "cue_scaffolding": "Cue scaffolding",
     "require_elaborative_why": "Ask why",
     "accept_paraphrase": "Accept a paraphrase",
+    "allow_depth_override_student_length": "Allow depth to override length",
+    "elaboration_style_on_question": "Elaboration style",
+    "check_in_prompt_style": "Check-in style",
+    "end_of_block_summary_style": "End-of-block summary",
 }
 
 
@@ -3181,7 +3219,7 @@ def tutor_variables(
         btype_key = str(block.get("type") or "topic_goal").strip()
         bcfg_dict = (cfg.get("blocks") or {}).get(btype_key) or {}
         active_bcfg_summary = ", ".join(f"{k}={v}" for k, v in bcfg_dict.items())
-    nine_blocks_summary = " | ".join(
+    all_blocks_summary = " | ".join(
         f"{bt}: " + ", ".join(f"{k}={v}" for k, v in ((cfg.get("blocks") or {}).get(bt) or {}).items())
         for bt in ALL_BLOCK_TYPES
     )
@@ -3241,7 +3279,7 @@ def tutor_variables(
                 _LAYER_4,
             ),
             _row("Active block config", active_bcfg_summary, _LAYER_4),
-            _row("All 9 block configs", nine_blocks_summary, _LAYER_4),
+            _row(f"All {len(ALL_BLOCK_TYPES)} block configs", all_blocks_summary, _LAYER_4),
         ]
     )
     for name, value in _active_setting_rows(block, cfg):
@@ -3256,6 +3294,16 @@ def tutor_variables(
             _row(
                 "Dialogue turns",
                 "" if session is None else str(int(block_state.get("dialogue_turns") or 0)),
+                _LAYER_7,
+            ),
+            _row(
+                "Topic index",
+                "" if session is None else str(int(block_state.get("topic_index") or 0)),
+                _LAYER_1,
+            ),
+            _row(
+                "Elaboration turns",
+                "" if session is None else str(int(block_state.get("elaboration_turns") or 0)),
                 _LAYER_7,
             ),
             _row("Eliminated choices", _eliminated_choices(block_state) if session is not None else "", _LAYER_7),
@@ -3340,7 +3388,7 @@ def prompt_for(db: Session, session: KcSession) -> dict:
     )
     bundle["recipe"] = session.recipe
     bundle["step"] = session.step
-    bundle["step_label"] = block_step_label(active, index, max(len(blocks), 1), substep)
+    bundle["step_label"] = block_step_label(active, index, max(len(blocks), 1), substep, block_state)
     return bundle
 
 
@@ -3539,14 +3587,22 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     return result
 
 
-def _chat_step_label(node: KcNode | None, step: int, goal: KcGoal | None = None) -> str:
+def _chat_step_label(
+    node: KcNode | None,
+    step: int,
+    goal: KcGoal | None = None,
+    active_block_state: dict | None = None,
+) -> str:
     del goal
     blocks = stored_blocks(node)
     if not blocks:
         return "This step"
     index = min(max(step, 0), len(blocks) - 1)
-    substep = default_substep_for_block(blocks[index], effective_kc_tutor_config(None))
-    return block_step_label(blocks[index], index, len(blocks), substep)
+    state = active_block_state if isinstance(active_block_state, dict) else {}
+    substep = str(state.get("substep") or "").strip() or default_substep_for_block(
+        blocks[index], effective_kc_tutor_config(None)
+    )
+    return block_step_label(blocks[index], index, len(blocks), substep, state)
 
 
 def _chat_load_options():
@@ -3590,7 +3646,7 @@ def _chat_summary(session: KcSession) -> dict:
         "kc_type": node.kc_type if node is not None else None,
         "recipe": session.recipe,
         "step": session.step,
-        "step_label": _chat_step_label(node, session.step, session.goal),
+        "step_label": _chat_step_label(node, session.step, session.goal, session.active_block_state),
         "status": session.status,
         "score": session.score,
         "created_at": session.created_at,
@@ -3619,7 +3675,7 @@ def kc_chat_detail(db: Session, session_id: uuid.UUID) -> dict:
         "status": session.status,
         "recipe": session.recipe,
         "step": session.step,
-        "step_label": _chat_step_label(node, session.step, session.goal),
+        "step_label": _chat_step_label(node, session.step, session.goal, session.active_block_state),
         "score": session.score,
         "attempts": session.attempts,
         "created_at": session.created_at,
@@ -3898,6 +3954,11 @@ _BLOCK_CATALOG_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ("elaborative_why_prompt", "Elaborative why prompt"),
         ("expected_why_rationale", "Expected why rationale"),
     ),
+    "explanation": (
+        ("block_title", "Block title"),
+        ("topics", "Topics"),
+        ("summary_takeaway", "Summary takeaway"),
+    ),
 }
 
 
@@ -3907,6 +3968,8 @@ def _catalog_field_lines(key: str, label: str, value: object) -> list[str]:
         return _choice_lines(value)
     if key == "steps":
         return _step_lines(value)
+    if key == "topics":
+        return _topic_lines(value)
     if isinstance(value, list):
         items = [
             str(item).strip()
@@ -3970,6 +4033,28 @@ def _step_lines(value: object) -> list[str]:
         elif why:
             rows.append(f"- {why}")
     return ["Steps:", *rows] if rows else []
+
+
+def _topic_lines(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    rows: list[str] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        explanation = str(item.get("explanation") or "").strip()
+        points = str(item.get("key_points") or "").strip()
+        examples = str(item.get("examples_or_analogies") or "").strip()
+        head = title or f"Topic {index}"
+        rows.append(f"{index}. {head}")
+        if explanation:
+            rows.append(f"Explanation: {explanation}")
+        if points:
+            rows.append(f"Key points: {points}")
+        if examples:
+            rows.append(f"Examples: {examples}")
+    return ["Topics:", *rows] if rows else []
 
 
 def _block_field_lines(raw: object) -> list[str]:

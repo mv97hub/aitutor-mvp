@@ -9,7 +9,8 @@ export type KcBlockType =
   | "worked_example"
   | "spot_the_flaw"
   | "teach_back"
-  | "retrieval_check";
+  | "retrieval_check"
+  | "explanation";
 
 export type KcBlock = {
   id: string;
@@ -402,6 +403,8 @@ export type KcTutorSession = {
   completed_blocks?: number;
   completion_pct?: number;
   active_block_index?: number;
+  active_block_type?: string;
+  active_substep?: string;
   active_substep_label?: string;
   block_progress?: KcBlockProgress[];
   reply?: string;

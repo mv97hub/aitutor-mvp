@@ -239,7 +239,7 @@ export const LAYER_FIELDS: LayerField[] = [
   {
     layer: "Layer 1, Component",
     name: "Type",
-    hover: "The active block type for this preview. The nine types are Topic / Goal, Multiple choice, Case study, Socratic, Curiosity, Worked example, Spot the flaw, Teach back, and Retrieval check.",
+    hover: "The active block type for this preview. The ten types are Topic / Goal, Multiple choice, Case study, Socratic, Curiosity, Worked example, Spot the flaw, Teach back, Retrieval check, and Explanatory walkthrough.",
     role: "Names the block the prompt is built for.",
     kind: "Configured",
     where: "KC Creator, /kc-creator",
@@ -299,6 +299,22 @@ export const LAYER_FIELDS: LayerField[] = [
     role: "Adds the counterfactual move when the field is present and self-explanation is on.",
     kind: "Configured",
     where: "KC Creator, /kc-creator, stored in type fields",
+  },
+  {
+    layer: "Layer 1, Component",
+    name: "Substep",
+    hover: "The active substep inside the current block. Leave it empty to use that block's opening substep. An explanatory walkthrough uses explain_topic, then summary_check.",
+    role: "Names which part of the block this preview turn is on.",
+    kind: "Configured",
+    where: "KC Prompt Tester",
+  },
+  {
+    layer: "Layer 1, Component",
+    name: "Topic index",
+    hover: "Which topic an explanatory walkthrough is on, counted from 0. Other block types ignore it.",
+    role: "Selects the topic the explanation prompt teaches.",
+    kind: "Configured",
+    where: "KC Prompt Tester",
   },
   {
     layer: "Layer 1, Component",

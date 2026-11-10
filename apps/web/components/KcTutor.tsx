@@ -1073,6 +1073,24 @@ function KcLesson({
           <p>{replyError}</p>
         </div>
       ) : null}
+      {composerOpen && session.active_block_type === "explanation" && !choosing ? (
+        <div className="kc-explain-chips">
+          {session.active_substep === "summary_check" ? (
+            <button type="button" onClick={() => void sendAnswer("No final questions — let's continue!")}>
+              No final questions — let&apos;s continue!
+            </button>
+          ) : (
+            <>
+              <button type="button" onClick={() => void sendAnswer("Got it — ready for the next topic!")}>
+                Got it — ready for the next topic!
+              </button>
+              <button type="button" onClick={() => void sendAnswer("Can you elaborate with an example?")}>
+                Can you elaborate with an example?
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
       {composerOpen ? (
         <form
           className="ds-composer-seat"
