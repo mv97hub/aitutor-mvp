@@ -3,12 +3,9 @@ import type { ReactNode } from "react";
 
 import { BrandMark } from "@/components/BrandMark";
 
-const BANNER_NAV_LINKS = [
+const LEARNER_BANNER_LINKS = [
   { href: "/kc-tutor", label: "KC Tutor", match: "KC Tutor" },
-  { href: "/kc-progress", label: "KC Progress", match: "KC Course Progress" },
-  { href: "/kc-studio", label: "KC Course Creator", match: "KC Course Creator" },
-  { href: "/kc-creator", label: "KC Creator", match: "KC Creator" },
-  { href: "/admin", label: "Administration", match: "Administration" },
+  { href: "/kc-progress", label: "KC Course Progress", match: "KC Course Progress" },
 ] as const;
 
 export function KcBanner({ name, children }: { name: string; children?: ReactNode }) {
@@ -17,7 +14,7 @@ export function KcBanner({ name, children }: { name: string; children?: ReactNod
       <BrandMark />
       <h1>{name}</h1>
       <nav className="kc-banner-nav" aria-label="Primary navigation">
-        {BANNER_NAV_LINKS.map((item) => {
+        {LEARNER_BANNER_LINKS.map((item) => {
           const isCurrent = name === item.match;
           return (
             <Link
