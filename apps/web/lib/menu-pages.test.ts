@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { kcAndAdminPages, olderPages } from "./menu-pages.ts";
@@ -31,4 +32,12 @@ test("KC and admin links sit above the older pages, with Course Progress in the 
     olderPages.some((page) => page.href === "/kc-progress"),
     false,
   );
+});
+
+test("the learner header links to the child experience and keeps creator and admin off it", () => {
+  const banner = readFileSync(new URL("../components/KcBanner.tsx", import.meta.url), "utf8");
+  const links = banner.slice(banner.indexOf("LEARNER_BANNER_LINKS"), banner.indexOf("] as const"));
+  assert.match(links, /href: "\/learn"/);
+  assert.match(links, /Child Experience/);
+  assert.doesNotMatch(links, /Course Creator|\/admin|\/kc-creator|\/kc-studio/);
 });
