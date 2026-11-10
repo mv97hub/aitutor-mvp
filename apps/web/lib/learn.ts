@@ -247,5 +247,57 @@ export function toneChoices(): [string, string][] {
   return COMMUNICATION_TONE_OPTIONS.map(([id]) => [id, TONE_SHORT[id] ?? id]);
 }
 
+export function learnCoursePath(
+  studentId: string,
+  courseId: string,
+  extra?: { session?: string; kc?: string },
+): string {
+  const params = new URLSearchParams();
+  if (extra?.session) params.set("session", extra.session);
+  if (extra?.kc && !extra.session) params.set("kc", extra.kc);
+  const query = params.toString();
+  const path = `/learn/${studentId}/course/${courseId}`;
+  return query ? `${path}?${query}` : path;
+}
+
+export function topicStars(unit: {
+  completed_blocks?: number;
+  first_try_blocks_count?: number;
+  status?: string;
+  mastery?: string;
+  revealed_blocks_count?: number;
+}): number {
+  const blocks = unit.completed_blocks ?? 0;
+  const first = unit.first_try_blocks_count ?? 0;
+  const finished = unit.status === "completed" ? 1 : 0;
+  const crown = finished && unit.mastery === "known" && (unit.revealed_blocks_count ?? 0) === 0 ? 1 : 0;
+  return blocks * 10 + first * 5 + finished * 25 + crown * 15;
+}
+
+export function starBurst(
+  knownIds: string[],
+  blocks: { id: string; status: string; outcome?: string | null; attempts?: number }[],
+): { award: number; firstTry: boolean; revealed: boolean; seen: string[] } {
+  const seen = [...knownIds];
+  let award = 0;
+  let firstTry = false;
+  for (const block of blocks) {
+    if (block.status !== "completed" || seen.includes(block.id)) continue;
+    seen.push(block.id);
+    award += 10;
+    if (block.outcome === "passed" && (block.attempts ?? 0) <= 1) {
+      award += 5;
+      firstTry = true;
+    }
+  }
+  return { award, firstTry, revealed: blocks.some((block) => !knownIds.includes(block.id) && block.status === "completed" && block.outcome === "revealed"), seen };
+}
+
+export function friendlyStrength(text: string | undefined): string {
+  const value = (text || "").trim();
+  if (!value || /fragile|reveal|fail/i.test(value)) return "You finished this topic.";
+  return value;
+}
+
 export const STAR_TOOLTIP =
   "10 stars for each finished block, 5 extra for a first-try pass, 25 for a finished topic, and 15 more when a topic is mastered with no reveals.";
