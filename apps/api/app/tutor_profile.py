@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import re
 from datetime import datetime, timezone
 
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.engine.choices import (
@@ -17,9 +19,116 @@ from app.engine.choices import (
     VOCABULARY_REGISTERS,
     ids,
 )
-from app.models import TutorProfile, default_kc_tutor_config
+from app.models import (
+    DEFAULT_TUTOR_DESCRIPTION,
+    KcSession,
+    Student,
+    TutorProfile,
+    default_kc_tutor_config,
+)
 
 PROFILE_ID = "default"
+
+AVATAR_PRESET_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "classic_mentor": (
+        "default_circle",
+        "mentor_cap",
+        "open_book",
+        "scroll_quill",
+        "lightbulb",
+        "lantern",
+        "glasses_scholar",
+        "chalkboard",
+    ),
+    "animals_companions": (
+        "owl",
+        "fox",
+        "badger",
+        "dolphin",
+        "turtle",
+        "lion",
+        "penguin",
+        "octopus",
+    ),
+    "mythic_fantasy": (
+        "dragon",
+        "wizard_hat",
+        "phoenix",
+        "unicorn",
+        "griffin",
+        "crystal_orb",
+        "magic_wand",
+        "castle_tower",
+    ),
+    "scifi_space_tech": (
+        "robot",
+        "rocket",
+        "astronaut",
+        "planet_ring",
+        "satellite",
+        "ufo_saucer",
+        "circuit_chip",
+        "telescope",
+    ),
+    "science_discovery": (
+        "atom",
+        "microscope",
+        "beaker",
+        "dna_helix",
+        "magnet",
+        "prism_light",
+        "gears",
+        "globe",
+    ),
+    "exploration_nature": (
+        "compass",
+        "mountain",
+        "magnifying_glass",
+        "treasure_map",
+        "campfire",
+        "oak_tree",
+        "sunburst",
+        "ocean_wave",
+    ),
+    "arts_music_creativity": (
+        "palette",
+        "music_note",
+        "headphones",
+        "theater_masks",
+        "camera",
+        "origami_bird",
+        "paintbrush",
+        "sparkles",
+    ),
+    "sports_games_strategy": (
+        "chess_knight",
+        "trophy",
+        "puzzle_piece",
+        "soccer_ball",
+        "basketball",
+        "gamepad",
+        "target_bullseye",
+        "stopwatch",
+    ),
+}
+
+AVATAR_PRESETS: tuple[str, ...] = tuple(
+    preset
+    for group in AVATAR_PRESET_CATEGORIES.values()
+    for preset in group
+)
+AVATAR_PRESET_SET: frozenset[str] = frozenset(AVATAR_PRESETS)
+
+
+def normalize_avatar_preset(raw: object, *, strict: bool = False) -> str:
+    val = str(raw or "").strip()
+    if not val:
+        return "default_circle"
+    if val in AVATAR_PRESET_SET:
+        return val
+    if strict:
+        raise ValueError(f"avatar_preset must be one of the 64 built-in presets (got {val!r})")
+    return "default_circle"
 
 LAYER_3_ENUMS: dict[str, set[str]] = {
     "persona": ids(PERSONAS),
@@ -42,6 +151,13 @@ DEFAULT_KC_OVERARCHING_CONFIG: dict[str, str] = {
 }
 
 DEFAULT_PROFILE: dict[str, object] = {
+    "id": PROFILE_ID,
+    "name": "Default",
+    "slug": "default",
+    "description": DEFAULT_TUTOR_DESCRIPTION,
+    "avatar_preset": "default_circle",
+    "avatar_url": None,
+    "is_default": True,
     "persona": "coach",
     "vocabulary_register": "adaptive_to_child",
     "interest_weaving": "subtle_natural",
@@ -281,6 +397,20 @@ def normalize_profile(raw: dict | TutorProfile | None, *, strict: bool = False) 
         cfg_raw = raw.kc_tutor_config if isinstance(raw.kc_tutor_config, dict) else {}
         voice_raw = cfg_raw.get("voice") if isinstance(cfg_raw.get("voice"), dict) else {}
         src: dict[str, object] = {
+            "id": getattr(raw, "id", PROFILE_ID) or PROFILE_ID,
+            "name": getattr(raw, "name", "Default") or "Default",
+            "slug": getattr(raw, "slug", "default") or "default",
+            "description": (
+                raw.description
+                if getattr(raw, "description", None) is not None
+                else DEFAULT_TUTOR_DESCRIPTION
+            ),
+            "avatar_preset": normalize_avatar_preset(
+                getattr(raw, "avatar_preset", "default_circle"),
+                strict=False,
+            ),
+            "avatar_url": getattr(raw, "avatar_url", None),
+            "is_default": bool(getattr(raw, "is_default", False) or getattr(raw, "id", "") == PROFILE_ID),
             "instructive": raw.instructive,
             "persona": raw.persona,
             "lexicon": raw.lexicon,
@@ -510,6 +640,12 @@ def effective_kc_tutor_config(profile: TutorProfile | None) -> dict:
 def default_row() -> TutorProfile:
     return TutorProfile(
         id=PROFILE_ID,
+        name="Default",
+        slug="default",
+        description=DEFAULT_TUTOR_DESCRIPTION,
+        avatar_preset="default_circle",
+        avatar_url=None,
+        is_default=True,
         instructive=3,
         persona="curious-co-explorer",
         lexicon="middle-grade-vivid",
@@ -555,8 +691,26 @@ def ensure_default_profile(db: Session) -> TutorProfile:
     """Insert the default row when it is missing. Never overwrite a saved profile."""
     row = db.get(TutorProfile, PROFILE_ID)
     if row is not None:
+        changed = False
         if not row.kc_tutor_config:
             row.kc_tutor_config = default_kc_tutor_config()
+            changed = True
+        if not getattr(row, "name", None):
+            row.name = "Default"
+            changed = True
+        if not getattr(row, "slug", None):
+            row.slug = "default"
+            changed = True
+        if getattr(row, "description", None) is None:
+            row.description = DEFAULT_TUTOR_DESCRIPTION
+            changed = True
+        if not getattr(row, "avatar_preset", None):
+            row.avatar_preset = "default_circle"
+            changed = True
+        if not getattr(row, "is_default", False):
+            row.is_default = True
+            changed = True
+        if changed:
             db.flush()
         return row
     row = default_row()
@@ -568,11 +722,18 @@ def ensure_default_profile(db: Session) -> TutorProfile:
 def reset_default_profile(db: Session) -> TutorProfile:
     """Put the singleton back to the built-in default. Tests use this."""
     row = db.get(TutorProfile, PROFILE_ID)
+    fresh = default_row()
     if row is None:
-        row = default_row()
+        row = fresh
         db.add(row)
     else:
-        _fill(row, default_row())
+        _fill(row, fresh)
+        row.name = "Default"
+        row.slug = "default"
+        row.description = DEFAULT_TUTOR_DESCRIPTION
+        row.avatar_preset = "default_circle"
+        row.avatar_url = None
+        row.is_default = True
     db.flush()
     return row
 
@@ -589,6 +750,74 @@ def load_profile(db: Session | None) -> TutorProfile:
     if row is None:
         return default_row()
     return row
+
+
+def get_profile_by_id_or_slug(db: Session | None, profile_id: object) -> TutorProfile | None:
+    if db is None or profile_id is None:
+        return None
+    key = str(profile_id).strip()
+    if not key:
+        return None
+    row = db.get(TutorProfile, key)
+    if row is not None:
+        return row
+    row = db.scalar(select(TutorProfile).where(TutorProfile.slug == key))
+    if row is not None:
+        return row
+    if key == "1":
+        return db.scalar(select(TutorProfile).where(TutorProfile.is_default.is_(True))) or db.get(
+            TutorProfile, PROFILE_ID
+        )
+    return None
+
+
+def resolve_active_profile(
+    db: Session | None,
+    *,
+    session: KcSession | None = None,
+    student: Student | None = None,
+    profile_id: object = None,
+) -> TutorProfile:
+    """Resolve the active tutor profile: explicit profile_id -> session -> student -> Default."""
+    if db is None:
+        return default_row()
+    if profile_id is not None and str(profile_id).strip():
+        found = get_profile_by_id_or_slug(db, profile_id)
+        if found is not None:
+            return found
+    if session is not None and getattr(session, "tutor_profile_id", None):
+        found = get_profile_by_id_or_slug(db, session.tutor_profile_id)
+        if found is not None:
+            return found
+    if student is not None and getattr(student, "preferred_tutor_profile_id", None):
+        found = get_profile_by_id_or_slug(db, student.preferred_tutor_profile_id)
+        if found is not None:
+            return found
+    return load_profile(db)
+
+
+def list_profiles(db: Session) -> list[TutorProfile]:
+    ensure_default_profile(db)
+    stmt = select(TutorProfile).order_by(TutorProfile.is_default.desc(), TutorProfile.id.asc())
+    return list(db.scalars(stmt).all())
+
+
+def unique_tutor_slug(db: Session, name: str, *, exclude_id: str | None = None) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    base = (cleaned or "tutor")[:96]
+    if base == PROFILE_ID and exclude_id != PROFILE_ID:
+        base = "tutor-default"
+    candidate = base
+    suffix = 2
+    while True:
+        existing_id = db.get(TutorProfile, candidate)
+        existing_slug = db.scalar(select(TutorProfile).where(TutorProfile.slug == candidate))
+        id_clash = existing_id is not None and existing_id.id != exclude_id
+        slug_clash = existing_slug is not None and existing_slug.id != exclude_id
+        if not id_clash and not slug_clash:
+            return candidate
+        candidate = f"{base}-{suffix}"
+        suffix += 1
 
 
 def effective_voice_settings(profile: TutorProfile | dict | None) -> dict[str, object]:
@@ -608,9 +837,17 @@ def effective_voice_settings(profile: TutorProfile | dict | None) -> dict[str, o
     }
 
 
+_UNSET = object()
+
+
 def save_profile(
     db: Session,
     *,
+    profile_id: str | None = None,
+    name: str | None = None,
+    description: str | None = None,
+    avatar_preset: str | None = None,
+    avatar_url: str | None | object = _UNSET,
     instructive: int = 3,
     persona: str = "coach",
     lexicon: str | None = None,
@@ -630,8 +867,32 @@ def save_profile(
     self_explanation: bool = True,
     enrichment: str = "on_request",
     kc_tutor_config: dict | None = None,
+    target_row: TutorProfile | None = None,
 ) -> TutorProfile:
-    row = ensure_default_profile(db)
+    if target_row is not None:
+        row = target_row
+    elif profile_id is not None and str(profile_id).strip():
+        found = get_profile_by_id_or_slug(db, profile_id)
+        if found is None:
+            raise LookupError(f"Tutor profile {profile_id!r} not found")
+        row = found
+    else:
+        row = ensure_default_profile(db)
+
+    if name is not None and str(name).strip():
+        cleaned_name = str(name).strip()[:120]
+        if row.is_default or row.id == PROFILE_ID:
+            row.name = cleaned_name
+        else:
+            row.name = cleaned_name
+    if description is not None:
+        row.description = str(description).strip()
+    if avatar_preset is not None:
+        row.avatar_preset = normalize_avatar_preset(avatar_preset, strict=True)
+    if avatar_url is not _UNSET:
+        cleaned_url = str(avatar_url).strip() if avatar_url else ""
+        row.avatar_url = cleaned_url or None
+
     existing_cfg = row.kc_tutor_config if isinstance(row.kc_tutor_config, dict) else {}
     existing_voice = existing_cfg.get("voice") if isinstance(existing_cfg.get("voice"), dict) else {}
 
@@ -698,3 +959,182 @@ def save_profile(
     row.updated_at = _now()
     db.flush()
     return row
+
+
+def create_tutor_profile(
+    db: Session,
+    *,
+    name: str,
+    description: str | None = None,
+    avatar_preset: str | None = None,
+    avatar_url: str | None = None,
+    source_profile_id: str | int | None = None,
+    overrides: dict[str, object] | None = None,
+) -> TutorProfile:
+    ensure_default_profile(db)
+    cleaned_name = str(name or "").strip()[:120]
+    if not cleaned_name:
+        raise ValueError("Tutor name is required")
+    slug = unique_tutor_slug(db, cleaned_name)
+    source = (
+        get_profile_by_id_or_slug(db, source_profile_id)
+        if source_profile_id is not None and str(source_profile_id).strip()
+        else None
+    )
+    if source is not None:
+        base_norm = normalize_profile(source, strict=False)
+        base_cfg = copy.deepcopy(effective_kc_tutor_config(source))
+        base_desc = source.description or DEFAULT_TUTOR_DESCRIPTION
+        base_avatar = source.avatar_preset or "default_circle"
+        base_avatar_url = source.avatar_url
+    else:
+        base_norm = copy.deepcopy(DEFAULT_PROFILE)
+        base_cfg = default_kc_tutor_config()
+        base_desc = DEFAULT_TUTOR_DESCRIPTION
+        base_avatar = "default_circle"
+        base_avatar_url = None
+
+    ovr = dict(overrides or {})
+    chosen_desc = (
+        str(description).strip()
+        if description is not None
+        else base_desc
+    )
+    chosen_preset = normalize_avatar_preset(
+        avatar_preset if avatar_preset is not None else base_avatar,
+        strict=True,
+    )
+    chosen_url = (
+        (str(avatar_url).strip() or None)
+        if avatar_url is not None
+        else base_avatar_url
+    )
+
+    row = TutorProfile(
+        id=slug,
+        name=cleaned_name,
+        slug=slug,
+        description=chosen_desc,
+        avatar_preset=chosen_preset,
+        avatar_url=chosen_url,
+        is_default=False,
+        instructive=int(ovr.get("instructive") or base_norm.get("instructive") or 3),
+        persona=str(ovr.get("persona") or base_norm.get("persona") or "coach"),
+        lexicon=str(ovr.get("lexicon") or base_norm.get("lexicon") or "adaptive_to_child"),
+        voice_override=bool(ovr.get("voice_override", base_norm.get("voice_override", False))),
+        metaphors=str(ovr.get("metaphors") or base_norm.get("metaphors") or "everyday"),
+        sidekick=str(ovr.get("sidekick") or base_norm.get("sidekick") or "none"),
+        struggle_window=str(ovr.get("struggle_window") or base_norm.get("struggle_window") or "standard"),
+        anti_spoiler=bool(ovr.get("anti_spoiler", True)),
+        one_question=bool(ovr.get("one_question", True)),
+        use_interests=bool(ovr.get("use_interests", True)),
+        stay_on_course=bool(ovr.get("stay_on_course", True)),
+        growth_praise=bool(ovr.get("growth_praise", True)),
+        misconception_policy=str(ovr.get("misconception_policy") or base_norm.get("misconception_policy") or "explain_and_retry_once"),
+        self_explanation=bool(ovr.get("self_explanation", True)),
+        enrichment=str(ovr.get("enrichment") or base_norm.get("enrichment") or "on_request"),
+        kc_tutor_config=base_cfg,
+        updated_at=_now(),
+    )
+    db.add(row)
+    db.flush()
+
+    return save_profile(
+        db,
+        target_row=row,
+        name=cleaned_name,
+        description=chosen_desc,
+        avatar_preset=chosen_preset,
+        avatar_url=chosen_url,
+        instructive=int(ovr.get("instructive") or row.instructive or 3),
+        persona=str(ovr.get("persona") or base_norm.get("persona") or "coach"),
+        lexicon=str(ovr.get("lexicon") or base_norm.get("lexicon") or "adaptive_to_child"),
+        vocabulary_register=str(
+            ovr.get("vocabulary_register")
+            or base_norm.get("vocabulary_register")
+            or "adaptive_to_child"
+        ),
+        interest_weaving=str(
+            ovr.get("interest_weaving")
+            or base_norm.get("interest_weaving")
+            or "subtle_natural"
+        ),
+        humor_and_wit=str(
+            ovr.get("humor_and_wit")
+            or base_norm.get("humor_and_wit")
+            or "light_warm"
+        ),
+        voice_override=bool(ovr.get("voice_override", True)),
+        metaphors=str(ovr.get("metaphors") or base_norm.get("metaphors") or "everyday"),
+        sidekick=str(ovr.get("sidekick") or base_norm.get("sidekick") or "none"),
+        struggle_window=str(ovr.get("struggle_window") or base_norm.get("struggle_window") or "standard"),
+        anti_spoiler=bool(ovr.get("anti_spoiler", True)),
+        one_question=bool(ovr.get("one_question", True)),
+        use_interests=bool(ovr.get("use_interests", True)),
+        stay_on_course=bool(ovr.get("stay_on_course", True)),
+        growth_praise=bool(ovr.get("growth_praise", True)),
+        misconception_policy=str(ovr.get("misconception_policy") or base_norm.get("misconception_policy") or "explain_and_retry_once"),
+        self_explanation=bool(ovr.get("self_explanation", True)),
+        enrichment=str(ovr.get("enrichment") or base_norm.get("enrichment") or "on_request"),
+        kc_tutor_config=ovr.get("kc_tutor_config") if isinstance(ovr.get("kc_tutor_config"), dict) else base_cfg,
+    )
+
+
+def reset_tutor_profile(db: Session, profile_id: str | None = None) -> TutorProfile:
+    ensure_default_profile(db)
+    if profile_id is None or not str(profile_id).strip():
+        row = ensure_default_profile(db)
+    else:
+        found = get_profile_by_id_or_slug(db, profile_id)
+        if found is None:
+            raise LookupError(f"Tutor profile {profile_id!r} not found")
+        row = found
+    fresh_cfg = default_kc_tutor_config()
+    return save_profile(
+        db,
+        target_row=row,
+        name="Default" if (row.is_default or row.id == PROFILE_ID) else row.name,
+        description=DEFAULT_TUTOR_DESCRIPTION if (row.is_default or row.id == PROFILE_ID) else row.description,
+        avatar_preset="default_circle" if (row.is_default or row.id == PROFILE_ID) else row.avatar_preset,
+        avatar_url=None if (row.is_default or row.id == PROFILE_ID) else row.avatar_url,
+        instructive=3,
+        persona=str(DEFAULT_PROFILE["persona"]),
+        lexicon=str(DEFAULT_PROFILE["lexicon"]),
+        vocabulary_register=str(DEFAULT_PROFILE["vocabulary_register"]),
+        interest_weaving=str(DEFAULT_PROFILE["interest_weaving"]),
+        humor_and_wit=str(DEFAULT_PROFILE["humor_and_wit"]),
+        voice_override=False,
+        metaphors=str(DEFAULT_PROFILE["metaphors"]),
+        sidekick=str(DEFAULT_PROFILE["sidekick"]),
+        struggle_window=str(DEFAULT_PROFILE["struggle_window"]),
+        anti_spoiler=True,
+        one_question=True,
+        use_interests=True,
+        stay_on_course=True,
+        growth_praise=True,
+        misconception_policy=str(DEFAULT_PROFILE["misconception_policy"]),
+        self_explanation=True,
+        enrichment=str(DEFAULT_PROFILE["enrichment"]),
+        kc_tutor_config=fresh_cfg,
+    )
+
+
+def delete_tutor_profile(db: Session, profile_id: str) -> None:
+    ensure_default_profile(db)
+    row = get_profile_by_id_or_slug(db, profile_id)
+    if row is None:
+        raise LookupError(f"Tutor profile {profile_id!r} not found")
+    if row.is_default or row.id == PROFILE_ID:
+        raise ValueError("The Default tutor profile cannot be deleted.")
+    db.execute(
+        update(Student)
+        .where(Student.preferred_tutor_profile_id == row.id)
+        .values(preferred_tutor_profile_id=None)
+    )
+    db.execute(
+        update(KcSession)
+        .where(KcSession.tutor_profile_id == row.id)
+        .values(tutor_profile_id=None)
+    )
+    db.delete(row)
+    db.flush()

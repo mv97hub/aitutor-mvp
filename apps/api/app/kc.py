@@ -51,10 +51,13 @@ from app.tutor_profile import (
     effective_kc_tutor_config,
     effective_voice_settings,
     load_profile,
+    normalize_avatar_preset,
+    resolve_active_profile,
 )
 from app.kc_syllabus import component_fields, planning_context
 from app.models import (
     ALL_BLOCK_TYPES,
+    DEFAULT_TUTOR_DESCRIPTION,
     KcCreatorMessage,
     KcEdge,
     KcGoal,
@@ -1688,7 +1691,8 @@ def _close_finished_walk(
     blocks = stored_blocks(node)
     if not _last_block_finished(node, session):
         return
-    cfg = effective_kc_tutor_config(load_profile(db))
+    student = db.get(Student, session.student_id)
+    cfg = effective_kc_tutor_config(resolve_active_profile(db, session=session, student=student))
     state = _get_state(db, session.student_id, node.id)
     if state.status not in {"known", "fragile"}:
         if _walk_fragile(blocks, session.block_results, cfg):
@@ -1775,7 +1779,7 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
     target_ids = {node.id for node in targets}
     states = _state_map(db, student.id, [node.id for node in everyone])
     sessions = _sessions_for(db, student.id, goal.id, [node.id for node in everyone])
-    cfg = effective_kc_tutor_config(load_profile(db))
+    cfg = effective_kc_tutor_config(resolve_active_profile(db, student=student))
     known = sum(1 for node in targets if _is_known(states, node))
     conceptual_known = sum(
         1 for node in targets if node.kc_type == "conceptual" and _is_known(states, node)
@@ -2287,7 +2291,8 @@ def _needs_speech(session: KcSession, messages: list[KcMessage]) -> bool:
 
 def _block_context(db: Session, session: KcSession, node: KcNode | None):
     """The active block, its substep, and whether a short answer still needs a full sentence."""
-    profile = load_profile(db)
+    student = db.get(Student, session.student_id)
+    profile = resolve_active_profile(db, session=session, student=student)
     goal = db.get(KcGoal, session.goal_id)
     messages = _session_messages(db, session)
     cfg = effective_kc_tutor_config(profile)
@@ -2361,9 +2366,27 @@ def _session_block_progress(node: KcNode | None, session: KcSession) -> dict:
     }
 
 
+def _tutor_meta_dict(profile) -> dict:
+    return {
+        "tutor_profile_id": str(getattr(profile, "id", None) or "default"),
+        "tutor_name": str(getattr(profile, "name", None) or "Default"),
+        "tutor_slug": str(getattr(profile, "slug", None) or getattr(profile, "id", None) or "default"),
+        "tutor_description": str(
+            profile.description
+            if getattr(profile, "description", None) is not None
+            else DEFAULT_TUTOR_DESCRIPTION
+        ),
+        "avatar_preset": normalize_avatar_preset(
+            getattr(profile, "avatar_preset", "default_circle"),
+            strict=False,
+        ),
+        "avatar_url": getattr(profile, "avatar_url", None),
+    }
+
+
 def session_out(db: Session, session: KcSession) -> dict:
     node = db.get(KcNode, session.kc_id)
-    _profile, _goal, messages, _fragment, cfg, blocks, index, block, state = _block_context(db, session, node)
+    profile, _goal, messages, _fragment, cfg, blocks, index, block, state = _block_context(db, session, node)
     needs_speech = _needs_speech(session, messages)
     substep = str(state.get("substep") or "")
     choice = None
@@ -2392,11 +2415,19 @@ def session_out(db: Session, session: KcSession) -> dict:
             {"id": str(message.id), "role": message.role, "content": message.content, "seq": message.seq}
             for message in messages
         ],
+        **_tutor_meta_dict(profile),
         **_session_block_progress(node, session),
     }
 
 
-def open_session(db: Session, student: Student, goal: KcGoal, node: KcNode) -> KcSession:
+def open_session(
+    db: Session,
+    student: Student,
+    goal: KcGoal,
+    node: KcNode,
+    *,
+    tutor_profile_id: str | int | None = None,
+) -> KcSession:
     if not goal.ready:
         raise HTTPException(status_code=422, detail="This course is not ready.")
     if not _authored_blocks(node.blocks):
@@ -2405,6 +2436,7 @@ def open_session(db: Session, student: Student, goal: KcGoal, node: KcNode) -> K
     allowed = {item.id for item in targets + load_patches(db, targets)}
     if node.id not in allowed:
         raise HTTPException(status_code=422, detail="That component is not on this course.")
+    active_profile = resolve_active_profile(db, student=student, profile_id=tutor_profile_id)
     existing = db.scalar(
         select(KcSession).where(
             KcSession.student_id == student.id,
@@ -2414,16 +2446,23 @@ def open_session(db: Session, student: Student, goal: KcGoal, node: KcNode) -> K
         )
     )
     if existing is not None:
+        if tutor_profile_id is not None and str(tutor_profile_id).strip():
+            existing.tutor_profile_id = active_profile.id
+            db.flush()
+        elif not existing.tutor_profile_id and student.preferred_tutor_profile_id:
+            existing.tutor_profile_id = active_profile.id
+            db.flush()
         if _last_block_finished(node, existing):
             _close_finished_walk(db, existing, node)
         return existing
     blocks = stored_blocks(node)
-    cfg = effective_kc_tutor_config(load_profile(db))
+    cfg = effective_kc_tutor_config(active_profile)
     substep = default_substep_for_block(blocks[0], cfg) if blocks else "main"
     session = KcSession(
         student_id=student.id,
         goal_id=goal.id,
         kc_id=node.id,
+        tutor_profile_id=active_profile.id if active_profile is not None else None,
         recipe="block_walk",
         step=0,
         status="in_progress",
@@ -2785,6 +2824,7 @@ def tutor_variables(
     student_id: uuid.UUID | None = None,
     course_id: uuid.UUID | None = None,
     session_id: uuid.UUID | None = None,
+    tutor_profile_id: str | int | None = None,
 ) -> list[dict[str, str]]:
     """Named inputs for the current KC chat, grouped under the seven layers."""
     session = db.get(KcSession, session_id) if session_id is not None else None
@@ -2798,7 +2838,7 @@ def tutor_variables(
         student = _student_or_404(db, student_id) if student_id is not None else None
         goal = _course_or_404(db, course_id) if course_id is not None else None
         node = None
-    profile = load_profile(db)
+    profile = resolve_active_profile(db, session=session, student=student, profile_id=tutor_profile_id)
     messages: list[KcMessage] = []
     cfg = effective_kc_tutor_config(profile)
     blocks = stored_blocks(node)
@@ -2806,9 +2846,12 @@ def tutor_variables(
     block = None
     block_state: dict = {}
     if session is not None and node is not None:
-        _profile, _goal, messages, _fragment, cfg, blocks, index, block, block_state = _block_context(
+        profile, _goal, messages, _fragment, cfg, blocks, index, block, block_state = _block_context(
             db, session, node
         )
+        if tutor_profile_id is not None and str(tutor_profile_id).strip():
+            profile = resolve_active_profile(db, session=session, student=student, profile_id=tutor_profile_id)
+            cfg = effective_kc_tutor_config(profile)
     elif blocks:
         block = blocks[0]
         block_state = {"substep": default_substep_for_block(block, cfg)}
@@ -2951,6 +2994,7 @@ def tutor_variables(
         str(max_retries_for_block(block, cfg, goal)) if block is not None else ""
     )
 
+    tutor_meta = _tutor_meta_dict(profile)
     rows.extend(
         [
             _row("Display name", student.display_name if student is not None else "", _LAYER_2),
@@ -2975,6 +3019,9 @@ def tutor_variables(
             _row("Last misconception", "" if session is None else (session.last_misconception or ""), _LAYER_2),
             _row("Minutes used", _minutes_used(db, student, goal), _LAYER_2),
             _row("Support band", band, _LAYER_2),
+            _row("Tutor profile", f"{tutor_meta['tutor_name']} ({tutor_meta['tutor_slug']})", _LAYER_3),
+            _row("Tutor description", tutor_meta["tutor_description"], _LAYER_3),
+            _row("Tutor avatar", tutor_meta["avatar_preset"], _LAYER_3),
             _row("Persona", labeled_choice(PERSONAS, persona_val), _LAYER_3),
             _row("Vocabulary register", labeled_choice(VOCABULARY_REGISTERS, vocab_reg), _LAYER_3),
             _row("Interest weaving", labeled_choice(INTEREST_WEAVING_MODES, weaving_val), _LAYER_3),

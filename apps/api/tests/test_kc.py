@@ -3390,3 +3390,152 @@ def test_kc_progress_analytics_and_accomplishments_opportunities() -> None:
         _clear_progress(storm.id)
         _wipe_zz()
 
+
+def test_multi_tutor_profiles_catalog_and_student_session_resolution() -> None:
+    from app.tutor_profile import AVATAR_PRESET_CATEGORIES, AVATAR_PRESETS
+
+    assert len(AVATAR_PRESET_CATEGORIES) == 8
+    assert all(len(group) == 8 for group in AVATAR_PRESET_CATEGORIES.values())
+    assert len(AVATAR_PRESETS) == 64
+    assert AVATAR_PRESETS[0] == "default_circle"
+
+    storm = _storm()
+    _clear_progress(storm.id)
+    course = _make("zz-multi-tutor", title="ZZ Multi Tutor", description="Tutor switching check.")
+    created_ids: list[str] = []
+    try:
+        listed = client.get("/tutor-profiles")
+        assert listed.status_code == 200, listed.text
+        profiles = listed.json()
+        assert len(profiles) >= 1
+        default_prof = profiles[0]
+        assert default_prof["id"] == "default"
+        assert default_prof["name"] == "Default"
+        assert default_prof["slug"] == "default"
+        assert default_prof["is_default"] is True
+        assert default_prof["avatar_preset"] == "default_circle"
+
+        # Default profile cannot be deleted
+        del_def = client.delete("/tutor-profiles/default")
+        assert del_def.status_code == 400
+
+        # Invalid avatar preset is rejected
+        bad_avatar = client.post(
+            "/tutor-profiles",
+            json={"name": "Invalid Avatar", "avatar_preset": "not_in_64"},
+        )
+        assert bad_avatar.status_code == 422
+
+        # Create a custom tutor profile
+        athena_resp = client.post(
+            "/tutor-profiles",
+            json={
+                "name": "Professor Athena",
+                "description": "Calm Socratic owl mentor who probes reasoning with precision.",
+                "avatar_preset": "owl",
+                "persona": "socratic_mentor",
+                "vocabulary_register": "academic_precision",
+                "humor_and_wit": "none_straightforward",
+                "metaphors": "nature",
+                "sidekick": "barnaby",
+            },
+        )
+        assert athena_resp.status_code == 200, athena_resp.text
+        athena = athena_resp.json()
+        created_ids.append(athena["id"])
+        assert athena["id"] == "professor-athena"
+        assert athena["slug"] == "professor-athena"
+        assert athena["is_default"] is False
+        assert athena["avatar_preset"] == "owl"
+        assert athena["persona"] == "socratic_mentor"
+        assert athena["vocabulary_register"] == "academic_precision"
+
+        # Clone from Professor Athena
+        clone_resp = client.post(
+            "/tutor-profiles",
+            json={
+                "name": "Professor Athena",
+                "description": "Cloned cosmic owl mentor.",
+                "avatar_preset": "telescope",
+                "source_profile_id": athena["id"],
+            },
+        )
+        assert clone_resp.status_code == 200, clone_resp.text
+        cloned = clone_resp.json()
+        created_ids.append(cloned["id"])
+        assert cloned["slug"] == "professor-athena-2"
+        assert cloned["persona"] == "socratic_mentor"
+        assert cloned["vocabulary_register"] == "academic_precision"
+        assert cloned["avatar_preset"] == "telescope"
+
+        # Assign Professor Athena to Storm
+        assign_resp = client.put(
+            f"/students/{storm.id}/tutor-profile",
+            json={"tutor_profile_id": athena["id"]},
+        )
+        assert assign_resp.status_code == 200, assign_resp.text
+        assert assign_resp.json()["preferred_tutor_profile_id"] == athena["id"]
+
+        pushed = client.post(
+            f"/kc/courses/{course['id']}/push",
+            json={"components": [{"code": "zz-mt-fact", "title": "Athena fact"}]},
+        ).json()["components"][0]
+        assert client.put(f"/kc/nodes/{pushed['id']}", json=_component("Athena fact")).status_code == 200
+        assert client.post(f"/kc/courses/{course['id']}/ready").status_code == 200
+
+        sess_resp = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": pushed["id"]},
+        )
+        assert sess_resp.status_code == 200, sess_resp.text
+        sess = sess_resp.json()
+        assert sess["tutor_profile_id"] == athena["id"]
+        assert sess["tutor_name"] == "Professor Athena"
+        assert sess["avatar_preset"] == "owl"
+
+        vars_resp = client.get("/kc/tutor/variables", params={"session_id": sess["id"]})
+        assert vars_resp.status_code == 200, vars_resp.text
+        vars_json = vars_resp.json()
+        assert vars_json["tutor_profile_id"] == athena["id"]
+        assert vars_json["tutor_name"] == "Professor Athena"
+        assert vars_json["avatar_preset"] == "owl"
+        vmap = _variable_map(vars_resp)
+        assert vmap["Tutor profile"] == "Professor Athena (professor-athena)"
+        assert vmap["Tutor avatar"] == "owl"
+        assert "socratic_mentor" in vmap["Persona"]
+
+        prompt_resp = client.get(f"/kc/tutor/sessions/{sess['id']}/prompt")
+        assert prompt_resp.status_code == 200, prompt_resp.text
+        assert "Active tutor profile (Professor Athena): Calm Socratic owl mentor" in prompt_resp.json()["system_prompt"]
+
+        # Switching student's active tutor updates the open session immediately
+        switch_resp = client.put(
+            f"/students/{storm.id}/tutor-profile",
+            json={"tutor_profile_id": cloned["id"]},
+        )
+        assert switch_resp.status_code == 200
+        reloaded = client.get(f"/kc/tutor/sessions/{sess['id']}").json()
+        assert reloaded["tutor_profile_id"] == cloned["id"]
+        assert reloaded["avatar_preset"] == "telescope"
+
+        # Resetting a custom tutor profile restores default Layer 3/4 settings while keeping its name
+        reset_resp = client.post(f"/tutor-profiles/{cloned['id']}/reset")
+        assert reset_resp.status_code == 200
+        assert reset_resp.json()["name"] == "Professor Athena"
+        assert reset_resp.json()["persona"] == "coach"
+
+        # Deleting the custom tutor clears student and session references back to default
+        del_resp = client.delete(f"/tutor-profiles/{cloned['id']}")
+        assert del_resp.status_code == 200
+        created_ids.remove(cloned["id"])
+        fallback_sess = client.get(f"/kc/tutor/sessions/{sess['id']}").json()
+        assert fallback_sess["tutor_profile_id"] == "default"
+        assert fallback_sess["tutor_name"] == "Default"
+    finally:
+        client.put(f"/students/{storm.id}/tutor-profile", json={"tutor_profile_id": None})
+        for pid in created_ids:
+            client.delete(f"/tutor-profiles/{pid}")
+        _clear_progress(storm.id)
+        _wipe_zz()
+
+

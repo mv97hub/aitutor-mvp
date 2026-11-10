@@ -146,6 +146,7 @@ class OpenSessionIn(BaseModel):
     student_id: uuid.UUID
     course_id: uuid.UUID
     kc_id: uuid.UUID
+    tutor_profile_id: str | int | None = None
 
 
 class RestartCourseIn(BaseModel):
@@ -402,7 +403,16 @@ def post_tutor_session(body: OpenSessionIn, db: Session = Depends(get_db)) -> di
     student = _student_or_404(db, body.student_id)
     goal = _course_or_404(db, body.course_id)
     node = _node_or_404(db, body.kc_id)
-    return session_out(db, open_session(db, student, goal, node))
+    return session_out(
+        db,
+        open_session(
+            db,
+            student,
+            goal,
+            node,
+            tutor_profile_id=body.tutor_profile_id,
+        ),
+    )
 
 
 def _session_or_404(db: Session, session_id: uuid.UUID):
@@ -424,12 +434,30 @@ def get_tutor_variables(
     student_id: uuid.UUID | None = None,
     course_id: uuid.UUID | None = None,
     session_id: uuid.UUID | None = None,
+    tutor_profile_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict:
+    from app.kc import _tutor_meta_dict
+    from app.models import KcSession
+    from app.tutor_profile import resolve_active_profile
+
+    variables = tutor_variables(
+        db,
+        student_id=student_id,
+        course_id=course_id,
+        session_id=session_id,
+        tutor_profile_id=tutor_profile_id,
+    )
+    sess = db.get(KcSession, session_id) if session_id is not None else None
+    stud = (
+        _student_or_404(db, sess.student_id)
+        if sess is not None
+        else (_student_or_404(db, student_id) if student_id is not None else None)
+    )
+    profile = resolve_active_profile(db, session=sess, student=stud, profile_id=tutor_profile_id)
     return {
-        "variables": tutor_variables(
-            db, student_id=student_id, course_id=course_id, session_id=session_id
-        )
+        "variables": variables,
+        **_tutor_meta_dict(profile),
     }
 
 

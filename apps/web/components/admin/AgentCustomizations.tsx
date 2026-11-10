@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+import { TutorAvatar, TutorAvatarPicker } from "@/components/TutorAvatar";
 import { AdminFrame } from "@/components/admin/AdminFrame";
 import { ConfigControl } from "@/components/admin/KcTutorConfigFields";
 import { api } from "@/lib/api";
@@ -25,6 +26,7 @@ import {
   type ConfigField,
   type KcTutorConfig,
 } from "@/lib/kc-tutor-config";
+import { DEFAULT_AVATAR_PRESET } from "@/lib/tutor-avatars";
 import type { TutorProfile } from "@/lib/types";
 
 type SectionTab = "voice" | "overarching" | "blocks" | "all";
@@ -139,6 +141,9 @@ const RESEARCH_DEFAULT_VOICE = {
   sidekick: "none",
 } as const;
 
+const DEFAULT_DESCRIPTION =
+  "Standard balanced AI Tutor profile using research-backed guided discovery and adaptive child vocabulary.";
+
 const LEGACY_LEXICON_MAP: Record<string, string> = {
   "1": "everyday_conversational",
   "2": "everyday_conversational",
@@ -208,6 +213,13 @@ function normalizeVoiceDraft(profile: TutorProfile): TutorProfile {
 
   return {
     ...profile,
+    id: profile.id || "default",
+    name: profile.name || "Default",
+    slug: profile.slug || profile.id || "default",
+    description: profile.description ?? DEFAULT_DESCRIPTION,
+    avatar_preset: profile.avatar_preset || DEFAULT_AVATAR_PRESET,
+    avatar_url: profile.avatar_url ?? null,
+    is_default: Boolean(profile.is_default || profile.id === "default"),
     persona,
     vocabulary_register,
     lexicon: vocabulary_register,
@@ -224,6 +236,10 @@ function serializeProfileState(profile: TutorProfile | null): string {
   if (!profile) return "";
   const cfg = kcTutorConfigFrom(profile.kc_tutor_config);
   return JSON.stringify({
+    name: profile.name || "Default",
+    description: profile.description ?? "",
+    avatar_preset: profile.avatar_preset || DEFAULT_AVATAR_PRESET,
+    avatar_url: profile.avatar_url ?? null,
     persona: profile.persona,
     vocabulary_register: profile.vocabulary_register,
     interest_weaving: profile.interest_weaving,
@@ -283,6 +299,8 @@ function Choice({
 }
 
 export function AgentCustomizations() {
+  const [profiles, setProfiles] = useState<TutorProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>("default");
   const [draft, setDraft] = useState<TutorProfile | null>(null);
   const [baseline, setBaseline] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -293,20 +311,33 @@ export function AgentCustomizations() {
   const [activeTab, setActiveTab] = useState<SectionTab>("voice");
   const [selectedBlock, setSelectedBlock] = useState<KcBlockType>("topic_goal");
   const [showAllBlocks, setShowAllBlocks] = useState(false);
+  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
+
+  const [newTutorOpen, setNewTutorOpen] = useState(false);
+  const [newTutorName, setNewTutorName] = useState("");
+  const [newTutorDesc, setNewTutorDesc] = useState("");
+  const [newTutorPreset, setNewTutorPreset] = useState<string>(DEFAULT_AVATAR_PRESET);
+  const [newTutorCloneFrom, setNewTutorCloneFrom] = useState<string>("");
+  const [creatingTutor, setCreatingTutor] = useState(false);
+  const [deletingTutor, setDeletingTutor] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    api<TutorProfile>("/tutor-profile")
-      .then((profile) => {
-        if (!cancelled) {
-          const normalized = normalizeVoiceDraft(profile);
-          setDraft(normalized);
-          setBaseline(serializeProfileState(normalized));
-          setError(null);
+    api<TutorProfile[]>("/tutor-profiles")
+      .then((list) => {
+        if (cancelled) return;
+        const normalizedList = (list.length > 0 ? list : []).map(normalizeVoiceDraft);
+        setProfiles(normalizedList);
+        const first = normalizedList.find((p) => p.is_default) ?? normalizedList[0];
+        if (first) {
+          setSelectedProfileId(first.id || "default");
+          setDraft(first);
+          setBaseline(serializeProfileState(first));
         }
+        setError(null);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load the tutor profile.");
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load tutor profiles.");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -315,6 +346,15 @@ export function AgentCustomizations() {
       cancelled = true;
     };
   }, []);
+
+  function selectProfile(profile: TutorProfile) {
+    const normalized = normalizeVoiceDraft(profile);
+    setSelectedProfileId(normalized.id || "default");
+    setDraft(normalized);
+    setBaseline(serializeProfileState(normalized));
+    setSaved(false);
+    setError(null);
+  }
 
   const hasUnsavedChanges = useMemo(() => {
     if (!draft || !baseline) return false;
@@ -325,6 +365,13 @@ export function AgentCustomizations() {
     () => kcTutorConfigFrom(draft?.kc_tutor_config),
     [draft?.kc_tutor_config],
   );
+
+  function updateIdentityField(
+    patch: Partial<Pick<TutorProfile, "name" | "description" | "avatar_preset" | "avatar_url">>,
+  ) {
+    setSaved(false);
+    setDraft((current) => (current ? { ...current, ...patch } : current));
+  }
 
   function updateVoiceField(key: VoiceFieldSpec["key"], value: string) {
     setSaved(false);
@@ -417,6 +464,66 @@ export function AgentCustomizations() {
     });
   }
 
+  async function handleCreateTutor() {
+    const trimmed = newTutorName.trim();
+    if (!trimmed) {
+      setError("Tutor name is required.");
+      return;
+    }
+    setCreatingTutor(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const created = await api<TutorProfile>("/tutor-profiles", {
+        method: "POST",
+        body: JSON.stringify({
+          name: trimmed,
+          description:
+            newTutorDesc.trim() ||
+            DEFAULT_DESCRIPTION,
+          avatar_preset: newTutorPreset || DEFAULT_AVATAR_PRESET,
+          source_profile_id: newTutorCloneFrom || null,
+        }),
+      });
+      const normalized = normalizeVoiceDraft(created);
+      setProfiles((prev) => [...prev.filter((p) => p.id !== normalized.id), normalized]);
+      setSelectedProfileId(normalized.id || "default");
+      setDraft(normalized);
+      setBaseline(serializeProfileState(normalized));
+      setNewTutorOpen(false);
+      setNewTutorName("");
+      setNewTutorDesc("");
+      setNewTutorPreset(DEFAULT_AVATAR_PRESET);
+      setNewTutorCloneFrom("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create tutor profile.");
+    } finally {
+      setCreatingTutor(false);
+    }
+  }
+
+  async function handleDeleteTutor() {
+    if (!draft || draft.is_default || draft.id === "default") return;
+    setDeletingTutor(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await api<{ deleted: boolean }>(`/tutor-profiles/${encodeURIComponent(draft.id || "")}`, {
+        method: "DELETE",
+      });
+      const remaining = profiles.filter((p) => p.id !== draft.id);
+      setProfiles(remaining);
+      const next = remaining.find((p) => p.is_default) ?? remaining[0] ?? null;
+      if (next) {
+        selectProfile(next);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete tutor profile.");
+    } finally {
+      setDeletingTutor(false);
+    }
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (!draft) return;
@@ -425,31 +532,42 @@ export function AgentCustomizations() {
     setSaved(false);
     try {
       const cfg = kcTutorConfigFrom(draft.kc_tutor_config);
-      const savedProfile = await api<TutorProfile>("/tutor-profile", {
-        method: "PUT",
-        body: JSON.stringify({
-          instructive: draft.instructive || 3,
-          persona: draft.persona,
-          lexicon: draft.vocabulary_register || draft.lexicon || "adaptive_to_child",
-          vocabulary_register: draft.vocabulary_register || "adaptive_to_child",
-          interest_weaving: draft.interest_weaving || "subtle_natural",
-          humor_and_wit: draft.humor_and_wit || "light_warm",
-          voice_override: true,
-          metaphors: draft.metaphors,
-          sidekick: draft.sidekick,
-          struggle_window: draft.struggle_window || "standard",
-          anti_spoiler: true,
-          one_question: true,
-          use_interests: (draft.interest_weaving || "subtle_natural") !== "off",
-          stay_on_course: cfg.overarching.stay_on_course !== "exploratory",
-          growth_praise: cfg.overarching.encouragement_style === "process_praise",
-          misconception_policy: cfg.overarching.misconception_policy || "explain_and_retry_once",
-          self_explanation: true,
-          enrichment: String(cfg.blocks.topic_goal?.enrichment_mode || "on_request"),
-          kc_tutor_config: cfg,
-        }),
-      });
+      const targetId = draft.id || selectedProfileId || "default";
+      const savedProfile = await api<TutorProfile>(
+        `/tutor-profiles/${encodeURIComponent(targetId)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            name: (draft.name || "Default").trim() || "Default",
+            description: (draft.description ?? DEFAULT_DESCRIPTION).trim(),
+            avatar_preset: draft.avatar_preset || DEFAULT_AVATAR_PRESET,
+            avatar_url: draft.avatar_url ?? null,
+            instructive: draft.instructive || 3,
+            persona: draft.persona,
+            lexicon: draft.vocabulary_register || draft.lexicon || "adaptive_to_child",
+            vocabulary_register: draft.vocabulary_register || "adaptive_to_child",
+            interest_weaving: draft.interest_weaving || "subtle_natural",
+            humor_and_wit: draft.humor_and_wit || "light_warm",
+            voice_override: true,
+            metaphors: draft.metaphors,
+            sidekick: draft.sidekick,
+            struggle_window: draft.struggle_window || "standard",
+            anti_spoiler: true,
+            one_question: true,
+            use_interests: (draft.interest_weaving || "subtle_natural") !== "off",
+            stay_on_course: cfg.overarching.stay_on_course !== "exploratory",
+            growth_praise: cfg.overarching.encouragement_style === "process_praise",
+            misconception_policy: cfg.overarching.misconception_policy || "explain_and_retry_once",
+            self_explanation: true,
+            enrichment: String(cfg.blocks.topic_goal?.enrichment_mode || "on_request"),
+            kc_tutor_config: cfg,
+          }),
+        },
+      );
       const normalized = normalizeVoiceDraft(savedProfile);
+      setProfiles((prev) =>
+        prev.map((item) => (item.id === normalized.id ? normalized : item)),
+      );
       setDraft(normalized);
       setBaseline(serializeProfileState(normalized));
       setSaved(true);
@@ -536,11 +654,111 @@ export function AgentCustomizations() {
         <p className="eyebrow">Administration</p>
         <h2>AI Tutor Configuration</h2>
         <p className="help">
-          One shared tutor profile for every student across Layer 3 (Voice &amp; Persona) and Layer 4 (Overarching
-          Teaching Policy &amp; 9 Block Types). Child-specific reading level, response length, explanation format, and
-          interests stay on Layer 2.
+          Configure the Default AI Tutor or create custom AI Tutor profiles with distinct 64-icon SVG avatars,
+          descriptions, Layer 3 Voice &amp; Persona settings, and Layer 4 Overarching &amp; Block Teaching Rules.
         </p>
-        {loading ? <p className="help">Loading the profile.</p> : null}
+
+        <section className="tutor-profile-switcher" aria-label="Tutor Profiles">
+          <div className="tutor-profile-pills" role="tablist" aria-label="Available AI Tutors">
+            {profiles.map((profile) => {
+              const active = profile.id === (draft?.id || selectedProfileId);
+              return (
+                <button
+                  key={profile.id || profile.slug}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  className={`tutor-profile-pill${active ? " is-active" : ""}`}
+                  onClick={() => selectProfile(profile)}
+                >
+                  <TutorAvatar
+                    preset={profile.avatar_preset}
+                    avatarUrl={profile.avatar_url}
+                    name={profile.name}
+                    size="sm"
+                  />
+                  <span className="tutor-profile-pill-name">{profile.name || "Default"}</span>
+                  {profile.is_default || profile.id === "default" ? (
+                    <span className="agent-pill-badge">Default</span>
+                  ) : null}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              className="button ghost tutor-profile-new-btn"
+              onClick={() => {
+                setNewTutorCloneFrom(draft?.id || "default");
+                setNewTutorOpen((open) => !open);
+              }}
+            >
+              + New Tutor
+            </button>
+          </div>
+
+          {newTutorOpen ? (
+            <div className="agent-config-card tutor-new-card" role="region" aria-label="Create New Tutor">
+              <h4>Create New AI Tutor Profile</h4>
+              <div className="tutor-new-grid">
+                <label>
+                  Tutor Name
+                  <input
+                    type="text"
+                    aria-label="New Tutor Name"
+                    placeholder="e.g. Professor Athena, Coach Leo, Captain Spark"
+                    value={newTutorName}
+                    maxLength={120}
+                    onChange={(event) => setNewTutorName(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Copy Settings From
+                  <select
+                    aria-label="Copy Settings From"
+                    value={newTutorCloneFrom}
+                    onChange={(event) => setNewTutorCloneFrom(event.target.value)}
+                  >
+                    <option value="">Research Defaults</option>
+                    {profiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        Clone from {p.name} ({p.slug})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="tutor-new-desc-field">
+                  Tutor Description
+                  <input
+                    type="text"
+                    aria-label="New Tutor Description"
+                    placeholder="Short description shown to learners in the Tutor selector..."
+                    value={newTutorDesc}
+                    onChange={(event) => setNewTutorDesc(event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="rail-actions">
+                <button
+                  type="button"
+                  className="button"
+                  disabled={creatingTutor || !newTutorName.trim()}
+                  onClick={() => void handleCreateTutor()}
+                >
+                  {creatingTutor ? "Creating..." : "Create Tutor"}
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => setNewTutorOpen(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        {loading ? <p className="help">Loading tutor profiles.</p> : null}
         {draft ? (
           <form className="agent-form agent-config-form" onSubmit={(event) => void onSubmit(event)}>
             <header className="agent-sticky-header" aria-label="Search and configuration actions">
@@ -582,6 +800,82 @@ export function AgentCustomizations() {
                 </button>
               </div>
             </header>
+
+            <section className="agent-config-card tutor-identity-card" aria-label="Tutor Identity & Avatar">
+              <div className="tutor-identity-top">
+                <div className="tutor-identity-summary">
+                  <TutorAvatar
+                    preset={draft.avatar_preset}
+                    avatarUrl={draft.avatar_url}
+                    name={draft.name}
+                    size="lg"
+                  />
+                  <div>
+                    <h3>
+                      {draft.name || "Default"}{" "}
+                      {draft.is_default || draft.id === "default" ? (
+                        <span className="agent-custom-badge">Default Profile</span>
+                      ) : (
+                        <span className="help">({draft.slug})</span>
+                      )}
+                    </h3>
+                    <p className="help">{draft.description || DEFAULT_DESCRIPTION}</p>
+                  </div>
+                </div>
+                <div className="tutor-identity-actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    aria-expanded={avatarPickerOpen}
+                    onClick={() => setAvatarPickerOpen((prev) => !prev)}
+                  >
+                    {avatarPickerOpen ? "Hide 64-Icon Avatar Picker" : "Choose Avatar (64 Icons)"}
+                  </button>
+                  {!draft.is_default && draft.id !== "default" ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={deletingTutor}
+                      onClick={() => void handleDeleteTutor()}
+                    >
+                      {deletingTutor ? "Deleting..." : "Delete Tutor"}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="tutor-identity-fields">
+                <label>
+                  Tutor Name
+                  <input
+                    type="text"
+                    aria-label="Tutor Name"
+                    value={draft.name || ""}
+                    maxLength={120}
+                    disabled={Boolean(draft.is_default || draft.id === "default")}
+                    onChange={(event) => updateIdentityField({ name: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Tutor Description
+                  <textarea
+                    aria-label="Tutor Description"
+                    rows={2}
+                    value={draft.description ?? ""}
+                    onChange={(event) => updateIdentityField({ description: event.target.value })}
+                  />
+                </label>
+              </div>
+
+              {avatarPickerOpen ? (
+                <TutorAvatarPicker
+                  preset={draft.avatar_preset || DEFAULT_AVATAR_PRESET}
+                  avatarUrl={draft.avatar_url}
+                  onChangePreset={(nextPreset) => updateIdentityField({ avatar_preset: nextPreset })}
+                  onChangeUrl={(nextUrl) => updateIdentityField({ avatar_url: nextUrl })}
+                />
+              ) : null}
+            </section>
 
             {!isSearching ? (
               <nav className="agent-section-tabs" aria-label="Configuration sections">
@@ -812,7 +1106,7 @@ export function AgentCustomizations() {
                 <p>{error}</p>
               </div>
             ) : null}
-            {saved ? <p className="note">Saved. This profile applies to every student.</p> : null}
+            {saved ? <p className="note">Saved tutor profile &ldquo;{draft.name}&rdquo;.</p> : null}
           </form>
         ) : null}
         {!loading && !draft && error ? (

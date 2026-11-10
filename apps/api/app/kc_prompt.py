@@ -28,6 +28,7 @@ from app.engine.choices import (
 from app.kc_model import BLOCK_LABELS
 from app.models import (
     ALL_BLOCK_TYPES,
+    DEFAULT_TUTOR_DESCRIPTION,
     INTEREST_TAG_LABELS,
     KcGoal,
     KcNode,
@@ -614,6 +615,16 @@ def _how_to_sound(
     missed_turn = turn_kind in {"nudge", "scaffold", "reveal"}
 
     lines: list[str] = [_voice_paragraph(profile)]
+    tutor_name = str(getattr(profile, "name", "") or "").strip()
+    tutor_desc = str(getattr(profile, "description", "") or "").strip()
+    if (tutor_name and tutor_name not in {"Default", "prompt-tester"}) or (
+        tutor_desc and tutor_desc != DEFAULT_TUTOR_DESCRIPTION
+    ):
+        label = tutor_name or "Default"
+        if tutor_desc:
+            lines.append(f"Active tutor profile ({label}): {tutor_desc}")
+        else:
+            lines.append(f"Active tutor profile: {label}.")
     lines.append(
         f"Persona framing: persona ({persona_label}) sets the framing metaphor, while the child's communication_tone ({tone}) governs emotional intensity."
     )

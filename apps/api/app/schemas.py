@@ -40,6 +40,7 @@ class StudentOut(BaseModel):
     tutor_struggle_window: str = "minimum"
     tutor_anti_spoiler: bool = True
     tutor_pacing: str = "short-turns-one-question"
+    preferred_tutor_profile_id: str | None = None
 
 
 class StudentCreate(BaseModel):
@@ -89,6 +90,11 @@ class StudentPatch(BaseModel):
     tutor_struggle_window: str | None = None
     tutor_anti_spoiler: bool | None = None
     tutor_pacing: str | None = None
+    preferred_tutor_profile_id: str | int | None = None
+
+
+class StudentTutorProfileIn(BaseModel):
+    tutor_profile_id: str | int | None = None
 
 
 def _closed(value: str, options: tuple[tuple[str, str], ...], field: str) -> None:
@@ -98,6 +104,10 @@ def _closed(value: str, options: tuple[tuple[str, str], ...], field: str) -> Non
 
 
 class TutorProfileIn(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    description: str | None = None
+    avatar_preset: str | None = None
+    avatar_url: str | None = None
     instructive: int = Field(default=3, ge=1, le=5)
     persona: str = "coach"
     lexicon: str | None = None
@@ -121,8 +131,14 @@ class TutorProfileIn(BaseModel):
     @model_validator(mode="after")
     def closed_choices(self) -> "TutorProfileIn":
         from app.engine.choices import HUMOR_MODES, INTEREST_WEAVING_MODES, VOCABULARY_REGISTERS
-        from app.tutor_profile import map_legacy_lexicon, normalize_kc_tutor_config
+        from app.tutor_profile import (
+            map_legacy_lexicon,
+            normalize_avatar_preset,
+            normalize_kc_tutor_config,
+        )
 
+        if self.avatar_preset is not None:
+            self.avatar_preset = normalize_avatar_preset(self.avatar_preset, strict=True)
         _closed(self.persona, PERSONAS, "persona")
         if self.lexicon is not None:
             if str(self.lexicon) in {"1", "2", "3", "4", "5", "match_child"}:
@@ -162,7 +178,19 @@ class TutorProfileIn(BaseModel):
         return self
 
 
+class TutorProfileCreateIn(TutorProfileIn):
+    name: str = Field(min_length=1, max_length=120)
+    source_profile_id: str | int | None = None
+
+
 class TutorProfileOut(TutorProfileIn):
+    id: str = "default"
+    name: str = "Default"
+    slug: str = "default"
+    description: str = ""
+    avatar_preset: str = "default_circle"
+    avatar_url: str | None = None
+    is_default: bool = False
     vocabulary_register: str = "adaptive_to_child"
     interest_weaving: str = "subtle_natural"
     humor_and_wit: str = "light_warm"

@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "re
 import { KcBanner } from "@/components/KcBanner";
 import { KcDebugPanel } from "@/components/KcDebugPanel";
 import { ChoiceWidget } from "@/components/LessonBlocks";
+import { TutorAvatar } from "@/components/TutorAvatar";
 import { api } from "@/lib/api";
 import type { KcBlockProgress, KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
 import type { KcDebugTurn } from "@/lib/kc-debug";
@@ -25,7 +26,7 @@ import {
 } from "@/lib/kc-layer-fields";
 import { KC_MODELS, kcModel, type KcModel } from "@/lib/kc-models";
 import { tutorPath } from "@/lib/kc-tutor-path";
-import type { KidQuiz, Student } from "@/lib/types";
+import type { KidQuiz, Student, TutorProfile } from "@/lib/types";
 import { useRouter } from "next/navigation";
 
 type SettingsDraft = {
@@ -150,6 +151,7 @@ function GearIcon() {
 export function KcTutor({
   students,
   courses,
+  tutorProfiles = [],
   studentId,
   courseId,
   kcId,
@@ -162,6 +164,7 @@ export function KcTutor({
 }: {
   students: Student[];
   courses: KcTutorCourse[];
+  tutorProfiles?: TutorProfile[];
   studentId: string;
   courseId: string;
   kcId: string;
@@ -188,6 +191,8 @@ export function KcTutor({
   const [addNotice, setAddNotice] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
   const [restartNotice, setRestartNotice] = useState<string | null>(null);
+  const [profiles, setProfiles] = useState<TutorProfile[]>(tutorProfiles);
+  const [switchingTutor, setSwitchingTutor] = useState(false);
   const roster = students.concat(
     createdStudents.filter((student) => !students.some((row) => row.id === student.id)),
   );
@@ -195,6 +200,82 @@ export function KcTutor({
   useEffect(() => {
     setPickedStudent(studentId);
   }, [studentId]);
+
+  useEffect(() => {
+    if (tutorProfiles.length > 0) {
+      setProfiles(tutorProfiles);
+      return;
+    }
+    let cancelled = false;
+    api<TutorProfile[]>("/tutor-profiles")
+      .then((rows) => {
+        if (!cancelled && rows.length > 0) setProfiles(rows);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [tutorProfiles]);
+
+  const resolvedTutorId =
+    session?.tutor_profile_id ||
+    learner?.preferred_tutor_profile_id ||
+    profiles.find((p) => p.is_default)?.id ||
+    "default";
+  const [selectedTutorId, setSelectedTutorId] = useState<string>(resolvedTutorId);
+
+  useEffect(() => {
+    setSelectedTutorId(resolvedTutorId);
+  }, [resolvedTutorId]);
+
+  const activeTutor =
+    profiles.find((p) => p.id === selectedTutorId || p.slug === selectedTutorId) ??
+    profiles.find((p) => p.is_default || p.id === "default") ?? {
+      id: session?.tutor_profile_id || "default",
+      name: session?.tutor_name || "Default",
+      slug: session?.tutor_slug || "default",
+      description:
+        session?.tutor_description ||
+        "Standard balanced AI Tutor profile using research-backed guided discovery and adaptive child vocabulary.",
+      avatar_preset: session?.avatar_preset || "default_circle",
+      avatar_url: session?.avatar_url ?? null,
+      is_default: true,
+      instructive: 3,
+      persona: "coach",
+      lexicon: "adaptive_to_child",
+      voice_override: false,
+      metaphors: "everyday",
+      sidekick: "none",
+      struggle_window: "standard",
+      anti_spoiler: true,
+      one_question: true,
+      use_interests: true,
+      stay_on_course: true,
+      growth_praise: true,
+      misconception_policy: "explain_and_retry_once",
+      self_explanation: true,
+      enrichment: "on_request",
+    };
+
+  async function selectActiveTutor(nextTutorId: string) {
+    setSelectedTutorId(nextTutorId);
+    const targetStudentId = studentId || pickedStudent;
+    if (!targetStudentId || targetStudentId === ADD_NEW_CHILD) return;
+    setSwitchingTutor(true);
+    try {
+      await api<Student>(`/students/${targetStudentId}/tutor-profile`, {
+        method: "PUT",
+        body: JSON.stringify({
+          tutor_profile_id: nextTutorId === "default" ? "default" : nextTutorId,
+        }),
+      });
+      router.refresh();
+    } catch (err) {
+      setRestartNotice(err instanceof Error ? err.message : "Could not switch tutor profile.");
+    } finally {
+      setSwitchingTutor(false);
+    }
+  }
 
   function openSettings() {
     setAddOpen(false);
@@ -414,6 +495,34 @@ export function KcTutor({
               ))}
             </select>
           </label>
+          <div className="kc-tutor-selector" aria-label="Active Tutor Selector">
+            <label>
+              Tutor
+              <div className="kc-tutor-selector-row">
+                <TutorAvatar
+                  preset={activeTutor.avatar_preset}
+                  avatarUrl={activeTutor.avatar_url}
+                  name={activeTutor.name}
+                  size="sm"
+                />
+                <select
+                  aria-label="Tutor"
+                  value={selectedTutorId}
+                  disabled={switchingTutor}
+                  onChange={(event) => void selectActiveTutor(event.target.value)}
+                >
+                  {(profiles.length > 0 ? profiles : [activeTutor]).map((item) => (
+                    <option key={item.id || item.slug} value={item.id || "default"}>
+                      {item.name || "Default"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </label>
+            {activeTutor.description ? (
+              <small className="kc-tutor-selector-desc">{activeTutor.description}</small>
+            ) : null}
+          </div>
           <button className="button" type="submit">
             Open
           </button>
@@ -527,7 +636,7 @@ export function KcTutor({
         {session?.redirect ? <p className="kc-redirect">Next card: {session.redirect.title}</p> : null}
         {!session ? <div className="ds-empty"><p>A card opens one component.</p></div> : null}
         {session ? (
-          <KcLesson key={session.id} session={session} model={model} />
+          <KcLesson key={session.id} session={session} model={model} activeTutor={activeTutor} />
         ) : null}
       </section>
       {debugOpen ? <KcDebugPanel variables={variables} turns={turns} /> : null}
@@ -584,9 +693,11 @@ function pillTitle(item: KcBlockProgress): string {
 function KcLesson({
   session,
   model,
+  activeTutor,
 }: {
   session: KcTutorSession;
   model: string;
+  activeTutor: TutorProfile;
 }) {
   const router = useRouter();
   const routerRef = useRef(router);
@@ -727,6 +838,19 @@ function KcLesson({
           {session.messages.map((message) => (
             <div key={message.id}>
               <div className={`bubble ${message.role === "user" ? "user" : "assistant"}`}>
+                {message.role === "assistant" ? (
+                  <div className="bubble-tutor-head">
+                    <TutorAvatar
+                      preset={session.avatar_preset || activeTutor.avatar_preset}
+                      avatarUrl={session.avatar_url ?? activeTutor.avatar_url}
+                      name={session.tutor_name || activeTutor.name || "Default"}
+                      size="sm"
+                    />
+                    <strong className="bubble-tutor-name">
+                      {session.tutor_name || activeTutor.name || "Default"}
+                    </strong>
+                  </div>
+                ) : null}
                 <p>{message.content}</p>
               </div>
               {quiz && anchor?.id === message.id ? (
