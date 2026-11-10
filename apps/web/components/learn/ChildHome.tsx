@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { BrandMark } from "@/components/BrandMark";
 import { TutorAvatar } from "@/components/TutorAvatar";
 import { BasicsFields, ChildMark, PersonaFields } from "@/components/learn/ChildFields";
 import { api } from "@/lib/api";
@@ -101,6 +102,7 @@ export function ChildHome({
 
   return (
     <main className="learn-shell">
+      <BrandMark />
       <header className="learn-home-bar">
         <div className="learn-who">
           <ChildMark

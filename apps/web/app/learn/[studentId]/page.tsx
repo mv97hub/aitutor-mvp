@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { BrandMark } from "@/components/BrandMark";
 import { ChildHome } from "@/components/learn/ChildHome";
 import { api } from "@/lib/api";
 import type { KcTutorCourse } from "@/lib/kc";
@@ -30,6 +31,7 @@ export default async function ChildHomePage({ params }: { params: Promise<{ stud
   if (!student) {
     return (
       <main className="learn-shell">
+        <BrandMark />
         <h1>That learner is not on this device.</h1>
         <p className="lede">{error || "Pick someone from the learner list."}</p>
         <Link href="/learn" className="learn-btn primary">
