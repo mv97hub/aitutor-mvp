@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import { BrandMark } from "@/components/BrandMark";
 import { TutorAvatar } from "@/components/TutorAvatar";
 import type { KcBlockProgress, KcProgress, KcTutorSession } from "@/lib/kc";
 import { displayChildStatus, topicStars } from "@/lib/learn";
@@ -41,6 +42,7 @@ export function LearnCourseBar({
 }) {
   return (
     <header className="learn-course-bar">
+      <BrandMark />
       <div className="learn-course-title">
         <Link href={homeHref} className="learn-back">
           ← Back to My Courses

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { BrandMark } from "@/components/BrandMark";
 import { BasicsFields, ChildMark, LearnStyleFields, PersonaFields } from "@/components/learn/ChildFields";
 import { api } from "@/lib/api";
 import {
@@ -22,6 +23,7 @@ export function ChildChooser({ learners, error }: { learners: LearnerCard[]; err
 
   return (
     <main className="learn-shell">
+      <BrandMark />
       <section className="learn-chooser">
         <p className="eyebrow">Child experience</p>
         <h1>Who&apos;s learning today?</h1>
