@@ -92,9 +92,6 @@ test("the form skips the model and keeps computed fields read-only", () => {
   assert.deepEqual([...READ_ONLY_DERIVED], [
     "Move name",
     "Evidence",
-    "Effective struggle window",
-    "Effective enrichment",
-    "Asks why",
   ]);
   for (const name of READ_ONLY_DERIVED) {
     assert.equal(isReadOnly(name), true);
@@ -104,9 +101,14 @@ test("the form skips the model and keeps computed fields read-only", () => {
   assert.equal("effective_struggle_window" in payload, false);
   assert.equal("move_name" in payload, false);
   assert.equal("asks_why" in payload, false);
-  assert.equal(payload.instructive, 3);
   assert.equal(payload.unit_close, "no");
-  assert.equal(payload.persona, "curious-co-explorer");
+  assert.equal(payload.persona, "coach");
+  assert.equal(payload.vocabulary_register, "adaptive_to_child");
+  assert.equal(payload.interest_weaving, "subtle_natural");
+  assert.equal(payload.humor_and_wit, "light_warm");
+  assert.equal(payload.instructional_stance, "guided_discovery");
+  assert.equal(payload.scaffolding_escalation, "progressive_nudge_then_scaffold");
+  assert.equal(payload.prerequisite_support_policy, "inline_micro_recap");
   assert.deepEqual(payload.type_fields, { fact: "kept" });
   assert.deepEqual(payload.blocks, []);
 });
@@ -244,15 +246,17 @@ test("choosing a child fills the layer 2 settings and leaves session fields", ()
   assert.equal(body.support_band, "stretch");
 });
 
-test("the payload keeps an edited instructive level and unit close", () => {
+test("the payload keeps edited Layer 3, Layer 4, and unit close fields", () => {
   const values = emptyTesterValues();
-  values.Instructive = "5";
+  values["Instructional stance"] = "direct_instruction_first";
+  values["Vocabulary register"] = "academic_precision";
   values["Unit close"] = "yes";
   values["Rubric lines"] = "States 180.\nNames the triangle.";
   values.Misconceptions = "They add to 90. -> right-angle";
   values.Interests = "kites, maps";
   const body = testerPayload(values);
-  assert.equal(body.instructive, 5);
+  assert.equal(body.instructional_stance, "direct_instruction_first");
+  assert.equal(body.vocabulary_register, "academic_precision");
   assert.equal(body.unit_close, "yes");
   assert.deepEqual(body.rubric, ["States 180.", "Names the triangle."]);
   assert.deepEqual(body.misconceptions, [{ wrong_move: "They add to 90.", broken_kc: "right-angle" }]);
@@ -261,15 +265,9 @@ test("the payload keeps an edited instructive level and unit close", () => {
     system_prompt: "prompt",
     move_name: "Retrieve",
     evidence: "fact",
-    effective_struggle_window: "minimum (1 tries)",
-    effective_enrichment: "direct",
-    asks_why: "no",
   });
   assert.equal(shown["Move name"], "Retrieve");
-  assert.equal(shown["Effective struggle window"], "minimum (1 tries)");
-  assert.equal(shown["Effective enrichment"], "direct");
-  assert.equal(shown["Asks why"], "no");
-  assert.equal(isReadOnly("Effective struggle window"), true);
+  assert.equal(shown.Evidence, "fact");
 });
 
 test("the page posts to the read-only route and the menu link is the tester", () => {

@@ -175,7 +175,7 @@ def test_prompt_tester_matches_build_kc_prompt_and_writes_nothing() -> None:
         assert "Reveal the goal after one missed answer." in timed.json()["system_prompt"]
         assert "Do not wait to be asked." in timed.json()["system_prompt"]
         assert "Course kind is time_boxed" in timed.json()["system_prompt"]
-        unknown = _body(persona="wizard")
+        unknown = _body(persona="not-a-persona")
         rejected = client.post("/kc/prompt-tester", json=unknown)
         assert rejected.status_code == 422, rejected.text
         assert "Persona must be one of:" in rejected.text

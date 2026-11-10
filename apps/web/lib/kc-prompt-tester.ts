@@ -6,18 +6,30 @@ import {
   EXPLANATION_STYLE_OPTIONS,
   EXPRESSION_STYLE_OPTIONS,
   GRADE_BAND_OPTIONS,
+  HUMOR_AND_WIT_OPTIONS,
   INTEREST_TAG_OPTIONS,
+  INTEREST_WEAVING_OPTIONS,
   LAYER_FIELDS,
   LAYER_HEADINGS,
   LEARNING_SUPPORT_OPTIONS,
+  METAPHOR_OPTIONS,
+  PERSONA_OPTIONS,
   READING_LEVEL_OPTIONS,
   RESPONSE_LENGTH_OPTIONS,
+  SIDEKICK_OPTIONS,
+  VOCABULARY_REGISTER_OPTIONS,
   gradeBandForAge,
   normalizeExplanationStyleOption,
   type LayerField,
 } from "./kc-layer-fields.ts";
 import { BLOCK_LABELS, BLOCK_TYPES, isBlockType } from "./kc-blocks.ts";
-import { AUDIENCES, KINDS, type KcBlock, type KcComponent, type KcCourse } from "./kc.ts";
+import { AUDIENCES, KINDS, type KcBlock, type KcBlockType, type KcComponent, type KcCourse } from "./kc.ts";
+import {
+  DEFAULT_KC_TUTOR_CONFIG,
+  OVERARCHING_FIELDS,
+  kcTutorConfigFrom,
+  type KcTutorConfig,
+} from "./kc-tutor-config.ts";
 import type { Student, TutorProfile } from "./types.ts";
 
 export { LAYER_HEADINGS, INTEREST_TAG_OPTIONS };
@@ -25,36 +37,31 @@ export { LAYER_HEADINGS, INTEREST_TAG_OPTIONS };
 export const READ_ONLY_DERIVED = [
   "Move name",
   "Evidence",
-  "Effective struggle window",
-  "Effective enrichment",
-  "Asks why",
 ] as const;
 
 export const DEFAULT_TUTOR_PROFILE: TutorProfile = {
   instructive: 3,
-  persona: "curious-co-explorer",
-  lexicon: "middle-grade-vivid",
+  persona: "coach",
+  lexicon: "adaptive_to_child",
+  vocabulary_register: "adaptive_to_child",
+  interest_weaving: "subtle_natural",
+  humor_and_wit: "light_warm",
   voice_override: false,
-  metaphors: "playground-sports",
-  sidekick: "bumbling-partner",
+  metaphors: "everyday",
+  sidekick: "none",
   struggle_window: "standard",
   anti_spoiler: true,
   one_question: true,
   use_interests: true,
   stay_on_course: true,
   growth_praise: true,
-  misconception_policy: "retry_once",
+  misconception_policy: "explain_and_retry_once",
   self_explanation: true,
   enrichment: "on_request",
+  kc_tutor_config: DEFAULT_KC_TUTOR_CONFIG,
 };
 
 const YES_NO = new Set([
-  "Use interests",
-  "Stay on course",
-  "Anti-spoiler",
-  "One question",
-  "Growth-mindset praise",
-  "Self-explanation",
   "Choice widget",
   "Help requested",
   "Redirect pending",
@@ -102,52 +109,29 @@ const UNIT_FIELDS = [
   "Course position",
 ] as const;
 
+function overarchingOptions(key: string): readonly (readonly [string, string])[] {
+  const field = OVERARCHING_FIELDS.find((item) => item.key === key);
+  return field && field.kind === "enum" ? field.options : [];
+}
+
 export const FIELD_OPTIONS: Record<string, readonly (readonly [string, string])[]> = {
   Audience: AUDIENCES.map((band) => [band, band] as const),
   Kind: KINDS.map((kind) => [kind.id, kind.label] as const),
   Type: [["", "Unset"], ...BLOCK_TYPES.map((type) => [type, BLOCK_LABELS[type]] as const)],
-  Persona: [
-    ["curious-co-explorer", "Curious co-explorer"],
-    ["tactical-coach", "Tactical coach"],
-    ["debate-moderator", "Debate moderator"],
-    ["patient-explainer", "Patient explainer"],
-  ],
-  Lexicon: [
-    ["early-concrete", "Early concrete"],
-    ["middle-grade-vivid", "Middle-grade vivid"],
-    ["precise-visual", "Precise visual"],
-    ["analytical-high-school", "Analytical high-school"],
-  ],
-  Metaphors: [
-    ["playground-sports", "Playground and sports"],
-    ["buildings-machines", "Buildings and machines"],
-    ["policy-cause", "Policy and cause-and-effect"],
-    ["none", "None (plain language only)"],
-  ],
-  Sidekick: [
-    ["bumbling-partner", "Bumbling partner"],
-    ["rookie-picture", "Rookie who trusts a picture"],
-    ["pundit", "Pundit who skips the chain"],
-    ["off", "Off"],
-  ],
-  Instructive: [
-    ["1", "1. Open on the question."],
-    ["2", "2. One short line, then the question."],
-    ["3", "3. Name the goal, then ask."],
-    ["4", "4. Explain the idea, then ask."],
-    ["5", "5. Teach a little more, then ask."],
-  ],
-  "Struggle window": [
-    ["short", "Minimum"],
-    ["standard", "Standard"],
-    ["long", "Wide"],
-  ],
-  Enrichment: [
-    ["direct", "Direct"],
-    ["on_request", "On request"],
-    ["offer", "Offer"],
-  ],
-  "Misconception policy": [["retry_once", "Retry once"]],
+  Persona: PERSONA_OPTIONS,
+  "Vocabulary register": VOCABULARY_REGISTER_OPTIONS,
+  "Interest weaving": INTEREST_WEAVING_OPTIONS,
+  Metaphors: METAPHOR_OPTIONS,
+  "Humor and wit": HUMOR_AND_WIT_OPTIONS,
+  Sidekick: SIDEKICK_OPTIONS,
+  "Orient framing": overarchingOptions("orient_framing"),
+  "Instructional stance": overarchingOptions("instructional_stance"),
+  "Scaffolding escalation": overarchingOptions("scaffolding_escalation"),
+  "Stay on course": overarchingOptions("stay_on_course"),
+  "Misconception policy": overarchingOptions("misconception_policy"),
+  "Prerequisite support policy": overarchingOptions("prerequisite_support_policy"),
+  "Encouragement style": overarchingOptions("encouragement_style"),
+  "Close summary depth": overarchingOptions("close_summary_depth"),
   "Support band": [
     ["ready", "Ready"],
     ["stretch", "Stretch"],
@@ -229,18 +213,21 @@ export type PromptTesterRequest = {
   support_band: string;
   persona: string;
   lexicon: string;
+  vocabulary_register: string;
+  interest_weaving: string;
   metaphors: string;
+  humor_and_wit: string;
   sidekick: string;
   use_interests: string;
-  instructive: number;
-  struggle_window: string;
+  orient_framing: string;
+  instructional_stance: string;
+  scaffolding_escalation: string;
   stay_on_course: string;
-  anti_spoiler: string;
-  one_question: string;
   misconception_policy: string;
-  enrichment: string;
-  growth_praise: string;
-  self_explanation: string;
+  prerequisite_support_policy: string;
+  encouragement_style: string;
+  close_summary_depth: string;
+  kc_tutor_config: KcTutorConfig;
   reveals: number;
   off_course_count: number;
   rubric_met: string[];
@@ -258,9 +245,11 @@ export type PromptTesterResult = {
   system_prompt: string;
   move_name: string;
   evidence: string;
-  effective_struggle_window: string;
-  effective_enrichment: string;
-  asks_why: string;
+  active_block_type?: string;
+  active_block_type_label?: string;
+  active_substep?: string;
+  active_substep_label?: string;
+  max_retries?: number;
 };
 
 export type TesterUnit = {
@@ -340,14 +329,14 @@ export function prerequisiteStatus(codes: string[]): string {
   return codes.map((code) => code.trim()).filter(Boolean).map((code) => `${code}: unknown`).join("; ");
 }
 
-function yesNo(value: boolean | undefined, fallback = true): "yes" | "no" {
-  if (value === undefined) return fallback ? "yes" : "no";
-  return value ? "yes" : "no";
-}
-
 export function emptyTesterValues(profile: TutorProfile = DEFAULT_TUTOR_PROFILE): TesterValues {
   const values: TesterValues = {};
   for (const field of formFields()) values[field.name] = "";
+  const cfg = kcTutorConfigFrom(profile.kc_tutor_config);
+  const vocab = profile.vocabulary_register || profile.lexicon || "adaptive_to_child";
+  const weaving =
+    profile.interest_weaving || (profile.use_interests === false ? "off" : "subtle_natural");
+  const humor = profile.humor_and_wit || "light_warm";
   return {
     ...values,
     Audience: "9-11",
@@ -368,20 +357,22 @@ export function emptyTesterValues(profile: TutorProfile = DEFAULT_TUTOR_PROFILE)
     Stability: "0",
     "Minutes used": "0",
     "Support band": "ready",
-    Persona: profile.persona,
-    Lexicon: profile.lexicon,
-    Metaphors: profile.metaphors,
-    Sidekick: profile.sidekick,
-    "Use interests": yesNo(profile.use_interests),
-    Instructive: String(profile.instructive || 3),
-    "Struggle window": profile.struggle_window || "standard",
-    "Stay on course": yesNo(profile.stay_on_course),
-    "Anti-spoiler": yesNo(profile.anti_spoiler),
-    "One question": yesNo(profile.one_question),
-    "Misconception policy": profile.misconception_policy || "retry_once",
-    Enrichment: profile.enrichment || "on_request",
-    "Growth-mindset praise": yesNo(profile.growth_praise),
-    "Self-explanation": yesNo(profile.self_explanation),
+    Persona: profile.persona || "coach",
+    "Vocabulary register": vocab,
+    "Interest weaving": weaving,
+    Metaphors: profile.metaphors || "everyday",
+    "Humor and wit": humor,
+    Sidekick: profile.sidekick || "none",
+    "Orient framing": cfg.overarching.orient_framing || "elaborate_outline",
+    "Instructional stance": cfg.overarching.instructional_stance || "guided_discovery",
+    "Scaffolding escalation":
+      cfg.overarching.scaffolding_escalation || "progressive_nudge_then_scaffold",
+    "Stay on course": cfg.overarching.stay_on_course || "brief_answer_then_return",
+    "Misconception policy": cfg.overarching.misconception_policy || "explain_and_retry_once",
+    "Prerequisite support policy":
+      cfg.overarching.prerequisite_support_policy || "inline_micro_recap",
+    "Encouragement style": cfg.overarching.encouragement_style || "process_praise",
+    "Close summary depth": cfg.overarching.close_summary_depth || "diagnostic_strengths_and_gaps",
     "Reveals used": "0",
     "Off-course count": "0",
     Affect: "",
@@ -500,11 +491,69 @@ export function blocksForUnit(unit: KcComponent): KcBlock[] {
     }));
 }
 
+export function activeBlockTypeFor(values: TesterValues, blocks: KcBlock[] = []): KcBlockType {
+  const moveIndex = Number(values["Move index"] || "1");
+  const idx = blocks.length
+    ? Math.min(Math.max(Number.isFinite(moveIndex) ? moveIndex : 1, 1), blocks.length) - 1
+    : 0;
+  const fromBlocks = blocks[idx]?.type;
+  if (fromBlocks && isBlockType(fromBlocks)) return fromBlocks;
+  const fromTypeField = values.Type ?? "";
+  if (isBlockType(fromTypeField)) return fromTypeField;
+  return "topic_goal";
+}
+
 export function testerPayload(
   values: TesterValues,
   typeFields: Record<string, unknown> = {},
   blocks: KcBlock[] = [],
+  tutorConfig?: KcTutorConfig,
 ): PromptTesterRequest {
+  const baseCfg = kcTutorConfigFrom(tutorConfig);
+  const orient_framing = values["Orient framing"] || baseCfg.overarching.orient_framing || "elaborate_outline";
+  const instructional_stance =
+    values["Instructional stance"] || baseCfg.overarching.instructional_stance || "guided_discovery";
+  const scaffolding_escalation =
+    values["Scaffolding escalation"] ||
+    baseCfg.overarching.scaffolding_escalation ||
+    "progressive_nudge_then_scaffold";
+  const stay_on_course =
+    values["Stay on course"] || baseCfg.overarching.stay_on_course || "brief_answer_then_return";
+  const misconception_policy =
+    values["Misconception policy"] || baseCfg.overarching.misconception_policy || "explain_and_retry_once";
+  const prerequisite_support_policy =
+    values["Prerequisite support policy"] ||
+    baseCfg.overarching.prerequisite_support_policy ||
+    "inline_micro_recap";
+  const encouragement_style =
+    values["Encouragement style"] || baseCfg.overarching.encouragement_style || "process_praise";
+  const close_summary_depth =
+    values["Close summary depth"] ||
+    baseCfg.overarching.close_summary_depth ||
+    "diagnostic_strengths_and_gaps";
+
+  const vocabulary_register = values["Vocabulary register"] || values.Lexicon || "adaptive_to_child";
+  const interest_weaving =
+    values["Interest weaving"] || (values["Use interests"] === "no" ? "off" : "subtle_natural");
+  const humor_and_wit = values["Humor and wit"] || "light_warm";
+  const persona = values.Persona || "coach";
+  const metaphors = values.Metaphors || "everyday";
+  const sidekick = values.Sidekick || "none";
+
+  const kc_tutor_config: KcTutorConfig = {
+    overarching: {
+      orient_framing,
+      instructional_stance,
+      scaffolding_escalation,
+      stay_on_course,
+      misconception_policy,
+      prerequisite_support_policy,
+      encouragement_style,
+      close_summary_depth,
+    },
+    blocks: baseCfg.blocks,
+  };
+
   return {
     course_title: values["Course title"] ?? "",
     course_description: values["Course description"] ?? "",
@@ -549,20 +598,23 @@ export function testerPayload(
     last_misconception: values["Last misconception"] ?? "",
     minutes_used: whole(values["Minutes used"] ?? "", 0),
     support_band: values["Support band"] || "ready",
-    persona: values.Persona,
-    lexicon: values.Lexicon,
-    metaphors: values.Metaphors,
-    sidekick: values.Sidekick,
-    use_interests: values["Use interests"] === "no" ? "no" : "yes",
-    instructive: whole(values.Instructive ?? "", 3),
-    struggle_window: values["Struggle window"] || "standard",
-    stay_on_course: values["Stay on course"] === "no" ? "no" : "yes",
-    anti_spoiler: values["Anti-spoiler"] === "no" ? "no" : "yes",
-    one_question: values["One question"] === "no" ? "no" : "yes",
-    misconception_policy: values["Misconception policy"] || "retry_once",
-    enrichment: values.Enrichment || "on_request",
-    growth_praise: values["Growth-mindset praise"] === "no" ? "no" : "yes",
-    self_explanation: values["Self-explanation"] === "no" ? "no" : "yes",
+    persona,
+    lexicon: vocabulary_register,
+    vocabulary_register,
+    interest_weaving,
+    metaphors,
+    humor_and_wit,
+    sidekick,
+    use_interests: interest_weaving === "off" ? "no" : "yes",
+    orient_framing,
+    instructional_stance,
+    scaffolding_escalation,
+    stay_on_course,
+    misconception_policy,
+    prerequisite_support_policy,
+    encouragement_style,
+    close_summary_depth,
+    kc_tutor_config,
     reveals: whole(values["Reveals used"] ?? "", 0),
     off_course_count: whole(values["Off-course count"] ?? "", 0),
     rubric_met: pieces(values["Rubric points met"] ?? ""),
@@ -582,8 +634,5 @@ export function applyResult(values: TesterValues, result: PromptTesterResult): T
     ...values,
     "Move name": result.move_name,
     Evidence: result.evidence,
-    "Effective struggle window": result.effective_struggle_window,
-    "Effective enrichment": result.effective_enrichment,
-    "Asks why": result.asks_why,
   };
 }

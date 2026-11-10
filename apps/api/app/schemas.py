@@ -99,11 +99,14 @@ def _closed(value: str, options: tuple[tuple[str, str], ...], field: str) -> Non
 
 class TutorProfileIn(BaseModel):
     instructive: int = Field(default=3, ge=1, le=5)
-    persona: str
-    lexicon: str
+    persona: str = "coach"
+    lexicon: str | None = None
+    vocabulary_register: str | None = None
+    interest_weaving: str | None = None
+    humor_and_wit: str | None = None
     voice_override: bool = False
-    metaphors: str
-    sidekick: str
+    metaphors: str = "everyday"
+    sidekick: str = "none"
     struggle_window: str = "standard"
     anti_spoiler: bool = True
     one_question: bool = True
@@ -117,15 +120,41 @@ class TutorProfileIn(BaseModel):
 
     @model_validator(mode="after")
     def closed_choices(self) -> "TutorProfileIn":
-        from app.tutor_profile import normalize_kc_tutor_config
+        from app.engine.choices import HUMOR_MODES, INTEREST_WEAVING_MODES, VOCABULARY_REGISTERS
+        from app.tutor_profile import map_legacy_lexicon, normalize_kc_tutor_config
 
         _closed(self.persona, PERSONAS, "persona")
-        _closed(self.lexicon, VOICES, "lexicon")
+        if self.lexicon is not None:
+            if str(self.lexicon) in {"1", "2", "3", "4", "5", "match_child"}:
+                self.vocabulary_register = self.vocabulary_register or map_legacy_lexicon(self.lexicon)
+                self.lexicon = self.vocabulary_register
+            else:
+                _closed(self.lexicon, VOICES, "lexicon")
+        if self.vocabulary_register is not None:
+            if str(self.vocabulary_register) in {"1", "2", "3", "4", "5", "match_child"}:
+                self.vocabulary_register = map_legacy_lexicon(self.vocabulary_register)
+            _closed(self.vocabulary_register, VOCABULARY_REGISTERS, "vocabulary_register")
+            if self.lexicon is None:
+                self.lexicon = self.vocabulary_register
+        if self.lexicon is None:
+            self.lexicon = self.vocabulary_register or "adaptive_to_child"
+        if self.interest_weaving is not None:
+            _closed(self.interest_weaving, INTEREST_WEAVING_MODES, "interest_weaving")
+            self.use_interests = self.interest_weaving != "off"
+        if self.humor_and_wit is not None:
+            _closed(self.humor_and_wit, HUMOR_MODES, "humor_and_wit")
         _closed(self.metaphors, METAPHORS, "metaphors")
         _closed(self.sidekick, SIDEKICKS, "sidekick")
         _closed(self.struggle_window, STRUGGLE_WINDOWS, "struggle_window")
-        if self.misconception_policy not in {"retry_once", "explain_and_retry_once", "immediate_redirect"}:
-            raise ValueError("misconception_policy must be retry_once, explain_and_retry_once, or immediate_redirect")
+        if self.misconception_policy not in {
+            "retry_once",
+            "nudge_without_naming",
+            "explain_and_retry_once",
+            "immediate_redirect",
+        }:
+            raise ValueError(
+                "misconception_policy must be retry_once, nudge_without_naming, explain_and_retry_once, or immediate_redirect"
+            )
         if self.enrichment not in {"direct", "on_request", "offer"}:
             raise ValueError("enrichment must be one of: direct, on_request, offer")
         if self.kc_tutor_config is not None:
@@ -134,6 +163,9 @@ class TutorProfileIn(BaseModel):
 
 
 class TutorProfileOut(TutorProfileIn):
+    vocabulary_register: str = "adaptive_to_child"
+    interest_weaving: str = "subtle_natural"
+    humor_and_wit: str = "light_warm"
     kc_tutor_config: dict = Field(default_factory=dict)
     updated_at: datetime
 

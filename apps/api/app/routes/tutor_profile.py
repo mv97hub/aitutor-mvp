@@ -4,16 +4,34 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import TutorProfile
 from app.schemas import TutorProfileIn, TutorProfileOut
-from app.tutor_profile import effective_kc_tutor_config, ensure_default_profile, save_profile
+from app.tutor_profile import (
+    effective_kc_tutor_config,
+    effective_voice_settings,
+    ensure_default_profile,
+    save_profile,
+)
 
 router = APIRouter()
 
 
 def _out(row: TutorProfile) -> TutorProfileOut:
+    voice = effective_voice_settings(row)
+    cfg = effective_kc_tutor_config(row)
+    cfg["voice"] = {
+        "persona": str(voice["persona"]),
+        "vocabulary_register": str(voice["vocabulary_register"]),
+        "interest_weaving": str(voice["interest_weaving"]),
+        "metaphors": str(voice["metaphors"]),
+        "humor_and_wit": str(voice["humor_and_wit"]),
+        "sidekick": str(voice["sidekick"]),
+    }
     return TutorProfileOut(
         instructive=row.instructive,
         persona=row.persona,
         lexicon=row.lexicon,
+        vocabulary_register=str(voice["vocabulary_register"]),
+        interest_weaving=str(voice["interest_weaving"]),
+        humor_and_wit=str(voice["humor_and_wit"]),
         voice_override=row.voice_override,
         metaphors=row.metaphors,
         sidekick=row.sidekick,
@@ -26,7 +44,7 @@ def _out(row: TutorProfile) -> TutorProfileOut:
         misconception_policy=row.misconception_policy,
         self_explanation=row.self_explanation,
         enrichment=row.enrichment,
-        kc_tutor_config=effective_kc_tutor_config(row),
+        kc_tutor_config=cfg,
         updated_at=row.updated_at,
     )
 
@@ -43,6 +61,9 @@ def put_tutor_profile(body: TutorProfileIn, db: Session = Depends(get_db)) -> Tu
         instructive=body.instructive,
         persona=body.persona,
         lexicon=body.lexicon,
+        vocabulary_register=body.vocabulary_register,
+        interest_weaving=body.interest_weaving,
+        humor_and_wit=body.humor_and_wit,
         voice_override=body.voice_override,
         metaphors=body.metaphors,
         sidekick=body.sidekick,

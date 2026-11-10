@@ -300,10 +300,21 @@ def default_kc_tutor_config() -> dict:
     return {
         "overarching": {
             "orient_framing": "elaborate_outline",
+            "instructional_stance": "guided_discovery",
+            "scaffolding_escalation": "progressive_nudge_then_scaffold",
             "stay_on_course": "brief_answer_then_return",
             "misconception_policy": "explain_and_retry_once",
+            "prerequisite_support_policy": "inline_micro_recap",
             "encouragement_style": "process_praise",
             "close_summary_depth": "diagnostic_strengths_and_gaps",
+        },
+        "voice": {
+            "persona": "coach",
+            "vocabulary_register": "adaptive_to_child",
+            "interest_weaving": "subtle_natural",
+            "metaphors": "everyday",
+            "humor_and_wit": "light_warm",
+            "sidekick": "none",
         },
         "blocks": {
             "topic_goal": {

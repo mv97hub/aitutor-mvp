@@ -8,7 +8,16 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, VOICES, ids
+from app.engine.choices import (
+    HUMOR_MODES,
+    INTEREST_WEAVING_MODES,
+    METAPHORS,
+    PERSONAS,
+    SIDEKICKS,
+    VOCABULARY_REGISTERS,
+    VOICES,
+    ids,
+)
 from app.kc import AUDIENCES, KINDS
 from app.kc_model import BLOCK_LABELS, derive_rubric_from_blocks
 from app.kc_prompt import (
@@ -35,7 +44,12 @@ from app.models import (
     default_kc_tutor_config,
     normalize_child_profile,
 )
-from app.tutor_profile import OVERARCHING_ENUMS, normalize_kc_tutor_config
+from app.tutor_profile import (
+    OVERARCHING_ENUMS,
+    map_legacy_lexicon,
+    map_legacy_use_interests,
+    normalize_kc_tutor_config,
+)
 
 SUPPORT_BANDS = ("ready", "stretch", "hold")
 COMPONENT_STATUSES = ("unknown", "fragile", "known")
@@ -94,14 +108,20 @@ class PromptTesterIn(BaseModel):
     last_misconception: str = ""
     minutes_used: int = Field(default=0, ge=0)
     support_band: str = "ready"
-    persona: str = "curious-co-explorer"
-    lexicon: str = "middle-grade-vivid"
-    metaphors: str = "playground-sports"
-    sidekick: str = "bumbling-partner"
+    persona: str = "coach"
+    lexicon: str = "adaptive_to_child"
+    vocabulary_register: str = ""
+    interest_weaving: str = ""
+    metaphors: str = "everyday"
+    humor_and_wit: str = "light_warm"
+    sidekick: str = "none"
     use_interests: str = "yes"
     orient_framing: str = "elaborate_outline"
+    instructional_stance: str = "guided_discovery"
+    scaffolding_escalation: str = "progressive_nudge_then_scaffold"
     stay_on_course: str = "brief_answer_then_return"
     misconception_policy: str = "explain_and_retry_once"
+    prerequisite_support_policy: str = "inline_micro_recap"
     encouragement_style: str = "process_praise"
     close_summary_depth: str = "diagnostic_strengths_and_gaps"
     instructive: int | None = Field(default=None, ge=1, le=5)
@@ -128,18 +148,44 @@ class PromptTesterIn(BaseModel):
         _one(self.component_status, COMPONENT_STATUSES, "Component status")
         _one(self.support_band, SUPPORT_BANDS, "Support band")
         _one(self.persona, ids(PERSONAS), "Persona")
-        _one(self.lexicon, ids(VOICES), "Lexicon")
+        if self.vocabulary_register:
+            if self.vocabulary_register in {"1", "2", "3", "4", "5", "match_child"}:
+                self.vocabulary_register = map_legacy_lexicon(self.vocabulary_register)
+            _one(self.vocabulary_register, ids(VOCABULARY_REGISTERS), "Vocabulary register")
+            self.lexicon = self.vocabulary_register
+        else:
+            if self.lexicon in {"1", "2", "3", "4", "5", "match_child"}:
+                self.lexicon = map_legacy_lexicon(self.lexicon)
+            _one(self.lexicon, ids(VOICES), "Lexicon")
+            self.vocabulary_register = map_legacy_lexicon(self.lexicon)
+        if self.interest_weaving:
+            _one(self.interest_weaving, ids(INTEREST_WEAVING_MODES), "Interest weaving")
+            self.use_interests = "no" if self.interest_weaving == "off" else "yes"
+        else:
+            _one(self.use_interests, YES_NO, "Use interests")
+            self.interest_weaving = map_legacy_use_interests(self.use_interests == "yes")
         _one(self.metaphors, ids(METAPHORS), "Metaphors")
+        _one(self.humor_and_wit, ids(HUMOR_MODES), "Humor and wit")
         _one(self.sidekick, ids(SIDEKICKS), "Sidekick")
-        _one(self.use_interests, YES_NO, "Use interests")
         _one(self.orient_framing, OVERARCHING_ENUMS["orient_framing"], "Orient framing")
+        _one(self.instructional_stance, OVERARCHING_ENUMS["instructional_stance"], "Instructional stance")
+        _one(self.scaffolding_escalation, OVERARCHING_ENUMS["scaffolding_escalation"], "Scaffolding escalation")
         if self.stay_on_course in {"yes", "no"}:
             self.stay_on_course = "brief_answer_then_return" if self.stay_on_course == "yes" else "exploratory"
         _one(self.stay_on_course, OVERARCHING_ENUMS["stay_on_course"], "Stay on course")
         if self.misconception_policy == "retry_once":
             self.misconception_policy = "explain_and_retry_once"
         _one(self.misconception_policy, OVERARCHING_ENUMS["misconception_policy"], "Misconception policy")
+        _one(
+            self.prerequisite_support_policy,
+            OVERARCHING_ENUMS["prerequisite_support_policy"],
+            "Prerequisite support policy",
+        )
+        if self.encouragement_style == "brief_confirm":
+            self.encouragement_style = "matter_of_fact_confirm"
         _one(self.encouragement_style, OVERARCHING_ENUMS["encouragement_style"], "Encouragement style")
+        if self.close_summary_depth == "elaborate_strengths_and_weaknesses":
+            self.close_summary_depth = "diagnostic_strengths_and_gaps"
         _one(self.close_summary_depth, OVERARCHING_ENUMS["close_summary_depth"], "Close summary depth")
         _one(self.affect, ("", *AFFECTS), "Affect")
         _one(self.help_requested, YES_NO, "Help requested")
@@ -208,8 +254,11 @@ def _effective_config(body: PromptTesterIn) -> dict:
         over.update(
             {
                 "orient_framing": body.orient_framing,
+                "instructional_stance": body.instructional_stance,
+                "scaffolding_escalation": body.scaffolding_escalation,
                 "stay_on_course": body.stay_on_course,
                 "misconception_policy": body.misconception_policy,
+                "prerequisite_support_policy": body.prerequisite_support_policy,
                 "encouragement_style": body.encouragement_style,
                 "close_summary_depth": body.close_summary_depth,
             }
@@ -217,13 +266,24 @@ def _effective_config(body: PromptTesterIn) -> dict:
     else:
         for k, v in (
             ("orient_framing", body.orient_framing),
+            ("instructional_stance", body.instructional_stance),
+            ("scaffolding_escalation", body.scaffolding_escalation),
             ("stay_on_course", body.stay_on_course),
             ("misconception_policy", body.misconception_policy),
+            ("prerequisite_support_policy", body.prerequisite_support_policy),
             ("encouragement_style", body.encouragement_style),
             ("close_summary_depth", body.close_summary_depth),
         ):
             over.setdefault(k, v)
     raw["overarching"] = over
+    raw["voice"] = {
+        "persona": body.persona,
+        "vocabulary_register": body.vocabulary_register or map_legacy_lexicon(body.lexicon),
+        "interest_weaving": body.interest_weaving or map_legacy_use_interests(body.use_interests == "yes"),
+        "metaphors": body.metaphors,
+        "humor_and_wit": body.humor_and_wit or "light_warm",
+        "sidekick": body.sidekick,
+    }
     if body.instructive is not None:
         blocks_cfg = {key: dict(value) for key, value in (raw.get("blocks") or {}).items() if isinstance(value, dict)}
         topic = dict(blocks_cfg.get("topic_goal") or {})

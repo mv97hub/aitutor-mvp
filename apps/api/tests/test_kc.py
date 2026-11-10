@@ -1563,11 +1563,22 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         ):
             assert blank[name] == ""
         assert blank["Persona"]
-        assert blank["Lexicon"]
+        assert blank["Vocabulary register"]
+        assert blank["Interest weaving"] in {
+            "subtle_natural (Subtle & natural (Hook or 1 example when it fits naturally))",
+            "frequent_thematic (Frequent thematic (Frame scenarios around child interests))",
+            "off (Off (Neutral curriculum examples or fallback metaphor domain))",
+        }
+        assert blank["Humor and wit"]
+        assert blank["Effective analogy source"] in {"child_interests", "fallback_metaphors"}
+        assert blank["Effective vocabulary rule"]
+        assert blank["Effective humor rule"]
         assert blank["Orient framing"] == "elaborate_outline"
+        assert blank["Instructional stance"] == "guided_discovery"
+        assert blank["Scaffolding escalation"] == "progressive_nudge_then_scaffold"
         assert blank["Stay on course"] == "brief_answer_then_return"
-        assert blank["Use interests"] in {"yes", "no"}
         assert blank["Misconception policy"] == "explain_and_retry_once"
+        assert blank["Prerequisite support policy"] == "inline_micro_recap"
         assert blank["Encouragement style"] == "process_praise"
         assert blank["Close summary depth"] == "diagnostic_strengths_and_gaps"
         assert blank["Close component"] == "no"
@@ -1581,6 +1592,8 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
             "Evidence",
             "Choice widget",
             "Move content",
+            "Lexicon",
+            "Use interests",
             "Instructive",
             "Struggle window",
             "Effective struggle window",

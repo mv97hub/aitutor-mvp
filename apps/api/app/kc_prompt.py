@@ -16,7 +16,15 @@ model cannot bundle topics, jump ahead, or close the unit early.
 
 from __future__ import annotations
 
-from app.engine.choices import METAPHORS, PERSONAS, SIDEKICKS, VOICES
+from app.engine.choices import (
+    HUMOR_MODES,
+    INTEREST_WEAVING_MODES,
+    METAPHORS,
+    PERSONAS,
+    SIDEKICKS,
+    VOCABULARY_REGISTERS,
+    VOICES,
+)
 from app.kc_model import BLOCK_LABELS
 from app.models import (
     ALL_BLOCK_TYPES,
@@ -27,7 +35,7 @@ from app.models import (
     TutorProfile,
     effective_child_profile,
 )
-from app.tutor_profile import effective_kc_tutor_config
+from app.tutor_profile import effective_kc_tutor_config, effective_voice_settings
 
 TEMPERATURE = 0.4
 HINTS = ("nudge", "analogy", "scaffold", "reveal")
@@ -488,22 +496,169 @@ def _finish(text: str) -> str:
     return f"{cleaned}."
 
 
+_PERSONA_DESCRIPTIONS = {
+    "socratic_mentor": "a calm, respectful academic mentor (thoughtful Socratic guide without theatrical roleplay)",
+    "coach": "a warm coach",
+    "detective": "a curious detective",
+    "explorer": "a field explorer",
+    "storyteller": "a narrative storyteller",
+    "sibling": "an encouraging older sibling",
+    "wizard": "a playful wizard",
+}
+
+_VOCABULARY_REGISTER_RULES = {
+    "adaptive_to_child": (
+        "vocabulary_register is adaptive_to_child: match disciplinary terminology to the child's reading level and grade band."
+    ),
+    "everyday_conversational": (
+        "vocabulary_register is everyday_conversational: use plain everyday words first and introduce technical terms only after the concept clicks."
+    ),
+    "academic_precision": (
+        "vocabulary_register is academic_precision: use exact disciplinary vocabulary early, always paired with a brief kid-friendly gloss."
+    ),
+    "story_rich_expressive": (
+        "vocabulary_register is story_rich_expressive: use vivid, expressive phrasing while still respecting the child's sentence-length cap."
+    ),
+}
+
+_INTEREST_WEAVING_RULES = {
+    "subtle_natural": (
+        "interest_weaving is subtle_natural: weave one of the child's personal interests into the opening hook or a single example when it fits naturally; never force a hobby into every turn."
+    ),
+    "frequent_thematic": (
+        "interest_weaving is frequent_thematic: frame examples, scenarios, and word problems around the child's personal interests whenever possible."
+    ),
+    "off": (
+        "interest_weaving is off: do not pull from the child's personal interests; use neutral curriculum examples or the fallback metaphors domain."
+    ),
+}
+
+_SIDEKICK_RULES = {
+    "barnaby": "Barnaby the Badger may voice at most one short line on hooks or hints and never asks a second competing question.",
+    "pixel": "Pixel the Robot may voice at most one short line on hooks or hints and never asks a second competing question.",
+    "spark": "Spark the Dragon may voice at most one short line on hooks or hints and never asks a second competing question.",
+}
+
+
+def compute_turn_kind(
+    *,
+    opening: bool,
+    unit_complete: bool,
+    course_complete: bool,
+    transition_from_block: dict | None,
+    attempts: int,
+    hint_tier: str,
+    reveals: int,
+) -> str:
+    """Derive the active turn kind (orient, ask, pass, nudge, scaffold, reveal, close)."""
+    if unit_complete or course_complete:
+        return "close"
+    if transition_from_block is not None:
+        return "pass"
+    if opening:
+        return "orient"
+    tier = (hint_tier or "nudge").strip().lower()
+    if tier == "reveal" or int(reveals or 0) > 0 and int(attempts or 0) > 0:
+        return "reveal"
+    if int(attempts or 0) >= 2 or tier in {"analogy", "scaffold"}:
+        return "scaffold"
+    if int(attempts or 0) == 1:
+        return "nudge"
+    return "ask"
+
+
 def _voice_paragraph(profile: TutorProfile) -> str:
-    persona = _a(_label(PERSONAS, profile.persona or ""))
-    lexicon = _lower_first(_label(VOICES, profile.lexicon or "")) or "plain"
-    if (profile.metaphors or "").strip() == "none":
+    voice = effective_voice_settings(profile)
+    persona_key = str(voice.get("persona") or profile.persona or "coach")
+    persona = _PERSONA_DESCRIPTIONS.get(persona_key) or _a(_label(PERSONAS, persona_key))
+    raw_lex = str(profile.lexicon or voice.get("vocabulary_register") or "")
+    lexicon = _lower_first(_label(VOICES, raw_lex)) or _lower_first(_label(VOCABULARY_REGISTERS, str(voice.get("vocabulary_register") or ""))) or "plain"
+    meta_key = str(voice.get("metaphors") or profile.metaphors or "everyday")
+    if meta_key == "none":
         images = "plain language and no borrowed image"
     else:
-        metaphor = _lower_first(_label(METAPHORS, profile.metaphors or ""))
+        metaphor = _lower_first(_label(METAPHORS, meta_key))
         images = f"{metaphor} images" if metaphor else "plain language"
-    if (profile.sidekick or "").strip() in {"", "off"}:
+    side_key = str(voice.get("sidekick") or profile.sidekick or "none")
+    if side_key in {"", "off", "none"}:
         company = ""
     else:
-        company = f", and with {_a(_label(SIDEKICKS, profile.sidekick))}"
+        company = f", and with {_a(_label(SIDEKICKS, side_key))}"
     return (
         f"Write as {persona}, in {lexicon} words, with {images}{company}. "
         "That voice does not change the block, the expected answer, or the score."
     )
+
+
+def _how_to_sound(
+    *,
+    profile: TutorProfile,
+    student: Student | None = None,
+    turn_kind: str = "ask",
+) -> list[str]:
+    """Assemble Layer 3 ('How to sound') with the 6 orthogonal settings and cross-layer precedence contract."""
+    voice = effective_voice_settings(profile)
+    cp = effective_child_profile(student) if student is not None else {}
+    persona_key = str(voice.get("persona") or "coach")
+    vocab_reg = str(voice.get("vocabulary_register") or "adaptive_to_child")
+    weaving = str(voice.get("interest_weaving") or "subtle_natural")
+    meta_key = str(voice.get("metaphors") or "everyday")
+    humor_key = str(voice.get("humor_and_wit") or "light_warm")
+    sidekick_key = str(voice.get("sidekick") or "none")
+
+    persona_label = _PERSONA_DESCRIPTIONS.get(persona_key) or _lower_first(_label(PERSONAS, persona_key))
+    meta_label = _lower_first(_label(METAPHORS, meta_key)) or meta_key
+    tone = str(cp.get("communication_tone") or "warm_and_encouraging")
+    support = str(cp.get("learning_support") or "none")
+    anxiety_or_gentle = support == "math_or_test_anxiety" or tone == "calm_and_gentle"
+    missed_turn = turn_kind in {"nudge", "scaffold", "reveal"}
+
+    lines: list[str] = [_voice_paragraph(profile)]
+    lines.append(
+        f"Persona framing: persona ({persona_label}) sets the framing metaphor, while the child's communication_tone ({tone}) governs emotional intensity."
+    )
+    lines.append(
+        "The child profile (reading_level, response_length, learning_support) exclusively owns sentence length, reading complexity, and paragraph length. "
+        + _VOCABULARY_REGISTER_RULES.get(vocab_reg, _VOCABULARY_REGISTER_RULES["adaptive_to_child"])
+    )
+    lines.append(
+        _INTEREST_WEAVING_RULES.get(weaving, _INTEREST_WEAVING_RULES["subtle_natural"])
+        + f" Fallback analogy domain ({meta_label}): use this fallback domain when interest_weaving is off, when the child has no personal interests set, or when the child's personal interests do not fit the concept cleanly."
+    )
+
+    if missed_turn or anxiety_or_gentle or humor_key == "none_straightforward":
+        reason = (
+            "an incorrect attempt (nudge/scaffold/reveal)"
+            if missed_turn
+            else (
+                "math_or_test_anxiety or calm_and_gentle tone"
+                if anxiety_or_gentle
+                else "humor_and_wit is none_straightforward"
+            )
+        )
+        lines.append(
+            f"Humor guardrail ({humor_key}): suppress jokes and banter on this turn ({reason}); stay clear, earnest, and supportive."
+        )
+    elif humor_key == "playful_banter":
+        lines.append(
+            "Humor & wit (playful_banter): bring playful, witty energy on hooks and passes, while automatically suppressing jokes on any nudge, scaffold, or reveal turn."
+        )
+    else:
+        lines.append(
+            "Humor & wit (light_warm): use occasional warm, gentle wit on hooks and passes, and suppress jokes on any nudge, scaffold, or reveal turn."
+        )
+
+    if sidekick_key in _SIDEKICK_RULES:
+        lines.append(f"Sidekick ({sidekick_key}): {_SIDEKICK_RULES[sidekick_key]}")
+    elif sidekick_key not in {"", "none", "off"}:
+        sidekick_label = _lower_first(_label(SIDEKICKS, sidekick_key)) or sidekick_key
+        lines.append(
+            f"Sidekick ({sidekick_label}): may voice at most one short line on hooks or hints and never asks a second competing question."
+        )
+    else:
+        lines.append("Sidekick (none): do not include a sidekick character.")
+
+    return lines
 
 
 _GRADE_BAND_LABELS = {
@@ -638,7 +793,9 @@ def _who_you_are_talking_to(
         if piece and piece not in interest_pieces:
             interest_pieces.append(piece)
     named = ", ".join(interest_pieces)
-    if profile.use_interests and named:
+    voice = effective_voice_settings(profile)
+    weaving = str(voice.get("interest_weaving") or ("subtle_natural" if profile.use_interests else "off"))
+    if weaving != "off" and named:
         parts.append(f"When an example would help, use one of these interests: {named}.")
     elif named:
         parts.append(f"The child cares about {named}. Keep examples inside the subject.")
@@ -744,12 +901,21 @@ def _this_turn(
     is_final_block_and_substep: bool,
     transition_from_block: dict | None = None,
     needs_dynamic_mcq: bool = False,
+    turn_kind: str = "ask",
+    instructional_stance: str = "guided_discovery",
+    scaffolding_escalation: str = "progressive_nudge_then_scaffold",
+    misconception_policy: str = "explain_and_retry_once",
+    prerequisite_support_policy: str = "inline_micro_recap",
+    encouragement_style: str = "process_praise",
+    challenge_appetite: str = "steady",
+    learning_support: str = "none",
+    communication_tone: str = "warm_and_encouraging",
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep)
     mode_note = "The child will pick on screen." if choice_on_screen else "The child will type."
     lines = [
         "You are the knowledge-component tutor.",
-        f"Active step: {label}. {mode_note}",
+        f"Active step: {label}. {mode_note} Active turn kind: {turn_kind}.",
     ]
     outline = stored_outline(node)
     if opening and step_index == 0:
@@ -772,6 +938,57 @@ def _this_turn(
             f"Block Transition: The learner just completed Block {step_index} ({prev_type}). "
             f"Briefly affirm their work on that block and immediately introduce {label} in this same reply."
         )
+    if turn_kind in {"orient", "ask"}:
+        if instructional_stance == "direct_instruction_first":
+            lines.append(
+                "Turn Stance (direct_instruction_first): Model the key rule or idea concisely before asking the block question."
+            )
+        elif instructional_stance == "productive_challenge_first":
+            lines.append(
+                "Turn Stance (productive_challenge_first): Let the learner try the problem first and teach contingently from their attempt."
+            )
+        else:
+            lines.append(
+                "Turn Stance (guided_discovery): Pair a short concrete anchor with a guiding question."
+            )
+    elif turn_kind in {"nudge", "scaffold"}:
+        if scaffolding_escalation == "socratic_probing":
+            lines.append(
+                "Turn Escalation (socratic_probing): Ask targeted diagnostic questions to help the learner spot the gap themselves."
+            )
+        elif scaffolding_escalation == "worked_example_on_first_miss":
+            lines.append(
+                "Turn Escalation (worked_example_on_first_miss): Show a brief parallel worked example or sub-step immediately on the first miss before asking them to retry."
+            )
+        else:
+            lines.append(
+                "Turn Escalation (progressive_nudge_then_scaffold): Give a brief nudge on the first miss, then a concrete breakdown or partial step on the next miss."
+            )
+        if challenge_appetite == "needs_reassurance":
+            lines.append(
+                "Reassurance on miss (challenge_appetite=needs_reassurance): Soften this miss transition, normalize the effort warmly, and keep stakes low."
+            )
+    if turn_kind in {"nudge", "scaffold", "reveal"}:
+        lines.append(
+            "Turn Humor Guardrail: Because this turn follows a missed attempt (nudge/scaffold/reveal), suppress all jokes and playful banter."
+        )
+    elif learning_support == "math_or_test_anxiety" or communication_tone == "calm_and_gentle":
+        lines.append(
+            "Turn Humor Guardrail: Suppress jokes and banter for this learner's anxiety or calm_and_gentle profile."
+        )
+    if turn_kind in {"pass", "nudge", "scaffold"}:
+        if encouragement_style == "matter_of_fact_confirm":
+            lines.append(
+                "Turn Feedback (matter_of_fact_confirm): Confirm clearly and warmly without extra fanfare."
+            )
+        elif encouragement_style == "minimal":
+            lines.append(
+                "Turn Feedback (minimal): Give a brief acknowledgment and move straight to the next step."
+            )
+        else:
+            lines.append(
+                "Turn Feedback (process_praise): Praise the specific strategy or reasoning move the learner used."
+            )
     if needs_dynamic_mcq:
         lines.append(
             "Dynamic MCQ Generation Required: Populate `generated_mcq` with a fresh question_stem, choices (a, b, c, ...), "
@@ -797,6 +1014,8 @@ def _this_turn(
             is_final_block_and_substep=is_final_block_and_substep,
         )
     )
+    del misconception_policy
+    del prerequisite_support_policy
     return lines
 
 
@@ -1272,13 +1491,52 @@ def _how_to_teach(
     minutes_used: int,
     has_misconceptions: bool,
     include_close: bool,
+    student: Student | None = None,
 ) -> list[str]:
     over = cfg.get("overarching") or {}
+    orient_mode = str(over.get("orient_framing") or "elaborate_outline")
+    stance = str(over.get("instructional_stance") or "guided_discovery")
+    escalation = str(over.get("scaffolding_escalation") or "progressive_nudge_then_scaffold")
     stay_mode = str(over.get("stay_on_course") or "brief_answer_then_return")
     misc_policy = str(over.get("misconception_policy") or "explain_and_retry_once")
+    prereq_policy = str(over.get("prerequisite_support_policy") or "inline_micro_recap")
     praise_style = str(over.get("encouragement_style") or "process_praise")
+    close_depth = str(over.get("close_summary_depth") or "diagnostic_strengths_and_gaps")
+    cp = effective_child_profile(student) if student is not None else {}
+    expl_style = str(cp.get("explanation_style") or "concrete_examples")
+    challenge_appetite = str(cp.get("challenge_appetite") or "steady")
 
     lines = _block_config_rules(block, substep, cfg, goal)
+
+    lines.append(
+        f"Representation harmony: whenever teaching rules call for an explanation, scaffold, or reveal, format the explanation using the child's explanation_style ({expl_style})."
+    )
+
+    if stance == "direct_instruction_first":
+        lines.append(
+            "Instructional stance (direct_instruction_first): model the key rule or idea concisely before asking the learner to respond."
+        )
+    elif stance == "productive_challenge_first":
+        lines.append(
+            "Instructional stance (productive_challenge_first): let the learner try the problem first and teach contingently from their attempt."
+        )
+    else:
+        lines.append(
+            "Instructional stance (guided_discovery): pair a short concrete anchor with a guiding question."
+        )
+
+    if escalation == "socratic_probing":
+        lines.append(
+            "Scaffolding escalation (socratic_probing): on misses, ask targeted diagnostic questions to help the learner spot the gap themselves."
+        )
+    elif escalation == "worked_example_on_first_miss":
+        lines.append(
+            "Scaffolding escalation (worked_example_on_first_miss): show a brief parallel worked example or sub-step immediately on the first miss before asking them to retry."
+        )
+    else:
+        lines.append(
+            "Scaffolding escalation (progressive_nudge_then_scaffold): give a brief nudge on the first miss, then a concrete breakdown or partial step on the next miss."
+        )
 
     if goal.kind == "time_boxed":
         budget = f" Budget: {goal.minutes} minutes ({minutes_used} used)." if goal.minutes is not None else ""
@@ -1301,10 +1559,40 @@ def _how_to_teach(
             lines.append(
                 "If a stored wrong move matches, name it on that same turn and set the decision to redirect."
             )
+        elif misc_policy == "nudge_without_naming":
+            lines.append(
+                "If a stored wrong move matches, guide the learner away with a contrasting question without naming the misconception; if it repeats, redirect."
+            )
         else:
             lines.append(
                 "the first time a stored wrong move matches, explain the trap and retry this block. The second time, redirect."
             )
+    else:
+        if misc_policy == "nudge_without_naming":
+            lines.append(
+                "Misconception policy (nudge_without_naming): guide the learner away from traps with a contrasting question without naming the misconception."
+            )
+        elif misc_policy == "immediate_redirect":
+            lines.append(
+                "Misconception policy (immediate_redirect): directly name and correct any misconception right away."
+            )
+        else:
+            lines.append(
+                "Misconception policy (explain_and_retry_once): contrast why a trap is tempting versus how the concept actually works, then give one retry."
+            )
+
+    if prereq_policy == "scaffold_heavily":
+        lines.append(
+            "Prerequisite support policy (scaffold_heavily): proactively break down steps that depend on fragile or missing prerequisites."
+        )
+    elif prereq_policy == "no_special_adjustment":
+        lines.append(
+            "Prerequisite support policy (no_special_adjustment): treat prerequisites normally unless the student asks."
+        )
+    else:
+        lines.append(
+            "Prerequisite support policy (inline_micro_recap): weave a 1-sentence reminder of any fragile prerequisite when relevant."
+        )
 
     if support_band == "hold":
         lines.append(
@@ -1315,12 +1603,26 @@ def _how_to_teach(
     elif support_band == "ready" and (prerequisite_status or "").strip() not in {"", "none"}:
         lines.append("Prerequisites are known; teach this block directly.")
 
+    reassurance_note = (
+        " Respect challenge_appetite (needs_reassurance) by normalizing effort warmly on any miss."
+        if challenge_appetite == "needs_reassurance"
+        else ""
+    )
     if praise_style == "process_praise":
         lines.append(
             "When you encourage, name the specific reasoning move the learner made. Do not use generic praise."
+            + reassurance_note
+        )
+    elif praise_style == "matter_of_fact_confirm":
+        lines.append(
+            "Encouragement style (matter_of_fact_confirm): confirm clearly and warmly without extra fanfare."
+            + reassurance_note
         )
     else:
-        lines.append("Keep any acknowledgment to a few words. Do not add praise.")
+        lines.append(
+            "Keep any acknowledgment to a few words. Do not add praise."
+            + reassurance_note
+        )
 
     if not choice_on_screen:
         q_line = "End a teaching or probing turn with a single clear question."
@@ -1328,6 +1630,8 @@ def _how_to_teach(
             q_line += " A unit close or course outro asks no new question."
         lines.append(q_line)
 
+    del orient_mode
+    del close_depth
     return lines
 
 
@@ -1520,6 +1824,16 @@ def build_kc_prompt(
     include_close = is_final_block_and_substep or unit_complete or course_complete
     frag_self_exp = bool(((cfg.get("blocks") or {}).get("topic_goal") or {}).get("fragment_self_explanation", True))
     interests = ", ".join(str(item) for item in (student.interests or []) if str(item).strip()) or "none named"
+    cp = effective_child_profile(student)
+    turn_kind = compute_turn_kind(
+        opening=opening,
+        unit_complete=unit_complete,
+        course_complete=course_complete,
+        transition_from_block=transition_from_block,
+        attempts=int(attempts or 0),
+        hint_tier=hint_tier or "nudge",
+        reveals=int(reveals or 0),
+    )
 
     prompt = _blocks_text(
         [
@@ -1545,6 +1859,19 @@ def build_kc_prompt(
                     is_final_block_and_substep=is_final_block_and_substep,
                     transition_from_block=transition_from_block,
                     needs_dynamic_mcq=needs_dynamic_mcq,
+                    turn_kind=turn_kind,
+                    instructional_stance=str(over.get("instructional_stance") or "guided_discovery"),
+                    scaffolding_escalation=str(
+                        over.get("scaffolding_escalation") or "progressive_nudge_then_scaffold"
+                    ),
+                    misconception_policy=str(over.get("misconception_policy") or "explain_and_retry_once"),
+                    prerequisite_support_policy=str(
+                        over.get("prerequisite_support_policy") or "inline_micro_recap"
+                    ),
+                    encouragement_style=str(over.get("encouragement_style") or "process_praise"),
+                    challenge_appetite=str(cp.get("challenge_appetite") or "steady"),
+                    learning_support=str(cp.get("learning_support") or "none"),
+                    communication_tone=str(cp.get("communication_tone") or "warm_and_encouraging"),
                 ),
             ),
             (
@@ -1573,9 +1900,10 @@ def build_kc_prompt(
                     minutes_used=minutes_used,
                     has_misconceptions=bool(_wrong_moves(node)),
                     include_close=include_close,
+                    student=student,
                 ),
             ),
-            ("How to sound", [_voice_paragraph(profile)]),
+            ("How to sound", _how_to_sound(profile=profile, student=student, turn_kind=turn_kind)),
             (
                 "What just happened",
                 _what_happened(

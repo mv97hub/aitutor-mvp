@@ -58,7 +58,7 @@ export function KcTutorConfigFields({
   );
 }
 
-function ConfigControl({
+export function ConfigControl({
   field,
   value,
   onChange,

@@ -35,19 +35,56 @@ export const OVERARCHING_FIELDS: ConfigField[] = [
     ["brief_hook", "Brief hook"],
     ["elaborate_outline", "Elaborate outline"],
   ]),
+  ENUM(
+    "instructional_stance",
+    "Instructional stance",
+    "Default teaching philosophy when introducing a block concept.",
+    [
+      ["direct_instruction_first", "Direct instruction first (Model the rule concisely before asking)"],
+      ["guided_discovery", "Guided discovery (Short concrete anchor + guiding question)"],
+      ["productive_challenge_first", "Productive challenge first (Let learner try first, teach from attempt)"],
+    ],
+  ),
+  ENUM(
+    "scaffolding_escalation",
+    "Scaffolding escalation",
+    "Contingent hint progression when a learner misses a step.",
+    [
+      ["socratic_probing", "Socratic probing (Targeted diagnostic questions to spot the gap)"],
+      ["progressive_nudge_then_scaffold", "Progressive nudge, then scaffold (Brief nudge first, breakdown next)"],
+      ["worked_example_on_first_miss", "Worked example on first miss (Parallel worked step right away)"],
+    ],
+  ),
   ENUM("stay_on_course", "Stay on course", "What the tutor does when the learner leaves the component.", [
     ["strict", "Strict"],
     ["brief_answer_then_return", "Brief answer, then return"],
     ["exploratory", "Exploratory"],
   ]),
   ENUM("misconception_policy", "Misconception policy", "How a named misconception is handled.", [
+    ["nudge_without_naming", "Nudge without naming (Guide away with a contrasting question)"],
     ["explain_and_retry_once", "Explain and retry once"],
     ["immediate_redirect", "Immediate redirect"],
   ]),
-  ENUM("encouragement_style", "Encouragement style", "Process praise names the reasoning move. Minimal stays quiet.", [
-    ["process_praise", "Process praise"],
-    ["minimal", "Minimal"],
-  ]),
+  ENUM(
+    "prerequisite_support_policy",
+    "Prerequisite support policy",
+    "How fragile or missing prerequisites in Layer 1 are supported.",
+    [
+      ["inline_micro_recap", "Inline micro-recap (1-sentence reminder of fragile prerequisite when relevant)"],
+      ["scaffold_heavily", "Scaffold heavily (Proactively break down steps depending on fragile prerequisites)"],
+      ["no_special_adjustment", "No special adjustment (Treat prerequisites normally unless asked)"],
+    ],
+  ),
+  ENUM(
+    "encouragement_style",
+    "Encouragement style",
+    "Process praise names the reasoning move. Matter-of-fact confirms warmly. Minimal stays quiet.",
+    [
+      ["process_praise", "Process praise"],
+      ["matter_of_fact_confirm", "Matter-of-fact confirm"],
+      ["minimal", "Minimal"],
+    ],
+  ),
   ENUM("close_summary_depth", "Close summary depth", "How the tutor closes a finished component.", [
     ["concise", "Concise"],
     ["restate_in_learner_words", "Restate in the learner's words"],
@@ -184,8 +221,11 @@ function fieldDefault(field: ConfigField): string | number | boolean {
 function defaults(): KcTutorConfig {
   const overarching: Record<string, string> = {
     orient_framing: "elaborate_outline",
+    instructional_stance: "guided_discovery",
+    scaffolding_escalation: "progressive_nudge_then_scaffold",
     stay_on_course: "brief_answer_then_return",
     misconception_policy: "explain_and_retry_once",
+    prerequisite_support_policy: "inline_micro_recap",
     encouragement_style: "process_praise",
     close_summary_depth: "diagnostic_strengths_and_gaps",
   };
@@ -253,7 +293,15 @@ export function kcTutorConfigFrom(raw: unknown): KcTutorConfig {
   const over = source.overarching;
   if (over && typeof over === "object") {
     for (const field of OVERARCHING_FIELDS) {
-      if (accepts(field, over[field.key])) next.overarching[field.key] = over[field.key] as string;
+      let incoming = over[field.key];
+      if (field.key === "encouragement_style" && incoming === "brief_confirm") {
+        incoming = "matter_of_fact_confirm";
+      } else if (field.key === "close_summary_depth" && incoming === "elaborate_strengths_and_weaknesses") {
+        incoming = "diagnostic_strengths_and_gaps";
+      } else if (field.key === "misconception_policy" && incoming === "retry_once") {
+        incoming = "explain_and_retry_once";
+      }
+      if (accepts(field, incoming)) next.overarching[field.key] = incoming as string;
     }
   }
   const blocks = source.blocks;
