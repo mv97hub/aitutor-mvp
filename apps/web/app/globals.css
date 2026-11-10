@@ -5002,6 +5002,328 @@ a.ds-row { text-decoration: none; }
   color: #1e293b;
 }
 
+.learn-shell {
+  width: min(1080px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 36px 0 72px;
+}
+
+.learn-chooser h1,
+.learn-home-bar h1,
+.learn-shell > h1 {
+  font-size: clamp(2rem, 4vw, 3.1rem);
+}
+
+.learn-child-grid,
+.learn-catalog,
+.learn-continue,
+.learn-tutor-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.learn-child-grid {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  margin-top: 28px;
+}
+
+.learn-child-card,
+.learn-course-card,
+.learn-tutor-card,
+.learn-rank {
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+}
+
+.learn-child-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 240px;
+  padding: 22px 18px 18px;
+  text-align: left;
+  color: inherit;
+}
+
+.learn-child-card:hover,
+.learn-tutor-card:hover,
+.learn-course-card:hover {
+  transform: translateY(-2px);
+}
+
+.learn-add-card {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border-style: dashed;
+  background: transparent;
+}
+
+.learn-add-mark {
+  display: grid;
+  place-items: center;
+  width: 88px;
+  height: 88px;
+  border-radius: 999px;
+  background: var(--teal);
+  color: white;
+  font-size: 2.4rem;
+  line-height: 1;
+}
+
+.learn-initials {
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--teal-deep);
+  color: white;
+  font-family: var(--serif);
+  font-weight: 600;
+}
+
+.learn-initials-sm { width: 24px; height: 24px; font-size: 0.62rem; }
+.learn-initials-md { width: 36px; height: 36px; font-size: 0.8rem; }
+.learn-initials-lg { width: 52px; height: 52px; font-size: 1rem; }
+.learn-initials-xl { width: 88px; height: 88px; font-size: 1.6rem; }
+
+.learn-pill,
+.learn-tag,
+.learn-badge,
+.learn-activity {
+  border-radius: 999px;
+}
+
+.learn-pill,
+.learn-activity {
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+}
+
+.learn-tag-row,
+.learn-badge-row,
+.learn-actions,
+.learn-home-actions,
+.learn-guided {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.learn-tag,
+.learn-badge {
+  padding: 2px 8px;
+  background: #e7f3f2;
+  color: var(--teal-deep);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.learn-quiet,
+.learn-meta {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+}
+
+.learn-home-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.learn-who {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.learn-who h1 { margin: 0; }
+
+.learn-switch,
+.learn-text-link {
+  color: var(--teal-deep);
+  font-size: 0.92rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.learn-stars {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: #fff4d6;
+  color: #8a5a00;
+  font-weight: 800;
+}
+
+.learn-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: white;
+  padding: 9px 16px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.learn-btn.primary {
+  border-color: transparent;
+  background: var(--teal);
+  color: white;
+}
+
+.learn-btn.ghost { background: transparent; }
+
+.learn-btn:disabled { opacity: 0.55; cursor: wait; }
+
+.learn-rank {
+  display: grid;
+  gap: 8px;
+  margin-top: 22px;
+  padding: 18px 20px;
+}
+
+.learn-rank h2 { margin: 0; font-size: 1.55rem; }
+
+.learn-rank-bar,
+.learn-progress {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #efe4d2;
+}
+
+.learn-rank-bar > span,
+.learn-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--teal), #e0a100);
+}
+
+.learn-section { margin-top: 32px; }
+.learn-section h2 { margin: 0 0 14px; font-size: 1.7rem; }
+
+.learn-continue,
+.learn-catalog,
+.learn-tutor-grid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.learn-course-card,
+.learn-tutor-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 18px;
+  text-align: left;
+}
+
+.learn-course-card.is-hero {
+  grid-column: 1 / -1;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(224, 161, 0, 0.18), transparent 36%),
+    var(--paper-2);
+}
+
+.learn-course-card h3,
+.learn-tutor-card h3,
+.learn-tutor-card strong { margin: 0; }
+
+.learn-course-card p,
+.learn-tutor-card p { margin: 0; }
+
+.learn-tutor-card.is-selected {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 2px rgba(15, 110, 107, 0.25);
+}
+
+.learn-dialog { width: min(920px, 100%); }
+
+.learn-fields { display: grid; gap: 14px; }
+
+.learn-field,
+.learn-choices {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.learn-field span,
+.learn-choices legend,
+.learn-readonly span {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.learn-field input,
+.learn-field select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white;
+}
+
+.learn-readonly { margin: 0; }
+.learn-readonly strong { display: block; font-size: 1.2rem; }
+
+.learn-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 14px;
+  font-weight: 700;
+}
+
+.learn-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; }
+
+.learn-disclosure {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-family: var(--serif);
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+.learn-done-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.learn-done-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper-2);
+}
+
+@media (max-width: 720px) {
+  .learn-shell { width: min(100% - 20px, 1080px); }
+  .learn-home-bar { align-items: flex-start; }
+}
+
 
 
 

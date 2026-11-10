@@ -215,6 +215,13 @@ export type KcProgress = {
   total_blocks_count?: number;
   completed_blocks_count?: number;
   first_try_pass_count?: number;
+  stars?: number;
+  star_block?: number;
+  star_first_try?: number;
+  star_topic?: number;
+  star_crown?: number;
+  finished_topic_count?: number;
+  crown_topic_count?: number;
   last_active_at?: string | null;
   accomplishments?: KcAccomplishmentItem[];
   opportunities?: KcOpportunityItem[];
@@ -231,6 +238,8 @@ export type KcProgress = {
     patch: boolean;
     status: "completed" | "in_progress" | "not_started";
     mastery?: "" | "known" | "fragile";
+    child_status?: string;
+    practice_bonus?: boolean;
     p_known?: number;
     finished_blocks?: number;
     completed_blocks?: number;
@@ -288,6 +297,33 @@ export type KcTutorCourse = {
   total_blocks_count?: number;
   completed_blocks_count?: number;
   first_try_pass_count?: number;
+  stars?: number;
+  star_block?: number;
+  star_first_try?: number;
+  star_topic?: number;
+  star_crown?: number;
+  finished_topic_count?: number;
+  crown_topic_count?: number;
+  course_complete?: boolean;
+  started?: boolean;
+  current_topic?: {
+    id: string;
+    code: string;
+    title: string;
+    status: string;
+    child_status: string;
+    completed_blocks: number;
+    total_blocks: number;
+  } | null;
+  tutor?: {
+    id: string;
+    name: string;
+    description: string;
+    avatar_preset: string;
+    avatar_url?: string | null;
+    is_default?: boolean;
+    source?: "course" | "preferred" | "default";
+  } | null;
   last_active_at?: string | null;
   accomplishments_preview?: KcAccomplishmentItem[];
   opportunities_preview?: KcOpportunityItem[];

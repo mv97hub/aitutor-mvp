@@ -11,6 +11,8 @@ export type ChildProfile = {
   learning_support: string;
   interest_tags: string[];
   interests: string;
+  avatar_preset?: string;
+  avatar_url?: string;
 };
 
 export type Student = {

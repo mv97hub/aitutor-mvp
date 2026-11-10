@@ -46,10 +46,12 @@ from app.kc_prompt import (
     substeps_for_block,
     topic_goal,
 )
+from app.learn_stars import child_status_label, empty_stars, explorer_progress, stars_from_units
 from app.tutor_profile import (
     BLOCK_CONFIG_SPECS,
     effective_kc_tutor_config,
     effective_voice_settings,
+    get_profile_by_id_or_slug,
     load_profile,
     normalize_avatar_preset,
     resolve_active_profile,
@@ -1474,6 +1476,17 @@ def tutor_courses(db: Session, *, student_id: uuid.UUID | None = None) -> list[d
                     "last_active_at": prog["last_active_at"],
                     "accomplishments_preview": (prog.get("accomplishments") or [])[:3],
                     "opportunities_preview": (prog.get("opportunities") or [])[:3],
+                    "stars": prog["stars"],
+                    "star_block": prog["star_block"],
+                    "star_first_try": prog["star_first_try"],
+                    "star_topic": prog["star_topic"],
+                    "star_crown": prog["star_crown"],
+                    "finished_topic_count": prog["finished_topic_count"],
+                    "crown_topic_count": prog["crown_topic_count"],
+                    "course_complete": prog["course_complete"],
+                    "started": int(prog["completed_count"]) + int(prog["in_progress_count"]) > 0,
+                    "current_topic": _current_topic(prog),
+                    "tutor": course_tutor_choice(db, student, goal.id),
                 }
             )
         else:
@@ -1497,10 +1510,187 @@ def tutor_courses(db: Session, *, student_id: uuid.UUID | None = None) -> list[d
                     "last_active_at": None,
                     "accomplishments_preview": [],
                     "opportunities_preview": [],
+                    **empty_stars(),
+                    "course_complete": False,
+                    "started": False,
+                    "current_topic": None,
+                    "tutor": None,
                 }
             )
         out.append(base)
     return out
+
+
+def _tutor_public(profile) -> dict:
+    return {
+        "id": str(profile.id),
+        "name": str(getattr(profile, "name", None) or "Default"),
+        "description": str(getattr(profile, "description", None) or ""),
+        "avatar_preset": str(getattr(profile, "avatar_preset", None) or "default_circle"),
+        "avatar_url": getattr(profile, "avatar_url", None),
+        "is_default": bool(getattr(profile, "is_default", False)),
+    }
+
+
+def _course_tutor_id(db: Session, student_id: uuid.UUID, goal_id: uuid.UUID) -> str | None:
+    """Tutor last stored on a session for this child and course."""
+    row = db.scalar(
+        select(KcSession)
+        .where(
+            KcSession.student_id == student_id,
+            KcSession.goal_id == goal_id,
+            KcSession.tutor_profile_id.is_not(None),
+        )
+        .order_by(KcSession.updated_at.desc(), KcSession.created_at.desc())
+    )
+    if row is None or not row.tutor_profile_id:
+        return None
+    return str(row.tutor_profile_id)
+
+
+def course_tutor_choice(db: Session, student: Student, goal_id: uuid.UUID) -> dict:
+    """Course binding wins. Otherwise the child's preferred tutor is the pre-selection."""
+    bound = _course_tutor_id(db, student.id, goal_id)
+    if bound:
+        profile = resolve_active_profile(db, student=student, profile_id=bound)
+        source = "course"
+    else:
+        profile = resolve_active_profile(db, student=student)
+        source = "preferred" if getattr(student, "preferred_tutor_profile_id", None) else "default"
+    return {**_tutor_public(profile), "source": source}
+
+
+def _topic_snapshot(unit: dict | None) -> dict | None:
+    if not unit:
+        return None
+    return {
+        "id": unit["id"],
+        "code": unit["code"],
+        "title": unit["title"],
+        "status": unit["status"],
+        "child_status": unit.get("child_status") or "Up Next",
+        "completed_blocks": int(unit.get("completed_blocks") or 0),
+        "total_blocks": int(unit.get("total_blocks") or 0),
+    }
+
+
+def _current_topic(prog: dict) -> dict | None:
+    units = [unit for unit in prog.get("units") or [] if not unit.get("patch")]
+    active = next((unit for unit in units if unit.get("status") == "in_progress"), None)
+    if active is not None:
+        return _topic_snapshot(active)
+    for card in prog.get("cards") or []:
+        if card.get("role") == "fastest":
+            match = next((unit for unit in units if unit.get("id") == card.get("id")), None)
+            if match is not None:
+                return _topic_snapshot(match)
+    upcoming = next((unit for unit in units if unit.get("status") == "not_started"), None)
+    return _topic_snapshot(upcoming)
+
+
+def bind_course_tutor(
+    db: Session,
+    student: Student,
+    goal: KcGoal,
+    tutor_profile_id: str | int | None,
+    *,
+    update_preferred: bool = True,
+):
+    """Remember a tutor on this course's sessions. Other courses keep their own tutor."""
+    if tutor_profile_id is None or not str(tutor_profile_id).strip():
+        raise HTTPException(status_code=422, detail="Choose a tutor.")
+    profile = get_profile_by_id_or_slug(db, tutor_profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Tutor profile not found")
+    rows = list(
+        db.scalars(
+            select(KcSession).where(
+                KcSession.student_id == student.id,
+                KcSession.goal_id == goal.id,
+            )
+        )
+    )
+    for row in rows:
+        row.tutor_profile_id = profile.id
+    if update_preferred:
+        student.preferred_tutor_profile_id = profile.id
+    db.flush()
+    return profile
+
+
+def _start_component(db: Session, student: Student, goal: KcGoal, kc_id: uuid.UUID | None) -> KcNode:
+    if kc_id is not None:
+        node = db.get(KcNode, kc_id)
+        if node is None:
+            raise HTTPException(status_code=404, detail="That topic is not on this course.")
+        return node
+    prog = progress(db, goal, student)
+    units = [unit for unit in prog.get("units") or [] if not unit.get("patch")]
+    chosen_id = None
+    for unit in units:
+        if unit.get("status") == "in_progress":
+            chosen_id = unit["id"]
+            break
+    if chosen_id is None:
+        for card in prog.get("cards") or []:
+            if card.get("role") == "fastest":
+                chosen_id = card["id"]
+                break
+    if chosen_id is None and units:
+        chosen_id = units[0]["id"]
+    if chosen_id is None:
+        raise HTTPException(status_code=422, detail="This course has no topics yet.")
+    node = db.get(KcNode, uuid.UUID(str(chosen_id)))
+    if node is None:
+        raise HTTPException(status_code=404, detail="That topic is not on this course.")
+    return node
+
+
+def start_course(
+    db: Session,
+    student: Student,
+    goal: KcGoal,
+    *,
+    tutor_profile_id: str | int | None = None,
+    kc_id: uuid.UUID | None = None,
+) -> KcSession:
+    """Open the course on its current topic and remember the tutor for this course only."""
+    if not goal.ready:
+        raise HTTPException(status_code=422, detail="This course is not ready.")
+    explicit = tutor_profile_id is not None and str(tutor_profile_id).strip()
+    if explicit:
+        profile = get_profile_by_id_or_slug(db, tutor_profile_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Tutor profile not found")
+        update_preferred = True
+    else:
+        bound = _course_tutor_id(db, student.id, goal.id)
+        profile = resolve_active_profile(db, student=student, profile_id=bound)
+        update_preferred = False
+    node = _start_component(db, student, goal, kc_id)
+    session = open_session(db, student, goal, node, tutor_profile_id=profile.id)
+    bind_course_tutor(db, student, goal, profile.id, update_preferred=update_preferred)
+    return session
+
+
+def learner_roster(db: Session) -> list[dict]:
+    """Chooser cards: each child, courses in progress, and stars across ready courses."""
+    students = list(db.scalars(select(Student)))
+    students.sort(key=lambda student: (student.display_name or "").lower())
+    roster: list[dict] = []
+    for student in students:
+        courses = tutor_courses(db, student_id=student.id)
+        in_progress = sum(1 for course in courses if course.get("started") and not course.get("course_complete"))
+        stars = sum(int(course.get("stars") or 0) for course in courses)
+        roster.append(
+            {
+                "student": student_out(student).model_dump(mode="json"),
+                "in_progress_course_count": in_progress,
+                "stars": stars,
+                **explorer_progress(stars),
+            }
+        )
+    return roster
 
 
 def _state_map(db: Session, student_id: uuid.UUID, node_ids: list[uuid.UUID]) -> dict[uuid.UUID, KcState]:
@@ -1948,6 +2138,7 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
             or (state.last_practiced if state is not None else None)
         )
         prereqs_in_course = [c for c in _clean_codes(node.prerequisite_codes) if c in everyone_codes]
+        locked = status == "not_started" and not prerequisites_ready(node)
         authored_misc = [
             {"wrong_move": str(m.get("wrong_move") or "").strip(), "broken_kc": str(m.get("broken_kc") or "").strip()}
             for m in (node.misconceptions or [])
@@ -1967,6 +2158,8 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
             "patch": node.id not in target_ids,
             "status": status,
             "mastery": mastery,
+            "child_status": child_status_label(status, mastery, locked=locked),
+            "practice_bonus": status == "completed" and mastery != "known",
             "p_known": p_known_val,
             "finished_blocks": done,
             "completed_blocks": done,
@@ -2015,6 +2208,7 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
     ]
     last_active_iso = max(timestamps) if timestamps else None
     accomplishments, opportunities = _synthesize_course_insights(unit_rows)
+    star_roll = stars_from_units(target_units)
 
     external_prereqs: list[str] = []
     for node in targets:
@@ -2056,6 +2250,7 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
         "total_blocks_count": total_blocks_cnt,
         "completed_blocks_count": completed_blocks_cnt,
         "first_try_pass_count": first_try_pass_cnt,
+        **star_roll,
         "last_active_at": last_active_iso,
         "accomplishments": accomplishments,
         "opportunities": opportunities,

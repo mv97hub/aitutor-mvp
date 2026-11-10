@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.engine.defaults import profile_for_age
-from app.models import Student, normalize_child_profile
+from app.models import Student, default_child_profile, normalize_child_profile
 from app.tutor_profile import ensure_default_profile
 
 STUDENTS = [
@@ -57,7 +57,17 @@ def _fill_student(student: Student, spec: dict) -> None:
         student.modality = profile.modality
     if not student.interests:
         student.interests = list(spec["interests"])
-    if not student.child_profile:
+    # The column default is a generic profile, so a brand-new seeded learner
+    # still needs the legacy modality copied in. A saved edit no longer matches
+    # that default and is left alone.
+    raw = student.child_profile if isinstance(student.child_profile, dict) else {}
+    untouched = (
+        not raw
+        or raw == default_child_profile(student.age)
+        or raw == default_child_profile(10)
+        or raw == default_child_profile(None)
+    )
+    if untouched:
         student.child_profile = normalize_child_profile(
             {},
             age=student.age,
