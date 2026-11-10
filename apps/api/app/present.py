@@ -87,6 +87,7 @@ def student_out(student) -> StudentOut:
         tutor_struggle_window=student.tutor_struggle_window or "minimum",
         tutor_anti_spoiler=bool(student.tutor_anti_spoiler),
         tutor_pacing=student.tutor_pacing or "short-turns-one-question",
+        preferred_tutor_profile_id=getattr(student, "preferred_tutor_profile_id", None),
     )
 
 

@@ -272,6 +272,12 @@ class Student(Base):
     tutor_pacing: Mapped[str] = mapped_column(
         String(80), nullable=False, default="short-turns-one-question"
     )
+    preferred_tutor_profile_id: Mapped[str | None] = mapped_column(
+        String(120),
+        ForeignKey("tutor_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -378,19 +384,47 @@ def default_kc_tutor_config() -> dict:
     }
 
 
+DEFAULT_TUTOR_DESCRIPTION = (
+    "Standard balanced AI Tutor profile using research-backed guided discovery "
+    "and adaptive child vocabulary."
+)
+
+
 class TutorProfile(Base):
-    """One default tutor profile, applied to every student."""
+    """A configurable AI Tutor profile (Default + custom profiles)."""
 
     __tablename__ = "tutor_profiles"
     __table_args__ = (
-        CheckConstraint("id = 'default'", name="ck_tutor_profiles_singleton"),
+        UniqueConstraint("slug", name="uq_tutor_profiles_slug"),
         CheckConstraint(
             "instructive >= 1 AND instructive <= 5",
             name="ck_tutor_profiles_instructive",
         ),
     )
 
-    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    name: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="Default", server_default="Default"
+    )
+    slug: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="default", server_default="default"
+    )
+    description: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default=DEFAULT_TUTOR_DESCRIPTION,
+        server_default=DEFAULT_TUTOR_DESCRIPTION,
+    )
+    avatar_preset: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="default_circle",
+        server_default="default_circle",
+    )
+    avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     instructive: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     persona: Mapped[str] = mapped_column(String(40), nullable=False)
     lexicon: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -1029,6 +1063,12 @@ class KcSession(Base):
     )
     kc_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("kc_nodes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tutor_profile_id: Mapped[str | None] = mapped_column(
+        String(120),
+        ForeignKey("tutor_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
     )
     recipe: Mapped[str] = mapped_column(String(40), nullable=False, default="block_walk", server_default="block_walk")
     step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

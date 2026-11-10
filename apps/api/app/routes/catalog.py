@@ -18,6 +18,7 @@ from app.flow import apply_student_profile, now, unique_course_code, unique_stud
 from app.models import (
     AGE_BANDS,
     Course,
+    KcSession,
     Quest,
     Session as TutorSession,
     Student,
@@ -41,7 +42,9 @@ from app.schemas import (
     StudentCreate,
     StudentOut,
     StudentPatch,
+    StudentTutorProfileIn,
 )
+from app.tutor_profile import ensure_default_profile, get_profile_by_id_or_slug
 
 router = APIRouter()
 
@@ -205,7 +208,48 @@ def patch_student(student_id: UUID, body: StudentPatch, db: Session = Depends(ge
         student.tutor_anti_spoiler = body.tutor_anti_spoiler
     if "tutor_pacing" in provided and body.tutor_pacing is not None:
         student.tutor_pacing = body.tutor_pacing.strip()
+    if "preferred_tutor_profile_id" in provided:
+        _assign_student_tutor_profile(db, student, body.preferred_tutor_profile_id)
     _apply_child_profile_updates(student, body, provided, age_changed=age_changed)
+    db.flush()
+    return student_out(student)
+
+
+def _assign_student_tutor_profile(
+    db: Session,
+    student: Student,
+    raw_profile_id: str | int | None,
+) -> None:
+    ensure_default_profile(db)
+    resolved_id: str | None = None
+    if raw_profile_id is not None and str(raw_profile_id).strip():
+        target = get_profile_by_id_or_slug(db, raw_profile_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Tutor profile not found")
+        resolved_id = target.id
+    student.preferred_tutor_profile_id = resolved_id
+    open_sessions = list(
+        db.scalars(
+            select(KcSession).where(
+                KcSession.student_id == student.id,
+                KcSession.status == "in_progress",
+            )
+        )
+    )
+    for sess in open_sessions:
+        sess.tutor_profile_id = resolved_id
+
+
+@router.put("/students/{student_id}/tutor-profile", response_model=StudentOut)
+def put_student_tutor_profile(
+    student_id: UUID,
+    body: StudentTutorProfileIn,
+    db: Session = Depends(get_db),
+) -> StudentOut:
+    student = db.get(Student, student_id)
+    if student is None:
+        raise HTTPException(status_code=404, detail="Student not found")
+    _assign_student_tutor_profile(db, student, body.tutor_profile_id)
     db.flush()
     return student_out(student)
 

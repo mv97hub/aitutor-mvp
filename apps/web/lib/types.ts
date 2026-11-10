@@ -39,9 +39,17 @@ export type Student = {
   tutor_struggle_window: string;
   tutor_anti_spoiler: boolean;
   tutor_pacing: string;
+  preferred_tutor_profile_id?: string | null;
 };
 
 export type TutorProfile = {
+  id?: string;
+  name?: string;
+  slug?: string;
+  description?: string;
+  avatar_preset?: string;
+  avatar_url?: string | null;
+  is_default?: boolean;
   instructive: number;
   persona: string;
   lexicon: string;

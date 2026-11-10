@@ -370,6 +370,12 @@ export type KcTutorSession = {
   block_progress?: KcBlockProgress[];
   reply?: string;
   passed?: boolean;
+  tutor_profile_id?: string;
+  tutor_name?: string;
+  tutor_slug?: string;
+  tutor_description?: string;
+  avatar_preset?: string;
+  avatar_url?: string | null;
   redirect: { id: string; code: string; title: string } | null;
   messages: { id: string; role: "user" | "assistant"; content: string; seq: number }[];
 };

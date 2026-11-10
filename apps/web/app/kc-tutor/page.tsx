@@ -6,7 +6,7 @@ import type { KcChatDetail, KcDebugVariable, KcProgress, KcTutorCourse, KcTutorS
 import { debugTurns, type KcDebugTurn } from "@/lib/kc-debug";
 import { kcModel } from "@/lib/kc-models";
 import { openedSessionPath, tutorSessionTarget } from "@/lib/kc-tutor-path";
-import type { Student } from "@/lib/types";
+import type { Student, TutorProfile } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +20,7 @@ export default async function KcTutorPage({
   const params = await searchParams;
   let students: Student[] = [];
   let courses: KcTutorCourse[] = [];
+  let tutorProfiles: TutorProfile[] = [];
   let progress: KcProgress | null = null;
   let session: KcTutorSession | null = null;
   let variables: KcDebugVariable[] = [];
@@ -27,7 +28,11 @@ export default async function KcTutorPage({
   let error: string | null = params.error ? decodeURIComponent(params.error) : null;
   let redirectTo: string | null = null;
   try {
-    [students, courses] = await Promise.all([api<Student[]>("/students"), api<KcTutorCourse[]>("/kc/tutor/courses")]);
+    [students, courses, tutorProfiles] = await Promise.all([
+      api<Student[]>("/students"),
+      api<KcTutorCourse[]>("/kc/tutor/courses"),
+      api<TutorProfile[]>("/tutor-profiles").catch(() => []),
+    ]);
     if (params.student && params.course) {
       progress = await api<KcProgress>(`/kc/tutor/courses/${params.course}?student_id=${params.student}`);
     }
@@ -68,6 +73,7 @@ export default async function KcTutorPage({
     <KcTutor
       students={students}
       courses={courses}
+      tutorProfiles={tutorProfiles}
       studentId={params.student ?? ""}
       courseId={params.course ?? ""}
       kcId={params.kc ?? ""}

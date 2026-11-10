@@ -44,16 +44,19 @@ export function KcPromptTester({
   courses,
   students,
   profile,
+  profiles = [],
   loadError,
 }: {
   courses: KcCourse[];
   students: Student[];
   profile: TutorProfile | null;
+  profiles?: TutorProfile[];
   loadError: string | null;
 }) {
   const [courseId, setCourseId] = useState("");
   const [unitId, setUnitId] = useState("");
   const [childId, setChildId] = useState("");
+  const [profileId, setProfileId] = useState(profile?.id || "default");
   const [typeFields, setTypeFields] = useState<Record<string, unknown>>({});
   const [blocks, setBlocks] = useState<KcBlock[]>([]);
   const [values, setValues] = useState<TesterValues>(() => emptyTesterValues(profile ?? DEFAULT_TUTOR_PROFILE));
@@ -113,6 +116,31 @@ export function KcPromptTester({
     const child = students.find((item) => item.id === nextId);
     if (!child) return;
     setValues((current) => applyChild(current, child));
+  }
+
+  function onProfile(nextId: string) {
+    setProfileId(nextId);
+    const chosen = profiles.find((item) => item.id === nextId) ?? profile;
+    if (!chosen) return;
+    const freshDefaults = emptyTesterValues(chosen);
+    setValues((current) => ({
+      ...current,
+      Persona: freshDefaults.Persona,
+      "Vocabulary register": freshDefaults["Vocabulary register"],
+      "Interest weaving": freshDefaults["Interest weaving"],
+      Metaphors: freshDefaults.Metaphors,
+      "Humor and wit": freshDefaults["Humor and wit"],
+      Sidekick: freshDefaults.Sidekick,
+      "Orient framing": freshDefaults["Orient framing"],
+      "Instructional stance": freshDefaults["Instructional stance"],
+      "Scaffolding escalation": freshDefaults["Scaffolding escalation"],
+      "Stay on course": freshDefaults["Stay on course"],
+      "Misconception policy": freshDefaults["Misconception policy"],
+      "Prerequisite support policy": freshDefaults["Prerequisite support policy"],
+      "Encouragement style": freshDefaults["Encouragement style"],
+      "Close summary depth": freshDefaults["Close summary depth"],
+    }));
+    setTutorConfig(kcTutorConfigFrom(chosen.kc_tutor_config));
   }
 
   async function onSubmit(event: FormEvent) {
@@ -200,6 +228,18 @@ export function KcPromptTester({
                   {students.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.display_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {heading === "Layer 3, Voice" && profiles.length > 0 ? (
+              <label>
+                Tutor Profile
+                <select aria-label="Tutor Profile" value={profileId} onChange={(event) => onProfile(event.target.value)}>
+                  {profiles.map((item) => (
+                    <option key={item.id || item.slug} value={item.id || "default"}>
+                      {item.name || "Default"} ({item.slug || item.id || "default"})
                     </option>
                   ))}
                 </select>
