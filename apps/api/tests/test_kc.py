@@ -3291,3 +3291,102 @@ def test_a_block_draft_is_valid_without_mixes() -> None:
         assert "type_fields" not in named.json()["draft"]
     finally:
         _wipe_zz()
+
+
+def test_kc_progress_analytics_and_accomplishments_opportunities() -> None:
+    storm = _storm()
+    _clear_progress(storm.id)
+    course = _ready(
+        _make("zz-analytics", title="Analytics Course"),
+        [
+            _spec("zz-an-known", "Known Concept"),
+            _spec("zz-an-fragile", "Fragile Concept", prerequisite_codes=["zz-an-known"]),
+            _spec("zz-an-open", "Open Concept", prerequisite_codes=["zz-an-fragile"]),
+        ],
+    )
+    try:
+        known_node = _node(course, "zz-an-known")
+        fragile_node = _node(course, "zz-an-fragile")
+        open_node = _node(course, "zz-an-open")
+
+        s_known = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": known_node["id"]},
+        ).json()
+        _decide(
+            s_known["id"],
+            "Explains known concept clearly.",
+            reply="Great explanation.",
+            what_was_strong="Explained the core mechanism on the first try.",
+            what_to_work_on="Keep applying this rule.",
+            score_justification="Passed every counting block on the first try.",
+        )
+
+        s_fragile = client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": fragile_node["id"]},
+        ).json()
+        _miss_until_revealed(
+            s_fragile["id"],
+            what_was_strong="Stayed engaged through the hints.",
+            what_to_work_on="Practice stating the rule without a prompt.",
+            score_justification="Required a reveal after max retries.",
+        )
+
+        client.post(
+            "/kc/tutor/sessions",
+            json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": open_node["id"]},
+        )
+
+        courses_resp = client.get(
+            "/kc/tutor/courses",
+            params={"student_id": str(storm.id)},
+        )
+        assert courses_resp.status_code == 200, courses_resp.text
+        tile = next(item for item in courses_resp.json() if item["code"] == "zz-analytics")
+        assert tile["component_count"] == 3
+        assert tile["completed_count"] == 2
+        assert tile["known_count"] == 1
+        assert tile["fragile_count"] == 1
+        assert tile["in_progress_count"] == 1
+        assert tile["not_started_count"] == 0
+        assert tile["total_blocks_count"] == 3
+        assert tile["completed_blocks_count"] == 2
+        assert tile["first_try_pass_count"] == 1
+        assert tile["last_active_at"] is not None
+        assert len(tile["accomplishments_preview"]) >= 1
+        assert len(tile["opportunities_preview"]) >= 1
+
+        detail = client.get(
+            f"/kc/tutor/courses/{course['id']}",
+            params={"student_id": str(storm.id)},
+        ).json()
+        assert detail["total_blocks_count"] == 3
+        assert detail["completed_blocks_count"] == 2
+        assert detail["first_try_pass_count"] == 1
+        assert detail["last_active_at"] is not None
+        assert any(a["kind"] == "strength" for a in detail["accomplishments"])
+        assert any(a["kind"] == "mastered" for a in detail["accomplishments"])
+        assert any(o["kind"] == "weakness" for o in detail["opportunities"])
+        assert any(o["kind"] == "revealed_block" for o in detail["opportunities"])
+        assert any(o["kind"] == "in_progress" for o in detail["opportunities"])
+
+        units_by_code = {u["code"]: u for u in detail["units"]}
+        ku = units_by_code["zz-an-known"]
+        assert ku["dependent_codes"] == ["zz-an-fragile"]
+        assert ku["passed_blocks_count"] == 1
+        assert ku["first_try_blocks_count"] == 1
+        assert ku["block_details"][0]["passed_on_first_try"] is True
+        assert ku["block_details"][0]["outcome"] == "passed"
+        assert ku["what_was_strong"] == "Explained the core mechanism on the first try."
+
+        fu = units_by_code["zz-an-fragile"]
+        assert fu["prerequisite_codes"] == ["zz-an-known"]
+        assert fu["dependent_codes"] == ["zz-an-open"]
+        assert fu["revealed_blocks_count"] == 1
+        assert fu["block_details"][0]["outcome"] == "revealed"
+        assert fu["what_to_work_on"] == "Practice stating the rule without a prompt."
+    finally:
+        _clear_progress(storm.id)
+        _wipe_zz()
+

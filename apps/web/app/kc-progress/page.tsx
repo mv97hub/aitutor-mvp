@@ -13,15 +13,26 @@ export default async function KcProgressPage({
   searchParams: Promise<{ student?: string; course?: string }>;
 }) {
   const params = await searchParams;
-  const studentId = params.student ?? "";
-  const courseId = params.course ?? "";
+  let studentId = params.student ?? "";
+  let courseId = params.course ?? "";
   let students: Student[] = [];
   let courses: KcTutorCourse[] = [];
   let progress: KcProgress | null = null;
   let network: KcNetwork | null = null;
   let error: string | null = null;
   try {
-    [students, courses] = await Promise.all([api<Student[]>("/students"), api<KcTutorCourse[]>("/kc/tutor/courses")]);
+    students = await api<Student[]>("/students");
+    if (!studentId && students.length > 0) {
+      studentId = students[0].id;
+    }
+    const courseQuery = studentId ? `?student_id=${encodeURIComponent(studentId)}` : "";
+    courses = await api<KcTutorCourse[]>(`/kc/tutor/courses${courseQuery}`);
+    if (!courseId && courses.length > 0) {
+      const activeOrDone = courses.find(
+        (c) => (c.completed_count ?? 0) > 0 || (c.in_progress_count ?? 0) > 0,
+      );
+      courseId = (activeOrDone ?? courses[0]).id;
+    }
     if (studentId && courseId) {
       [progress, network] = await Promise.all([
         api<KcProgress>(`/kc/tutor/courses/${courseId}?student_id=${studentId}`),

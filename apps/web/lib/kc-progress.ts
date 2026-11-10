@@ -1,3 +1,8 @@
+import type {
+  KcBlockDetail,
+  KcMisconception,
+} from "./kc.ts";
+
 export type KcUnitStatus = "completed" | "in_progress" | "not_started";
 
 export type KcProgressBlock = {
@@ -14,14 +19,37 @@ export type KcProgressUnit = {
   id: string;
   code: string;
   title: string;
+  description?: string;
+  outline?: string;
+  core_truth?: string;
   kc_type: string | null;
   summary?: string;
   patch: boolean;
   status: KcUnitStatus;
   mastery?: "" | "known" | "fragile";
+  p_known?: number;
   finished_blocks?: number;
+  completed_blocks?: number;
   total_blocks?: number;
+  passed_blocks_count?: number;
+  revealed_blocks_count?: number;
+  first_try_blocks_count?: number;
+  total_attempts?: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+  updated_at?: string | null;
+  strengths?: string;
+  what_was_strong?: string;
+  weaknesses?: string;
+  what_to_work_on?: string;
+  close_text?: string;
+  score_justification?: string;
+  prerequisite_codes?: string[];
+  dependent_codes?: string[];
+  misconceptions?: KcMisconception[];
+  student_misconceptions?: string[];
   blocks?: KcProgressBlock[];
+  block_details?: KcBlockDetail[];
   rubric?: string[];
   result?: {
     status: "known" | "fragile";
@@ -74,8 +102,14 @@ export function masteryByCode(units: KcProgressUnit[]): Record<string, string> {
   );
 }
 
-export function networkStatusClass(status: KcUnitStatus | undefined): string {
-  if (status === "completed") return "is-completed";
+export function networkStatusClass(
+  status: KcUnitStatus | undefined,
+  mastery?: string,
+): string {
+  if (status === "completed") {
+    if (mastery === "fragile") return "is-completed is-fragile";
+    return "is-completed";
+  }
   if (status === "in_progress") return "is-in-progress";
   if (status === "not_started") return "is-not-started";
   return "";

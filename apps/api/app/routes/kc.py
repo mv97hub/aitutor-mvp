@@ -372,8 +372,11 @@ def remove_node(node_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/kc/tutor/courses")
-def get_tutor_courses(db: Session = Depends(get_db)) -> list[dict]:
-    return tutor_courses(db)
+def get_tutor_courses(
+    student_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return tutor_courses(db, student_id=student_id)
 
 
 @router.get("/kc/tutor/courses/{course_id}")
