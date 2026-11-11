@@ -3,7 +3,7 @@ import { generateText, jsonSchema, Output, wrapLanguageModel, type LanguageModel
 import { api } from "@/lib/api";
 import type { KcTutorSession } from "@/lib/kc";
 import { languageModel } from "@/lib/language-model";
-import { DEFAULT_KC_MODEL, isKcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
+import { isKcModel, kcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { readModelUsage, type ModelUsageCounts } from "@/lib/model-usage";
 import { requestForCall, type ModelCall } from "@/lib/stored-prompt";
 
@@ -19,6 +19,8 @@ type PromptBundle = {
   recipe: string;
   step: number;
   step_label: string;
+  tutor_model?: string;
+  model?: string;
 };
 
 type Decision = {
@@ -48,14 +50,6 @@ export async function POST(req: Request) {
   if (requested && !isKcModel(called)) {
     return new Response("That model is not allowed.", { status: 422 });
   }
-  const modelName = called && isKcModel(called) ? called : DEFAULT_KC_MODEL;
-  const missingKey = missingKeyMessage(modelName);
-  if (missingKey) {
-    return new Response(missingKey, {
-      status: 503,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-    });
-  }
 
   let prior: KcTutorSession;
   try {
@@ -71,6 +65,16 @@ export async function POST(req: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not load the prompt.";
     return new Response(message, { status: 502 });
+  }
+
+  const modelName =
+    called && isKcModel(called) ? called : kcModel(bundle.tutor_model ?? bundle.model ?? prior.tutor_model);
+  const missingKey = missingKeyMessage(modelName);
+  if (missingKey) {
+    return new Response(missingKey, {
+      status: 503,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
   }
 
   let captured: StoredCall | null = null;

@@ -15,6 +15,7 @@ import {
   RESPONSE_LENGTH_OPTIONS,
   gradeBandForAge,
 } from "@/lib/kc-layer-fields";
+import { KC_MODEL_OPTIONS } from "@/lib/kc-models";
 import {
   challengeChoices,
   explanationChoices,
@@ -272,6 +273,12 @@ export function BasicsFields({
           gradeTouched.current = true;
           onChange({ ...draft, grade_band });
         }}
+      />
+      <SelectField
+        label="AI Model"
+        value={draft.tutor_model}
+        options={KC_MODEL_OPTIONS}
+        onChange={(tutor_model) => onChange({ ...draft, tutor_model })}
       />
       <div className="learn-field">
         <span>Interest tags</span>

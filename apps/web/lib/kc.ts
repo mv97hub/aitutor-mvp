@@ -445,6 +445,7 @@ export type KcChatSummary = {
   message_count: number;
   safety_event_count?: number;
   unreviewed_safety_count?: number;
+  tutor_model?: string;
 };
 
 export type KcChatDetail = {
@@ -457,7 +458,8 @@ export type KcChatDetail = {
   attempts: number;
   created_at: string;
   updated_at: string;
-  student: { id: string; display_name: string };
+  tutor_model?: string;
+  student: { id: string; display_name: string; tutor_model?: string; child_profile?: { tutor_model?: string } };
   course: { id: string; code: string; title: string };
   component: { id: string; code: string; title: string; kc_type: string | null };
   messages: { id: string; role: "user" | "assistant"; content: string; seq: number; created_at: string }[];
@@ -504,6 +506,8 @@ export type KcDebugVariable = {
 
 export type KcTutorSession = {
   id: string;
+  student_id?: string;
+  tutor_model?: string;
   course_id: string;
   kc_id: string;
   code: string;

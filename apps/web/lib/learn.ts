@@ -7,6 +7,7 @@ import {
   gradeBandForAge,
 } from "./kc-layer-fields.ts";
 import type { KcTutorCourse } from "./kc.ts";
+import { DEFAULT_KC_MODEL, kcModel } from "./kc-models.ts";
 import type { Student } from "./types.ts";
 
 /** Keep these thresholds aligned with apps/api/app/learn_stars.py. */
@@ -62,6 +63,7 @@ export type ChildDraft = {
   interests: string;
   avatar_preset: string;
   avatar_url: string;
+  tutor_model: string;
 };
 
 export type LearnerCard = {
@@ -154,6 +156,7 @@ export function blankChildDraft(): ChildDraft {
     interests: "",
     avatar_preset: "",
     avatar_url: "",
+    tutor_model: DEFAULT_KC_MODEL,
   };
 }
 
@@ -175,6 +178,7 @@ export function draftFromStudent(student: Student): ChildDraft {
     interests: cp?.interests || (student.interests || []).join(", "),
     avatar_preset: cp?.avatar_preset || "",
     avatar_url: cp?.avatar_url || "",
+    tutor_model: kcModel(student.tutor_model || cp?.tutor_model),
   };
 }
 
@@ -189,6 +193,7 @@ export function childWriteBody(draft: ChildDraft, opts: { includeName: boolean }
   const age = Number(draft.age);
   const favorites = draft.interests.trim().slice(0, 120);
   const tags = draft.interest_tags.slice(0, 4);
+  const tutorModel = kcModel(draft.tutor_model);
   const profile = {
     grade_band: draft.grade_band || gradeBandForAge(age),
     reading_level: draft.reading_level || "on_grade",
@@ -202,6 +207,7 @@ export function childWriteBody(draft: ChildDraft, opts: { includeName: boolean }
     interests: favorites,
     avatar_preset: draft.avatar_preset,
     avatar_url: draft.avatar_url.trim(),
+    tutor_model: tutorModel,
   };
   const interests = favorites
     .split(",")
@@ -220,6 +226,7 @@ export function childWriteBody(draft: ChildDraft, opts: { includeName: boolean }
     learning_support: profile.learning_support,
     interest_tags: tags,
     interests,
+    tutor_model: tutorModel,
     child_profile: profile,
   };
   if (opts.includeName) body.display_name = draft.name.trim();

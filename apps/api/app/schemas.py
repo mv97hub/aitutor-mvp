@@ -31,6 +31,7 @@ class StudentOut(BaseModel):
     communication_tone: str = "warm_and_encouraging"
     learning_support: str = "none"
     interest_tags: list[str] = Field(default_factory=list)
+    tutor_model: str = "gpt-4.1"
     child_profile: dict = Field(default_factory=dict)
     tutor_persona: str = ""
     tutor_lexicon: str = ""
@@ -57,6 +58,7 @@ class StudentCreate(BaseModel):
     communication_tone: str | None = None
     learning_support: str | None = None
     interest_tags: list[str] | None = None
+    tutor_model: str | None = None
     child_profile: dict | None = None
     tutor_persona: str | None = None
     tutor_lexicon: str | None = None
@@ -81,6 +83,7 @@ class StudentPatch(BaseModel):
     communication_tone: str | None = None
     learning_support: str | None = None
     interest_tags: list[str] | None = None
+    tutor_model: str | None = None
     child_profile: dict | None = None
     tutor_persona: str | None = None
     tutor_lexicon: str | None = None
@@ -622,6 +625,7 @@ class KcChatSummary(BaseModel):
     message_count: int
     safety_event_count: int = 0
     unreviewed_safety_count: int = 0
+    tutor_model: str = "gpt-4.1"
 
 
 class KcChatCourse(BaseModel):
@@ -696,6 +700,7 @@ class KcChatDetail(BaseModel):
     attempts: int
     created_at: datetime
     updated_at: datetime
+    tutor_model: str = "gpt-4.1"
     student: StudentOut
     course: KcChatCourse
     component: KcChatComponent

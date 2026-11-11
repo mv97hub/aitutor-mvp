@@ -3058,8 +3058,12 @@ def session_out(db: Session, session: KcSession) -> dict:
         choice = on_screen_choice(block, substep, state, cfg)
     label = block_step_label(block, index, len(blocks), substep, state) if block is not None else "This step"
     redirect = db.get(KcNode, session.redirect_kc_id) if session.redirect_kc_id else None
+    student = db.get(Student, session.student_id)
+    tutor_model = effective_child_profile(student)["tutor_model"]
     return {
         "id": str(session.id),
+        "student_id": str(session.student_id),
+        "tutor_model": tutor_model,
         "course_id": str(session.goal_id),
         "kc_id": str(session.kc_id),
         "code": node.code if node else "",
@@ -3694,6 +3698,7 @@ def tutor_variables(
         [
             _row("Display name", student.display_name if student is not None else "", _LAYER_2),
             _row("Age", "" if student is None or student.age is None else str(student.age), _LAYER_2),
+            _row("Tutor model", "" if cp is None else str(cp["tutor_model"]), _LAYER_2),
             _row("Grade band", "" if cp is None else str(cp["grade_band"]), _LAYER_2),
             _row("Reading level", "" if cp is None else str(cp["reading_level"]), _LAYER_2),
             _row("Response length", "" if cp is None else str(cp["response_length"]), _LAYER_2),
@@ -3859,6 +3864,9 @@ def prompt_for(db: Session, session: KcSession) -> dict:
     bundle["recipe"] = session.recipe
     bundle["step"] = session.step
     bundle["step_label"] = block_step_label(active, index, max(len(blocks), 1), substep, block_state)
+    tutor_model = effective_child_profile(student)["tutor_model"]
+    bundle["tutor_model"] = tutor_model
+    bundle["model"] = tutor_model
     return bundle
 
 
@@ -4156,6 +4164,17 @@ def kc_prompt_out(row: KcModelPrompt) -> dict:
     }
 
 
+def _session_tutor_model(session: KcSession) -> str:
+    latest = ""
+    for row in reversed(list(session.prompts or [])):
+        chosen = str(getattr(row, "model", "") or "").strip()
+        if chosen:
+            latest = chosen
+            break
+    configured = effective_child_profile(session.student)["tutor_model"]
+    return latest or configured
+
+
 def _chat_summary(
     session: KcSession,
     *,
@@ -4185,6 +4204,7 @@ def _chat_summary(
         "message_count": len(session.messages),
         "safety_event_count": safety_event_count,
         "unreviewed_safety_count": unreviewed_safety_count,
+        "tutor_model": _session_tutor_model(session),
     }
 
 
@@ -4221,6 +4241,7 @@ def kc_chat_detail(db: Session, session_id: uuid.UUID) -> dict:
         "attempts": session.attempts,
         "created_at": session.created_at,
         "updated_at": session.updated_at,
+        "tutor_model": _session_tutor_model(session),
         "student": student_out(session.student).model_dump(),
         "course": {
             "id": session.goal_id,
@@ -4263,6 +4284,10 @@ def append_kc_model_prompt(
         linked = db.get(KcMessage, message_id)
         if linked is None or linked.session_id != session.id:
             raise HTTPException(status_code=400, detail="That message is not part of this chat.")
+    stored_model = (model or "").strip()
+    if not stored_model:
+        student = db.get(Student, session.student_id)
+        stored_model = effective_child_profile(student)["tutor_model"]
     seq = db.scalar(select(func.max(KcModelPrompt.seq)).where(KcModelPrompt.session_id == session.id))
     row = KcModelPrompt(
         session_id=session.id,
@@ -4270,7 +4295,7 @@ def append_kc_model_prompt(
         seq=(seq or 0) + 1,
         system_prompt=system_prompt,
         messages=messages,
-        model=model.strip(),
+        model=stored_model,
         rubric_met=[str(item) for item in (rubric_met or []) if str(item).strip()],
         misconception=(misconception or "").strip() or None,
     )

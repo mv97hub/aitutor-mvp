@@ -25,6 +25,10 @@ export type KcModel = (typeof KC_MODELS)[number];
 
 export const DEFAULT_KC_MODEL: KcModel = "gpt-4.1";
 
+export const KC_MODEL_OPTIONS: readonly (readonly [KcModel, string])[] = KC_MODELS.map(
+  (id) => [id, id] as const,
+);
+
 export const MISSING_OPENAI_KEY =
   "OPENAI_API_KEY is not set. Copy .env.example to apps/web/.env.local, set OPENAI_API_KEY to your real key, and restart the Next.js server.";
 
@@ -45,6 +49,13 @@ export function kcModel(value: string | undefined | null): KcModel {
 
 export function isKcModel(value: string): value is KcModel {
   return (KC_MODELS as readonly string[]).includes(value);
+}
+
+/** A query or request model, or "" when the caller did not choose one. */
+export function explicitKcModel(value: string | undefined | null): KcModel | "" {
+  const cleaned = modelForCall(value || "");
+  if (!cleaned || !isKcModel(cleaned)) return "";
+  return cleaned;
 }
 
 export function usesOpenRouter(model: string): boolean {

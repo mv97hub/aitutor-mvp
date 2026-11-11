@@ -44,6 +44,7 @@ from app.models import (
     Student,
     TutorProfile,
     default_kc_tutor_config,
+    effective_child_profile,
     normalize_child_profile,
 )
 from app.tutor_profile import (
@@ -92,6 +93,7 @@ class PromptTesterIn(BaseModel):
     course_position: str = ""
     display_name: str = ""
     age: int | None = None
+    tutor_model: str = "gpt-4.1"
     grade_band: str = ""
     reading_level: str = ""
     response_length: str = ""
@@ -300,7 +302,7 @@ def _rows(body: PromptTesterIn) -> tuple[Student, TutorProfile, KcNode, KcGoal, 
     cfg = _effective_config(body)
     blocks = _effective_blocks(body)
     rubric = list(body.rubric) or derive_rubric_from_blocks(blocks)
-    child_raw: dict = {}
+    child_raw: dict = {"tutor_model": body.tutor_model}
     for k in (
         "grade_band",
         "reading_level",
@@ -451,4 +453,5 @@ def preview_kc_prompt(body: PromptTesterIn) -> dict:
         "evidence": ev_id,
         "max_retries": max_retries,
         "uses_choice_widget": "yes" if widget_on else "no",
+        "tutor_model": effective_child_profile(student)["tutor_model"],
     }

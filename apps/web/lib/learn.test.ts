@@ -38,7 +38,7 @@ test("child status labels never include the technical mastery word", () => {
   }
 });
 
-test("a new learner write includes the avatar and the twelve persona fields", () => {
+test("a new learner write includes the avatar, the persona fields, and the tutor model", () => {
   const draft = blankChildDraft();
   draft.name = "Nova";
   draft.age = "9";
@@ -47,11 +47,18 @@ test("a new learner write includes the avatar and the twelve persona fields", ()
   draft.interests = "rockets";
   const body = childWriteBody(draft, { includeName: true });
   assert.equal(body.display_name, "Nova");
-  const profile = body.child_profile as { avatar_preset: string; interest_tags: string[]; interests: string };
+  const profile = body.child_profile as {
+    avatar_preset: string;
+    interest_tags: string[];
+    interests: string;
+    tutor_model: string;
+  };
   assert.equal(profile.avatar_preset, "fox");
   assert.deepEqual(profile.interest_tags, ["space_and_science", "video_games"]);
   assert.equal(profile.interests, "rockets");
-  assert.equal(Object.keys(profile).length, 12);
+  assert.equal(profile.tutor_model, "gpt-4.1");
+  assert.equal(body.tutor_model, "gpt-4.1");
+  assert.equal(Object.keys(profile).length, 13);
 });
 
 test("topic stars and a passed block use the child star rules", () => {

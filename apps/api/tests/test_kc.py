@@ -1511,6 +1511,7 @@ def test_kc_chat_admin_lists_the_session_and_the_stored_prompt() -> None:
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": node["id"]},
         )
         assert opened.status_code == 200, opened.text
+        assert opened.json()["tutor_model"] == "gpt-4.1"
         session_id = opened.json()["id"]
         spoken = client.post(
             f"/kc/tutor/sessions/{session_id}/speech",
@@ -1543,6 +1544,7 @@ def test_kc_chat_admin_lists_the_session_and_the_stored_prompt() -> None:
         assert row["message_count"] == 1
         assert row["score"] is None
         assert row["step_label"]
+        assert row["tutor_model"] == "gpt-4o-mini"
         filtered = client.get(f"/kc/sessions?student_id={storm.id}")
         assert [item["id"] for item in filtered.json() if item["id"] == session_id] == [session_id]
         assert client.get(f"/kc/sessions?student_id={uuid.uuid4()}").json() == []
@@ -1553,6 +1555,8 @@ def test_kc_chat_admin_lists_the_session_and_the_stored_prompt() -> None:
         assert detail.status_code == 200, detail.text
         body = detail.json()
         assert body["student"]["id"] == str(storm.id)
+        assert body["student"]["tutor_model"] == "gpt-4.1"
+        assert body["tutor_model"] == "gpt-4o-mini"
         assert body["component"]["code"] == "zz-chat-fact"
         assert body["messages"][0]["content"] == "What is true of River fact?"
         assert body["prompts"][0]["system_prompt"] == "You are the knowledge-component tutor."
@@ -1572,6 +1576,31 @@ def test_kc_chat_admin_lists_the_session_and_the_stored_prompt() -> None:
     finally:
         _clear_progress(storm.id)
         _wipe_zz()
+
+
+def test_child_tutor_model_is_stored_on_the_profile() -> None:
+    storm = _storm()
+    try:
+        patched = client.patch(
+            f"/students/{storm.id}",
+            json={"tutor_model": "deepseek/deepseek-flash-latest"},
+        )
+        assert patched.status_code == 200, patched.text
+        body = patched.json()
+        assert body["tutor_model"] == "~deepseek/deepseek-flash-latest"
+        assert body["child_profile"]["tutor_model"] == "~deepseek/deepseek-flash-latest"
+        variables = client.get("/kc/tutor/variables", params={"student_id": str(storm.id)})
+        assert variables.status_code == 200, variables.text
+        assert variables.json()["tutor_model"] == "~deepseek/deepseek-flash-latest"
+        names = {row["name"]: row["value"] for row in variables.json()["variables"]}
+        assert names["Tutor model"] == "~deepseek/deepseek-flash-latest"
+        blank = client.get("/kc/tutor/variables")
+        assert blank.json()["tutor_model"] == ""
+        unknown = client.patch(f"/students/{storm.id}", json={"tutor_model": "not-a-model"})
+        assert unknown.status_code == 200, unknown.text
+        assert unknown.json()["tutor_model"] == "gpt-4.1"
+    finally:
+        client.patch(f"/students/{storm.id}", json={"tutor_model": "gpt-4.1"})
 
 
 def _variable_map(response) -> dict[str, str]:

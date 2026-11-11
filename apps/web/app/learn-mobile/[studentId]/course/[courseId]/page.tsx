@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { LearnMobileTutor } from "@/components/learn/LearnMobileTutor";
 import { api } from "@/lib/api";
 import type { KcChatSummary, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
-import { kcModel } from "@/lib/kc-models";
+import { explicitKcModel, kcModel } from "@/lib/kc-models";
 import { learnMobileCoursePath, tutorForSession } from "@/lib/learn-mobile";
 import type { Student, TutorProfile } from "@/lib/types";
 
@@ -86,7 +86,7 @@ export default async function MobileCourseTutorPage({
       session={session}
       error={error}
       tutor={tutorForSession(tutorProfiles, session, learner?.preferred_tutor_profile_id)}
-      model={kcModel(query.model)}
+      model={explicitKcModel(query.model) || kcModel(learner?.tutor_model || learner?.child_profile?.tutor_model)}
     />
   );
 }

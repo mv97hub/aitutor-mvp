@@ -25,7 +25,7 @@ import {
   normalizeExplanationStyleOption,
   normalizeReadingLevelOption,
 } from "@/lib/kc-layer-fields";
-import { KC_MODELS, kcModel, type KcModel } from "@/lib/kc-models";
+import { KC_MODEL_OPTIONS, explicitKcModel, kcModel, type KcModel } from "@/lib/kc-models";
 import { tutorPath } from "@/lib/kc-tutor-path";
 import { friendlyStrength, learnCoursePath, topicStars } from "@/lib/learn";
 import type { Student, TutorProfile } from "@/lib/types";
@@ -46,10 +46,10 @@ type SettingsDraft = {
   interests: string;
 };
 
-function settingsDraft(learner: Student | null, model: string): SettingsDraft {
+function settingsDraft(learner: Student | null): SettingsDraft {
   const cp = learner?.child_profile;
   return {
-    model: kcModel(model),
+    model: kcModel(learner?.tutor_model || cp?.tutor_model),
     age: learner?.age == null ? "10" : String(learner.age),
     grade_band: learner?.grade_band ?? cp?.grade_band ?? gradeBandForAge(learner?.age ?? 10),
     reading_level: normalizeReadingLevelOption(cp?.reading_level ?? learner?.reading_level),
@@ -81,6 +81,7 @@ type ChildDraft = {
   learning_support: string;
   interest_tags: string[];
   interests: string;
+  tutor_model: KcModel;
 };
 
 function blankChild(): ChildDraft {
@@ -97,6 +98,7 @@ function blankChild(): ChildDraft {
     learning_support: "none",
     interest_tags: [],
     interests: "",
+    tutor_model: kcModel(undefined),
   };
 }
 
@@ -118,6 +120,7 @@ function childCreateBody(draft: ChildDraft) {
     challenge_appetite: draft.challenge_appetite || "steady",
     communication_tone: draft.communication_tone || "warm_and_encouraging",
     learning_support: draft.learning_support || "none",
+    tutor_model: kcModel(draft.tutor_model),
     interest_tags: draft.interest_tags.slice(0, 4),
     interests,
     child_profile: {
@@ -131,6 +134,7 @@ function childCreateBody(draft: ChildDraft) {
       learning_support: draft.learning_support || "none",
       interest_tags: draft.interest_tags.slice(0, 4),
       interests: draft.interests.trim().slice(0, 120),
+      tutor_model: kcModel(draft.tutor_model),
     },
   };
 }
@@ -185,11 +189,14 @@ export function KcTutor({
   const [mood, setMood] = useState<TutorMood>("ready");
   const course = courses.find((item) => item.id === courseId) ?? null;
   const learner = students.find((item) => item.id === studentId) ?? null;
+  const explicitModel = explicitKcModel(model);
+  const activeModel =
+    explicitModel || kcModel(learner?.tutor_model || learner?.child_profile?.tutor_model || session?.tutor_model);
   const router = useRouter();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
-  const [draft, setDraft] = useState<SettingsDraft>(() => settingsDraft(learner, model));
+  const [draft, setDraft] = useState<SettingsDraft>(() => settingsDraft(learner));
   const [pickedStudent, setPickedStudent] = useState(studentId);
   const [createdStudents, setCreatedStudents] = useState<Student[]>([]);
   const [addOpen, setAddOpen] = useState(false);
@@ -203,6 +210,10 @@ export function KcTutor({
   const roster = students.concat(
     createdStudents.filter((student) => !students.some((row) => row.id === student.id)),
   );
+  const openedChild = roster.find((student) => student.id === pickedStudent);
+  const openedModel = openedChild
+    ? kcModel(openedChild.tutor_model || openedChild.child_profile?.tutor_model)
+    : activeModel;
 
   useEffect(() => {
     setPickedStudent(studentId);
@@ -286,7 +297,7 @@ export function KcTutor({
 
   function openSettings() {
     setAddOpen(false);
-    setDraft(settingsDraft(learner, model));
+    setDraft(settingsDraft(learner));
     setSettingsNotice(null);
     setSettingsOpen(true);
   }
@@ -323,7 +334,7 @@ export function KcTutor({
         tutorPath({
           student: student.id,
           course: courseId || undefined,
-          model,
+          model: kcModel(child.tutor_model),
         }),
       );
       router.refresh();
@@ -348,7 +359,7 @@ export function KcTutor({
           student: studentId,
           course: courseId,
           kc: restarted.ring[0]?.id,
-          model,
+          model: activeModel,
         }),
       );
       router.refresh();
@@ -361,7 +372,7 @@ export function KcTutor({
 
   function jumpToComponent(kc: string) {
     if (!kc || !studentId || !courseId) return;
-    router.push(tutorPath({ student: studentId, course: courseId, kc, model }));
+    router.push(tutorPath({ student: studentId, course: courseId, kc, model: activeModel }));
     router.refresh();
   }
 
@@ -389,6 +400,7 @@ export function KcTutor({
             challenge_appetite: draft.challenge_appetite,
             communication_tone: draft.communication_tone,
             learning_support: draft.learning_support,
+            tutor_model: kcModel(draft.model),
             interest_tags: draft.interest_tags.slice(0, 4),
             interests: draft.interests
               .split(",")
@@ -405,6 +417,7 @@ export function KcTutor({
               learning_support: draft.learning_support,
               interest_tags: draft.interest_tags.slice(0, 4),
               interests: draft.interests.trim().slice(0, 120),
+              tutor_model: kcModel(draft.model),
             },
           }),
         });
@@ -501,7 +514,7 @@ export function KcTutor({
             }
           }}
         >
-          <input type="hidden" name="model" value={model} />
+          <input type="hidden" name="model" value={openedModel} />
           <label>
             Child
             <select
@@ -594,7 +607,7 @@ export function KcTutor({
             <ul className="kc-cards" aria-label="Next work">
               {progress.cards.map((card) => (
                 <li key={card.role}>
-                  <a href={tutorPath({ student: studentId, course: courseId, kc: card.id, model })}>
+                  <a href={tutorPath({ student: studentId, course: courseId, kc: card.id, model: activeModel })}>
                     <span>{card.label}</span>
                     <strong>{card.title}</strong>
                     <small>{card.reason}</small>
@@ -605,7 +618,7 @@ export function KcTutor({
             {progress.next_course ? (
               <a
                 className="button kc-next-course"
-                href={tutorPath({ student: studentId, course: progress.next_course.id, model })}
+                href={tutorPath({ student: studentId, course: progress.next_course.id, model: activeModel })}
               >
                 Open {progress.next_course.title}
               </a>
@@ -713,7 +726,7 @@ export function KcTutor({
           <KcLesson
             key={session.id}
             session={session}
-            model={model}
+            model={activeModel}
             activeTutor={activeTutor}
             learnMode={learnMode}
             onActivity={setMood}
@@ -879,6 +892,24 @@ function AddChildDialog({
               maxLength={120}
               autoComplete="off"
             />
+          </label>
+          <label title={hoverFor("AI Model")}>
+            AI Model
+            <select
+              aria-label="AI Model"
+              title={hoverFor("AI Model")}
+              value={draft.tutor_model}
+              onChange={(event) => {
+                const tutor_model = kcModel(event.target.value);
+                setDraft((current) => ({ ...current, tutor_model }));
+              }}
+            >
+              {KC_MODEL_OPTIONS.map(([option]) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
           </label>
           <label title={hoverFor("Age")}>
             Age
@@ -1122,15 +1153,15 @@ function TutorSettingsDialog({
           </button>
         </header>
         <form className="prompt-body" onSubmit={onSubmit}>
-          <label title={hoverFor("Model")}>
-            Model
+          <label title={hoverFor("AI Model")}>
+            AI Model
             <select
-              aria-label="Model"
-              title={hoverFor("Model")}
+              aria-label="AI Model"
+              title={hoverFor("AI Model")}
               value={draft.model}
               onChange={(event) => onChange({ ...draft, model: kcModel(event.target.value) })}
             >
-              {KC_MODELS.map((option) => (
+              {KC_MODEL_OPTIONS.map(([option]) => (
                 <option key={option} value={option}>
                   {option}
                 </option>

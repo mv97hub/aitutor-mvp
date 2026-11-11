@@ -629,8 +629,12 @@ def get_tutor_variables(
         else (_student_or_404(db, student_id) if student_id is not None else None)
     )
     profile = resolve_active_profile(db, session=sess, student=stud, profile_id=tutor_profile_id)
+    from app.models import effective_child_profile
+
+    child = effective_child_profile(stud) if stud is not None else None
     return {
         "variables": variables,
+        "tutor_model": "" if child is None else child["tutor_model"],
         **_tutor_meta_dict(profile),
     }
 
