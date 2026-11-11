@@ -945,6 +945,7 @@ class KcNode(Base):
     core_truth: Mapped[str] = mapped_column(Text, nullable=False, default="")
     rubric: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     misconceptions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    standards: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     prerequisite_codes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     encompasses_codes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     marked_complete: Mapped[bool] = mapped_column(
@@ -1035,6 +1036,7 @@ class KcGoal(Base):
     brief: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     blueprint: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     drafting: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    standards: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     history: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(

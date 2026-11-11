@@ -7,7 +7,11 @@ function copy(blueprint: KcBlueprint): KcBlueprint {
     outcomes: [...blueprint.outcomes],
     units: blueprint.units.map((unit) => ({
       ...unit,
-      components: unit.components.map((item) => ({ ...item, prerequisites: [...item.prerequisites] })),
+      components: unit.components.map((item) => ({
+        ...item,
+        prerequisites: [...item.prerequisites],
+        standards: [...(item.standards ?? [])],
+      })),
     })),
   };
 }
@@ -25,7 +29,7 @@ export function componentCount(blueprint: KcBlueprint): number {
 export function editComponent(
   blueprint: KcBlueprint,
   spot: Spot,
-  change: Partial<Pick<KcBlueprintComponent, "title" | "summary" | "prerequisites">>,
+  change: Partial<Pick<KcBlueprintComponent, "title" | "summary" | "prerequisites" | "standards">>,
 ): KcBlueprint {
   const next = copy(blueprint);
   const item = next.units[spot.unit]?.components[spot.index];
@@ -95,7 +99,7 @@ export function removeComponent(blueprint: KcBlueprint, spot: Spot): KcBlueprint
 /** A new row has no code. The API assigns one when the blueprint is saved. */
 export function addComponent(blueprint: KcBlueprint, unit: number, title = "New component"): KcBlueprint {
   const next = copy(blueprint);
-  next.units[unit]?.components.push({ code: "", title, summary: "", prerequisites: [] });
+  next.units[unit]?.components.push({ code: "", title, summary: "", prerequisites: [], standards: [] });
   return next;
 }
 

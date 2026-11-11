@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 
-import type { KcBlueprint } from "@/lib/kc";
+import { KcCoverageMatrix } from "@/components/KcCoverageMatrix";
+import type { KcBlueprint, KcStatement } from "@/lib/kc";
 import {
   addComponent,
   earlierCodes,
@@ -17,11 +18,13 @@ import {
 /** The blueprint, editable before any descriptions are written. */
 export function KcBlueprintEditor({
   blueprint,
+  statements = [],
   busy,
   onSave,
   onApprove,
 }: {
   blueprint: KcBlueprint;
+  statements?: KcStatement[];
   busy: boolean;
   onSave: (blueprint: KcBlueprint) => void;
   onApprove: (blueprint: KcBlueprint) => void;
@@ -45,6 +48,8 @@ export function KcBlueprintEditor({
 
   return (
     <div className="kc-blueprint">
+      <div className="kc-blueprint-layout">
+        <div className="kc-blueprint-main">
       <label>
         Outcomes, one per line
         <textarea
@@ -85,6 +90,7 @@ export function KcBlueprintEditor({
                   <div className="kc-blueprint-row">
                     <strong>{item.code ? `Component ${position.get(item.code)}` : "New component"}</strong>
                     <span className="studio-code">{item.code || "code assigned on save"}</span>
+                    {statements.length && !(item.standards ?? []).length ? <span>Extension</span> : null}
                     <span className="kc-row-actions">
                       <button
                         type="button"
@@ -133,6 +139,20 @@ export function KcBlueprintEditor({
                       onChange={(event) => setDraft(editComponent(draft, spot, { summary: event.target.value }))}
                     />
                   </label>
+                  {statements.length ? (
+                    <label>
+                      Standard codes
+                      <input
+                        aria-label={`Component ${index + 1} standards in unit ${unitIndex + 1}`}
+                        value={(item.standards ?? []).join(", ")}
+                        disabled={busy}
+                        placeholder="Leave blank for an extension"
+                        onChange={(event) =>
+                          setDraft(editComponent(draft, spot, { standards: parseCodes(event.target.value) }))
+                        }
+                      />
+                    </label>
+                  ) : null}
                   <label>
                     Prerequisites
                     <input
@@ -154,6 +174,9 @@ export function KcBlueprintEditor({
           </button>
         </section>
       ))}
+        </div>
+        {statements.length ? <KcCoverageMatrix statements={statements} blueprint={draft} /> : null}
+      </div>
       <div className="kc-pipeline-actions">
         <button type="button" className="ghost" disabled={busy} onClick={() => onSave(draft)}>
           Save blueprint

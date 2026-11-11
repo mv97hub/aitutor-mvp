@@ -70,6 +70,7 @@ from app.tutor_profile import (
     resolve_active_profile,
 )
 from app.kc_pipeline import clean_intake
+from app.kc_standards import component_standards, read_statements, statements_from_intake
 from app.block_catalog import BLOCK_BANNER_LABELS, BLOCK_FIELDS, BLOCK_LABELS, block_summary_label
 from app.models import (
     ALL_BLOCK_TYPES,
@@ -474,6 +475,7 @@ def _detail(node: KcNode, *, target: bool, codes: set[str]) -> dict:
             "core_truth": node.core_truth or "",
             "rubric": list(node.rubric or []),
             "misconceptions": list(node.misconceptions or []),
+            "standards": [str(code) for code in (node.standards or []) if str(code).strip()],
             "prerequisite_codes": list(node.prerequisite_codes or []),
             "encompasses_codes": list(node.encompasses_codes or []),
             "type_fields": dict(node.type_fields or {}),
@@ -505,6 +507,7 @@ def course_out(db: Session, goal: KcGoal) -> dict:
         "allowed_block_types": list(goal.allowed_block_types or []),
         "intake": clean_intake(goal.intake),
         "brief": goal.brief or "",
+        "standards": read_course_standards(goal),
         "ready": goal.ready,
         "history": goal.history or "",
         "updated_at": goal.updated_at.isoformat(),
@@ -717,6 +720,7 @@ def create_course(
         ready=False,
         allowed_block_types=clean_allowed_block_types(allowed_block_types),
         intake=cleaned_intake,
+        standards=statements_from_intake(cleaned_intake),
     )
     db.add(goal)
     db.flush()
@@ -748,10 +752,11 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
     goal.minutes = minutes
     if "intake" in body and body["intake"] is not None:
         goal.intake = _clean_course_intake(body["intake"])
-    if _brief_signature(goal) != before and (goal.brief or goal.blueprint or goal.drafting):
+    if _brief_signature(goal) != before and (goal.brief or goal.blueprint or goal.drafting or goal.standards):
         goal.brief = ""
         goal.blueprint = {}
         goal.drafting = {}
+        goal.standards = statements_from_intake(clean_intake(goal.intake))
     if "allowed_block_types" in body:
         from app.kc_model import clean_allowed_block_types
 
@@ -759,6 +764,20 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
     goal.updated_at = _now()
     db.flush()
     return goal
+
+
+def read_course_standards(goal: KcGoal) -> list[dict]:
+    return read_statements(goal.standards)
+
+
+def _pushed_standards(goal: KcGoal, item: dict) -> list[str]:
+    try:
+        codes, _extension = component_standards(
+            item.get("standards"), read_statements(goal.standards), str(item.get("title") or "A component")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return codes
 
 
 def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
@@ -790,6 +809,7 @@ def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
                 outline=outline,
                 topics=topics,
                 blocks=_blocks_from_pairs(topics),
+                standards=_pushed_standards(goal, item),
             )
             db.add(node)
             db.flush()
@@ -801,6 +821,7 @@ def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
             if write_fields:
                 node.outline = outline
                 node.topics = topics
+            node.standards = _pushed_standards(goal, item)
             node.updated_at = _now()
         _ensure_topic_blocks(node)
         if requested:
@@ -1026,6 +1047,7 @@ def structure(db: Session, goal: KcGoal) -> dict:
                 "code": node.code,
                 "title": node.title,
                 "description": node.description or "",
+                "standards": [str(code) for code in (node.standards or []) if str(code).strip()],
                 "blocks": blocks,
                 "summary": _block_summary(blocks),
                 "position": position,
@@ -4588,6 +4610,13 @@ def _add_creator_message(
 
 
 
+def _creator_standard_codes(goal: KcGoal, node: KcNode) -> list[str] | None:
+    """None when the course has no standard. An empty list marks an extension."""
+    if not read_statements(goal.standards):
+        return None
+    return [str(code) for code in (node.standards or []) if str(code).strip()]
+
+
 def creator_prompt_for(
     db: Session,
     node: KcNode,
@@ -4626,6 +4655,7 @@ def creator_prompt_for(
             siblings=siblings,
             course_brief=goal.brief or "",
             outcomes=list(blueprint.get("outcomes") or []),
+            standard_codes=_creator_standard_codes(goal, node),
             position=position_text(blueprint, node.code) if blueprint else "",
             builds_on=builds_on,
             leads_to=leads_to,

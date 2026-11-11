@@ -27,6 +27,12 @@ from app.kc_pipeline import (
     review_bundle,
     unit_bundle,
 )
+from app.kc_standards import (
+    clean_statements,
+    read_statements,
+    standard_label,
+    statements_from_intake,
+)
 from app.models import KcGoal
 
 STAGES = ("brief", "blueprint", "unit", "review")
@@ -40,6 +46,7 @@ def _course(goal: KcGoal) -> dict:
         "kind": goal.kind,
         "minutes": goal.minutes,
         "intake": clean_intake(goal.intake),
+        "statements": read_statements(goal.standards),
     }
 
 
@@ -56,12 +63,19 @@ def _fail(status: int, message: str) -> HTTPException:
 
 
 def pipeline_out(goal: KcGoal) -> dict:
-    state = pipeline_state(brief=goal.brief or "", blueprint=_blueprint(goal), drafting=_drafting(goal))
+    intake = clean_intake(goal.intake)
+    state = pipeline_state(
+        brief=goal.brief or "",
+        blueprint=_blueprint(goal),
+        drafting=_drafting(goal),
+        standards=read_statements(goal.standards),
+        standard_chosen=bool(intake["standard"]),
+    )
     state["missing"] = missing_intake(
         title=goal.title,
         description=goal.description or "",
         audience=goal.audience,
-        intake=clean_intake(goal.intake),
+        intake=intake,
     )
     return state
 
@@ -96,6 +110,8 @@ def stage_prompt(db: Session, goal: KcGoal, stage: str, model: str, unit: int | 
     if not brief or state["questions"]:
         raise _fail(409, "Write the brief and answer its follow-ups first.")
     if stage == "blueprint":
+        if course["intake"].get("standard") and not drafting.get("standards_confirmed"):
+            raise _fail(409, "Check the standard statements before the blueprint.")
         return blueprint_bundle(course=course, brief=brief, model=chosen)
     units = blueprint.get("units") or []
     if not units or not drafting.get("approved"):
@@ -128,14 +144,53 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
     try:
         if stage == "brief":
             answers = list(drafting.get("answers") or [])
+            intake = clean_intake(goal.intake)
             brief, questions = clean_brief(result, answered=bool(answers))
+            recall = bool(intake["standard"]) and not intake["standard_text"]
+            if recall:
+                raw_statements = result.get("statements") if isinstance(result, dict) else None
+                if not raw_statements:
+                    raise ValueError("Recall the statements for this standard and grade. Return at least one.")
+                statements = clean_statements(raw_statements)
+                source = "recalled"
+            elif intake["standard"]:
+                statements = statements_from_intake(intake)
+                source = "pasted"
+            else:
+                statements = []
+                source = ""
+            if intake["standard"]:
+                label = standard_label(intake["standard"], intake.get("standard_name") or "")
+                note = f"The standard is {label}, {intake['standard_grade']}."
+                if note not in brief:
+                    brief = f"{brief} {note}"
+                if source == "recalled" and "should be checked" not in brief:
+                    brief = f"{brief} The statement list is recalled and should be checked."
             goal.brief = brief
+            goal.standards = statements
             goal.blueprint = {}
-            goal.drafting = {"questions": questions, "answers": answers}
+            goal.drafting = {
+                "questions": questions,
+                "answers": answers,
+                "standards_confirmed": not bool(intake["standard"]),
+                "standards_source": source,
+            }
         elif stage == "blueprint":
-            bounds = component_range(kind=goal.kind, minutes=goal.minutes, intake=clean_intake(goal.intake))
-            goal.blueprint = assemble_blueprint(result, bounds=bounds, taken=taken, make_code=slug_code)
-            goal.drafting = {"questions": [], "answers": list(drafting.get("answers") or []), "approved": False}
+            intake = clean_intake(goal.intake)
+            if intake["standard"] and not drafting.get("standards_confirmed"):
+                raise _fail(409, "Check the standard statements before the blueprint.")
+            bounds = component_range(kind=goal.kind, minutes=goal.minutes, intake=intake)
+            statements = read_statements(goal.standards)
+            goal.blueprint = assemble_blueprint(
+                result, bounds=bounds, taken=taken, make_code=slug_code, statements=statements
+            )
+            goal.drafting = {
+                "questions": [],
+                "answers": list(drafting.get("answers") or []),
+                "approved": False,
+                "standards_confirmed": True,
+                "standards_source": drafting.get("standards_source") or "",
+            }
         elif stage == "unit":
             units = blueprint.get("units") or []
             done = int(drafting.get("units_done") or 0)
@@ -156,6 +211,7 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
                 descriptions=dict(drafting.get("units") or {}),
                 taken=taken,
                 make_code=slug_code,
+                statements=read_statements(goal.standards),
             )
             goal.blueprint = fixed
             drafting["units"] = notes
@@ -171,8 +227,14 @@ def save_blueprint(db: Session, goal: KcGoal, raw: object, approve: bool) -> dic
     """The author's edited blueprint. Descriptions written for the old one are dropped."""
     if not goal.brief:
         raise _fail(409, "Write the brief first.")
+    drafting = _drafting(goal)
+    intake = clean_intake(goal.intake)
+    if intake["standard"] and not drafting.get("standards_confirmed"):
+        raise _fail(409, "Check the standard statements before the blueprint.")
     try:
-        edited = clean_blueprint_edit(raw, taken=set(_nodes_by_code(db)), make_code=slug_code)
+        edited = clean_blueprint_edit(
+            raw, taken=set(_nodes_by_code(db)), make_code=slug_code, statements=read_statements(goal.standards)
+        )
     except ValueError as exc:
         raise _fail(422, str(exc)) from exc
     drafting = _drafting(goal)
@@ -181,6 +243,8 @@ def save_blueprint(db: Session, goal: KcGoal, raw: object, approve: bool) -> dic
         "questions": [],
         "answers": list(drafting.get("answers") or []),
         "approved": bool(approve),
+        "standards_confirmed": True,
+        "standards_source": drafting.get("standards_source") or "",
     }
     db.flush()
     return pipeline_out(goal)
@@ -205,9 +269,34 @@ def answer_follow_ups(db: Session, goal: KcGoal, answers: list[dict], skip: bool
     return pipeline_out(goal)
 
 
+def save_statements(db: Session, goal: KcGoal, raw: object, confirm: bool) -> dict:
+    """The author edits the statement list before the blueprint."""
+    if not (goal.brief or "").strip():
+        raise _fail(409, "Write the brief first.")
+    try:
+        statements = clean_statements(raw)
+    except ValueError as exc:
+        raise _fail(422, str(exc)) from exc
+    intake = clean_intake(goal.intake)
+    if confirm and intake["standard"] and not statements:
+        raise _fail(422, "Add the statements this course should cover, or set the standard to None.")
+    drafting = _drafting(goal)
+    goal.standards = statements
+    goal.blueprint = {}
+    goal.drafting = {
+        "questions": [],
+        "answers": list(drafting.get("answers") or []),
+        "standards_confirmed": bool(confirm),
+        "standards_source": drafting.get("standards_source") or ("pasted" if intake["standard_text"] else "recalled"),
+    }
+    db.flush()
+    return pipeline_out(goal)
+
+
 def reset_pipeline(db: Session, goal: KcGoal) -> dict:
     goal.brief = ""
     goal.blueprint = {}
     goal.drafting = {}
+    goal.standards = statements_from_intake(clean_intake(goal.intake))
     db.flush()
     return pipeline_out(goal)

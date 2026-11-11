@@ -116,7 +116,7 @@ export function stageRunner(courseId: string, model: string, unitsTotal: () => n
 
 export async function pipelineAction(
   courseId: string,
-  action: "answers" | "blueprint" | "reset",
+  action: "answers" | "blueprint" | "standards" | "reset",
   payload: Record<string, unknown> = {},
 ): Promise<KcPipeline> {
   const response = await fetch(ROUTE, {
