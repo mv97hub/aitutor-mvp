@@ -20,7 +20,8 @@ from app.engine.choices import (
     ids,
 )
 from app.kc import AUDIENCES, KINDS
-from app.kc_model import BLOCK_LABELS, derive_rubric_from_blocks
+from app.block_catalog import BLOCK_LABELS
+from app.kc_model import derive_rubric_from_blocks
 from app.kc_prompt import (
     AFFECTS,
     HINTS,

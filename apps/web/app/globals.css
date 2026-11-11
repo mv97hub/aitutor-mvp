@@ -5750,6 +5750,69 @@ a.ds-row { text-decoration: none; }
   border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
 }
 
+.kc-pipeline,
+.kc-blueprint,
+.kc-questions {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.kc-pipeline label,
+.kc-blueprint label,
+.kc-questions label {
+  display: grid;
+  gap: 4px;
+  color: rgb(97, 102, 107);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.kc-blueprint input,
+.kc-blueprint textarea,
+.kc-questions textarea {
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px 10px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.kc-blueprint-unit {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+
+.kc-blueprint-unit h3 { margin: 0; font-size: 14px; line-height: 20px; }
+
+.kc-blueprint-unit ol {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kc-blueprint-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.kc-pipeline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.kc-review { margin: 0; padding-left: 1.2rem; }
+
 
 
 

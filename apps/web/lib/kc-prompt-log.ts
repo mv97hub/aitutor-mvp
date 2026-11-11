@@ -21,40 +21,8 @@ export class KcDraftError extends Error {
   }
 }
 
-/** One in-flight call per key. The entry is dropped when the call settles. */
-export function shareInFlight<T>(bucket: Map<string, Promise<T>>, key: string, run: () => Promise<T>): Promise<T> {
-  const existing = bucket.get(key);
-  if (existing) return existing;
-  const promise = Promise.resolve()
-    .then(run)
-    .finally(() => {
-      if (bucket.get(key) === promise) bucket.delete(key);
-    });
-  bucket.set(key, promise);
-  return promise;
-}
-
 export function releaseRecord(record: Record<string, unknown>) {
   for (const key of Object.keys(record)) delete record[key];
-}
-
-/** Keep the component rows and drop the rest of that slice's model output. */
-export function takeComponentRows(proposal: Record<string, unknown>): Record<string, unknown>[] {
-  const raw = proposal.components;
-  delete proposal.components;
-  if (!Array.isArray(raw)) {
-    releaseRecord(proposal);
-    return [];
-  }
-  const rows: Record<string, unknown>[] = [];
-  for (let index = 0; index < raw.length; index += 1) {
-    const item = raw[index];
-    raw[index] = undefined;
-    if (item && typeof item === "object") rows.push(item as Record<string, unknown>);
-  }
-  raw.length = 0;
-  releaseRecord(proposal);
-  return rows;
 }
 
 export function promptTurnId(parts: readonly string[]): string {

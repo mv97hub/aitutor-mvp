@@ -13,6 +13,91 @@ export const BLOCK_TYPES: KcBlockType[] = [
   "explanation",
 ];
 
+/** Long names, the same strings the stored draft reply and the API catalog use. */
+export const BLOCK_REPLY_LABELS: Record<KcBlockType, string> = {
+  topic_goal: "Topic / Goal",
+  mcq: "Multiple Choice Question",
+  case_study: "Case Study / Contrasting Cases",
+  socratic: "Socratic Discussion",
+  curiosity: "Curiosity / Wonder Hook",
+  worked_example: "Worked Example + Faded Step",
+  spot_the_flaw: "Spot the Flaw / Buggy Rule",
+  teach_back: "Teach-Back / Feynman",
+  retrieval_check: "Retrieval & Elaborative Interrogation",
+  explanation: "Explanatory Walkthrough",
+};
+
+/** Field order and labels for one block, shared by the draft reply and the catalog. */
+export const BLOCK_FIELD_LABELS: Record<KcBlockType, [string, string][]> = {
+  topic_goal: [
+    ["topic", "Topic"],
+    ["goal", "Goal"],
+    ["acceptance_criteria", "Acceptance criteria"],
+    ["teaching_notes", "Teaching notes"],
+  ],
+  mcq: [
+    ["mode", "Mode"],
+    ["question_stem", "Question stem"],
+    ["choices", "Choices"],
+    ["correct_explanation", "Correct explanation"],
+    ["target_skill", "Target skill"],
+    ["difficulty", "Difficulty"],
+    ["num_choices", "Number of choices"],
+    ["distractor_guidance", "Distractor guidance"],
+    ["stem_constraints", "Stem constraints"],
+  ],
+  case_study: [
+    ["case_a", "Case A"],
+    ["case_b", "Case B"],
+    ["prediction_prompt", "Prediction prompt"],
+    ["invariant_principle", "Invariant principle"],
+    ["transfer_prompt", "Transfer prompt"],
+    ["transfer_expected", "Transfer expected"],
+  ],
+  socratic: [
+    ["central_dilemma", "Central dilemma"],
+    ["initial_probe", "Opening probe"],
+    ["counterexamples", "Counterexamples"],
+    ["target_synthesis", "Target synthesis"],
+  ],
+  curiosity: [
+    ["phenomenon_hook", "Phenomenon hook"],
+    ["prediction_question", "Prediction question"],
+    ["bridge_to_unit", "Bridge to unit"],
+    ["wonder_branches", "Wonder branches"],
+  ],
+  worked_example: [
+    ["problem_statement", "Problem statement"],
+    ["steps", "Steps"],
+    ["faded_step_index", "Faded step"],
+    ["solo_problem", "Solo problem"],
+    ["solo_expected_answer", "Solo expected answer"],
+  ],
+  spot_the_flaw: [
+    ["rookie_work", "Rookie work"],
+    ["flaw_description", "Flaw description"],
+    ["underlying_misconception", "Underlying misconception"],
+    ["corrected_version", "Corrected version"],
+  ],
+  teach_back: [
+    ["peer_persona_prompt", "Peer prompt"],
+    ["required_concepts", "Required concepts"],
+    ["peer_follow_up_question", "Peer follow-up"],
+  ],
+  retrieval_check: [
+    ["recall_prompt", "Recall prompt"],
+    ["expected_fact", "Expected fact"],
+    ["elaborative_why_prompt", "Elaborative why prompt"],
+    ["expected_why_rationale", "Expected why rationale"],
+  ],
+  explanation: [
+    ["block_title", "Block title"],
+    ["topics", "Topics"],
+    ["summary_takeaway", "Summary takeaway"],
+  ],
+};
+
+/** Short names for the canvas and the course structure. */
 export const BLOCK_LABELS: Record<KcBlockType, string> = {
   topic_goal: "Topic + Goal",
   mcq: "Multiple choice",
@@ -174,40 +259,6 @@ export function blockSummary(blocks: { type: string }[]): string {
       return `${run.count} ${name}`;
     })
     .join(" · ");
-}
-
-export type RecommendedChip = { label: string; focus: string };
-
-/** Ordered block-type chips from a stored recommendation, seeded blocks, or the description sentence. */
-export function recommendedChips(
-  description: string | undefined,
-  recommended?: { type: string; focus?: string }[] | null,
-  blocks?: { type: string }[] | null,
-): RecommendedChip[] {
-  if (recommended?.length) {
-    return recommended.map((item) => ({
-      label: isBlockType(item.type) ? BLOCK_LABELS[item.type] : item.type,
-      focus: item.focus?.trim() ?? "",
-    }));
-  }
-  if (blocks?.length) {
-    return blocks.map((item) => ({
-      label: isBlockType(item.type) ? BLOCK_LABELS[item.type] : item.type,
-      focus: "",
-    }));
-  }
-  const match = (description ?? "").match(/Recommended blocks:\s*(.+)$/i);
-  if (!match) return [];
-  return match[1]
-    .replace(/\.\s*$/, "")
-    .split("->")
-    .map((part) => {
-      const cleaned = part.replace(/^\s*\d+\.\s*/, "").trim();
-      const focus = cleaned.match(/^(.*?)\s*\((.*)\)\s*$/);
-      if (focus) return { label: focus[1].trim(), focus: focus[2].trim() };
-      return { label: cleaned, focus: "" };
-    })
-    .filter((chip) => chip.label);
 }
 
 /** Keep known types in canvas order. An empty pick falls back to Topic + Goal. */

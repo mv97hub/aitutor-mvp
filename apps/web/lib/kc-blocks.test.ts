@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { blankBlock, blankData, blockSummary, orderScope, recommendedChips, scopeFromCourse, toggleScope } from "./kc-blocks.ts";
+import {
+  BLOCK_FIELD_LABELS,
+  BLOCK_REPLY_LABELS,
+  BLOCK_TYPES,
+  blankBlock,
+  blankData,
+  blockSummary,
+  orderScope,
+  scopeFromCourse,
+  toggleScope,
+} from "./kc-blocks.ts";
 
 test("an empty scope falls back to topic and goal, in canvas order", () => {
   assert.deepEqual(orderScope([]), ["topic_goal"]);
@@ -15,19 +25,14 @@ test("unchecking the last type keeps topic and goal", () => {
   assert.deepEqual(toggleScope(["topic_goal", "mcq"], "topic_goal"), ["mcq"]);
 });
 
-test("recommended chips follow the description sequence", () => {
-  assert.deepEqual(
-    recommendedChips(
-      "Explains free fall. Recommended blocks: 1. Curiosity Hook (hammer vs. feather) -> 2. Topic / Goal (force-to-mass ratio).",
-    ),
-    [
-      { label: "Curiosity Hook", focus: "hammer vs. feather" },
-      { label: "Topic / Goal", focus: "force-to-mass ratio" },
-    ],
-  );
-  assert.deepEqual(recommendedChips("", [{ type: "mcq", focus: "check" }]), [
-    { label: "Multiple choice", focus: "check" },
-  ]);
+test("reply labels and field labels cover every block type once", () => {
+  assert.deepEqual(Object.keys(BLOCK_REPLY_LABELS).sort(), [...BLOCK_TYPES].sort());
+  assert.deepEqual(Object.keys(BLOCK_FIELD_LABELS).sort(), [...BLOCK_TYPES].sort());
+  for (const type of BLOCK_TYPES) {
+    const keys = BLOCK_FIELD_LABELS[type].map(([key]) => key);
+    assert.equal(new Set(keys).size, keys.length, type);
+    for (const key of keys) assert.equal(key in blankData(type), true, `${type}.${key}`);
+  }
 });
 
 test("blank blocks use the field catalog keys", () => {

@@ -1031,6 +1031,10 @@ class KcGoal(Base):
     allowed_block_types: Mapped[list] = mapped_column(
         JSON, nullable=False, default=default_allowed_block_types, server_default="[]"
     )
+    intake: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    brief: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    blueprint: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    drafting: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     history: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(

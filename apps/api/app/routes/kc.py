@@ -20,15 +20,11 @@ from app.kc import (
     apply_decision,
     course_of_node,
     course_out,
-    course_prompt_for,
     create_course,
     creator_prompt_for,
     creator_thread,
     delete_kc_course,
     delete_node,
-    description_prompts_for,
-    draft_course,
-    finish_model_course,
     kc_chat_detail,
     kc_chat_summaries,
     kc_prompt_out,
@@ -41,7 +37,6 @@ from app.kc import (
     course_tutor_choice,
     learner_roster,
     open_session,
-    post_creator_turn,
     progress,
     start_course,
     prompt_for,
@@ -58,6 +53,14 @@ from app.kc import (
     tutor_variables,
     update_course,
 )
+from app.kc_course_draft import (
+    answer_follow_ups,
+    pipeline_out,
+    reset_pipeline,
+    save_blueprint,
+    store_stage,
+    stage_prompt,
+)
 from app.kc_prompt_tester import PromptTesterIn, preview_kc_prompt
 from app.schemas import KcChatDetail, KcChatSummary, ModelPromptIn, ModelPromptOut
 
@@ -72,6 +75,7 @@ class CourseIn(BaseModel):
     minutes: int | None = None
     code: str | None = None
     allowed_block_types: list[str] | None = None
+    intake: dict | None = None
 
 
 class CoursePatch(BaseModel):
@@ -81,6 +85,7 @@ class CoursePatch(BaseModel):
     kind: str | None = None
     minutes: int | None = None
     allowed_block_types: list[str] | None = None
+    intake: dict | None = None
 
 
 class DraftIn(BaseModel):
@@ -89,19 +94,24 @@ class DraftIn(BaseModel):
     allowed_block_types: list[str] | None = None
 
 
-class FinishDraftIn(BaseModel):
-    message: str = ""
-    proposal: dict
-    allowed_block_types: list[str] | None = None
-
-
-class SliceDraftIn(BaseModel):
-    message: str = ""
+class StagePromptIn(BaseModel):
     model: str = ""
-    titles: list[str] = Field(default_factory=list)
-    subject: str = ""
-    major_ideas: list[str] = Field(default_factory=list)
-    allowed_block_types: list[str] | None = None
+    unit: int | None = None
+
+
+class StageResultIn(BaseModel):
+    result: dict
+    unit: int | None = None
+
+
+class BlueprintIn(BaseModel):
+    blueprint: dict
+    approve: bool = False
+
+
+class AnswersIn(BaseModel):
+    answers: list[dict] = Field(default_factory=list)
+    skip: bool = False
 
 
 class ModelTurnIn(BaseModel):
@@ -222,6 +232,7 @@ def post_course(body: CourseIn, db: Session = Depends(get_db)) -> dict:
         minutes=body.minutes,
         code=body.code,
         allowed_block_types=body.allowed_block_types,
+        intake=body.intake,
     )
     return course_out(db, goal)
 
@@ -238,36 +249,44 @@ def patch_course(course_id: uuid.UUID, body: CoursePatch, db: Session = Depends(
     return course_out(db, update_course(db, goal, fields))
 
 
-@router.post("/kc/courses/{course_id}/draft")
-def post_course_draft(course_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
-    goal = _course_or_404(db, course_id)
-    return draft_course(goal, body.message)
-
-
-@router.post("/kc/courses/{course_id}/draft-prompt")
-def post_course_draft_prompt(course_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
-    goal = _course_or_404(db, course_id)
-    return course_prompt_for(goal, body.message, body.model, body.allowed_block_types)
-
-
-@router.post("/kc/courses/{course_id}/draft-slices")
-def post_course_draft_slices(course_id: uuid.UUID, body: SliceDraftIn, db: Session = Depends(get_db)) -> dict:
-    goal = _course_or_404(db, course_id)
-    return description_prompts_for(
-        goal,
-        body.message,
-        body.model,
-        body.titles,
-        body.subject,
-        body.major_ideas,
-        body.allowed_block_types,
-    )
-
-
 @router.post("/kc/courses/{course_id}/draft-finish")
 def post_course_draft_finish(course_id: uuid.UUID, body: FinishDraftIn, db: Session = Depends(get_db)) -> dict:
     goal = _course_or_404(db, course_id)
     return finish_model_course(goal, body.message, body.proposal, body.allowed_block_types)
+
+
+@router.get("/kc/courses/{course_id}/pipeline")
+def get_course_pipeline(course_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    return pipeline_out(_course_or_404(db, course_id))
+
+
+@router.delete("/kc/courses/{course_id}/pipeline")
+def delete_course_pipeline(course_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    return reset_pipeline(db, _course_or_404(db, course_id))
+
+
+@router.post("/kc/courses/{course_id}/pipeline/answers")
+def post_pipeline_answers(course_id: uuid.UUID, body: AnswersIn, db: Session = Depends(get_db)) -> dict:
+    return answer_follow_ups(db, _course_or_404(db, course_id), body.answers, body.skip)
+
+
+@router.put("/kc/courses/{course_id}/pipeline/blueprint")
+def put_pipeline_blueprint(course_id: uuid.UUID, body: BlueprintIn, db: Session = Depends(get_db)) -> dict:
+    return save_blueprint(db, _course_or_404(db, course_id), body.blueprint, body.approve)
+
+
+@router.post("/kc/courses/{course_id}/pipeline/{stage}/prompt")
+def post_pipeline_prompt(
+    course_id: uuid.UUID, stage: str, body: StagePromptIn, db: Session = Depends(get_db)
+) -> dict:
+    return stage_prompt(db, _course_or_404(db, course_id), stage, body.model, body.unit)
+
+
+@router.post("/kc/courses/{course_id}/pipeline/{stage}")
+def post_pipeline_stage(
+    course_id: uuid.UUID, stage: str, body: StageResultIn, db: Session = Depends(get_db)
+) -> dict:
+    return store_stage(db, _course_or_404(db, course_id), stage, body.result, body.unit)
 
 
 @router.post("/kc/courses/{course_id}/push")
@@ -339,11 +358,6 @@ def get_node_thread(node_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return creator_thread(db, _node_or_404(db, node_id))
 
 
-@router.post("/kc/nodes/{node_id}/thread")
-def post_node_thread(node_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
-    return post_creator_turn(db, _node_or_404(db, node_id), body.message)
-
-
 @router.post("/kc/nodes/{node_id}/creator-prompt")
 def post_creator_prompt(node_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
     return creator_prompt_for(
@@ -365,15 +379,6 @@ def post_model_turn(node_id: uuid.UUID, body: ModelTurnIn, db: Session = Depends
         body.draft,
         body.allowed_block_types,
     )
-
-
-@router.post("/kc/nodes/{node_id}/draft")
-def post_node_draft(node_id: uuid.UUID, body: DraftIn, db: Session = Depends(get_db)) -> dict:
-    from app.kc import draft_component
-
-    node = _node_or_404(db, node_id)
-    goal, ordered = course_of_node(db, node)
-    return draft_component(goal, node, ordered, body.message)
 
 
 @router.post("/kc/nodes/{node_id}/push")

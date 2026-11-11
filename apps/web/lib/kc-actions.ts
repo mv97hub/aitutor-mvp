@@ -19,6 +19,23 @@ function minutesOf(formData: FormData): number | null {
   return raw ? Number(raw) : null;
 }
 
+function intakeOf(formData: FormData) {
+  const count = String(formData.get("component_count") || "").trim();
+  const text = (name: string) => String(formData.get(name) || "").trim();
+  return {
+    reading_level: text("reading_level") || "age",
+    depth: text("depth") || "standard",
+    component_count: count ? Number(count) : null,
+    use: text("use"),
+    starting_point: text("starting_point"),
+    must_cover: text("must_cover"),
+    must_avoid: text("must_avoid"),
+    interests: text("interests"),
+    misconceptions_seen: text("misconceptions_seen"),
+    source_text: text("source_text"),
+  };
+}
+
 function creatorBack(courseId: string, nodeId: string, formData: FormData) {
   const raw = String(formData.get("model") || "").trim();
   const params = new URLSearchParams();
@@ -58,6 +75,7 @@ export async function saveKcCourse(formData: FormData) {
         audience: String(formData.get("audience") || "12-14"),
         kind: String(formData.get("kind") || "mastery"),
         minutes: minutesOf(formData),
+        intake: intakeOf(formData),
       }),
     });
   } catch (error) {
