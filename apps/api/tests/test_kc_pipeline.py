@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import block_catalog, kc, kc_model
-from app.kc_standards import MAX_STATEMENTS, coverage_matrix, parse_standard_text, statements_from_intake
+from app.kc_standards import MAX_STATEMENTS, coverage_matrix, parse_standard_text, paste_count, statements_from_intake
 from app.kc_pipeline import (
     CHECKS,
     components_of,
@@ -172,7 +172,7 @@ def test_brief_check_is_one_paragraph_and_drops_questions_once_answered() -> Non
 def test_blueprint_prompt_carries_the_count_the_rules_and_the_schema() -> None:
     bundle = blueprint_bundle(course=_course(), brief="A brief about triangles.", model="gpt-4.1")
     prompt = bundle["system_prompt"]
-    assert "Return between 4 and 6 components." in prompt
+    assert "Return between 4 and 6 components total across all units (including the final capstone component)." in prompt
     assert INSTRUCTION_RULES in prompt
     assert "One teachable idea per component, about 10 to 15 minutes." in prompt
     assert "Order from concrete to abstract." in prompt
@@ -183,7 +183,7 @@ def test_blueprint_prompt_carries_the_count_the_rules_and_the_schema() -> None:
     unit = bundle["schema"]["properties"]["units"]["items"]["properties"]["components"]["items"]
     assert unit["required"] == ["ref", "title", "summary", "prerequisites"]
     exact = blueprint_bundle(course=_course(intake=clean_intake({"component_count": 7})), brief="B" * 50, model="gpt-4.1")
-    assert "Return exactly 7 components." in exact["system_prompt"]
+    assert "Return exactly 7 components total across all units (including the final capstone component)." in exact["system_prompt"]
 
 
 def test_blueprint_refs_become_codes_and_bad_plans_are_rejected() -> None:
@@ -517,8 +517,8 @@ def test_the_staged_pipeline_runs_end_to_end_and_the_creator_gets_sibling_contex
 
         planned = _stage(course_id, "blueprint")
         assert planned.status_code == 200
-        assert "Return between 4 and 6 components." in planned.json()["system_prompt"]
-        short = _stage(course_id, "blueprint", _model_blueprint(8))
+        assert "Return between 4 and 6 components total across all units (including the final capstone component)." in planned.json()["system_prompt"]
+        short = _stage(course_id, "blueprint", _model_blueprint(11))
         assert short.status_code == 422
         stored = _stage(course_id, "blueprint", _model_blueprint(5))
         assert stored.status_code == 200, stored.text
@@ -893,7 +893,7 @@ def test_a_pasted_syllabus_is_one_component_per_topic_and_not_clamped() -> None:
     prompt = blueprint_bundle(
         course=_course(intake=intake, statements=statements), brief="B" * 50, model="gpt-4.1"
     )["system_prompt"]
-    assert "Return exactly 42 components." in prompt
+    assert "Return exactly 42 components total across all units (including the final capstone component)." in prompt
     assert "One component per statement" in prompt
     assert "Unit 1: Basic concepts" in prompt
     assert "Unit 2: Markets" in prompt
@@ -1239,7 +1239,7 @@ def test_standard_depth_with_a_42_unit_paste_accepts_42_components() -> None:
         prompt = _stage(course_id, "blueprint")
         assert prompt.status_code == 200, prompt.text
         system = prompt.json()["system_prompt"]
-        assert "Return exactly 42 components." in system
+        assert "Return exactly 42 components total across all units (including the final capstone component)." in system
         assert "A longer paste overrides the depth." in system
         assert "Return between 8 and 12" not in system
         assert prompt.json()["combine"] == "blueprint"
@@ -1322,3 +1322,184 @@ def test_a_matched_curriculum_over_12_is_one_call_per_unit_and_review() -> None:
     ordinary["units"][1]["components"][-1]["prerequisites"] = ["c1", "c2", "c3", "c4", "c5"]
     with pytest.raises(ValueError, match="more than 4"):
         assemble_blueprint(ordinary, bounds=(6, 6), taken=set(), make_code=_slug)
+
+
+AP_MACRO = """Unit 1: Basic Economic Concepts
+* 1.1 Scarcity
+* 1.2 Opportunity Cost and the Production Possibilities Curve (PPC)
+* 1.3 Comparative Advantage and Gains from Trade
+* 1.4 Demand
+* 1.5 Supply
+* 1.6 Market Equilibrium, Disequilibrium, and Changes in Equilibrium
+Unit 2: Economic Indicators and the Business Cycle
+* 2.1 The Circular Flow and GDP
+* 2.2 Limitations of GDP
+* 2.3 Unemployment
+* 2.4 Price Indices and Inflation
+* 2.5 Costs of Inflation
+* 2.6 Real v. Nominal GDP
+* 2.7 Business Cycles
+Unit 3: National Income and Price Determination
+* 3.1 Aggregate Demand (AD)
+* 3.2 Multipliers
+* 3.3 Short-Run Aggregate Supply (SRAS)
+* 3.4 Long-Run Aggregate Supply (LRAS)
+* 3.5 Equilibrium in the AD-AS Model
+* 3.6 Changes in the AD-AS Model in the Short Run
+* 3.7 Long-Run Self-Adjustment
+* 3.8 Fiscal Policy
+* 3.9 Automatic Stabilizers
+Unit 4: Financial Sector
+* 4.1 Financial Assets
+* 4.2 Nominal v. Real Interest Rates
+* 4.3 Definition, Measurement, and Functions of Money
+* 4.4 Banking and the Expansion of the Money Supply
+* 4.5 The Money Market
+* 4.6 Monetary Policy
+* 4.7 The Loanable Funds Market
+Unit 5: Long-Run Consequences of Stabilization Policies
+* 5.1 Fiscal and Monetary Policy Actions in the Short Run
+* 5.2 The Phillips Curve
+* 5.3 Money Growth and Inflation
+* 5.4 Government Deficits and the National Debt
+* 5.5 Crowding Out
+* 5.6 Economic Growth
+* 5.7 Public Policy and Economic Growth
+Unit 6: Open Economy—International Trade and Finance
+* 6.1 Balance of Payments Accounts
+* 6.2 Exchange Rates
+* 6.3 The Foreign Exchange Market
+* 6.4 Effect of Changes in Policies and Economic Conditions on the Foreign Exchange Market
+* 6.5 Changes in the Foreign Exchange Market and Net Exports
+* 6.6 Real Interest Rates and International Capital Flows
+"""
+
+
+def test_ap_macro_outline_is_42_topics_and_a_capstone_is_not_a_43rd() -> None:
+    """The six Unit lines are groups. The count is the 42 numbered topics."""
+    assert paste_count(AP_MACRO, syllabus=True) == 42
+    intake = clean_intake({"depth": "standard", "source_text": AP_MACRO})
+    assert component_range(kind="mastery", minutes=None, intake=intake) == (42, 42)
+    exact = clean_intake({"depth": "standard", "component_count": 10, "source_text": AP_MACRO})
+    assert component_range(kind="mastery", minutes=None, intake=exact) == (10, 10)
+    plan = _forty_two_plan()
+    built = assemble_blueprint(
+        plan, bounds=(42, 42), taken=set(), make_code=_slug, matched=True, intake=intake
+    )
+    assert len(components_of(built)) == 42
+    extra = json.loads(json.dumps(plan))
+    extra["units"][-1]["components"].append(
+        {
+            "ref": "c43",
+            "title": "Zz Capstone",
+            "summary": "Combines the earlier topics.",
+            "prerequisites": ["c42"],
+            "standards": [],
+        }
+    )
+    with pytest.raises(ValueError, match="exactly 42"):
+        assemble_blueprint(extra, bounds=(42, 42), taken=set(), make_code=_slug, matched=True, intake=intake)
+    with pytest.raises(ValueError, match="exactly 10"):
+        assemble_blueprint(_model_blueprint(11), bounds=(10, 10), taken=set(), make_code=_slug, intake=exact)
+
+
+def test_a_soft_depth_band_allows_a_few_past_the_high_and_an_exact_count_does_not() -> None:
+    standard = clean_intake({"depth": "standard"})
+    built = assemble_blueprint(
+        _model_blueprint(13), bounds=(8, 12), taken=set(), make_code=_slug, intake=standard
+    )
+    assert len(components_of(built)) == 13
+    with pytest.raises(ValueError, match="8 and 12"):
+        assemble_blueprint(_model_blueprint(17), bounds=(8, 12), taken=set(), make_code=_slug, intake=standard)
+    intro = clean_intake({"depth": "intro"})
+    wider = assemble_blueprint(_model_blueprint(8), bounds=(4, 6), taken=set(), make_code=_slug, intake=intro)
+    assert len(components_of(wider)) == 8
+    with pytest.raises(ValueError, match="4 and 6"):
+        assemble_blueprint(_model_blueprint(11), bounds=(4, 6), taken=set(), make_code=_slug, intake=intro)
+    typed = clean_intake({"depth": "standard", "component_count": 12})
+    with pytest.raises(ValueError, match="exactly 12"):
+        assemble_blueprint(_model_blueprint(13), bounds=(12, 12), taken=set(), make_code=_slug, intake=typed)
+
+
+def test_a_flat_topic_list_counts_when_the_syllabus_is_requested() -> None:
+    lines = [f"- Topic {index} about scarcity and choice." for index in range(1, 14)]
+    flat = "\n".join(lines)
+    assert paste_count(flat, syllabus=True) == 0
+    assert paste_count(flat, syllabus=True, flat=True) == 13
+    assert paste_count("A prose source with no unit headers.", syllabus=True) == 0
+    aligned = clean_intake({"depth": "standard", "align_syllabus": True, "source_text": flat})
+    assert component_range(kind="mastery", minutes=None, intake=aligned) == (13, 13)
+    curriculum = clean_intake({"depth": "curriculum", "source_text": flat})
+    assert component_range(kind="mastery", minutes=None, intake=curriculum) == (13, 13)
+    plain = clean_intake({"depth": "standard", "source_text": flat})
+    assert component_range(kind="mastery", minutes=None, intake=plain) == (8, 12)
+    weeks = "\n".join(f"Week {index}: Topic {index} about scarcity and choice." for index in range(1, 14))
+    assert paste_count(weeks, syllabus=True) == 13
+    week_intake = clean_intake({"depth": "standard", "source_text": weeks})
+    assert component_range(kind="mastery", minutes=None, intake=week_intake) == (13, 13)
+
+
+def test_a_saved_ap_macro_paste_survives_a_partial_intake_update() -> None:
+    """A later intake patch that omits source_text must not put the blueprint back on 8 to 12."""
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-macro",
+            "title": "AP Macroeconomics",
+            "description": OUTCOME,
+            "audience": "15-17",
+            "kind": "mastery",
+            "intake": {"depth": "standard", "source_text": AP_MACRO},
+        },
+    )
+    assert created.status_code == 200, created.text
+    course_id = created.json()["id"]
+    try:
+        assert paste_count(created.json()["intake"]["source_text"], syllabus=True) == 42
+        patched = client.patch(f"/kc/courses/{course_id}", json={"intake": {"reading_level": "stronger"}})
+        assert patched.status_code == 200, patched.text
+        saved = patched.json()["intake"]["source_text"]
+        assert "1.1 Scarcity" in saved
+        assert "6.6 Real Interest Rates" in saved
+        assert paste_count(saved, syllabus=True) == 42
+        brief = _stage(
+            course_id,
+            "brief",
+            {"brief": "A standard course that follows the pasted macroeconomics syllabus one topic at a time. " * 2, "questions": []},
+        )
+        assert brief.status_code == 200, brief.text
+        assert brief.json()["stage"] == "blueprint"
+        prompt = _stage(course_id, "blueprint")
+        assert prompt.status_code == 200, prompt.text
+        system = prompt.json()["system_prompt"]
+        assert "Return exactly 42 components" in system
+        assert "not an extra component" in system
+        assert "Return between 8 and 12" not in system
+        assert len(prompt.json()["calls"]) == 6
+        last = prompt.json()["calls"][-1]["system_prompt"]
+        assert "Do not add a component beyond the count above." in last
+        assert "Return exactly 6 components" in last
+        short = _stage(course_id, "blueprint", _model_blueprint(13, title_prefix="Zz Idea"))
+        assert short.status_code == 422
+        assert "exactly 42" in short.json()["detail"]
+        assert "8 and 12" not in short.json()["detail"]
+        plan = _forty_two_plan()
+        plan["units"][-1]["components"].append(
+            {
+                "ref": "c43",
+                "title": "Zz Capstone",
+                "summary": "Combines the earlier topics.",
+                "prerequisites": ["c42"],
+                "standards": [],
+            }
+        )
+        extra = _stage(course_id, "blueprint", plan)
+        assert extra.status_code == 422
+        assert "exactly 42" in extra.json()["detail"]
+        saved_plan = _stage(course_id, "blueprint", _forty_two_plan())
+        assert saved_plan.status_code == 200, saved_plan.text
+        units = saved_plan.json()["blueprint"]["units"]
+        assert sum(len(unit["components"]) for unit in units) == 42
+    finally:
+        _wipe_zz()

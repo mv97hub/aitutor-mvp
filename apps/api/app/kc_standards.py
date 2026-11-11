@@ -54,7 +54,14 @@ STANDARDS: dict[str, dict[str, str]] = {
 
 _CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9./-]{0,24}$")
 _BULLET = re.compile(r"^(?:[-*•]|\d+[.)])\s+")
-_UNIT_HEADER = re.compile(r"^(?:unit|chapter|module)\s+\d+\s*[:.\-–—]\s*(.+)$", re.IGNORECASE)
+_LIST_ITEM = re.compile(r"^(?:[-*•]\s+|\d+(?:\.\d+)*[.)]?\s+)\S")
+# Unit words, or a markdown heading. A dotted topic such as "1.2 Demand" is not a header.
+_UNIT_HEADER = re.compile(
+    r"^(?:(?:unit|chapter|module|week|part|section|topic|lesson)\s+\d+\b"
+    r"(?:\s*[:–—-]\s*(.+)|\s*\.\s+(?!\d)(.+)|\s+(?!\d)(.+))"
+    r"|#+\s*(.+))$",
+    re.IGNORECASE,
+)
 _SPACE = re.compile(r"\s+")
 
 
@@ -74,6 +81,15 @@ def _looks_like_code(token: str) -> bool:
 
 def _too_many(count: int) -> ValueError:
     return ValueError(f"Keep the statements to at most {MAX_STATEMENTS} lines. This list has {count}.")
+
+
+def _unit_title(line: str) -> str | None:
+    """The title of a unit header, or None when the line is a topic."""
+    match = _UNIT_HEADER.match(line)
+    if not match:
+        return None
+    title = next((part.strip() for part in match.groups() if part and part.strip()), "")
+    return title or None
 
 
 def _statement_row(line: str) -> dict[str, str]:
@@ -100,13 +116,16 @@ def parse_syllabus(text: str) -> dict[str, Any]:
     current: dict[str, Any] | None = None
     loose: list[str] = []
     for raw in str(text or "").splitlines():
-        line = _BULLET.sub("", raw.strip())
-        if not line:
+        raw_line = raw.strip()
+        if not raw_line:
             continue
-        header = _UNIT_HEADER.match(line)
-        if header:
-            current = {"title": _clean(header.group(1)), "lines": []}
+        title = _unit_title(raw_line)
+        if title:
+            current = {"title": _clean(title), "lines": []}
             buckets.append(current)
+            continue
+        line = _BULLET.sub("", raw_line)
+        if not line:
             continue
         if current is None:
             loose.append(line)
@@ -127,25 +146,33 @@ def parse_syllabus(text: str) -> dict[str, Any]:
     return {"units": units, "statements": statements}
 
 
-def paste_count(text: str, *, syllabus: bool = False) -> int:
+def paste_count(text: str, *, syllabus: bool = False, flat: bool = False) -> int:
     """Units or statements in pasted text. A long list is counted, not rejected.
 
     syllabus=True counts source text only when it has unit headers, so a prose
-    source does not set the course size. The count is the larger of the unit
-    headers and the topic lines: one component per pasted unit or statement.
+    source does not set the course size. flat=True counts bulleted or numbered
+    lines when there is no unit header. The count is the larger of the unit
+    headers and the topic lines: one component per pasted topic, not one per
+    header plus one per topic.
     """
     units = 0
     statements = 0
+    listed = 0
     for raw in str(text or "").splitlines():
-        line = _BULLET.sub("", raw.strip())
+        line = raw.strip()
         if not line:
             continue
-        if _UNIT_HEADER.match(line):
+        if _unit_title(line):
             units += 1
             continue
+        body = _BULLET.sub("", line)
+        if not body:
+            continue
         statements += 1
+        if _LIST_ITEM.match(line):
+            listed += 1
     if syllabus and units == 0:
-        return 0
+        return listed if flat else 0
     if units:
         return max(units, statements)
     return statements

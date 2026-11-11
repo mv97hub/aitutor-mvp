@@ -84,21 +84,35 @@ export class StageError extends Error {
   }
 }
 
-/** How many rows of the main list the model has written so far. Shown as streaming progress. */
+/** How many components the model has written so far. Shown as streaming progress. */
 export function partialItems(partial: unknown): number {
   if (!partial || typeof partial !== "object") return 0;
-  let items = 0;
-  for (const value of Object.values(partial as Record<string, unknown>)) {
-    if (!Array.isArray(value)) continue;
-    for (const row of value) {
-      items += 1;
-      if (row && typeof row === "object") {
-        const inner = (row as Record<string, unknown>).components;
-        if (Array.isArray(inner)) items += inner.length;
-      }
+  const record = partial as Record<string, unknown>;
+  if ("units" in record || "unit" in record) {
+    const grouped = record.units ?? record.unit;
+    const rows = Array.isArray(grouped) ? grouped : grouped && typeof grouped === "object" ? [grouped] : [];
+    let items = 0;
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const inner = (row as Record<string, unknown>).components;
+      if (Array.isArray(inner)) items += inner.length;
     }
+    return items;
+  }
+  let items = 0;
+  for (const value of Object.values(record)) {
+    if (Array.isArray(value)) items += value.length;
   }
   return items;
+}
+
+/** The streaming line. A blueprint counts components, and a retry says so. */
+export function progressLine(label: string, items: number): string {
+  if (label.startsWith("Blueprint")) {
+    const noun = items === 1 ? "component" : "components";
+    return `${label}: ${items} ${noun} so far`;
+  }
+  return `${label}: ${items} so far`;
 }
 
 function noted(prompt: string, note: string): string {
@@ -214,6 +228,7 @@ export async function runStage(
         const call = calls[0];
         const instructions = noted(call.system_prompt, note);
         emit({ type: "prompt", label: attempt ? `${label} (retry)` : label, instructions, prompt: call.user_prompt });
+        const progressLabel = attempt ? `${label} (retry)` : label;
         let seen = 0;
         const result = await deps.generate({
           instructions,
@@ -224,7 +239,7 @@ export async function runStage(
             const items = partialItems(partial);
             if (items === seen) return;
             seen = items;
-            emit({ type: "progress", label, items });
+            emit({ type: "progress", label: progressLabel, items });
           },
         });
         if (!result || typeof result !== "object") throw new Error("The model reply could not be read.");
@@ -234,9 +249,10 @@ export async function runStage(
       for (const call of calls) {
         const callLabel = call.label || label;
         const instructions = noted(call.system_prompt, note);
+        const progressLabel = attempt ? `${callLabel} (retry)` : callLabel;
         emit({
           type: "prompt",
-          label: attempt ? `${callLabel} (retry)` : callLabel,
+          label: progressLabel,
           instructions,
           prompt: call.user_prompt,
         });
@@ -250,7 +266,7 @@ export async function runStage(
             const items = partialItems(partial);
             if (items === seen) return;
             seen = items;
-            emit({ type: "progress", label: callLabel, items });
+            emit({ type: "progress", label: progressLabel, items });
           },
         });
         if (!result || typeof result !== "object") throw new Error("The model reply could not be read.");

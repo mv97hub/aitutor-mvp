@@ -762,7 +762,10 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
     goal.kind = kind
     goal.minutes = minutes
     if "intake" in body and body["intake"] is not None:
-        goal.intake = _clean_course_intake(body["intake"])
+        incoming = body["intake"] if isinstance(body["intake"], dict) else {}
+        current = goal.intake if isinstance(goal.intake, dict) else {}
+        # A partial intake must not drop a saved paste the caller did not send.
+        goal.intake = _clean_course_intake({**current, **incoming})
     if _brief_signature(goal) != before and (goal.brief or goal.blueprint or goal.drafting or goal.standards):
         goal.brief = ""
         goal.blueprint = {}

@@ -22,6 +22,7 @@ from app.kc_standards import (
     standard_label,
     statement_lines,
     statements_from_intake,
+    syllabus_requested,
     syllabus_units,
 )
 
@@ -228,6 +229,7 @@ BLUEPRINT_RULES = (
     "The first component has no prerequisites. "
     "Name titles for the ideas themselves. Do not cut titles out of the author's sentences. "
     "End the last unit with a capstone component that combines earlier ideas. "
+    "The capstone is one of the components in the total, not an extra component. "
     "Cover every must-cover item and none of the must-avoid items. "
     "Use the author's source text as the content when it is given."
 )
@@ -349,7 +351,11 @@ def _pasted_count(intake: dict, statements: list[dict] | None) -> int:
     """
     stored = len(statements) if statements else 0
     standard = paste_count(str(intake.get("standard_text") or ""))
-    source = paste_count(str(intake.get("source_text") or ""), syllabus=True)
+    source = paste_count(
+        str(intake.get("source_text") or ""),
+        syllabus=True,
+        flat=syllabus_requested(intake),
+    )
     return max(stored, standard, source)
 
 
@@ -419,8 +425,33 @@ def component_range(
 
 def _count_text(low: int, high: int) -> str:
     if low == high:
-        return f"Return exactly {low} components."
-    return f"Return between {low} and {high} components."
+        return (
+            f"Return exactly {low} components total across all units "
+            "(including the final capstone component)."
+        )
+    return (
+        f"Return between {low} and {high} components total across all units "
+        "(including the final capstone component)."
+    )
+
+
+def _soft_ceiling(low: int, high: int, intake: dict | None, statements: list[dict] | None) -> int:
+    """How many components a blueprint may have.
+
+    An exact range stays exact. That is an author-typed component count, or a
+    paste that locked the course to one component per topic. A soft depth band
+    may run a little past its high so a capstone is not rejected. A paste that
+    did not lock the range may use the full component ceiling.
+    """
+    if low == high or intake is None or intake.get("component_count"):
+        return high
+    depth = str(intake.get("depth") or "standard")
+    band = DEPTHS.get(depth)
+    if band is None or depth not in {"intro", "standard", "deep"} or (low, high) != (band[1], band[2]):
+        return high
+    if _pasted_count(intake, statements) > 0:
+        return MAX_COMPONENTS
+    return min(MAX_COMPONENTS, high + 4)
 
 
 def _kind_text(kind: str, minutes: int | None) -> str:
@@ -776,6 +807,11 @@ def _blueprint_unit_calls(
             )
         else:
             lines.append("Do not invent curriculum codes.")
+        if index == total:
+            lines.append(
+                "If the course needs a capstone, the last component of this unit is that capstone. "
+                "Do not add a component beyond the count above."
+            )
         calls.append(
             {
                 "label": f"Blueprint unit {index} of {total}",
@@ -843,6 +879,7 @@ def assemble_blueprint(
     make_code: Callable[[str, set[str]], str],
     statements: list[dict] | None = None,
     matched: bool = False,
+    intake: dict | None = None,
 ) -> dict:
     """Turn the model blueprint (refs) into the stored blueprint (codes)."""
     if not isinstance(result, dict):
@@ -905,7 +942,8 @@ def assemble_blueprint(
     _check_blueprint(blueprint)
     total = len(components_of(blueprint))
     low, high = bounds
-    if total < low or total > high:
+    ceiling = _soft_ceiling(low, high, intake, statements)
+    if total < low or total > ceiling:
         raise ValueError(_count_text(low, high).replace("Return", f"You returned {total}. Return"))
     return blueprint
 
