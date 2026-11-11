@@ -19,7 +19,7 @@ export const menuSections: readonly MenuSection[] = [
     id: "kids",
     title: "Kids Portal",
     links: [
-      { href: "/learn", label: "Child chooser" },
+      { href: "/learn", label: "Child Portal" },
       { href: "/learn-mobile", label: "Mobile child" },
     ],
   },
@@ -34,7 +34,6 @@ export const menuSections: readonly MenuSection[] = [
     links: [
       { href: "/admin", label: "Admin" },
       { href: "/admin/kc-chats", label: "KC View Chats" },
-      { href: "/viewkcchats", label: "View KC chats" },
       { href: "/admin/agent-customizations", label: "AI Tutor Configurations" },
       { href: "/admin/ai-safety", label: "AI Safety" },
       { href: "/admin/token-usage", label: "Token usage" },
@@ -68,6 +67,7 @@ export const menuSections: readonly MenuSection[] = [
       { href: "/create-course", label: "Create course" },
       { href: "/manage-courses", label: "Manage courses" },
       { href: "/viewchats", label: "View chats" },
+      { href: "/viewkcchats", label: "View KC chats" },
     ],
   },
 ];
