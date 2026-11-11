@@ -311,7 +311,12 @@ def answer_addresses_substep(
     state: dict | None,
     cfg: dict | None,
 ) -> bool:
-    """The learner's words cover this substep. A model flag is not enough."""
+    """Literal wording check for this substep.
+
+    resolve_block_turn uses this only as a fallback. A real answer that the
+    model passed (substep_passed or the active step's evidence id) does not
+    need this overlap.
+    """
     btype = str(block.get("type") or "topic_goal").strip()
     data = _data(block)
     bcfg = _bcfg(block, cfg or {})
@@ -399,6 +404,119 @@ def answer_addresses_substep(
     if btype == "passage_ela":
         return _passage_answer_met(data, substep, answer, bcfg)
     return _substantive(answer)
+
+
+_EVIDENCE_ALIASES = {
+    "peer_follow_up": ("peer_follow_up", "follow_up_question"),
+    "initial_explanation": ("initial_explanation",),
+    "faded_step": ("faded_step",),
+    "solo_solve": ("solo_solve",),
+    "summary_check": ("summary_check",),
+}
+
+
+def _block_prefix(block: dict, index: int) -> str:
+    return str(block.get("id") or f"blk_{index + 1}").strip()
+
+
+def evidence_ids_for_substep(block: dict, index: int, substep: str) -> set[str]:
+    """Ids the model may return for this substep, including the block prefix."""
+    prefix = _block_prefix(block, index)
+    ids = {block_evidence_id(block, index, substep), prefix}
+    for alias in _EVIDENCE_ALIASES.get(substep, (substep,)):
+        if alias and alias not in {"main", "choice", "critique", "explain"}:
+            ids.add(f"{prefix}:{alias}")
+    return {item for item in ids if item}
+
+
+_TEACH_BACK_EVIDENCE = {"initial_explanation", "peer_follow_up", "follow_up_question"}
+
+
+def rubric_covers_substep(block: dict, index: int, substep: str, rubric_met: list[str]) -> bool:
+    """True when rubric_met names this step, an alias, or the block prefix.
+
+    On teach-back, the initial explanation id and the follow-up id both count
+    for either step. The model often awards the explanation id for the example
+    the tutor just asked for.
+    """
+    if not substep:
+        return False
+    met = {str(item).strip() for item in rubric_met if str(item).strip()}
+    if evidence_ids_for_substep(block, index, substep) & met:
+        return True
+    if str(block.get("type") or "").strip() != "teach_back":
+        return False
+    if substep not in _TEACH_BACK_EVIDENCE | {"summary_check", "main"}:
+        return False
+    prefix = _block_prefix(block, index)
+    for item in met:
+        if item == prefix:
+            return True
+        if not item.startswith(prefix + ":"):
+            continue
+        tail = item.split(":", 1)[1]
+        if tail in _TEACH_BACK_EVIDENCE:
+            return True
+    return False
+
+
+def _minimum_words(block: dict, substep: str, cfg: dict | None) -> int:
+    btype = str(block.get("type") or "topic_goal").strip()
+    bcfg = _bcfg(block, cfg or {})
+    if btype == "topic_goal" and bool(bcfg.get("fragment_self_explanation", True)):
+        return 3
+    if btype == "worked_example" and substep == "faded_step" and bool(
+        bcfg.get("require_step_self_explanation", True)
+    ):
+        return 4
+    return 2
+
+
+def learner_gave_real_attempt(block: dict, substep: str, answer: str, cfg: dict | None) -> bool:
+    """A substantive try. Proceed phrases, bare yes, questions, and give-ups do not count."""
+    if learner_ready_to_proceed(answer, False) or _proceed_text(answer) == "yes":
+        return False
+    if learner_asks_question_or_background(answer) or _gives_up(answer):
+        return False
+    return _substantive(answer, _minimum_words(block, substep, cfg))
+
+
+def _gives_up(answer: str) -> bool:
+    """A skip or an 'I don't know', not a paraphrase of the step."""
+    text = _proceed_text(answer)
+    return any(
+        phrase in text
+        for phrase in (
+            "i do not know",
+            "i dont know",
+            "not sure",
+            "no idea",
+            "idk",
+        )
+    )
+
+
+def model_accepts_substep(
+    block: dict,
+    index: int,
+    substep: str,
+    answer: str,
+    cfg: dict | None,
+    *,
+    substep_passed: bool,
+    rubric_met: list[str],
+) -> bool:
+    """Trust the model on a real answer. Literal overlap is not required.
+
+    passage_ela stays on its own check. A help, skip, or too-short reply does not pass.
+    """
+    if str(block.get("type") or "").strip() == "passage_ela":
+        return False
+    if not learner_gave_real_attempt(block, substep, answer, cfg):
+        return False
+    if substep_passed:
+        return True
+    return rubric_covers_substep(block, index, substep, rubric_met)
 
 
 def _central_beyond_detail(answer: str, central: str, distractor: str) -> bool:
@@ -655,6 +773,15 @@ def resolve_block_turn(
     dialogue_turns = int(state.get("dialogue_turns") or 0) + 1
     state["dialogue_turns"] = dialogue_turns
     state["substep"] = substep
+    if (
+        btype == "worked_example"
+        and substep == "faded_step"
+        and "solo_solve" in substeps
+        and rubric_covers_substep(block, index, "faded_step", _clean_ids(list(stored_rubric)))
+    ):
+        # The faded step already passed. Grade this reply against the solo problem.
+        substep = "solo_solve"
+        state["substep"] = substep
 
     results = [dict(r) for r in (block_results or []) if isinstance(r, dict)]
     if btype == "explanation":
@@ -769,7 +896,18 @@ def resolve_block_turn(
 
     strong_text = (strong or "").strip()
     work_text = (work_on or "").strip()
-    addressed = answer_addresses_substep(block, substep, answer, state, cfg)
+    literal = answer_addresses_substep(block, substep, answer, state, cfg)
+    model_pass = model_accepts_substep(
+        block,
+        index,
+        substep,
+        answer,
+        cfg,
+        substep_passed=bool(substep_passed),
+        rubric_met=met,
+    )
+    # Keyword overlap is only the fallback. A model pass on a real answer stands.
+    addressed = model_pass or literal
 
     def note_try() -> int:
         total = int(state.get("block_attempts") or 0) + 1
@@ -836,7 +974,9 @@ def resolve_block_turn(
 
     if btype == "topic_goal" and substep == "main" and learner_ready_to_proceed(answer, False):
         tries = note_try()
-        if addressed and not state.get("revealed_substep"):
+        covered = rubric_covers_substep(block, index, "main", met) or bool(substep_passed)
+        # "move on" after the goal evidence is already met is a pass, not a give-up.
+        if covered or (addressed and not state.get("revealed_substep")):
             return finish("passed", tries, reveals)
         return finish("revealed", tries, reveals + 1)
 
@@ -892,8 +1032,17 @@ def resolve_block_turn(
     def _resolve_summary_check() -> BlockResolution:
         stored_task = str(state.get("last_task_substep") or "").strip()
         task_substep = stored_task or (substeps[-2] if len(substeps) >= 2 else substep)
-        demonstrated = bool(substep_passed) and answer_addresses_substep(
-            block, task_substep, answer, state, cfg
+        demonstrated = model_accepts_substep(
+            block,
+            index,
+            task_substep,
+            answer,
+            cfg,
+            substep_passed=bool(substep_passed),
+            rubric_met=met,
+        ) or (
+            bool(substep_passed)
+            and answer_addresses_substep(block, task_substep, answer, state, cfg)
         )
         move_phrase = learner_ready_to_proceed(answer, False)
         if state.get("revealed_substep") and demonstrated and not move_phrase:
@@ -940,16 +1089,38 @@ def resolve_block_turn(
             bumped = "scaffold"
         return stay(move_attempts + 1, bumped)
 
+    def _proceeding() -> bool:
+        return learner_ready_to_proceed(answer, False) or _proceed_text(answer) == "yes"
+
+    if _proceeding():
+        relevant = substep
+        if substep == "summary_check":
+            relevant = str(state.get("last_task_substep") or "").strip() or (
+                substeps[-2] if len(substeps) >= 2 else substep
+            )
+        covered = rubric_covers_substep(block, index, relevant, met) or (
+            relevant != substep and rubric_covers_substep(block, index, substep, met)
+        )
+        # A proceed phrase never reveals a step the model already awarded.
+        if covered or (bool(substep_passed) and not state.get("revealed_substep")):
+            if not (state.get("revealed_substep") and not covered):
+                tries = int(state.get("block_attempts") or 0) or 1
+                return finish("passed", tries, reveals)
+
     # A continue question is already on screen. Yes, move on, and next part close it.
     # A bare yes does not close an ordinary worked step.
     if (
         btype == "worked_example"
         and tutor_asked_to_continue(prior_tutor)
         and worked_continue_answer(answer)
-        and not (on_last_task and addressed and bool(substep_passed))
+        and not (on_last_task and (model_pass or (addressed and bool(substep_passed))))
     ):
         tries = int(state.get("block_attempts") or 0) or 1
-        if substep == "summary_check" and not state.get("revealed_substep"):
+        close_step = substep
+        if substep == "summary_check":
+            close_step = str(state.get("last_task_substep") or "solo_solve")
+        evidence_met = rubric_covers_substep(block, index, close_step, met) or bool(substep_passed)
+        if evidence_met or (substep == "summary_check" and not state.get("revealed_substep")):
             return finish("passed", tries, reveals)
         reveal_count = reveals if state.get("revealed_substep") else reveals + 1
         return finish("revealed", tries, reveal_count)
@@ -965,7 +1136,8 @@ def resolve_block_turn(
             note_try()
             return stay(move_attempts, "nudge")
 
-    satisfied = addressed and bool(substep_passed) and not (decision == "stay" and not substep_passed)
+    # The model pass is enough. Literal overlap still needs the model flag.
+    satisfied = model_pass or (literal and bool(substep_passed))
     if on_last_task and satisfied:
         note_try()
         # The step divider opens the next block. Do not stop for a summary question.

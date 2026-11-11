@@ -1927,6 +1927,13 @@ def _what_to_teach(
                 "Active substep (initial_explanation): Roleplay the confused peer and invite the learner's explanation. "
                 f"If follow-up is needed after their first explanation, ask: {_finish(follow)}"
             )
+        lines.append(
+            "Misconception guard: do not tag \"Thinking scarcity only applies to money or poor people\" "
+            "when the learner is explaining why rich people or everyone are affected, including through prices or inflation, "
+            "or when the learner is answering the follow-up example prompt. "
+            "A money example that shows the idea still applies to wealthy people is not that misconception, "
+            "and a follow-up example such as time, kids, or hobbies is the explanation they were asked for."
+        )
 
     elif btype == "retrieval_check":
         recall_p = str(data.get("recall_prompt") or "").strip()
