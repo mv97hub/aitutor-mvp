@@ -152,7 +152,7 @@ test("a session with no stored prompt still downloads the messages and an empty 
 test("the parent chat view does not gain a download or prompts", () => {
   const parent = readFileSync(new URL("../components/parent/ParentChats.tsx", import.meta.url), "utf8");
   const admin = readFileSync(new URL("../components/ViewKcChats.tsx", import.meta.url), "utf8");
-  assert.match(parent, /<SessionView session=\{session\} \/>/);
+  assert.match(parent, /<SessionView session=\{session\} heading="work" \/>/);
   assert.doesNotMatch(parent, /downloadKcChat|Download|prompts|token_usage|input_tokens/);
   assert.match(admin, /downloadKcChat\(session\)/);
   assert.match(admin, /\bdebug\b/);

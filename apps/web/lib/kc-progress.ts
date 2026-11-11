@@ -247,6 +247,210 @@ export function passedCourseRubric(course: {
   return { completed, struggled };
 }
 
+export type CourseTotals = {
+  mastered: number;
+  completed: number;
+  inProgress: number;
+  notStarted: number;
+  blocksPassed: number;
+  blocksRevealed: number;
+  blocksNotYet: number;
+};
+
+export type BlockState = "Passed" | "Revealed" | "Not yet";
+
+export type BlockRow = {
+  id: string;
+  name: string;
+  type: string;
+  state: BlockState;
+  attempts: number;
+  firstTry: boolean;
+};
+
+export type RevisitComponent = { code: string; title: string };
+
+export type ComponentRecommendations = {
+  workOn: string;
+  misconceptions: string[];
+  opportunities: string[];
+};
+
+type CountableBlock = {
+  status?: string;
+  outcome?: "passed" | "revealed" | null;
+  attempts?: number;
+  passed_on_first_try?: boolean;
+};
+
+function blockStateOf(block: CountableBlock): BlockState {
+  if (block.status === "revealed" || block.outcome === "revealed") return "Revealed";
+  if (block.status === "passed" || block.outcome === "passed" || block.status === "completed") return "Passed";
+  return "Not yet";
+}
+
+function blockFacts(unit: {
+  block_details?: CountableBlock[];
+  blocks?: CountableBlock[];
+  passed_blocks_count?: number;
+  revealed_blocks_count?: number;
+  total_blocks?: number;
+}): { passed: number; revealed: number; notYet: number } {
+  const details = unit.block_details ?? [];
+  const blocks = details.length > 0 ? details : (unit.blocks ?? []);
+  if (blocks.length > 0) {
+    let passed = 0;
+    let revealed = 0;
+    let notYet = 0;
+    for (const block of blocks) {
+      const state = blockStateOf(block);
+      if (state === "Passed") passed += 1;
+      else if (state === "Revealed") revealed += 1;
+      else notYet += 1;
+    }
+    return { passed, revealed, notYet };
+  }
+  const passed = unit.passed_blocks_count ?? 0;
+  const revealed = unit.revealed_blocks_count ?? 0;
+  const total = unit.total_blocks ?? 0;
+  return { passed, revealed, notYet: Math.max(0, total - passed - revealed) };
+}
+
+function passedImmediately(block: CountableBlock, state: BlockState): boolean {
+  if (state !== "Passed") return false;
+  if (block.passed_on_first_try) return true;
+  const attempts = block.attempts ?? 0;
+  return attempts <= 1 && (block.outcome === "passed" || block.status === "passed" || block.status === "completed");
+}
+
+/** Component counts, then block counts. Patches stay out of both. */
+export function courseTotals(units: KcProgressUnit[]): CourseTotals {
+  const totals: CourseTotals = {
+    mastered: 0,
+    completed: 0,
+    inProgress: 0,
+    notStarted: 0,
+    blocksPassed: 0,
+    blocksRevealed: 0,
+    blocksNotYet: 0,
+  };
+  for (const unit of units) {
+    if (unit.patch) continue;
+    const label = childComponentLabel(unit);
+    if (label === "Mastered") totals.mastered += 1;
+    else if (label === "Completed") totals.completed += 1;
+    else if (label === "In Progress") totals.inProgress += 1;
+    else totals.notStarted += 1;
+    const facts = blockFacts(unit);
+    totals.blocksPassed += facts.passed;
+    totals.blocksRevealed += facts.revealed;
+    totals.blocksNotYet += facts.notYet;
+  }
+  return totals;
+}
+
+/** Status plus passed and revealed counts. The of-total count stays with them. */
+export function componentLine(unit: {
+  status?: string;
+  mastery?: string;
+  total_blocks?: number;
+  block_details?: KcBlockDetail[];
+  blocks?: KcProgressBlock[];
+  passed_blocks_count?: number;
+  revealed_blocks_count?: number;
+}): string {
+  const label = childComponentLabel(unit);
+  const facts = blockFacts(unit);
+  const total = unit.total_blocks ?? (unit.block_details?.length || unit.blocks?.length || 0);
+  const parts = [label, `${facts.passed} passed`, `${facts.revealed} revealed`];
+  if (total > 0) parts.push(`${facts.passed + facts.revealed} of ${total}`);
+  return parts.filter(Boolean).join(" · ");
+}
+
+/** One row per block. A revealed block stays revealed. First try only when it passed immediately. */
+export function blockRows(unit: KcProgressUnit): BlockRow[] {
+  const details = unit.block_details ?? [];
+  if (details.length > 0) {
+    return details.map((block, index) => {
+      const state = blockStateOf(block);
+      const preview = (block.prompt_preview || "").trim();
+      const label = (block.label || "").trim();
+      const name = preview || label || `Block ${block.index || index + 1}`;
+      const type = label && label !== name ? label : block.block_type || label;
+      return {
+        id: block.block_id || String(block.index ?? index),
+        name,
+        type,
+        state,
+        attempts: block.attempts ?? 0,
+        firstTry: passedImmediately(block, state),
+      };
+    });
+  }
+  return (unit.blocks ?? []).map((block, index) => {
+    const state = blockStateOf(block);
+    const name = block.type_label || block.type || `Block ${index + 1}`;
+    return {
+      id: block.id || String(index),
+      name,
+      type: block.type && block.type !== name ? block.type : block.type_label || block.type,
+      state,
+      attempts: block.attempts ?? 0,
+      firstTry: passedImmediately(block, state),
+    };
+  });
+}
+
+/** Components to open again: fragile, or any block was revealed. */
+export function courseRecommendations(units: KcProgressUnit[]): RevisitComponent[] {
+  const items: RevisitComponent[] = [];
+  const seen = new Set<string>();
+  for (const unit of units) {
+    if (unit.patch || seen.has(unit.code)) continue;
+    if (unit.mastery !== "fragile" && blockFacts(unit).revealed === 0) continue;
+    seen.add(unit.code);
+    items.push({ code: unit.code, title: unit.title });
+  }
+  return items;
+}
+
+function keptText(text: string | null | undefined): string {
+  const value = (text || "").trim();
+  if (!value || STORED_FILLER.has(value.toLowerCase())) return "";
+  return value;
+}
+
+/** Stored next steps for one component. No new model call. */
+export function componentRecommendations(
+  unit: {
+    code: string;
+    what_to_work_on?: string;
+    result?: { work_on?: string } | null;
+    student_misconceptions?: string[];
+  },
+  opportunities?: { component_code: string; summary?: string | null }[],
+): ComponentRecommendations {
+  const workOn = keptText(unit.what_to_work_on || unit.result?.work_on);
+  const misconceptions: string[] = [];
+  const seenMisc = new Set<string>();
+  for (const item of unit.student_misconceptions ?? []) {
+    const text = keptText(item);
+    if (!text || seenMisc.has(text)) continue;
+    seenMisc.add(text);
+    misconceptions.push(text);
+  }
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const item of opportunities ?? []) {
+    if (item.component_code !== unit.code) continue;
+    const summary = keptText(item.summary);
+    if (!summary || summary === workOn || seen.has(summary)) continue;
+    seen.add(summary);
+    lines.push(summary);
+  }
+  return { workOn, misconceptions, opportunities: lines };
+}
+
 /** Started courses first. Relative order is kept when activity matches. */
 export function coursesStartedFirst<T extends PortfolioCourse>(courses: T[]): T[] {
   return courses

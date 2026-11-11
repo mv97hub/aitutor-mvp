@@ -5,8 +5,9 @@ import Link from "next/link";
 
 import { BrandMark } from "@/components/BrandMark";
 import { ChildMark } from "@/components/learn/ChildFields";
+import { ParentFrame } from "@/components/parent/ParentFrame";
 import { gradePill } from "@/lib/learn";
-import { parentChats, parentProgress, parentSettings, type Parent } from "@/lib/parent";
+import { parentChats, parentProgress, type Parent } from "@/lib/parent";
 import type { Student } from "@/lib/types";
 
 export function ParentDashboard({ parent, learners }: { parent: Parent; learners: Student[] }) {
@@ -14,23 +15,18 @@ export function ParentDashboard({ parent, learners }: { parent: Parent; learners
   const picked = learners.find((child) => child.id === pickedId) ?? null;
 
   return (
-    <main className="learn-shell parent-shell">
-      <BrandMark />
-      <header className="learn-home-bar">
-        <div>
-          <p className="eyebrow">Parent portal</p>
+    <ParentFrame parentId={parent.id} parentName={parent.name} studentId={picked?.id} current="home">
+      <div className="parent-work">
+        <BrandMark />
+        <header className="parent-work-head">
           <h1>Hello, {parent.name}</h1>
-          <p className="lede">Choose a child, then look at their chats or their progress.</p>
-        </div>
-        <div className="parent-links">
-          <Link className="learn-text-link" href={parentSettings(parent.id)}>
-            Settings
-          </Link>
+          <p>Choose a child, then look at their chats or their progress.</p>
+        </header>
+        <p className="parent-links">
           <Link className="learn-text-link" href="/parent">
             Switch parent
           </Link>
-        </div>
-      </header>
+        </p>
 
       <section className="learn-section" aria-label="Choose a child">
         <h2>Your children</h2>
@@ -77,6 +73,7 @@ export function ParentDashboard({ parent, learners }: { parent: Parent; learners
       ) : (
         <p className="learn-quiet parent-hint">Pick a child above to continue.</p>
       )}
-    </main>
+      </div>
+    </ParentFrame>
   );
 }

@@ -97,7 +97,7 @@ export function ParentChats({
             sessionId={session.id}
             childName={studentName}
           />
-          <SessionView session={session} />
+          <SessionView session={session} heading="work" />
         </>
       ) : sessionId ? (
         <article className="transcript-view">
@@ -105,8 +105,10 @@ export function ParentChats({
         </article>
       ) : (
         <article className="transcript-view">
-          <h2>No chats yet</h2>
-          <p className="help">When {studentName} works with the tutor, the conversation appears here.</p>
+          <header className="parent-work-head">
+            <h1>No chats yet</h1>
+            <p>When {studentName} works with the tutor, the conversation appears here.</p>
+          </header>
         </article>
       )}
     </ParentFrame>
