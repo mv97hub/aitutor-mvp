@@ -73,6 +73,8 @@ export type KcCourse = {
 
 export type KcStructure = {
   groups: {
+    title?: string;
+    unit_index?: number | null;
     components: {
       id: string;
       code: string;
@@ -121,7 +123,7 @@ export type KcCourseDraft = {
   }[];
 };
 
-export type KcDepth = "intro" | "standard" | "deep";
+export type KcDepth = "intro" | "standard" | "deep" | "curriculum";
 export type KcReadingLevel = "easier" | "age" | "stronger";
 export type KcUse = "" | "enrichment" | "school_support" | "test_prep";
 
@@ -130,6 +132,8 @@ export type KcIntake = {
   depth: KcDepth;
   component_count: number | null;
   use: KcUse;
+  align_syllabus?: boolean;
+  subject?: string;
   standard: string;
   standard_grade: string;
   standard_name: string;
@@ -522,6 +526,7 @@ export const DEPTHS = [
   { id: "intro", label: "Quick intro" },
   { id: "standard", label: "Standard" },
   { id: "deep", label: "Deep dive" },
+  { id: "curriculum", label: "Match curriculum (1 component per topic)" },
 ] as const;
 export const COURSE_USES = [
   { id: "", label: "Not set" },

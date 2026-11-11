@@ -1035,27 +1035,85 @@ def _first_sentence(text: str) -> str:
 
 
 
+def _structure_row(node: KcNode, codes: set[str], position: int) -> dict:
+    blocks = _public_blocks(node)
+    return {
+        "id": str(node.id),
+        "code": node.code,
+        "title": node.title,
+        "description": node.description or "",
+        "standards": [str(code) for code in (node.standards or []) if str(code).strip()],
+        "blocks": blocks,
+        "summary": _block_summary(blocks),
+        "position": position,
+        "missing": gaps_for(node, codes),
+        "marked_complete": bool(node.marked_complete),
+    }
+
+
 def structure(db: Session, goal: KcGoal) -> dict:
+    """Pushed components grouped by the blueprint unit that owns them."""
     targets = load_targets(db, goal)
     codes = set(_nodes_by_code(db))
-    rows = []
-    for position, node in enumerate(targets, start=1):
-        blocks = _public_blocks(node)
-        rows.append(
-            {
-                "id": str(node.id),
-                "code": node.code,
-                "title": node.title,
-                "description": node.description or "",
-                "standards": [str(code) for code in (node.standards or []) if str(code).strip()],
-                "blocks": blocks,
-                "summary": _block_summary(blocks),
-                "position": position,
-                "missing": gaps_for(node, codes),
-                "marked_complete": bool(node.marked_complete),
-            }
-        )
-    return {"course_id": str(goal.id), "groups": [{"components": rows}] if rows else []}
+    by_code = {node.code: node for node in targets}
+    blueprint = goal.blueprint if isinstance(goal.blueprint, dict) else {}
+    groups: list[dict] = []
+    used: set[str] = set()
+    position = 0
+    for index, unit in enumerate(blueprint.get("units") or []):
+        if not isinstance(unit, dict):
+            continue
+        rows = []
+        for item in unit.get("components") or []:
+            if not isinstance(item, dict):
+                continue
+            node = by_code.get(str(item.get("code") or ""))
+            if node is None or str(node.id) in used:
+                continue
+            position += 1
+            used.add(str(node.id))
+            rows.append(_structure_row(node, codes, position))
+        if rows:
+            groups.append(
+                {
+                    "title": str(unit.get("title") or f"Unit {index + 1}"),
+                    "unit_index": index,
+                    "components": rows,
+                }
+            )
+    extras = []
+    for node in targets:
+        if str(node.id) in used:
+            continue
+        position += 1
+        extras.append(_structure_row(node, codes, position))
+    if extras:
+        groups.append({"title": "Components", "unit_index": None, "components": extras})
+    return {"course_id": str(goal.id), "groups": groups}
+
+
+def clear_course_components(db: Session, goal: KcGoal, codes: set[str] | None = None) -> None:
+    """Drop this course's components. Unshared nodes are deleted. Shared nodes stay on their other course.
+
+    codes limits the drop to those component codes. None clears every target on the course.
+    """
+    targets = load_targets(db, goal)
+    chosen = [node for node in targets if codes is None or node.code in codes]
+    extras = load_patches(db, targets) if codes is None else []
+    keep = _ids_on_other_courses(db, goal.id)
+    chosen_ids = {str(node.id) for node in chosen}
+    if codes is None:
+        goal.target_kc_ids = []
+    else:
+        goal.target_kc_ids = [item for item in _target_ids(goal) if item not in chosen_ids]
+    for node in [*chosen, *extras]:
+        if node.id in keep:
+            continue
+        delete_node(db, node)
+    if codes is None:
+        goal.target_kc_ids = []
+    goal.ready = False
+    goal.updated_at = _now()
 
 
 def network(db: Session, goal: KcGoal) -> dict:

@@ -5758,6 +5758,53 @@ a.ds-row { text-decoration: none; }
   border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
 }
 
+.kc-modes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.kc-modes a {
+  text-decoration: none;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 999px;
+  padding: 6px 12px;
+  color: rgb(38, 49, 72);
+}
+
+.kc-modes a[aria-current="page"] {
+  background: #e7f3f2;
+  border-color: #0f6e6b;
+}
+
+.kc-check {
+  display: flex !important;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.kc-confirm {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.kc-chat {
+  display: grid;
+  gap: 12px;
+}
+
+.kc-chat-log {
+  display: grid;
+  gap: 8px;
+}
+
 .kc-pipeline,
 .kc-blueprint,
 .kc-questions {

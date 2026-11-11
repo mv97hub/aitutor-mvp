@@ -26,6 +26,7 @@ function intakeOf(formData: FormData) {
     reading_level: text("reading_level") || "age",
     depth: text("depth") || "standard",
     component_count: count ? Number(count) : null,
+    align_syllabus: formData.get("align_syllabus") === "yes",
     use: text("use"),
     standard: text("standard"),
     standard_grade: text("standard_grade"),
@@ -114,6 +115,19 @@ export async function markKcCourseReady(formData: FormData) {
   const courseId = String(formData.get("course_id") || "");
   try {
     await api(`/kc/courses/${courseId}/ready`, { method: "POST" });
+  } catch (error) {
+    bounce(back, error);
+  }
+  redirect(back);
+}
+
+export async function deleteKcUnit(formData: FormData) {
+  const courseId = String(formData.get("course_id") || "");
+  const unitIndex = String(formData.get("unit_index") || "");
+  const chat = String(formData.get("mode") || "") === "chat";
+  const back = `/kc-studio?course=${courseId}${chat ? "&mode=chat" : ""}`;
+  try {
+    await api(`/kc/courses/${courseId}/units/${unitIndex}`, { method: "DELETE" });
   } catch (error) {
     bounce(back, error);
   }

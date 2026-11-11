@@ -201,7 +201,7 @@ export function KcCourseSettings({ course, drafted }: { course: KcCourse; drafte
                     Close
                   </button>
                 </div>
-                <p>Keep it to the statements the course should cover, usually 5 to 20 lines. A whole-subject paste makes the course too broad.</p>
+                <p>A pasted list can be as long as the curriculum, up to 120 lines. Choose Match curriculum when you want one component per topic.</p>
               </dialog>
             </div>
           </>
@@ -254,6 +254,15 @@ export function KcCourseSettings({ course, drafted }: { course: KcCourse; drafte
         <label className="studio-span">
           Source text, optional
           <textarea aria-label="Source text" name="source_text" defaultValue={intake.source_text} rows={4} />
+        </label>
+        <label className="studio-span kc-check">
+          <input
+            type="checkbox"
+            name="align_syllabus"
+            value="yes"
+            defaultChecked={Boolean(intake.align_syllabus)}
+          />
+          Align 1:1 with pasted syllabus/curriculum
         </label>
       </div>
     </form>

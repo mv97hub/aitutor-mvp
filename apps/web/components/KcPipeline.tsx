@@ -36,16 +36,19 @@ export function KcPipelinePanel({
   courseId,
   model,
   pipeline,
+  componentCount = 0,
 }: {
   courseId: string;
   model: string;
   pipeline: KcPipeline;
+  componentCount?: number;
 }) {
   const [state, setState] = useState(pipeline);
   const [modelId, setModelId] = useState(kcModel(model));
   const [working, setWorking] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [resetOpen, setResetOpen] = useState(false);
   const debug = useCreatorDebug();
   const unitsTotal = useRef(pipeline.units_total);
   const abort = useRef<AbortController | null>(null);
@@ -135,12 +138,14 @@ export function KcPipelinePanel({
     }
   }
 
-  async function reset() {
+  async function reset(clearComponents: boolean) {
     setError(null);
+    setResetOpen(false);
     abort.current?.abort();
     try {
-      setState(await pipelineAction(courseId, "reset"));
+      setState(await pipelineAction(courseId, "reset", { components: clearComponents }));
       setProgress("");
+      if (clearComponents) window.location.assign(`/kc-studio?course=${courseId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The draft did not reset.");
     }
@@ -308,7 +313,15 @@ export function KcPipelinePanel({
           </button>
         ) : null}
         {state.stage !== "brief" || state.brief ? (
-          <button className="ghost" type="button" disabled={Boolean(working)} onClick={() => void reset()}>
+          <button
+            className="ghost"
+            type="button"
+            disabled={Boolean(working)}
+            onClick={() => {
+              if (componentCount > 0) setResetOpen(true);
+              else void reset(false);
+            }}
+          >
             Start over
           </button>
         ) : null}
@@ -324,6 +337,22 @@ export function KcPipelinePanel({
         </label>
       </div>
       {error && failedStage ? <p className="ds-quiet">This retry starts at the stage that failed.</p> : null}
+      {resetOpen ? (
+        <div className="kc-confirm" role="dialog" aria-modal="true" aria-label="Start over">
+          <p>Start over clears the draft. Deleting components also removes the ones already on this course.</p>
+          <div className="kc-pipeline-actions">
+            <button className="ghost" type="button" onClick={() => void reset(false)}>
+              Reset draft only
+            </button>
+            <button className="button" type="button" onClick={() => void reset(true)}>
+              Start over and delete components
+            </button>
+            <button className="ghost" type="button" onClick={() => setResetOpen(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

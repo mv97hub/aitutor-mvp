@@ -10,17 +10,20 @@ from app.kc_standards import coverage_matrix, parse_standard_text, statements_fr
 from app.kc_pipeline import (
     CHECKS,
     INSTRUCTION_RULES,
+    MAX_COMPONENTS,
     MAX_FOLLOW_UPS,
     apply_review,
     assemble_blueprint,
     blueprint_bundle,
     brief_bundle,
+    chat_bundle,
     clean_blueprint_edit,
     clean_brief,
     clean_description,
     clean_intake,
     clean_unit,
     component_range,
+    interpret_chat,
     missing_intake,
     review_bundle,
     unit_bundle,
@@ -64,11 +67,11 @@ def _sentences(topic: str) -> str:
     )
 
 
-def _model_blueprint(count: int = 5) -> dict:
+def _model_blueprint(count: int = 5, *, title_prefix: str = "Idea") -> dict:
     components = [
         {
             "ref": f"c{index}",
-            "title": f"Idea {index}",
+            "title": f"{title_prefix} {index}",
             "summary": f"Teaches idea {index}.",
             "prerequisites": [f"c{index - 1}"] if index > 1 else [],
         }
@@ -628,8 +631,9 @@ def test_a_pasted_standard_is_the_authority_and_a_gap_is_marked() -> None:
     )
     parsed = parse_standard_text(sample)
     assert [item["code"] for item in parsed] == ["3.NF.A.1", "3.NF.A.2", "3.NF.A.3"]
-    with pytest.raises(ValueError, match="5 to 20"):
-        parse_standard_text("\n".join(f"s{index} Statement {index}." for index in range(41)))
+    assert len(parse_standard_text("\n".join(f"{index}. Topic {index}." for index in range(1, 43)))) == 42
+    with pytest.raises(ValueError, match="120"):
+        parse_standard_text("\n".join(f"s{index} Statement {index}." for index in range(121)))
 
     intake = clean_intake({"standard": "common_core_math", "standard_grade": "3", "standard_text": _five_text()})
     statements = statements_from_intake(intake)
@@ -844,3 +848,212 @@ def test_a_named_standard_with_no_paste_is_recalled_and_then_checked() -> None:
 
 def test_model_fields_helper_still_matches_the_creator_schema() -> None:
     assert set(_model_fields()) == set(kc_model.CREATOR_SCHEMA["required"])
+
+
+def test_a_pasted_syllabus_is_one_component_per_topic_and_not_clamped() -> None:
+    topics = [f"{index}. Topic {index} about scarcity and choice." for index in range(1, 43)]
+    text = "Unit 1: Basic concepts\n" + "\n".join(topics[:10]) + "\nUnit 2: Markets\n" + "\n".join(topics[10:])
+    intake = clean_intake({"depth": "curriculum", "align_syllabus": True, "source_text": text})
+    statements = statements_from_intake(intake)
+    assert len(statements) == 42
+    assert all(not item["text"].lower().startswith("unit ") for item in statements)
+    assert component_range(kind="mastery", minutes=None, intake=intake, statements=statements) == (42, 42)
+    assert MAX_COMPONENTS == 100
+    prompt = blueprint_bundle(
+        course=_course(intake=intake, statements=statements), brief="B" * 50, model="gpt-4.1"
+    )["system_prompt"]
+    assert "Return exactly 42 components." in prompt
+    assert "One component per statement" in prompt
+    assert "Unit 1: Basic concepts" in prompt
+    assert "Unit 2: Markets" in prompt
+    wide = clean_intake(
+        {
+            "depth": "standard",
+            "standard": "other",
+            "standard_grade": "12",
+            "standard_name": "AP Macroeconomics",
+            "standard_text": "\n".join(topics),
+        }
+    )
+    assert component_range(kind="mastery", minutes=None, intake=wide, statements=statements_from_intake(wide)) == (42, 42)
+    with pytest.raises(ValueError, match="100"):
+        clean_intake({"component_count": 101})
+
+
+def test_an_empty_unit_is_dropped_and_chat_keeps_untouched_descriptions() -> None:
+    stored = assemble_blueprint(_model_blueprint(5), bounds=(4, 6), taken=set(), make_code=_slug)
+    edited = json.loads(json.dumps(stored))
+    edited["units"][1]["components"] = []
+    cleaned = clean_blueprint_edit(edited, taken=set(), make_code=_slug)
+    assert [unit["title"] for unit in cleaned["units"]] == ["Angles"]
+    notes = {item["code"]: _sentences(item["title"]) for unit in stored["units"] for item in unit["components"]}
+    kept = stored["units"][0]
+    proposal = {
+        "reply": "Removed unit 2.",
+        "changed_codes": [],
+        "outcomes": stored["outcomes"],
+        "units": [
+            {
+                "title": kept["title"],
+                "summary": kept["summary"],
+                "components": [
+                    {
+                        "code": item["code"],
+                        "title": item["title"],
+                        "summary": item["summary"],
+                        "prerequisites": item["prerequisites"],
+                        "standards": [],
+                        "description": None,
+                    }
+                    for item in kept["components"]
+                ],
+            }
+        ],
+    }
+    interpreted = interpret_chat(proposal, blueprint=stored, descriptions=notes, statements=[], taken=set(), make_code=_slug)
+    assert interpreted["changes"]
+    assert any(line.startswith("Removed") for line in interpreted["changes"])
+    kept_codes = [item["code"] for item in kept["components"]]
+    assert all(interpreted["descriptions"][code] == notes[code] for code in kept_codes)
+    assert "idea-4" not in interpreted["descriptions"] or interpreted["descriptions"].get("idea-4") != notes.get("idea-4")
+    bundle = chat_bundle(
+        course=_course(statements=[]),
+        brief="A brief about triangles that is long enough.",
+        blueprint=stored,
+        descriptions=notes,
+        statements=[],
+        components=[],
+        messages=[{"role": "user", "content": "Delete unit 2."}],
+        model="gpt-4.1",
+    )
+    assert "Delete unit 2." in bundle["user_prompt"]
+    assert "Course schema:" in bundle["system_prompt"]
+    assert INSTRUCTION_RULES not in bundle["system_prompt"]
+    assert "Group components into units of 3 to 8" not in bundle["system_prompt"]
+
+
+def test_delete_unit_and_start_over_can_clear_pushed_components() -> None:
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-units",
+            "title": "Triangle congruence",
+            "description": OUTCOME,
+            "audience": "12-14",
+            "kind": "mastery",
+            "intake": {"depth": "intro"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    course_id = created.json()["id"]
+    try:
+        brief = "A course on triangle congruence for twelve to fourteen year olds. " * 2
+        assert _stage(course_id, "brief", {"brief": brief, "questions": []}).status_code == 200
+        planned = _stage(course_id, "blueprint", _model_blueprint(5, title_prefix="Zz Idea"))
+        assert planned.status_code == 200, planned.text
+        blueprint = planned.json()["blueprint"]
+        pushed = client.post(
+            f"/kc/courses/{course_id}/push",
+            json={
+                "components": [
+                    {
+                        "code": item["code"],
+                        "title": item["title"],
+                        "description": _sentences(item["title"]),
+                        "prerequisite_codes": item["prerequisites"],
+                    }
+                    for unit in blueprint["units"]
+                    for item in unit["components"]
+                ]
+            },
+        )
+        assert pushed.status_code == 200, pushed.text
+        before = client.get(f"/kc/courses/{course_id}/structure").json()
+        assert [group["title"] for group in before["groups"]] == ["Angles", "Congruence"]
+        removed_codes = [item["code"] for item in blueprint["units"][0]["components"]]
+        deleted = client.delete(f"/kc/courses/{course_id}/units/0")
+        assert deleted.status_code == 200, deleted.text
+        assert [unit["title"] for unit in deleted.json()["blueprint"]["units"]] == ["Congruence"]
+        structure = client.get(f"/kc/courses/{course_id}/structure").json()
+        assert [group["title"] for group in structure["groups"]] == ["Congruence"]
+        assert all(row["code"] not in removed_codes for group in structure["groups"] for row in group["components"])
+        kept = client.get(f"/kc/courses/{course_id}").json()["components"]
+        assert kept
+        draft_only = client.delete(f"/kc/courses/{course_id}/pipeline")
+        assert draft_only.status_code == 200
+        assert client.get(f"/kc/courses/{course_id}").json()["components"]
+        # The blueprint is gone, so put the components back on a fresh draft and clear them.
+        assert _stage(course_id, "brief", {"brief": brief, "questions": []}).status_code == 200
+        again = _stage(course_id, "blueprint", _model_blueprint(5, title_prefix="Zz Idea"))
+        assert again.status_code == 200, again.text
+        cleared = client.delete(f"/kc/courses/{course_id}/pipeline?components=true")
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["stage"] == "brief"
+        assert client.get(f"/kc/courses/{course_id}").json()["components"] == []
+        assert client.get(f"/kc/courses/{course_id}/structure").json()["groups"] == []
+    finally:
+        _wipe_zz()
+
+
+def test_chat_apply_changes_the_same_course_and_preview_does_not() -> None:
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-chat",
+            "title": "Triangle congruence",
+            "description": OUTCOME,
+            "audience": "12-14",
+            "kind": "mastery",
+            "intake": {"depth": "intro"},
+        },
+    )
+    course_id = created.json()["id"]
+    try:
+        brief = "A course on triangle congruence for twelve to fourteen year olds. " * 2
+        assert _stage(course_id, "brief", {"brief": brief, "questions": []}).status_code == 200
+        planned = _stage(course_id, "blueprint", _model_blueprint(5, title_prefix="Zz Idea"))
+        assert planned.status_code == 200, planned.text
+        blueprint = planned.json()["blueprint"]
+        kept = blueprint["units"][0]
+        proposal = {
+            "reply": "Removed the congruence unit.",
+            "changed_codes": [],
+            "outcomes": blueprint["outcomes"],
+            "units": [
+                {
+                    "title": kept["title"],
+                    "summary": kept["summary"],
+                    "components": [
+                        {
+                            "code": item["code"],
+                            "title": item["title"],
+                            "summary": item["summary"],
+                            "prerequisites": item["prerequisites"],
+                            "standards": [],
+                            "description": _sentences(item["title"]),
+                        }
+                        for item in kept["components"]
+                    ],
+                }
+            ],
+        }
+        preview = client.post(f"/kc/courses/{course_id}/chat/preview", json={"proposal": proposal})
+        assert preview.status_code == 200, preview.text
+        assert any("Removed" in line for line in preview.json()["changes"])
+        assert len(client.get(f"/kc/courses/{course_id}/pipeline").json()["blueprint"]["units"]) == 2
+        prompt = client.post(
+            f"/kc/courses/{course_id}/chat/prompt",
+            json={"model": "gpt-4.1", "messages": [{"role": "user", "content": "Delete unit 2."}]},
+        )
+        assert prompt.status_code == 200, prompt.text
+        assert "Delete unit 2." in prompt.json()["user_prompt"]
+        assert "Angles" in prompt.json()["system_prompt"]
+        assert INSTRUCTION_RULES not in prompt.json()["system_prompt"]
+        applied = client.post(f"/kc/courses/{course_id}/chat/apply", json={"proposal": proposal})
+        assert applied.status_code == 200, applied.text
+        assert [unit["title"] for unit in applied.json()["pipeline"]["blueprint"]["units"]] == ["Angles"]
+        assert applied.json()["pipeline"]["brief"].startswith("A course on triangle congruence")
+    finally:
+        _wipe_zz()
