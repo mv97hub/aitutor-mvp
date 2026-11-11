@@ -1684,6 +1684,18 @@ def test_a_wiped_syllabus_paste_is_named_instead_of_planning_standard() -> None:
         _wipe_zz()
 
 
+def test_a_topic_line_without_a_bullet_locks_to_its_line_count() -> None:
+    """Topic 1.1 with no bullet, and the usual numbered and bullet shapes, set the count."""
+    topics = "\n".join(f"Topic 1.{index} Idea {index} about scarcity and choice." for index in range(1, 43))
+    assert paste_count(topics, syllabus=True) == 42
+    intake = clean_intake({"depth": "standard", "source_text": topics})
+    assert component_range(kind="mastery", minutes=None, intake=intake) == (42, 42)
+    bullets = "\n".join(["– 1.1 Scarcity", "— 1.2 Opportunity cost", "· 1.3 Comparative advantage"])
+    assert paste_count(bullets, syllabus=True) == 3
+    shapes = "\n".join(["(1) Scarcity", "(2) Opportunity cost", "1.1: Demand"])
+    assert paste_count(shapes, syllabus=True) == 3
+
+
 def test_a_numbered_topic_list_counts_without_unit_headers() -> None:
     numbered = "\n".join(f"{index}. Topic {index} about scarcity and choice." for index in range(1, 43))
     assert paste_count(numbered, syllabus=True) == 42
@@ -1753,8 +1765,14 @@ def test_ap_macro_in_the_outcome_box_locks_the_blueprint_to_42() -> None:
     assert "1.1 Scarcity" not in text
     assert paste_count(intake["source_text"], syllabus=True) == 42
     kept, held = absorb_description_syllabus(AP_MACRO, {"depth": "standard", "source_text": "Notes about skateboards."})
-    assert "Unit 1:" in kept
-    assert held["source_text"] == "Notes about skateboards."
+    assert kept.startswith("Work through Basic Economic Concepts through ")
+    assert "1.1 Scarcity" not in kept
+    assert paste_count(held["source_text"], syllabus=True) == 42
+    longer = AP_MACRO.rstrip() + "\n* 6.7 Extra topic about capital flows.\n* 6.8 Another topic about trade."
+    assert paste_count(longer, syllabus=True) == 44
+    unchanged, kept_source = absorb_description_syllabus(AP_MACRO, {"depth": "standard", "source_text": longer})
+    assert unchanged.strip().startswith("Unit 1:")
+    assert paste_count(kept_source["source_text"], syllabus=True) == 44
 
     _wipe_zz()
     created = client.post(
@@ -1783,6 +1801,7 @@ def test_ap_macro_in_the_outcome_box_locks_the_blueprint_to_42() -> None:
             {"brief": "A standard course that follows the pasted macroeconomics syllabus one topic at a time. " * 2, "questions": []},
         )
         assert brief.status_code == 200, brief.text
+        assert len(client.get(f"/kc/courses/{course_id}").json()["standards"]) == 42
         prompt = _stage(course_id, "blueprint")
         assert prompt.status_code == 200, prompt.text
         assert "Return exactly 42 components" in prompt.json()["system_prompt"]
@@ -1817,9 +1836,9 @@ def test_ap_macro_in_the_outcome_box_locks_the_blueprint_to_42() -> None:
             },
         )
         assert held.status_code == 200, held.text
-        assert held.json()["intake"]["source_text"] == "Notes about skateboards."
-        assert "Unit 1:" in held.json()["description"]
-        assert held.json()["standards"] == []
+        assert paste_count(held.json()["intake"]["source_text"], syllabus=True) == 42
+        assert held.json()["description"].startswith("Work through Basic Economic Concepts through ")
+        assert len(held.json()["standards"]) == 42
     finally:
         _wipe_zz()
 
@@ -1850,6 +1869,8 @@ def test_a_syllabus_pasted_in_chat_is_saved_and_not_cut_at_4000() -> None:
         assert prompt.status_code == 200, prompt.text
         system = prompt.json()["system_prompt"]
         assert "42 components across the 6 units" in system
+        assert "Unit 1: Basic Economic Concepts\n* 1.1 Scarcity" in system
+        assert "Unit 1: Basic Economic Concepts\n* 1.1 Scarcity" in prompt.json()["user_prompt"]
         assert "1.1 Scarcity" in system
         assert "ENDMARKER" in system
         saved = client.get(f"/kc/courses/{course_id}").json()
@@ -1924,5 +1945,126 @@ def test_chat_preview_resolves_scarcity_on_opportunity_cost() -> None:
         assert preview.status_code == 200, preview.text
         preview_rows = [item for unit in preview.json()["blueprint"]["units"] for item in unit["components"]]
         assert preview_rows[1]["prerequisites"] == [rows[0]["code"]]
+    finally:
+        _wipe_zz()
+
+
+def _component_count(blueprint: dict | None) -> int:
+    if not blueprint:
+        return 0
+    return sum(len(unit.get("components") or []) for unit in blueprint.get("units") or [])
+
+
+def _chat_proposal(plan: dict, *, reply: str) -> dict:
+    return {
+        "reply": reply,
+        "changed_codes": [],
+        "outcomes": ["Explain scarcity.", "Use a supply and demand graph."],
+        "units": [
+            {
+                "title": unit["title"],
+                "summary": unit.get("summary") or unit["title"],
+                "components": [
+                    {
+                        "code": "",
+                        "title": item["title"],
+                        "summary": item.get("summary") or f"Teaches {item['title']}.",
+                        "prerequisites": [],
+                        "standards": [],
+                        "description": None,
+                    }
+                    for item in unit["components"]
+                ],
+            }
+            for unit in plan["units"]
+        ],
+    }
+
+
+def test_ap_macro_stays_42_through_the_wizard_and_chat() -> None:
+    """The wizard and chat both keep 42, including a chat that starts from 12 components."""
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-macro-lock",
+            "title": "AP Macroeconomics",
+            "description": AP_MACRO,
+            "audience": "15-17",
+            "kind": "mastery",
+            "intake": {"depth": "standard"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    course_id = created.json()["id"]
+    try:
+        brief_prompt = _stage(course_id, "brief")
+        assert brief_prompt.status_code == 200, brief_prompt.text
+        assert "exactly 42 components" in brief_prompt.json()["system_prompt"]
+        assert "Return between 8 and 12" not in brief_prompt.json()["system_prompt"]
+        brief = _stage(
+            course_id,
+            "brief",
+            {
+                "brief": "A standard course that follows the pasted macroeconomics syllabus one topic at a time. " * 2,
+                "questions": [],
+            },
+        )
+        assert brief.status_code == 200, brief.text
+        assert len(client.get(f"/kc/courses/{course_id}").json()["standards"]) == 42
+        blueprint_prompt = _stage(course_id, "blueprint")
+        assert blueprint_prompt.status_code == 200, blueprint_prompt.text
+        assert "Return exactly 42 components" in blueprint_prompt.json()["system_prompt"]
+        assert "Return between 8 and 12" not in blueprint_prompt.json()["system_prompt"]
+        assert len(blueprint_prompt.json()["calls"]) == 6
+        planned = _stage(course_id, "blueprint", _macro_topic_plan())
+        assert planned.status_code == 200, planned.text
+        assert _component_count(planned.json()["blueprint"]) == 42
+        assert len(planned.json()["blueprint"]["units"]) == 6
+        short_chat = client.post(
+            f"/kc/courses/{course_id}/chat/apply",
+            json={"proposal": _chat_proposal(_model_blueprint(12, title_prefix="Zz Short"), reply="Planned a shorter course.")},
+        )
+        assert short_chat.status_code == 422, short_chat.text
+        assert "exactly 42" in short_chat.json()["detail"]
+        assert _component_count(client.get(f"/kc/courses/{course_id}/pipeline").json()["blueprint"]) == 42
+        short = assemble_blueprint(
+            _model_blueprint(12, title_prefix="Zz Short"),
+            bounds=(12, 12),
+            taken=set(),
+            make_code=_slug,
+        )
+        saved_short = client.put(
+            f"/kc/courses/{course_id}/pipeline/blueprint",
+            json={"blueprint": short, "approve": True},
+        )
+        assert saved_short.status_code == 200, saved_short.text
+        assert _component_count(saved_short.json()["blueprint"]) == 12
+        prompt = client.post(
+            f"/kc/courses/{course_id}/chat/prompt",
+            json={"model": "gpt-4.1", "messages": [{"role": "user", "content": AP_MACRO}]},
+        )
+        assert prompt.status_code == 200, prompt.text
+        system = prompt.json()["system_prompt"]
+        assert "Unit 1: Basic Economic Concepts\n* 1.1 Scarcity" in system
+        assert "Unit 1: Basic Economic Concepts\n* 1.1 Scarcity" in prompt.json()["user_prompt"]
+        assert "The stored blueprint has 12 components" in system
+        assert "all 42 components" in system
+        applied = client.post(
+            f"/kc/courses/{course_id}/chat/apply",
+            json={
+                "proposal": _chat_proposal(
+                    _macro_topic_plan(),
+                    reply="Replaced the short blueprint with one component per topic.",
+                )
+            },
+        )
+        assert applied.status_code == 200, applied.text
+        units = applied.json()["pipeline"]["blueprint"]["units"]
+        titles = [item["title"] for unit in units for item in unit["components"]]
+        assert len(titles) == 42
+        assert len(units) == 6
+        assert "Scarcity" in titles
+        assert all(not title.startswith("Zz Short") for title in titles)
     finally:
         _wipe_zz()

@@ -14,8 +14,8 @@ const DEPTH_HIGH: Record<string, number> = {
 
 const UNIT_HEADER =
   /^(?:(?:unit|chapter|module|week|part|section|topic|lesson)\s+\d+\b(?:\s*[:–—-]\s*(.+)|\s*\.\s+(?!\d)(.+)|\s+(?!\d)(.+))|#+\s*(.+))$/i;
-const BULLET = /^(?:[-*•]|\d+[.)])\s+/;
-const LIST_ITEM = /^(?:[-*•]\s+|\d+(?:\.\d+)*[.)]?\s+)\S/;
+const BULLET = /^(?:[-*•–—·∙●○◦▪▸►‣⁃]|\d+[.)])\s+/;
+const LIST_ITEM = /^(?:[-*•–—·∙●○◦▪▸►‣⁃]\s+|(?:topic\s+)?\d+(?:\.\d+)*[.):]?\s+|\(\d+(?:\.\d+)*\)\s+)\S/i;
 
 function countPaste(text: string, syllabusOnly: boolean, flat = false): number {
   let units = 0;

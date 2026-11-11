@@ -334,14 +334,17 @@ def clean_intake(raw: object) -> dict:
 def absorb_description_syllabus(description: str, intake: dict) -> tuple[str, dict]:
     """Copy a syllabus pasted into the outcome box into source text.
 
-    Source text or standard text that is already set stays as it is. A paste
-    of more than one topic leaves a short outcome sentence in the description.
+    A short note already in source text does not block that copy. Source text
+    that is itself a longer syllabus stays. A paste of more than one topic
+    leaves a short outcome sentence in the description.
     """
     text = str(description or "").strip()
     cleaned = clean_intake(intake)
-    if str(cleaned.get("source_text") or "").strip() or str(cleaned.get("standard_text") or "").strip():
+    count = paste_count(text, syllabus=True)
+    if count < 2:
         return text, cleaned
-    if paste_count(text, syllabus=True) < 2:
+    source = str(cleaned.get("source_text") or "")
+    if paste_count(source, syllabus=True) > count:
         return text, cleaned
     stored = clean_intake({**cleaned, "source_text": text})
     return syllabus_outcome(text), stored
@@ -489,6 +492,25 @@ def component_range(
     return low, high
 
 
+def locked_paste_count(
+    intake: dict,
+    statements: list[dict] | None = None,
+    *,
+    kind: str = "mastery",
+    minutes: int | None = None,
+) -> int | None:
+    """The exact component count a paste locks, or None when a depth band still applies."""
+    if intake.get("component_count") or intake.get("paste_missing"):
+        return None
+    try:
+        low, high = component_range(kind=kind, minutes=minutes, intake=intake, statements=statements)
+    except ValueError:
+        return None
+    if low != high or _pasted_count(intake, statements) <= 0:
+        return None
+    return low
+
+
 def _count_text(low: int, high: int) -> str:
     if low == high:
         return (
@@ -580,6 +602,17 @@ def brief_bundle(*, course: dict, answers: list[dict], model: str) -> dict:
         lines.append("Follow-up answers:")
         lines.extend(f"- {item['question']} {item['answer']}" for item in answers)
         lines.append("The follow-ups are answered. Return no questions.")
+    locked = locked_paste_count(
+        course["intake"],
+        list(course.get("statements") or []),
+        kind=str(course.get("kind") or "mastery"),
+        minutes=course.get("minutes"),
+    )
+    if locked:
+        lines.append(
+            f"The pasted syllabus locks this course at exactly {locked} components, one per pasted topic. "
+            f"Say that the course has {locked} components. Do not describe the course as 8 to 12 components."
+        )
     recall = bool(course["intake"].get("standard")) and not course.get("statements")
     return {
         "model": model,
@@ -905,6 +938,12 @@ def _standard_mark(item: dict) -> str:
 
 def _clean_text(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _prompt_text(value: object) -> str:
+    """Chat text with its line breaks. A pasted syllabus stays one topic per line."""
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in str(value or "").splitlines()]
+    return "\n".join(line for line in lines if line)
 
 
 def _clean_outcomes(value: object, *, limit: int = MAX_OUTCOMES) -> list[str]:
@@ -1669,6 +1708,22 @@ def chat_bundle(
     note = syllabus_prompt_line(course.get("intake"))
     if note:
         lines.append(note)
+    source = str((course.get("intake") or {}).get("source_text") or "")
+    if paste_count(source, syllabus=True) >= 2:
+        lines.extend(["Pasted syllabus:", _prompt_text(source)])
+    intake = course.get("intake") or {}
+    locked = locked_paste_count(
+        intake,
+        statements,
+        kind=str(course.get("kind") or "mastery"),
+        minutes=course.get("minutes"),
+    )
+    stored = len(components_of(blueprint or {}))
+    if locked and locked > 12 and stored != locked:
+        lines.append(
+            f"The stored blueprint has {stored} components. Replace it with the full course. "
+            f"Return every unit and all {locked} components. Do not keep the shorter blueprint."
+        )
     if statements:
         lines.extend(["Curriculum statements:", statement_lines(statements)])
     if components:
@@ -1678,13 +1733,13 @@ def chat_bundle(
         lines.append("Chat:")
         for item in messages:
             who = "Author" if item.get("role") == "user" else "Editor"
-            text = _clean_text(item.get("content"))
+            text = _prompt_text(item.get("content"))
             if text:
                 lines.append(f"{who}: {text}")
     latest = ""
     for item in reversed(messages):
         if item.get("role") == "user":
-            latest = _clean_text(item.get("content"))
+            latest = _prompt_text(item.get("content"))
             if latest:
                 break
     return {
@@ -1706,12 +1761,13 @@ def _raw_components(result: dict) -> list[dict]:
     return rows
 
 
-def merge_chat_patch(blueprint: dict, result: dict) -> dict:
+def merge_chat_patch(blueprint: dict, result: dict, *, locked_count: int | None = None) -> dict:
     """Fold a chat patch onto the stored blueprint.
 
     Units the reply leaves out stay as they are. A returned unit replaces the
     stored unit that shares a component code or the same title. An empty
-    components list removes that unit.
+    components list removes that unit. A paste locked above 12 replaces a
+    shorter stored blueprint, so those old units are not kept.
     """
     stored_units = [
         {**unit, "components": [dict(item) for item in (unit.get("components") or []) if isinstance(item, dict)]}
@@ -1719,6 +1775,10 @@ def merge_chat_patch(blueprint: dict, result: dict) -> dict:
         if isinstance(unit, dict)
     ]
     patch_units = result.get("units") if isinstance(result.get("units"), list) else []
+    stored_count = sum(len(unit["components"]) for unit in stored_units)
+    if locked_count is not None and locked_count > 12 and stored_count != locked_count and patch_units:
+        outcomes = result.get("outcomes") if isinstance(result.get("outcomes"), list) and result.get("outcomes") else blueprint.get("outcomes")
+        return {"outcomes": list(outcomes or []), "units": [unit for unit in patch_units if isinstance(unit, dict)]}
     if not patch_units:
         outcomes = result.get("outcomes") if isinstance(result.get("outcomes"), list) and result.get("outcomes") else blueprint.get("outcomes")
         return {"outcomes": list(outcomes or []), "units": stored_units}
@@ -1778,8 +1838,12 @@ def interpret_chat(
     taken: set[str],
     make_code: Callable[[str, set[str]], str],
     matched: bool = False,
+    locked_count: int | None = None,
 ) -> dict:
-    """The proposed course. A partial reply is merged. Unchanged descriptions stay."""
+    """The proposed course. A partial reply is merged. Unchanged descriptions stay.
+
+    A locked paste rejects a proposal whose component count is not that count.
+    """
     if not isinstance(result, dict):
         raise ValueError("The model reply could not be read.")
     reply = _clean_text(result.get("reply"))
@@ -1790,12 +1854,15 @@ def interpret_chat(
         key = _clean_text(code)
         if key and key not in listed:
             listed.append(key)
-    merged = merge_chat_patch(blueprint or {}, result)
+    merged = merge_chat_patch(blueprint or {}, result, locked_count=locked_count)
     raw_rows = _raw_components(merged)
     proposed = clean_blueprint_edit(merged, taken=taken, make_code=make_code, statements=statements, matched=matched)
     cleaned_rows = components_of(proposed)
     if len(raw_rows) != len(cleaned_rows):
         raise ValueError("Each component needs a title.")
+    if locked_count is not None and len(cleaned_rows) != locked_count:
+        total = len(cleaned_rows)
+        raise ValueError(_count_text(locked_count, locked_count).replace("Return", f"You returned {total}. Return"))
     old_rows = {row["code"]: row for row in components_of(blueprint or {})}
     old_notes = dict(descriptions or {})
     had_notes = any(str(text or "").strip() for text in old_notes.values())

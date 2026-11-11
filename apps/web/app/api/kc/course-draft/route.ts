@@ -145,7 +145,7 @@ export async function POST(request: Request) {
             instructions: bundle.system_prompt,
             prompt: bundle.user_prompt,
             schema: bundle.schema,
-            maxOutputTokens: STAGE_TOKEN_LIMITS.unit,
+            maxOutputTokens: STAGE_TOKEN_LIMITS.blueprint,
             onPartial: () => undefined,
           },
           request.signal,
