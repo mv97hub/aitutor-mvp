@@ -8,17 +8,22 @@ A parent never receives model prompts or token counts: the chat detail here has 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
-from app.kc import kc_chat_detail, kc_chat_summaries
+from app.kc import _ready_course_cards, kc_chat_detail, kc_chat_summaries
+from app.learn_stars import stars_from_units
 from app.models import KcSession, Parent, ParentStudent, Student
 from app.present import student_out
 from app.schemas import KcChatComponent, KcChatCourse, KcChatMessage, StudentOut
+
+# A household week starts Monday at midnight in this zone. The product has no per-parent zone yet.
+PARENT_WEEK_ZONE = ZoneInfo("America/New_York")
 
 
 class ParentCreate(BaseModel):
@@ -73,6 +78,45 @@ class ParentChatDetail(BaseModel):
     course: KcChatCourse
     component: KcChatComponent
     messages: list[KcChatMessage]
+
+
+class ParentWeekCounts(BaseModel):
+    sessions: int = 0
+    topics_finished: int = 0
+    stars: int = 0
+
+
+class ParentDashboardChild(BaseModel):
+    student_id: uuid.UUID
+    display_name: str
+    courses_started: int = 0
+    courses_finished: int = 0
+    stars: int = 0
+    finished_topics: int = 0
+    current_course_id: uuid.UUID | None = None
+    current_course_title: str = ""
+    current_topic_title: str = ""
+    last_active_at: datetime | None = None
+    week: ParentWeekCounts = Field(default_factory=ParentWeekCounts)
+
+
+class ParentDashboardActivity(BaseModel):
+    id: uuid.UUID
+    student_id: uuid.UUID
+    student_display_name: str
+    course_id: uuid.UUID
+    course_title: str
+    kc_title: str
+    status: str
+    updated_at: datetime
+
+
+class ParentDashboardOut(BaseModel):
+    """Household view. No chat text, prompts, or safety-event bodies."""
+
+    week_starts_at: datetime
+    recent: list[ParentDashboardActivity]
+    children: list[ParentDashboardChild]
 
 
 def _clean_name(value: str) -> str:
@@ -187,3 +231,179 @@ def parent_chat_detail(
     detail.pop("token_usage", None)
     detail["student"] = {"id": detail["student"]["id"], "display_name": detail["student"]["display_name"]}
     return ParentChatDetail(**detail)
+
+
+def parent_week_start(now: datetime | None = None) -> datetime:
+    """Monday 00:00 in the parent week zone, for the week that contains `now`."""
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    local = moment.astimezone(PARENT_WEEK_ZONE)
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight - timedelta(days=midnight.weekday())
+
+
+def _aware(moment: datetime) -> datetime:
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment
+
+
+def session_star_unit(status: str, block_results: list, reveals: int) -> dict:
+    """One session as the unit shape `stars_from_units` already scores.
+
+    Topic and crown points apply only when the session is completed.
+    Block points come from passed and revealed outcomes stored on that session.
+    """
+    rows = [item for item in block_results if isinstance(item, dict)]
+    passed = [item for item in rows if item.get("outcome") == "passed"]
+    revealed_rows = [item for item in rows if item.get("outcome") == "revealed"]
+    first_try = 0
+    for item in passed:
+        try:
+            attempts = int(item.get("attempts") or 1)
+        except (TypeError, ValueError):
+            attempts = 1
+        if attempts <= 1:
+            first_try += 1
+    revealed = max(len(revealed_rows), int(reveals or 0))
+    finished = status == "completed"
+    mastery = ""
+    if finished:
+        mastery = "fragile" if revealed else "known"
+    return {
+        "patch": False,
+        "status": "completed" if finished else ("in_progress" if rows else "not_started"),
+        "mastery": mastery,
+        "completed_blocks": len(passed) + len(revealed_rows),
+        "first_try_blocks_count": first_try,
+        "revealed_blocks_count": revealed if finished else len(revealed_rows),
+    }
+
+
+def _week_counts(rows: list[KcSession]) -> dict[uuid.UUID, dict]:
+    """Sessions touched this week, plus stars for topics completed this week.
+
+    A topic counts once. When several completed sessions share it, the newest
+    session's star total is the one that counts. In-progress chats count as
+    sessions and do not add stars.
+    """
+    counts: dict[uuid.UUID, dict] = {}
+    seen: set[tuple[uuid.UUID, uuid.UUID]] = set()
+    ordered = sorted(rows, key=lambda row: (_aware(row.updated_at), row.id), reverse=True)
+    for row in ordered:
+        bucket = counts.setdefault(
+            row.student_id, {"sessions": 0, "topics_finished": 0, "stars": 0}
+        )
+        bucket["sessions"] += 1
+        if row.status != "completed":
+            continue
+        key = (row.student_id, row.kc_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        bucket["topics_finished"] += 1
+        results = row.block_results if isinstance(row.block_results, list) else []
+        unit = session_star_unit(row.status, results, int(row.reveals or 0))
+        bucket["stars"] += int(stars_from_units([unit])["stars"])
+    return counts
+
+
+def _as_uuid(value: object) -> uuid.UUID | None:
+    if isinstance(value, uuid.UUID):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return uuid.UUID(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _as_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return _aware(value)
+    if isinstance(value, str) and value:
+        try:
+            return _aware(datetime.fromisoformat(value))
+        except ValueError:
+            return None
+    return None
+
+
+def _child_progress(cards: list[dict]) -> dict:
+    started = [card for card in cards if card.get("started")]
+    finished = [card for card in cards if card.get("course_complete")]
+    open_courses = [card for card in started if not card.get("course_complete")]
+    open_courses.sort(key=lambda card: str(card.get("last_active_at") or ""), reverse=True)
+    current = open_courses[0] if open_courses else None
+    topic = current.get("current_topic") if current else None
+    topic_title = ""
+    if isinstance(topic, dict):
+        topic_title = str(topic.get("title") or "")
+    return {
+        "courses_started": len(started),
+        "courses_finished": len(finished),
+        "stars": sum(int(card.get("stars") or 0) for card in cards),
+        "finished_topics": sum(int(card.get("finished_topic_count") or 0) for card in cards),
+        "current_course_id": _as_uuid(current.get("id")) if current else None,
+        "current_course_title": str(current.get("title") or "") if current else "",
+        "current_topic_title": topic_title,
+        "last_active_at": _as_datetime(current.get("last_active_at")) if current else None,
+    }
+
+
+def parent_dashboard(db: Session, parent_id: uuid.UUID, *, now: datetime | None = None) -> ParentDashboardOut:
+    """One read for the parent home: last 10 chats, progress, and this week.
+
+    Stars in `week` are the star total of topics completed since Monday, using
+    the same point values as the child view. They are not a lifetime total.
+    """
+    parent_or_404(db, parent_id)
+    students = linked_students(db, parent_id)
+    start = parent_week_start(now)
+    if not students:
+        return ParentDashboardOut(week_starts_at=start, recent=[], children=[])
+    ids = [student.id for student in students]
+    recent_rows = db.scalars(
+        select(KcSession)
+        .where(KcSession.student_id.in_(ids))
+        .options(
+            joinedload(KcSession.student),
+            joinedload(KcSession.goal),
+            joinedload(KcSession.component),
+        )
+        .order_by(KcSession.updated_at.desc(), KcSession.id.desc())
+        .limit(10)
+    ).unique().all()
+    week_rows = db.scalars(
+        select(KcSession).where(KcSession.student_id.in_(ids), KcSession.updated_at >= start)
+    ).all()
+    weeks = _week_counts(week_rows)
+    cards = _ready_course_cards(db, students)
+    children: list[ParentDashboardChild] = []
+    for student in students:
+        progress = _child_progress(cards.get(student.id, []))
+        week = weeks.get(student.id, {"sessions": 0, "topics_finished": 0, "stars": 0})
+        children.append(
+            ParentDashboardChild(
+                student_id=student.id,
+                display_name=student.display_name,
+                week=ParentWeekCounts(**week),
+                **progress,
+            )
+        )
+    recent = [
+        ParentDashboardActivity(
+            id=row.id,
+            student_id=row.student_id,
+            student_display_name=row.student.display_name if row.student is not None else "",
+            course_id=row.goal_id,
+            course_title=row.goal.title if row.goal is not None else "",
+            kc_title=row.component.title if row.component is not None else "",
+            status=row.status,
+            updated_at=_aware(row.updated_at),
+        )
+        for row in recent_rows
+    ]
+    return ParentDashboardOut(week_starts_at=start, recent=recent, children=children)

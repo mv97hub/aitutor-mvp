@@ -1,16 +1,23 @@
+"use client";
+
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { BrandMark } from "@/components/BrandMark";
-import { parentChats, parentHome, parentProgress, parentSettings } from "@/lib/parent";
+import { parentChildHref, parentChats, parentHome, parentProgress, parentSettings, type ParentSection } from "@/lib/parent";
 
-export type ParentSection = "home" | "chats" | "progress" | "settings";
+export type { ParentSection };
+
+export type ParentLearner = { id: string; display_name: string };
 
 /** The parent area's own frame. It carries no admin bar and no debug controls. */
 export function ParentFrame({
   parentId,
   parentName,
   studentId,
+  learners = [],
+  onStudentChange,
   current,
   sidebar,
   children,
@@ -18,10 +25,13 @@ export function ParentFrame({
   parentId: string;
   parentName: string;
   studentId?: string | null;
+  learners?: ParentLearner[];
+  onStudentChange?: (studentId: string) => void;
   current: ParentSection;
   sidebar?: ReactNode;
   children: ReactNode;
 }) {
+  const router = useRouter();
   const childId = studentId?.trim() || "";
   const links: { id: ParentSection; href: string | null; label: string }[] = [
     { id: "home", href: parentHome(parentId), label: "Dashboard" },
@@ -29,6 +39,17 @@ export function ParentFrame({
     { id: "progress", href: childId ? parentProgress(parentId, childId) : null, label: "Progress" },
     { id: "settings", href: parentSettings(parentId), label: "Settings" },
   ];
+
+  function chooseChild(nextId: string) {
+    if (!nextId || nextId === childId) return;
+    const href = parentChildHref(current, parentId, nextId);
+    if (href) {
+      router.push(href);
+      return;
+    }
+    onStudentChange?.(nextId);
+  }
+
   return (
     <main className={`ds-shell ds-desk ds-admin parent-frame${sidebar ? " has-sidebar" : " no-sidebar"}`}>
       <header className="ds-admin-bar">
@@ -53,6 +74,19 @@ export function ParentFrame({
             );
           })}
         </nav>
+        {learners.length > 0 ? (
+          <label className="parent-child-menu">
+            <span aria-hidden="true">Child</span>
+            <select aria-label="Child" value={childId} onChange={(event) => chooseChild(event.target.value)}>
+              {childId ? null : <option value="">Choose a child</option>}
+              {learners.map((learner) => (
+                <option key={learner.id} value={learner.id}>
+                  {learner.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </header>
       {sidebar ? (
         <aside className="ds-side">

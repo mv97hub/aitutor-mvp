@@ -6,6 +6,7 @@ import {
   childCountLabel,
   knownId,
   landingPathFor,
+  parentChildHref,
   parentChats,
   parentHome,
   parentProgress,
@@ -84,6 +85,13 @@ test("progress takes an area so parent links never leave /parent", () => {
   assert.doesNotMatch(page, /["`]\/(learn|kc-progress)/);
 });
 
+test("the child menu changes chats and progress and stays put on the dashboard", () => {
+  assert.equal(parentChildHref("chats", id, child), parentChats(id, child));
+  assert.equal(parentChildHref("progress", id, child), parentProgress(id, child));
+  assert.equal(parentChildHref("home", id, child), null);
+  assert.equal(parentChildHref("settings", id, child), null);
+});
+
 test("dashboard, settings, chats, and parent progress share one parent frame", () => {
   for (const path of [
     "../components/parent/ParentDashboard.tsx",
@@ -96,10 +104,22 @@ test("dashboard, settings, chats, and parent progress share one parent frame", (
   const frame = source("../components/parent/ParentFrame.tsx");
   assert.match(frame, /Parent portal · \{parentName\}/);
   assert.match(frame, /ds-top-btn/);
+  assert.match(frame, /aria-label="Child"/);
+  assert.match(frame, /parentChildHref/);
   for (const label of ["Dashboard", "Chats", "Progress", "Settings"]) {
     assert.match(frame, new RegExp(label));
   }
   assert.match(frame, /Choose a child first/);
+  const dashboard = source("../components/parent/ParentDashboard.tsx");
+  assert.doesNotMatch(dashboard, /BrandMark/);
+  assert.match(dashboard, /Recent activity/);
+  assert.match(dashboard, /This week/);
+  assert.match(dashboard, /Pick up where they left off/);
+  assert.match(dashboard, /aria-label="Progress"/);
+  const settings = source("../components/parent/ParentSettings.tsx");
+  assert.doesNotMatch(settings, /BrandMark/);
+  const home = source("../app/parent/[parentId]/page.tsx");
+  assert.match(home, /\/dashboard/);
   const admin = source("../components/ViewKcChats.tsx");
   assert.match(admin, /AdminFrame/);
   assert.doesNotMatch(admin, /ParentFrame/);

@@ -46,6 +46,8 @@ export function knownId(value: string | null | undefined): string | null {
   return knownStudentId(value);
 }
 
+export type ParentSection = "home" | "chats" | "progress" | "settings";
+
 export function parentHome(parentId: string): string {
   return `/parent/${parentId}`;
 }
@@ -62,6 +64,51 @@ export function parentProgress(parentId: string, studentId: string, courseId?: s
   const base = `/parent/${parentId}/child/${studentId}/progress`;
   return courseId ? `${base}?course=${encodeURIComponent(courseId)}` : base;
 }
+
+/** Chats and Progress follow the child. Dashboard and Settings stay put. */
+export function parentChildHref(section: ParentSection, parentId: string, studentId: string): string | null {
+  if (section === "chats") return parentChats(parentId, studentId);
+  if (section === "progress") return parentProgress(parentId, studentId);
+  return null;
+}
+
+export type ParentWeekCounts = {
+  sessions: number;
+  topics_finished: number;
+  stars: number;
+};
+
+export type ParentDashboardChild = {
+  student_id: string;
+  display_name: string;
+  courses_started: number;
+  courses_finished: number;
+  stars: number;
+  finished_topics: number;
+  current_course_id: string | null;
+  current_course_title: string;
+  current_topic_title: string;
+  last_active_at: string | null;
+  week: ParentWeekCounts;
+};
+
+export type ParentDashboardActivity = {
+  id: string;
+  student_id: string;
+  student_display_name: string;
+  course_id: string;
+  course_title: string;
+  kc_title: string;
+  status: string;
+  updated_at: string;
+};
+
+/** Household read. It has no chat text and no safety-flag bodies. */
+export type ParentDashboardSummary = {
+  week_starts_at: string;
+  recent: ParentDashboardActivity[];
+  children: ParentDashboardChild[];
+};
 
 export function childCountLabel(count: number): string {
   if (count <= 0) return "No children linked yet";

@@ -1,13 +1,16 @@
 """Parents, the child links, and the parent-safe chat and progress endpoints."""
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
 from app.database import SessionLocal
+from app.learn_stars import stars_from_units
 from app.main import app
-from app.models import Parent, Student
+from app.models import KcSession, KcState, Parent, Student
+from app.parents import PARENT_WEEK_ZONE, parent_week_start, session_star_unit
 from app.seed import seed
 from app.studio import DELETE_PASSWORD
 
@@ -241,3 +244,128 @@ def test_parent_chats_omit_prompts_and_refuse_an_unlinked_child() -> None:
         _drop_parents(parent["id"], other_parent["id"])
         _drop_course(code)
         _drop_course(f"{code}-b")
+
+
+def test_parent_week_starts_on_monday_and_a_finished_topic_uses_child_stars() -> None:
+    # Wednesday 11 Nov 2026, noon in New York (UTC-5).
+    start = parent_week_start(datetime(2026, 11, 11, 17, 0, tzinfo=timezone.utc))
+    local = start.astimezone(PARENT_WEEK_ZONE)
+    assert local.weekday() == 0
+    assert (local.hour, local.minute) == (0, 0)
+    assert (local.year, local.month, local.day) == (2026, 11, 9)
+    finished = session_star_unit("completed", [{"outcome": "passed", "attempts": 1}], 0)
+    assert stars_from_units([finished])["stars"] == 55
+    still_open = session_star_unit("in_progress", [{"outcome": "passed", "attempts": 1}], 0)
+    assert stars_from_units([still_open])["stars"] == 15
+
+
+def _student(name: str) -> str:
+    created = client.post("/students", json={"display_name": name, "age": 10})
+    assert created.status_code == 200, created.text
+    return created.json()["id"]
+
+
+def _drop_students(*ids: str) -> None:
+    db = SessionLocal()
+    try:
+        keys = [uuid.UUID(item) for item in ids]
+        db.execute(delete(KcState).where(KcState.student_id.in_(keys)))
+        db.execute(delete(KcSession).where(KcSession.student_id.in_(keys)))
+        db.execute(delete(Student).where(Student.id.in_(keys)))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_parent_dashboard_is_the_last_ten_chats_progress_and_this_week() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    linked_id = _student(f"ZZ Dash Active {suffix}")
+    quiet_id = _student(f"ZZ Dash Quiet {suffix}")
+    other_id = _student(f"ZZ Dash Other {suffix}")
+    code = f"zz-dash-{suffix}"
+    parent = _parent()
+    outsider = _parent()
+    try:
+        course_id, session_id = _course_with_chat(linked_id, code)
+        _, outside_session = _course_with_chat(other_id, f"{code}-out")
+        client.put(
+            f"/parents/{parent['id']}/students",
+            json={"student_ids": [linked_id, quiet_id]},
+        )
+        client.put(f"/parents/{outsider['id']}/students", json={"student_ids": [other_id]})
+
+        db = SessionLocal()
+        try:
+            opened = db.get(KcSession, uuid.UUID(session_id))
+            assert opened is not None
+            opened.status = "completed"
+            opened.block_results = [{"outcome": "passed", "attempts": 1}]
+            opened.reveals = 0
+            opened.updated_at = datetime.now(timezone.utc)
+            old = KcSession(
+                student_id=opened.student_id,
+                goal_id=opened.goal_id,
+                kc_id=opened.kc_id,
+                status="completed",
+                block_results=[{"outcome": "passed", "attempts": 1}],
+                updated_at=datetime.now(timezone.utc) - timedelta(days=14),
+            )
+            db.add(old)
+            db.flush()
+            old_id = str(old.id)
+            for minute in range(9):
+                db.add(
+                    KcSession(
+                        student_id=opened.student_id,
+                        goal_id=opened.goal_id,
+                        kc_id=opened.kc_id,
+                        status="in_progress",
+                        updated_at=datetime.now(timezone.utc) - timedelta(minutes=minute + 1),
+                    )
+                )
+            db.commit()
+        finally:
+            db.close()
+
+        missing = client.get(f"/parents/{uuid.uuid4()}/dashboard")
+        assert missing.status_code == 404
+
+        body = client.get(f"/parents/{parent['id']}/dashboard")
+        assert body.status_code == 200, body.text
+        payload = body.json()
+        assert "prompts" not in body.text
+        assert "What color is the river?" not in body.text
+        assert "SECRET-SYSTEM-PROMPT" not in body.text
+        recent = payload["recent"]
+        assert len(recent) == 10
+        assert old_id not in {item["id"] for item in recent}
+        assert outside_session not in {item["id"] for item in recent}
+        moments = [item["updated_at"] for item in recent]
+        assert moments == sorted(moments, reverse=True)
+        assert recent[0]["kc_title"] == "Parent fact"
+        assert recent[0]["course_title"] == "ZZ parent course"
+        assert recent[0]["status"] == "completed"
+        assert all("message" not in item for item in recent)
+
+        by_child = {item["student_id"]: item for item in payload["children"]}
+        assert set(by_child) == {linked_id, quiet_id}
+        active = by_child[linked_id]
+        assert active["week"] == {"sessions": 10, "topics_finished": 1, "stars": 55}
+        assert active["courses_started"] >= 1
+        if active["current_course_id"]:
+            assert active["current_course_id"] == course_id
+            assert active["current_course_title"] == "ZZ parent course"
+        else:
+            assert active["courses_finished"] >= 1
+        assert by_child[quiet_id]["week"] == {"sessions": 0, "topics_finished": 0, "stars": 0}
+        assert by_child[quiet_id]["courses_started"] == 0
+        assert payload["week_starts_at"]
+
+        outsider_body = client.get(f"/parents/{outsider['id']}/dashboard").json()
+        assert [item["student_id"] for item in outsider_body["children"]] == [other_id]
+        assert outside_session in {item["id"] for item in outsider_body["recent"]}
+    finally:
+        _drop_parents(parent["id"], outsider["id"])
+        _drop_course(code)
+        _drop_course(f"{code}-out")
+        _drop_students(linked_id, quiet_id, other_id)

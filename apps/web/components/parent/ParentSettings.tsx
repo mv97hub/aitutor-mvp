@@ -4,7 +4,6 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import { BrandMark } from "@/components/BrandMark";
 import { ChildMark } from "@/components/learn/ChildFields";
 import { ParentFrame } from "@/components/parent/ParentFrame";
 import { api } from "@/lib/api";
@@ -15,16 +14,18 @@ import type { Student } from "@/lib/types";
 export function ParentSettings({
   parent,
   students,
-  linkedIds,
+  linked,
   error,
 }: {
   parent: Parent;
   students: Student[];
-  linkedIds: string[];
+  linked: Student[];
   error: string | null;
 }) {
   const router = useRouter();
+  const linkedIds = linked.map((student) => student.id);
   const [picked, setPicked] = useState<string[]>(linkedIds);
+  const [menuChild, setMenuChild] = useState<string | null>(linkedIds.length === 1 ? linkedIds[0] : null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(error);
@@ -53,16 +54,16 @@ export function ParentSettings({
     }
   }
 
-  const onlyChild = linkedIds.length === 1 ? linkedIds[0] : null;
-
   return (
-    <ParentFrame parentId={parent.id} parentName={parent.name} studentId={onlyChild} current="settings">
+    <ParentFrame
+      parentId={parent.id}
+      parentName={parent.name}
+      studentId={menuChild}
+      learners={linked}
+      onStudentChange={setMenuChild}
+      current="settings"
+    >
       <div className="parent-work">
-        <BrandMark />
-        <header className="parent-work-head">
-          <h1>Your children</h1>
-          <p>Tick the children you want to follow. You can change this any time.</p>
-        </header>
         <p className="parent-links">
           <Link className="learn-text-link" href="/parent">
             Switch parent
@@ -74,6 +75,10 @@ export function ParentSettings({
         </div>
       ) : null}
       <form className="parent-settings-form" onSubmit={(event) => void save(event)}>
+        <section className="learn-section" aria-label="Your children">
+          <h2>Your children</h2>
+          <p className="learn-quiet">Tick the children you want to follow. You can change this any time.</p>
+        </section>
         {students.length === 0 ? <p className="learn-quiet">No children have been added yet.</p> : null}
         <ul className="parent-check-list" aria-label="Children">
           {students.map((student) => {
