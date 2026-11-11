@@ -8,7 +8,7 @@ import { KcBanner } from "@/components/KcBanner";
 import { KcBlockCanvas, KcBlockScope } from "@/components/KcBlockCanvas";
 import { KcCreatorComposer } from "@/components/KcComposer";
 import { markKcComplete, markKcCourseReady, pushKcComponent, saveKcComponent } from "@/lib/kc-actions";
-import { BLOCK_LABELS, blockSummary, scopeFromCourse } from "@/lib/kc-blocks";
+import { blockSummary, scopeFromCourse } from "@/lib/kc-blocks";
 import {
   type KcComponent,
   type KcCourse,
@@ -438,11 +438,6 @@ function ComponentEditor({
           rows={3}
         />
       </label>
-      {component.recommended_blocks?.length ? (
-        <p className="ds-quiet">
-          Recommended blocks: {component.recommended_blocks.map((item) => BLOCK_LABELS[item.type] ?? item.type).join(", ")}
-        </p>
-      ) : null}
       {/* Remount when Push draft replaces the saved blocks. Edits stay until that list changes. */}
       <KcBlockCanvas
         key={`${component.id}:${JSON.stringify(component.blocks ?? [])}`}

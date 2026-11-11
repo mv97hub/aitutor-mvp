@@ -1,87 +1,5 @@
+import { BLOCK_FIELD_LABELS, BLOCK_REPLY_LABELS, isBlockType } from "./kc-blocks.ts";
 import type { KcComponentDraft } from "./kc";
-
-/** Catalog type labels. The same strings the stored reply uses. */
-const TYPE_LABELS: Record<string, string> = {
-  topic_goal: "Topic / Goal",
-  mcq: "Multiple Choice Question",
-  case_study: "Case Study / Contrasting Cases",
-  socratic: "Socratic Discussion",
-  curiosity: "Curiosity / Wonder Hook",
-  worked_example: "Worked Example + Faded Step",
-  spot_the_flaw: "Spot the Flaw / Buggy Rule",
-  teach_back: "Teach-Back / Feynman",
-  retrieval_check: "Retrieval & Elaborative Interrogation",
-  explanation: "Explanatory Walkthrough",
-};
-
-const CATALOG_FIELDS: Record<string, [string, string][]> = {
-  topic_goal: [
-    ["topic", "Topic"],
-    ["goal", "Goal"],
-    ["acceptance_criteria", "Acceptance criteria"],
-    ["teaching_notes", "Teaching notes"],
-  ],
-  mcq: [
-    ["mode", "Mode"],
-    ["question_stem", "Question stem"],
-    ["choices", "Choices"],
-    ["correct_explanation", "Correct explanation"],
-    ["target_skill", "Target skill"],
-    ["difficulty", "Difficulty"],
-    ["num_choices", "Number of choices"],
-    ["distractor_guidance", "Distractor guidance"],
-    ["stem_constraints", "Stem constraints"],
-  ],
-  case_study: [
-    ["case_a", "Case A"],
-    ["case_b", "Case B"],
-    ["prediction_prompt", "Prediction prompt"],
-    ["invariant_principle", "Invariant principle"],
-    ["transfer_prompt", "Transfer prompt"],
-    ["transfer_expected", "Transfer expected"],
-  ],
-  socratic: [
-    ["central_dilemma", "Central dilemma"],
-    ["initial_probe", "Opening probe"],
-    ["counterexamples", "Counterexamples"],
-    ["target_synthesis", "Target synthesis"],
-  ],
-  curiosity: [
-    ["phenomenon_hook", "Phenomenon hook"],
-    ["prediction_question", "Prediction question"],
-    ["bridge_to_unit", "Bridge to unit"],
-    ["wonder_branches", "Wonder branches"],
-  ],
-  worked_example: [
-    ["problem_statement", "Problem statement"],
-    ["steps", "Steps"],
-    ["faded_step_index", "Faded step"],
-    ["solo_problem", "Solo problem"],
-    ["solo_expected_answer", "Solo expected answer"],
-  ],
-  spot_the_flaw: [
-    ["rookie_work", "Rookie work"],
-    ["flaw_description", "Flaw description"],
-    ["underlying_misconception", "Underlying misconception"],
-    ["corrected_version", "Corrected version"],
-  ],
-  teach_back: [
-    ["peer_persona_prompt", "Peer prompt"],
-    ["required_concepts", "Required concepts"],
-    ["peer_follow_up_question", "Peer follow-up"],
-  ],
-  retrieval_check: [
-    ["recall_prompt", "Recall prompt"],
-    ["expected_fact", "Expected fact"],
-    ["elaborative_why_prompt", "Elaborative why prompt"],
-    ["expected_why_rationale", "Expected why rationale"],
-  ],
-  explanation: [
-    ["block_title", "Block title"],
-    ["topics", "Topics"],
-    ["summary_takeaway", "Summary takeaway"],
-  ],
-};
 
 type DraftBlock = { type?: string; data?: Record<string, unknown> };
 
@@ -173,9 +91,9 @@ function blockLines(raw: unknown): string[] {
     const kind = textOf(block.type);
     if (!kind) continue;
     shown += 1;
-    lines.push(`${shown}. ${TYPE_LABELS[kind] ?? kind}`);
+    lines.push(`${shown}. ${isBlockType(kind) ? BLOCK_REPLY_LABELS[kind] : kind}`);
     const data = block.data && typeof block.data === "object" ? block.data : {};
-    for (const [key, label] of CATALOG_FIELDS[kind] ?? []) {
+    for (const [key, label] of isBlockType(kind) ? BLOCK_FIELD_LABELS[kind] : []) {
       if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
       lines.push(...fieldLines(key, label, data[key]));
     }

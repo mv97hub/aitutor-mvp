@@ -25,7 +25,7 @@ from app.engine.choices import (
     VOCABULARY_REGISTERS,
     VOICES,
 )
-from app.kc_model import BLOCK_LABELS
+from app.block_catalog import BLOCK_LABELS
 from app.models import (
     ALL_BLOCK_TYPES,
     DEFAULT_TUTOR_DESCRIPTION,

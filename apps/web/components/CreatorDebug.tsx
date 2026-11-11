@@ -1,13 +1,18 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { mergePromptTurns, type PromptTurn } from "@/lib/kc-prompt-log";
 
 type DebugContextValue = {
   open: boolean;
   toggle: () => void;
+  record: (turn: PromptTurn) => void;
 };
+
+export function useCreatorDebug(): DebugContextValue | null {
+  return useContext(DebugContext);
+}
 
 const DebugContext = createContext<DebugContextValue | null>(null);
 
@@ -31,12 +36,21 @@ export function CreatorDebugShell({
     setTurns(mergePromptTurns(scope, turn, store));
   }, [scope, turn, turnId]);
 
+  const record = useCallback(
+    (turn: PromptTurn) => {
+      const store = typeof window === "undefined" ? null : window.sessionStorage;
+      setTurns(mergePromptTurns(scope, turn, store));
+    },
+    [scope],
+  );
+
   const value = useMemo<DebugContextValue>(
     () => ({
       open,
       toggle: () => setOpen((current) => !current),
+      record,
     }),
-    [open],
+    [open, record],
   );
 
   return (

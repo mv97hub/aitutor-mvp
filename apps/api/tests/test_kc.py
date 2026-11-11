@@ -357,49 +357,44 @@ def test_seed_keeps_a_saved_kc_course_and_inserts_no_defaults() -> None:
                 db.close()
 
 
-def test_draft_is_not_written_until_push() -> None:
-    drafted_codes = ["angle-sum", "missing-angle", "sas-versus-ssa", "congruence"]
-    _drop_codes(drafted_codes)
+def test_pushed_course_components_keep_plain_descriptions_order_and_prerequisites() -> None:
+    codes = ["angle-sum", "missing-angle", "sas-versus-ssa", "congruence"]
+    _drop_codes(codes)
     course = _make(
         "zz-draft",
         description="Name the angle sum, find the missing angle, and tell SAS from SSA.",
     )
     before = _counts()
     try:
-        drafted = client.post(
-            f"/kc/courses/{course['id']}/draft",
-            json={"message": "Angle sum\nMissing angle\nSAS versus SSA\nCongruence"},
-        )
-        assert drafted.status_code == 200, drafted.text
-        assert drafted.json()["draft"]["kind"] == "course"
-        assert len(drafted.json()["draft"]["components"]) == 4
-        assert "Nothing is saved" in drafted.json()["reply"]
-        stored = client.get(f"/kc/courses/{course['id']}").json()
-        assert stored["components"] == []
-        after_draft = _counts()
-        assert after_draft["nodes"] == before["nodes"]
-        assert after_draft["edges"] == before["edges"]
-        assert after_draft["messages"] == before["messages"]
-        assert after_draft["chats"] == before["chats"]
-        assert after_draft["classes"] == before["classes"]
-
-        pushed = client.post(
-            f"/kc/courses/{course['id']}/push",
-            json={"components": drafted.json()["draft"]["components"]},
-        )
+        drafted = [
+            {
+                "code": code,
+                "title": title,
+                "description": f"The child can use {title}. The one idea is {title}. A common mix-up is skipping it.",
+                "prerequisite_codes": codes[max(index - 1, 0) : index],
+            }
+            for index, (code, title) in enumerate(
+                zip(codes, ["Angle sum", "Missing angle", "SAS versus SSA", "Congruence"])
+            )
+        ]
+        assert _counts()["nodes"] == before["nodes"]
+        pushed = client.post(f"/kc/courses/{course['id']}/push", json={"components": drafted})
         assert pushed.status_code == 200, pushed.text
-        titles = [item["title"] for item in pushed.json()["components"]]
-        assert titles == ["Angle sum", "Missing angle", "SAS versus SSA", "Congruence"]
-        assert all(item["outline"] and item["topics"] for item in pushed.json()["components"])
-        assert all(not item["description"].startswith("Outline:") for item in pushed.json()["components"])
+        components = pushed.json()["components"]
+        assert [item["title"] for item in components] == ["Angle sum", "Missing angle", "SAS versus SSA", "Congruence"]
+        assert [item["description"] for item in components] == [item["description"] for item in drafted]
+        assert all(item["outline"] == "" and item["topics"] == [] for item in components)
+        assert all("Recommended blocks" not in item["description"] for item in components)
+        assert [item["prerequisite_codes"] for item in components] == [[], ["angle-sum"], ["missing-angle"], ["sas-versus-ssa"]]
         structure = client.get(f"/kc/courses/{course['id']}/structure").json()
         shown = [row["description"] for group in structure["groups"] for row in group["components"]]
-        assert shown == [item["description"] for item in pushed.json()["components"]]
+        assert shown == [item["description"] for item in components]
         assert _counts()["nodes"] == before["nodes"] + 4
+        assert _counts()["edges"] == before["edges"] + 3
         assert _counts()["chats"] == before["chats"]
     finally:
         _wipe_zz()
-        _drop_codes(drafted_codes)
+        _drop_codes(codes)
 
 
 def test_four_components_stay_separate() -> None:
@@ -424,7 +419,14 @@ def test_four_components_stay_separate() -> None:
 
         first = components[0]
         others = {item["id"]: item["core_truth"] for item in components[1:]}
-        drafted = client.post(f"/kc/nodes/{first['id']}/draft", json={"message": "Draft this fact."})
+        drafted = client.post(
+            f"/kc/nodes/{first['id']}/model-turn",
+            json={
+                "message": "Draft this fact.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(**{"misconceptions": [{"wrong_move": "The river is red", "broken_kc": "zz-four-b"}], "prerequisite_codes": ["zz-four-b"]}),
+            },
+        )
         assert drafted.status_code == 200, drafted.text
         assert drafted.json()["draft"]["code"] == "zz-four-a"
         assert drafted.json()["draft"]["kind"] == "component"
@@ -1008,10 +1010,16 @@ def test_creator_thread_revises_one_component_and_complete_clears_on_write() -> 
         assert "River fact" in opened.json()["mirror"]
         assert _counts()["messages"] == before_messages
 
-        first = client.post(f"/kc/nodes/{river['id']}/thread", json={"message": "Draft this fact."})
+        first = client.post(
+            f"/kc/nodes/{river['id']}/model-turn",
+            json={
+                "message": "Draft this fact.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(**{"misconceptions": [{"wrong_move": "The river is red", "broken_kc": "zz-creator-b"}], "prerequisite_codes": ["zz-creator-b"]}),
+            },
+        )
         assert first.status_code == 200, first.text
-        opening = first.json()["messages"][-1]["content"]
-        assert opening.index("The topic, before the fields") < opening.index("Core truth:")
+        assert first.json()["messages"][-1]["content"].index(_model_fields()["discussion"]) < first.json()["messages"][-1]["content"].index("Core truth:")
         draft = first.json()["draft"]
         assert draft["kind"] == "component"
         assert draft["code"] == "zz-creator-a"
@@ -1022,8 +1030,12 @@ def test_creator_thread_revises_one_component_and_complete_clears_on_write() -> 
         assert stored["kc_type"] is None
 
         revised = client.post(
-            f"/kc/nodes/{river['id']}/thread",
-            json={"message": "Core truth: The river in this course is blue."},
+            f"/kc/nodes/{river['id']}/model-turn",
+            json={
+                "message": "Core truth: The river in this course is blue.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(core_truth="The river in this course is blue.", **{"misconceptions": [{"wrong_move": "The river is red", "broken_kc": "zz-creator-b"}], "prerequisite_codes": ["zz-creator-b"]}),
+            },
         )
         assert revised.status_code == 200, revised.text
         assert revised.json()["draft"]["core_truth"] == "The river in this course is blue."
@@ -1366,7 +1378,14 @@ def test_wrong_password_keeps_a_kc_course_and_the_right_password_deletes_it() ->
             json={"components": [{"code": "zz-del-a", "title": "Gone"}]},
         ).json()["components"]
         node_id = pushed[0]["id"]
-        opened = client.post(f"/kc/nodes/{node_id}/thread", json={"message": "Draft this fact."})
+        opened = client.post(
+            f"/kc/nodes/{node_id}/model-turn",
+            json={
+                "message": "Draft this fact.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(misconceptions=[], prerequisite_codes=[]),
+            },
+        )
         assert opened.status_code == 200, opened.text
         assert opened.json()["messages"]
 

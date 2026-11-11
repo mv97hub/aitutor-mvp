@@ -7,6 +7,7 @@ do not call this module.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -68,7 +69,8 @@ from app.tutor_profile import (
     normalize_avatar_preset,
     resolve_active_profile,
 )
-from app.kc_syllabus import component_fields, planning_context
+from app.kc_pipeline import clean_intake
+from app.block_catalog import BLOCK_BANNER_LABELS, BLOCK_FIELDS, BLOCK_LABELS, block_summary_label
 from app.models import (
     ALL_BLOCK_TYPES,
     DEFAULT_TUTOR_DESCRIPTION,
@@ -405,24 +407,7 @@ def load_patches(db: Session, targets: list[KcNode]) -> list[KcNode]:
 
 
 def _block_summary(blocks: list[dict]) -> str:
-    from app.kc_model import block_summary_label
-
     return block_summary_label(blocks)
-
-
-_BANNER_LABELS = {
-    "topic_goal": "Topic + Goal",
-    "mcq": "Multiple choice",
-    "case_study": "Case study",
-    "socratic": "Socratic",
-    "curiosity": "Curiosity",
-    "worked_example": "Worked example",
-    "spot_the_flaw": "Spot the flaw",
-    "teach_back": "Teach back",
-    "retrieval_check": "Retrieval check",
-    "explanation": "Explanatory walkthrough",
-}
-
 
 def _public_blocks(node: KcNode | None) -> list[dict]:
     if node is None:
@@ -518,6 +503,8 @@ def course_out(db: Session, goal: KcGoal) -> dict:
         "kind": goal.kind,
         "minutes": goal.minutes,
         "allowed_block_types": list(goal.allowed_block_types or []),
+        "intake": clean_intake(goal.intake),
+        "brief": goal.brief or "",
         "ready": goal.ready,
         "history": goal.history or "",
         "updated_at": goal.updated_at.isoformat(),
@@ -692,6 +679,13 @@ def _validate_course_fields(
         raise HTTPException(status_code=422, detail="Minutes are a positive number or left blank.")
 
 
+def _clean_course_intake(raw: object) -> dict:
+    try:
+        return clean_intake(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def create_course(
     db: Session,
     *,
@@ -702,10 +696,12 @@ def create_course(
     minutes: int | None,
     code: str | None,
     allowed_block_types: list[str] | None = None,
+    intake: dict | None = None,
 ) -> KcGoal:
     from app.kc_model import clean_allowed_block_types
 
     _validate_course_fields(title=title, audience=audience, kind=kind, minutes=minutes)
+    cleaned_intake = _clean_course_intake(intake)
     taken = set(_nodes_by_code(db)) | {goal.code for goal in db.scalars(select(KcGoal))}
     chosen = (code or "").strip() or slug_code(title, taken)
     if db.scalar(select(KcGoal).where(KcGoal.code == chosen)) is not None:
@@ -720,10 +716,19 @@ def create_course(
         target_kc_ids=[],
         ready=False,
         allowed_block_types=clean_allowed_block_types(allowed_block_types),
+        intake=cleaned_intake,
     )
     db.add(goal)
     db.flush()
     return goal
+
+
+def _brief_signature(goal: KcGoal) -> str:
+    """The intake the brief was written from. A change means the brief is out of date."""
+    return json.dumps(
+        [goal.title, goal.description or "", goal.audience, goal.kind, goal.minutes, clean_intake(goal.intake)],
+        sort_keys=True,
+    )
 
 
 def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
@@ -735,11 +740,18 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
     else:
         minutes = goal.minutes
     _validate_course_fields(title=title, audience=audience, kind=kind, minutes=minutes)
+    before = _brief_signature(goal)
     goal.title = title.strip()
     goal.description = str(body.get("description", goal.description) or "").strip()
     goal.audience = audience
     goal.kind = kind
     goal.minutes = minutes
+    if "intake" in body and body["intake"] is not None:
+        goal.intake = _clean_course_intake(body["intake"])
+    if _brief_signature(goal) != before and (goal.brief or goal.blueprint or goal.drafting):
+        goal.brief = ""
+        goal.blueprint = {}
+        goal.drafting = {}
     if "allowed_block_types" in body:
         from app.kc_model import clean_allowed_block_types
 
@@ -749,129 +761,14 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
     return goal
 
 
-def draft_course(goal: KcGoal, message: str) -> dict:
-    """Return a component list. This does not write."""
-    try:
-        ctx = planning_context(
-            title=goal.title,
-            description=goal.description,
-            kind=goal.kind,
-            minutes=goal.minutes,
-            message=message or "",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    taken: set[str] = set()
-    components = []
-    for title in ctx["titles"]:
-        code = slug_code(title, taken)
-        taken.add(code)
-        components.append(
-            {
-                "code": code,
-                "title": title,
-                **component_fields(str(ctx["subject"]), title, str(ctx["kind"])),
-            }
-        )
-    return {
-        "reply": ctx["reply"],
-        "draft": {"kind": "course", "components": components},
-    }
-
-
-def finish_model_course(
-    goal: KcGoal, message: str, proposal: dict, allowed_block_types: list[str] | None = None
-) -> dict:
-    """Shape a model object into a draft. This does not write."""
-    from app.kc_model import assemble_course
-
-    try:
-        assembled = assemble_course(
-            title=goal.title,
-            description=goal.description or "",
-            kind=goal.kind,
-            minutes=goal.minutes,
-            message=message or "",
-            proposal=proposal,
-            allowed_block_types=allowed_block_types,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    taken: set[str] = set()
-    components = []
-    for item in assembled["components"]:
-        code = slug_code(str(item["title"]), taken)
-        taken.add(code)
-        components.append(
-            {
-                "code": code,
-                "title": item["title"],
-                "description": item.get("description") or "",
-                "outline": item.get("outline") or "",
-                "topics": item.get("topics") or [],
-            }
-        )
-    return {
-        "reply": assembled["reply"],
-        "draft": {"kind": "course", "components": components},
-    }
-
-
-def course_prompt_for(
-    goal: KcGoal, message: str, model: str, allowed_block_types: list[str] | None = None
-) -> dict:
-    from app.kc_model import course_bundle
-
-    try:
-        return course_bundle(
-            title=goal.title,
-            description=goal.description or "",
-            audience=goal.audience,
-            kind=goal.kind,
-            minutes=goal.minutes,
-            message=message or "",
-            model=model,
-            allowed_block_types=allowed_block_types,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-def description_prompts_for(
-    goal: KcGoal,
-    message: str,
-    model: str,
-    titles: list[str],
-    subject: str = "",
-    major_ideas: list[str] | None = None,
-    allowed_block_types: list[str] | None = None,
-) -> dict:
-    from app.kc_model import description_plan
-
-    try:
-        return description_plan(
-            title=goal.title,
-            description=goal.description or "",
-            audience=goal.audience,
-            kind=goal.kind,
-            minutes=goal.minutes,
-            message=message or "",
-            model=model,
-            titles=titles,
-            subject=subject,
-            major_ideas=major_ideas,
-            allowed_block_types=allowed_block_types,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
 def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
     if not components:
         raise HTTPException(status_code=422, detail="Push a list of components.")
     by_code = _nodes_by_code(db)
     on_course = set(_target_ids(goal))
     ordered: list[str] = []
+    remap: dict[str, str] = {}
+    pushed: list[tuple[KcNode, list[str] | None]] = []
     for item in components:
         if not isinstance(item, dict):
             raise HTTPException(status_code=422, detail="Each component needs a title.")
@@ -906,11 +803,24 @@ def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
                 node.topics = topics
             node.updated_at = _now()
         _ensure_topic_blocks(node)
+        if requested:
+            remap[requested] = code
+        needs = item.get("prerequisite_codes")
+        pushed.append((node, _clean_codes(needs) if isinstance(needs, list) else None))
         if str(node.id) not in ordered:
             ordered.append(str(node.id))
+    for node, needs in pushed:
+        if needs is None:
+            continue
+        node.prerequisite_codes = [remap.get(code, code) for code in needs if remap.get(code, code) != node.code]
+        _sync_edges(db, node)
     goal.target_kc_ids = ordered
     goal.ready = False
     goal.updated_at = _now()
+    drafting = dict(goal.drafting or {})
+    if drafting:
+        drafting["pushed"] = True
+        goal.drafting = drafting
     db.flush()
     return goal
 
@@ -1103,45 +1013,6 @@ def _first_sentence(text: str) -> str:
     return re.split(r"(?<=[.])\s+", cleaned, maxsplit=1)[0].strip()
 
 
-def draft_component(goal: KcGoal, node: KcNode, ordered: list[KcNode], message: str) -> dict:
-    """Draft this component only. This does not write."""
-    del message
-    earlier = []
-    for item in ordered:
-        if item.id == node.id:
-            break
-        earlier.append(item)
-    previous = earlier[-1] if earlier else None
-    summary, outline, pairs = _topic_fields(goal, node)
-    blocks = _authored_blocks(node.blocks) or _blocks_from_pairs(pairs)
-    if not blocks:
-        goal_text = _first_sentence(goal.description) or f"Explain {node.title}."
-        blocks = [{"id": "blk_1", "type": "topic_goal", "data": {"topic": node.title, "goal": goal_text}}]
-        pairs = [{"topic": node.title, "goal": goal_text}]
-    truth = _first_sentence(goal.description) or f"The core idea of {node.title}."
-    from app.kc_model import derive_rubric_from_blocks
-
-    rubric = derive_rubric_from_blocks(blocks) or [f"States the idea of {node.title}"]
-    draft = {
-        "kind": "component",
-        "id": str(node.id),
-        "code": node.code,
-        "title": node.title,
-        "description": summary,
-        "outline": outline,
-        "topics": pairs,
-        "blocks": blocks,
-        "core_truth": truth,
-        "rubric": rubric,
-        "misconceptions": [],
-        "prerequisite_codes": [previous.code] if previous else [],
-        "encompasses_codes": [],
-    }
-    return {
-        "reply": f"Draft for {node.title} only. Other components stay as they are. Nothing is saved until you push it.",
-        "draft": draft,
-    }
-
 
 def structure(db: Session, goal: KcGoal) -> dict:
     targets = load_targets(db, goal)
@@ -1277,7 +1148,7 @@ def _build_block_details(
         stored = by_id.get(key)
         kind = str(block.get("type") or "topic_goal").strip()
         data = block.get("data") if isinstance(block.get("data"), dict) else {}
-        label = _BANNER_LABELS.get(kind, kind or "Block")
+        label = BLOCK_BANNER_LABELS.get(kind, kind or "Block")
         prompt_preview = _block_title(data, node.title)
         rubric_line = _rubric_line(block, cfg)
         counts = _block_counts_toward_mastery(block, cfg)
@@ -2215,7 +2086,7 @@ def _stored_block_rows(
         row: dict = {
             "id": key,
             "type": kind,
-            "type_label": _BANNER_LABELS.get(kind, kind or "Block"),
+            "type_label": BLOCK_BANNER_LABELS.get(kind, kind or "Block"),
             "status": "completed" if finished else "active",
         }
         if stored is not None:
@@ -2984,7 +2855,7 @@ def _session_block_progress(node: KcNode | None, session: KcSession) -> dict:
                 "id": bid,
                 "index": index,
                 "type": kind,
-                "type_label": _BANNER_LABELS.get(kind, kind),
+                "type_label": BLOCK_BANNER_LABELS.get(kind, kind),
                 "title": _block_title(data, node.title),
                 "status": status,
                 "outcome": stored.get("outcome"),
@@ -3510,7 +3381,7 @@ def tutor_variables(
     substep = str(block_state.get("substep") or "")
     if block is not None and not substep:
         substep = default_substep_for_block(block, cfg)
-    from app.kc_model import BLOCK_LABELS, derive_rubric_from_blocks
+    from app.kc_model import derive_rubric_from_blocks
 
     state = _state_row(db, student, node)
     prereq = _prerequisite_status(db, student, node)
@@ -4397,91 +4268,6 @@ def _assign_topic_fields(node: KcNode, body: dict) -> None:
     node.topics = split["topics"]
 
 
-def _topic_fields(goal: KcGoal, node: KcNode) -> tuple[str, str, list]:
-    """Summary, outline, and pairs already stored, or a short fallback."""
-    from app.kc_model import clean_pairs, split_brief
-
-    description = (node.description or "").strip()
-    outline = (node.outline or "").strip()
-    pairs = clean_pairs(node.topics)
-    if outline or pairs:
-        return description or outline, outline, pairs
-    split = split_brief(description)
-    if split is not None:
-        return split["description"], split["outline"], split["topics"]
-    summary = description or f"How {node.title} fits {goal.title}."
-    return summary, summary, [{"topic": node.title, "goal": f"Use {node.title}."}]
-
-
-_BLOCK_CATALOG_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
-    "topic_goal": (
-        ("topic", "Topic"),
-        ("goal", "Goal"),
-        ("acceptance_criteria", "Acceptance criteria"),
-        ("teaching_notes", "Teaching notes"),
-    ),
-    "mcq": (
-        ("mode", "Mode"),
-        ("question_stem", "Question stem"),
-        ("choices", "Choices"),
-        ("correct_explanation", "Correct explanation"),
-        ("target_skill", "Target skill"),
-        ("difficulty", "Difficulty"),
-        ("num_choices", "Number of choices"),
-        ("distractor_guidance", "Distractor guidance"),
-        ("stem_constraints", "Stem constraints"),
-    ),
-    "case_study": (
-        ("case_a", "Case A"),
-        ("case_b", "Case B"),
-        ("prediction_prompt", "Prediction prompt"),
-        ("invariant_principle", "Invariant principle"),
-        ("transfer_prompt", "Transfer prompt"),
-        ("transfer_expected", "Transfer expected"),
-    ),
-    "socratic": (
-        ("central_dilemma", "Central dilemma"),
-        ("initial_probe", "Opening probe"),
-        ("counterexamples", "Counterexamples"),
-        ("target_synthesis", "Target synthesis"),
-    ),
-    "curiosity": (
-        ("phenomenon_hook", "Phenomenon hook"),
-        ("prediction_question", "Prediction question"),
-        ("bridge_to_unit", "Bridge to unit"),
-        ("wonder_branches", "Wonder branches"),
-    ),
-    "worked_example": (
-        ("problem_statement", "Problem statement"),
-        ("steps", "Steps"),
-        ("faded_step_index", "Faded step"),
-        ("solo_problem", "Solo problem"),
-        ("solo_expected_answer", "Solo expected answer"),
-    ),
-    "spot_the_flaw": (
-        ("rookie_work", "Rookie work"),
-        ("flaw_description", "Flaw description"),
-        ("underlying_misconception", "Underlying misconception"),
-        ("corrected_version", "Corrected version"),
-    ),
-    "teach_back": (
-        ("peer_persona_prompt", "Peer prompt"),
-        ("required_concepts", "Required concepts"),
-        ("peer_follow_up_question", "Peer follow-up"),
-    ),
-    "retrieval_check": (
-        ("recall_prompt", "Recall prompt"),
-        ("expected_fact", "Expected fact"),
-        ("elaborative_why_prompt", "Elaborative why prompt"),
-        ("expected_why_rationale", "Expected why rationale"),
-    ),
-    "explanation": (
-        ("block_title", "Block title"),
-        ("topics", "Topics"),
-        ("summary_takeaway", "Summary takeaway"),
-    ),
-}
-
 
 def _catalog_field_lines(key: str, label: str, value: object) -> list[str]:
     """One catalog field, omitted when Push draft would write it empty."""
@@ -4580,8 +4366,6 @@ def _topic_lines(value: object) -> list[str]:
 
 def _block_field_lines(raw: object) -> list[str]:
     """Each block, in order, with its type label and the filled catalog fields."""
-    from app.kc_model import BLOCK_LABELS
-
     if not isinstance(raw, list) or not raw:
         return ["Blocks: none"]
     lines: list[str] = []
@@ -4595,7 +4379,7 @@ def _block_field_lines(raw: object) -> list[str]:
         shown += 1
         lines.append(f"{shown}. {BLOCK_LABELS.get(kind, kind)}")
         data = item.get("data") if isinstance(item.get("data"), dict) else {}
-        for key, label in _BLOCK_CATALOG_FIELDS.get(kind, ()):
+        for key, label in BLOCK_FIELDS.get(kind, ()):
             if key not in data:
                 continue
             lines.extend(_catalog_field_lines(key, label, data.get(key)))
@@ -4722,45 +4506,6 @@ def _labeled_updates(message: str) -> dict:
     return updates
 
 
-def _revise_draft(previous: dict, message: str, goal: KcGoal, node: KcNode) -> dict:
-    draft = {
-        "kind": "component",
-        "id": previous.get("id") or str(node.id),
-        "code": previous.get("code") or node.code,
-        "title": previous.get("title") or node.title,
-        "description": str(previous.get("description") or node.description or ""),
-        "outline": str(previous.get("outline") or node.outline or ""),
-        "topics": list(previous.get("topics") if previous.get("topics") is not None else (node.topics or [])),
-        "blocks": list(previous.get("blocks") or _authored_blocks(node.blocks)),
-        "core_truth": previous.get("core_truth") or "",
-        "rubric": list(previous.get("rubric") or []),
-        "misconceptions": [
-            dict(item) for item in (previous.get("misconceptions") or []) if isinstance(item, dict)
-        ],
-        "prerequisite_codes": list(previous.get("prerequisite_codes") or []),
-        "encompasses_codes": list(previous.get("encompasses_codes") or []),
-    }
-    labels = _labeled_updates(message)
-    if str(labels.get("title") or "").strip():
-        draft["title"] = str(labels["title"]).strip()
-    if "description" in labels:
-        draft["description"] = str(labels["description"]).strip()
-    if "core_truth" in labels:
-        draft["core_truth"] = str(labels["core_truth"]).strip()
-    elif not _label_present(labels):
-        sentence = _first_sentence(message)
-        if len(_norm(sentence)) >= OPEN_ANSWER_MIN:
-            draft["core_truth"] = sentence
-    if "rubric" in labels:
-        draft["rubric"] = _clean_rubric(labels["rubric"])
-    if "prerequisite_codes" in labels:
-        draft["prerequisite_codes"] = _clean_codes(labels["prerequisite_codes"])
-    if "encompasses_codes" in labels:
-        draft["encompasses_codes"] = _clean_codes(labels["encompasses_codes"])
-    if "misconception" in labels:
-        draft["misconceptions"] = _clean_misconceptions(labels["misconception"])
-    return draft
-
 
 def _label_present(labels: dict) -> bool:
     if labels.get("fields"):
@@ -4842,41 +4587,6 @@ def _add_creator_message(
     return message
 
 
-def expert_opening(goal: KcGoal, node: KcNode) -> str:
-    """The brief, before any type field."""
-    brief = (node.description or "").strip() or f"{node.title} belongs to {goal.title}."
-    if goal.kind == "time_boxed" and goal.minutes:
-        kind_line = f"Time boxed fits {goal.minutes} minutes."
-    elif goal.kind == "time_boxed":
-        kind_line = "Time boxed fits the minutes."
-    elif goal.kind == "curiosity":
-        kind_line = "Curiosity is a path through the subject."
-    else:
-        kind_line = "Mastery is the fuller rigorous breakdown."
-    return f"Expert on {node.title}. {kind_line}\n{brief}\nThe topic, before the fields:"
-
-
-def post_creator_turn(db: Session, node: KcNode, message: str) -> dict:
-    cleaned = message.strip()
-    if not cleaned:
-        raise HTTPException(status_code=422, detail="Write a message first.")
-    goal, ordered = course_of_node(db, node)
-    previous = _latest_draft(_creator_rows(db, node.id))
-    if previous is None:
-        draft = draft_component(goal, node, ordered, cleaned)["draft"]
-    else:
-        draft = _revise_draft(previous, cleaned, goal, node)
-    _add_creator_message(db, node, "user", cleaned)
-    _add_creator_message(
-        db,
-        node,
-        "assistant",
-        f"{expert_opening(goal, node)}\n\n{_draft_reply(draft)}",
-        draft=draft,
-        applied=False,
-    )
-    return creator_thread(db, node)
-
 
 def creator_prompt_for(
     db: Session,
@@ -4886,10 +4596,15 @@ def creator_prompt_for(
     allowed_block_types: list[str] | None = None,
 ) -> dict:
     from app.kc_model import creator_bundle
+    from app.kc_pipeline import position_text
 
     goal, ordered = course_of_node(db, node)
-    others = _other_codes(db, node, ordered)
+    siblings = _sibling_rows(db, goal, node, ordered)
+    by_code = {item["code"]: item for item in siblings}
     previous = _latest_draft(_creator_rows(db, node.id))
+    blueprint = goal.blueprint if isinstance(goal.blueprint, dict) else {}
+    builds_on = [by_code[code] for code in _clean_codes(node.prerequisite_codes) if code in by_code]
+    leads_to = [item for item in siblings if node.code in item["prerequisite_codes"]]
     try:
         return creator_bundle(
             course_title=goal.title,
@@ -4908,13 +4623,40 @@ def creator_prompt_for(
                 if not (isinstance(block, dict) and block.get("type") == "_legacy")
             ],
             allowed_block_types=allowed_block_types,
-            other_codes=others,
+            siblings=siblings,
+            course_brief=goal.brief or "",
+            outcomes=list(blueprint.get("outcomes") or []),
+            position=position_text(blueprint, node.code) if blueprint else "",
+            builds_on=builds_on,
+            leads_to=leads_to,
             previous=previous,
             message=message,
             model=model,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _sibling_rows(db: Session, goal: KcGoal, node: KcNode, ordered: list[KcNode]) -> list[dict]:
+    """The other components with their codes, titles, and one-line summaries."""
+    from app.kc_pipeline import components_of
+
+    blueprint = goal.blueprint if isinstance(goal.blueprint, dict) else {}
+    planned = {item["code"]: item.get("summary") or "" for item in components_of(blueprint)} if blueprint else {}
+    patches = load_patches(db, ordered)
+    rows: list[dict] = []
+    for item in [*ordered, *patches]:
+        if item.id == node.id:
+            continue
+        rows.append(
+            {
+                "code": item.code,
+                "title": item.title,
+                "summary": planned.get(item.code) or _first_sentence(item.description or ""),
+                "prerequisite_codes": _clean_codes(item.prerequisite_codes),
+            }
+        )
+    return rows
 
 
 def _other_codes(db: Session, node: KcNode, ordered: list[KcNode]) -> list[str]:

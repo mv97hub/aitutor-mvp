@@ -5,27 +5,13 @@ import { KcBanner } from "@/components/KcBanner";
 import { KcBlockScope } from "@/components/KcBlockCanvas";
 import { KcCourseHistory } from "@/components/KcCourseHistory";
 import { KcCourseList } from "@/components/KcCourseList";
+import { KcCourseSettings } from "@/components/KcIntakeForm";
 import { NetworkMap } from "@/components/KcNetwork";
 import { KcNewCourse } from "@/components/KcNewCourse";
-import { KcStudioComposer } from "@/components/KcComposer";
-import {
-  addKcComponent,
-  markKcReady,
-  moveKcComponent,
-  pushKcDraft,
-  removeKcComponent,
-  saveKcCourse,
-} from "@/lib/kc-actions";
-import { blockSummary, recommendedChips, type RecommendedChip } from "@/lib/kc-blocks";
-import {
-  AUDIENCES,
-  KINDS,
-  type KcComponent,
-  type KcCourse,
-  type KcDraft,
-  type KcNetwork,
-  type KcStructure,
-} from "@/lib/kc";
+import { KcPipelinePanel } from "@/components/KcPipeline";
+import { addKcComponent, moveKcComponent, removeKcComponent } from "@/lib/kc-actions";
+import { blockSummary } from "@/lib/kc-blocks";
+import type { KcComponent, KcCourse, KcNetwork, KcPipeline, KcStructure } from "@/lib/kc";
 import type { PromptTurn } from "@/lib/kc-prompt-log";
 
 export function KcStudio({
@@ -33,9 +19,7 @@ export function KcStudio({
   initialCourse,
   initialStructure,
   initialNetwork,
-  initialDraft,
-  initialReply,
-  initialMessage,
+  initialPipeline,
   initialModel,
   initialError,
   promptScope,
@@ -45,9 +29,7 @@ export function KcStudio({
   initialCourse: KcCourse | null;
   initialStructure: KcStructure | null;
   initialNetwork: KcNetwork | null;
-  initialDraft: KcDraft | null;
-  initialReply: string;
-  initialMessage: string;
+  initialPipeline: KcPipeline | null;
   initialModel: string;
   initialError: string | null;
   promptScope: string;
@@ -55,7 +37,6 @@ export function KcStudio({
 }) {
   const course = initialCourse;
   const order = course?.components.map((item) => item.id) ?? [];
-  const courseDraft = initialDraft?.kind === "course" ? initialDraft : null;
 
   return (
     <CreatorDebugShell className="ds-shell studio-shell kc-screen" scope={promptScope} turn={promptTurn}>
@@ -78,11 +59,7 @@ export function KcStudio({
           Manage KC courses
         </Link>
         <KcNewCourse />
-        <KcCourseList
-          courses={initialCourses}
-          activeId={course?.id ?? null}
-          hrefBase="/kc-studio?course="
-        />
+        <KcCourseList courses={initialCourses} activeId={course?.id ?? null} hrefBase="/kc-studio?course=" />
       </aside>
       <section className="studio-stage kc-course-stage">
         {initialError ? (
@@ -90,120 +67,29 @@ export function KcStudio({
             <p>{initialError}</p>
           </div>
         ) : null}
-        {!course ? <div className="ds-empty"><p>Choose a course, or create one.</p></div> : null}
-        {course ? (
+        {!course ? (
+          <div className="ds-empty">
+            <p>Choose a course, or create one.</p>
+          </div>
+        ) : null}
+        {course && initialPipeline ? (
           <>
-            <form className="studio-prefs" action={saveKcCourse} key={course.id}>
-              <input type="hidden" name="course_id" value={course.id} />
-              <div className="studio-prefs-head">
-                <div className="studio-prefs-title">
-                  <h1>
-                    <span className="studio-code">{course.code}</span>
-                    {course.title}
-                    <span className="studio-draft">{course.ready ? "Ready" : "Draft"}</span>
-                  </h1>
-                </div>
-                <div className="studio-prefs-actions">
-                  <button className="button" type="submit">
-                    Save course
-                  </button>
-                  <a className="ghost" href={`/kc-studio?course=${course.id}&network=1`}>
-                    Network
-                  </a>
-                  <button type="submit" formAction={markKcReady}>
-                    {course.ready ? "Ready" : "Mark ready"}
-                  </button>
-                </div>
-              </div>
-              <div className="studio-grid">
-                <label>
-                  Name
-                  <input aria-label="Course name" name="title" defaultValue={course.title} required />
-                </label>
-                <label>
-                  Audience
-                  <select aria-label="Audience" name="audience" defaultValue={course.audience}>
-                    {AUDIENCES.map((band) => (
-                      <option key={band}>{band}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="studio-span">
-                  What the kid should come away able to do
-                  <textarea aria-label="Course description" name="description" defaultValue={course.description} rows={3} />
-                </label>
-                <label>
-                  Kind
-                  <select aria-label="Kind" name="kind" defaultValue={course.kind}>
-                    {KINDS.map((kind) => (
-                      <option key={kind.id} value={kind.id}>
-                        {kind.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Minutes, optional
-                  <input aria-label="Minutes" name="minutes" inputMode="numeric" defaultValue={course.minutes ?? ""} />
-                </label>
-              </div>
-            </form>
+            <KcCourseSettings course={course} drafted={Boolean(initialPipeline.brief || initialPipeline.blueprint)} />
             <div className="studio-columns">
               <div className="studio-tree" aria-label="Course structure">
-                <StructureView
-                  courseId={course.id}
-                  structure={initialStructure}
-                  patches={course.patches}
-                  order={order}
-                />
+                <StructureView courseId={course.id} structure={initialStructure} patches={course.patches} order={order} />
               </div>
               <div className="studio-chat">
                 <div className="ds-scroll">
                   <div className="ds-column">
-                    {!initialMessage ? (
-                      <p className="ds-quiet">
-                        The draft names the subject and its major ideas, then the component list.
-                        Each component gets a short summary, an outline, and a topic with its goal. Nothing is stored until you push it.
-                      </p>
-                    ) : null}
-                    {initialMessage ? (
-                      <div className="bubble user">
-                        <p>{initialMessage}</p>
-                      </div>
-                    ) : null}
-                    {initialReply ? (
-                      <div className="bubble assistant">
-                        <p className="kc-reply">{initialReply}</p>
-                      </div>
-                    ) : null}
-                    {courseDraft ? (
-                      <ol className="kc-draft-list" aria-label="Draft component list">
-                        {courseDraft.components.map((item) => (
-                          <li key={item.code}>
-                            <strong>{item.title}</strong> <span className="studio-code">{item.code}</span>
-                            {item.description ? <p className="kc-brief">{item.description}</p> : null}
-                            <BlockChips chips={recommendedChips(item.description, item.recommended_blocks)} />
-                          </li>
-                        ))}
-                      </ol>
-                    ) : null}
+                    <KcPipelinePanel
+                      key={course.id}
+                      courseId={course.id}
+                      model={initialModel}
+                      pipeline={initialPipeline}
+                    />
                   </div>
                 </div>
-                {courseDraft ? (
-                  <form action={pushKcDraft}>
-                    <input type="hidden" name="course_id" value={course.id} />
-                    <input type="hidden" name="kind" value="course" />
-                    <input type="hidden" name="components" value={JSON.stringify(courseDraft.components)} />
-                    <button className="button studio-push" type="submit">
-                      Push draft
-                    </button>
-                  </form>
-                ) : null}
-                <KcStudioComposer
-                  key={`${initialMessage}\n${initialReply}\n${initialError ?? ""}`}
-                  courseId={course.id}
-                  model={initialModel}
-                />
               </div>
             </div>
             <KcCourseHistory text={course.history ?? ""} />
@@ -214,20 +100,6 @@ export function KcStudio({
         <NetworkModal title={course.title} network={initialNetwork} closeHref={`/kc-studio?course=${course.id}`} />
       ) : null}
     </CreatorDebugShell>
-  );
-}
-
-function BlockChips({ chips }: { chips: RecommendedChip[] }) {
-  if (!chips.length) return null;
-  return (
-    <ol className="kc-block-chips" aria-label="Recommended blocks">
-      {chips.map((chip, index) => (
-        <li key={`${chip.label}-${index}`} title={chip.focus || undefined}>
-          <span>{index + 1}</span>
-          {chip.label}
-        </li>
-      ))}
-    </ol>
   );
 }
 
@@ -253,46 +125,45 @@ function StructureView({
       <h2>Course structure</h2>
       <ul>
         {structure?.groups.flatMap((group) => group.components).map((row) => (
-              <li key={row.id}>
-                <a href={`/kc-creator?course=${courseId}&kc=${row.id}`}>
-                  <strong>{row.title}</strong>
-                  {row.description ? <p className="kc-brief">{row.description}</p> : null}
-                  <BlockChips chips={recommendedChips(row.description, row.recommended_blocks, row.blocks)} />
-                  <span>{row.blocks?.length ? blockSummary(row.blocks) : "No blocks yet"}</span>
-                  <em>{rowStatus(row)}</em>
-                </a>
-                <span className="kc-row-actions">
-                  <form action={moveKcComponent}>
-                    <input type="hidden" name="course_id" value={courseId} />
-                    <input type="hidden" name="id" value={row.id} />
-                    <input type="hidden" name="direction" value="-1" />
-                    {order.map((id) => (
-                      <input key={id} type="hidden" name="order" value={id} />
-                    ))}
-                    <button className="ghost" type="submit" aria-label={`Move ${row.title} up`}>
-                      Up
-                    </button>
-                  </form>
-                  <form action={moveKcComponent}>
-                    <input type="hidden" name="course_id" value={courseId} />
-                    <input type="hidden" name="id" value={row.id} />
-                    <input type="hidden" name="direction" value="1" />
-                    {order.map((id) => (
-                      <input key={id} type="hidden" name="order" value={id} />
-                    ))}
-                    <button className="ghost" type="submit" aria-label={`Move ${row.title} down`}>
-                      Down
-                    </button>
-                  </form>
-                  <form action={removeKcComponent}>
-                    <input type="hidden" name="course_id" value={courseId} />
-                    <input type="hidden" name="id" value={row.id} />
-                    <button className="ghost" type="submit" aria-label={`Remove ${row.title}`}>
-                      Remove
-                    </button>
-                  </form>
-                </span>
-              </li>
+          <li key={row.id}>
+            <a href={`/kc-creator?course=${courseId}&kc=${row.id}`}>
+              <strong>{row.title}</strong>
+              {row.description ? <p className="kc-brief">{row.description}</p> : null}
+              <span>{row.blocks?.length ? blockSummary(row.blocks) : "No blocks yet"}</span>
+              <em>{rowStatus(row)}</em>
+            </a>
+            <span className="kc-row-actions">
+              <form action={moveKcComponent}>
+                <input type="hidden" name="course_id" value={courseId} />
+                <input type="hidden" name="id" value={row.id} />
+                <input type="hidden" name="direction" value="-1" />
+                {order.map((id) => (
+                  <input key={id} type="hidden" name="order" value={id} />
+                ))}
+                <button className="ghost" type="submit" aria-label={`Move ${row.title} up`}>
+                  Up
+                </button>
+              </form>
+              <form action={moveKcComponent}>
+                <input type="hidden" name="course_id" value={courseId} />
+                <input type="hidden" name="id" value={row.id} />
+                <input type="hidden" name="direction" value="1" />
+                {order.map((id) => (
+                  <input key={id} type="hidden" name="order" value={id} />
+                ))}
+                <button className="ghost" type="submit" aria-label={`Move ${row.title} down`}>
+                  Down
+                </button>
+              </form>
+              <form action={removeKcComponent}>
+                <input type="hidden" name="course_id" value={courseId} />
+                <input type="hidden" name="id" value={row.id} />
+                <button className="ghost" type="submit" aria-label={`Remove ${row.title}`}>
+                  Remove
+                </button>
+              </form>
+            </span>
+          </li>
         ))}
       </ul>
       {patches.length ? (
@@ -304,7 +175,6 @@ function StructureView({
                 <a href={`/kc-creator?course=${courseId}&kc=${patch.id}`}>
                   <strong>{patch.title}</strong>
                   {patch.description ? <p className="kc-brief">{patch.description}</p> : null}
-                  <BlockChips chips={recommendedChips(patch.description, patch.recommended_blocks, patch.blocks)} />
                   <span>{patch.blocks?.length ? blockSummary(patch.blocks) : "No blocks yet"}</span>
                   <em>Not a target</em>
                 </a>

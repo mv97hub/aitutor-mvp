@@ -18,12 +18,6 @@ export type KcBlock = {
   data: Record<string, unknown>;
 };
 
-export type KcRecommendedBlock = {
-  type: KcBlockType;
-  reason?: string;
-  focus?: string;
-};
-
 export type KcBlockProgress = {
   id: string;
   index: number;
@@ -55,7 +49,6 @@ export type KcComponent = {
   encompasses_codes: string[];
   type_fields: Record<string, unknown>;
   blocks?: KcBlock[];
-  recommended_blocks?: KcRecommendedBlock[];
   marked_complete: boolean;
   missing: string[];
   history: string;
@@ -71,6 +64,8 @@ export type KcCourse = {
   minutes: number | null;
   ready: boolean;
   allowed_block_types?: KcBlockType[];
+  intake: KcIntake;
+  brief: string;
   history: string;
   components: KcComponent[];
   patches: KcComponent[];
@@ -83,7 +78,6 @@ export type KcStructure = {
       code: string;
       title: string;
       description: string;
-      recommended_blocks?: KcRecommendedBlock[];
       blocks?: { type: string }[];
       missing: string[];
       marked_complete: boolean;
@@ -111,22 +105,82 @@ export type KcComponentDraft = {
   encompasses_codes: string[];
   type_fields?: Record<string, unknown>;
   blocks?: KcBlock[];
-  recommended_blocks?: KcRecommendedBlock[];
 };
 
-export type KcDraft =
-  | {
-      kind: "course";
-      components: {
-        code: string;
-        title: string;
-        description?: string;
-        outline?: string;
-        topics?: KcTopicPair[];
-        recommended_blocks?: KcRecommendedBlock[];
-      }[];
-    }
-  | KcComponentDraft;
+export type KcCourseDraft = {
+  kind: "course";
+  components: {
+    code: string;
+    title: string;
+    description: string;
+    prerequisite_codes: string[];
+    unit?: string;
+    position?: number;
+  }[];
+};
+
+export type KcDepth = "intro" | "standard" | "deep";
+export type KcReadingLevel = "easier" | "age" | "stronger";
+export type KcUse = "" | "enrichment" | "school_support" | "test_prep";
+
+export type KcIntake = {
+  reading_level: KcReadingLevel;
+  depth: KcDepth;
+  component_count: number | null;
+  use: KcUse;
+  starting_point: string;
+  must_cover: string;
+  must_avoid: string;
+  interests: string;
+  misconceptions_seen: string;
+  source_text: string;
+};
+
+export type KcBlueprintComponent = {
+  code: string;
+  title: string;
+  summary: string;
+  prerequisites: string[];
+};
+
+export type KcBlueprintUnit = {
+  title: string;
+  summary: string;
+  components: KcBlueprintComponent[];
+};
+
+export type KcBlueprint = {
+  outcomes: string[];
+  units: KcBlueprintUnit[];
+};
+
+export type KcPipelineStage = "brief" | "blueprint" | "unit" | "review";
+
+export type KcPipelineNext = { stage: KcPipelineStage; unit: number | null } | null;
+
+export type KcReviewCheck = { name: string; result: "ok" | "fixed" | "issue"; note: string };
+
+export type KcPipeline = {
+  stage: "brief" | "questions" | "blueprint" | "edit_blueprint" | "units" | "review" | "draft";
+  next: KcPipelineNext;
+  brief: string;
+  questions: string[];
+  answers: { question: string; answer: string }[];
+  blueprint: KcBlueprint | null;
+  approved: boolean;
+  units_total: number;
+  units_done: number;
+  descriptions: Record<string, string>;
+  review: {
+    checks: KcReviewCheck[];
+    revised: string[];
+    added: string[];
+    outcomes_changed: boolean;
+  } | null;
+  pushed: boolean;
+  missing: string[];
+  draft: KcCourseDraft | null;
+};
 
 export type KcCard = {
   role: "fastest" | "patch" | "stretch";
@@ -426,6 +480,22 @@ export const KINDS = [
   { id: "mastery", label: "Mastery" },
   { id: "time_boxed", label: "Time boxed" },
   { id: "curiosity", label: "Curiosity" },
+] as const;
+export const READING_LEVELS = [
+  { id: "easier", label: "Easier than the age band" },
+  { id: "age", label: "Matches the age band" },
+  { id: "stronger", label: "A stronger reader" },
+] as const;
+export const DEPTHS = [
+  { id: "intro", label: "Quick intro" },
+  { id: "standard", label: "Standard" },
+  { id: "deep", label: "Deep dive" },
+] as const;
+export const COURSE_USES = [
+  { id: "", label: "Not set" },
+  { id: "enrichment", label: "Enrichment" },
+  { id: "school_support", label: "School support" },
+  { id: "test_prep", label: "Test prep" },
 ] as const;
 export type KcCreatorMessage = {
   id: string;

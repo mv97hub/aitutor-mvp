@@ -11,8 +11,6 @@ import {
   releaseRecord,
   rememberCreatorPrompts,
   resetCreatorPromptHandoff,
-  shareInFlight,
-  takeComponentRows,
   type PromptStore,
   type PromptTurn,
   type SentPrompt,
@@ -38,65 +36,10 @@ function turn(id: string, instructions: string, prompt = "user"): PromptTurn {
   return { id, prompts: [{ label: "Draft", instructions, prompt }] };
 }
 
-test("slice rows stay and the raw model output is dropped", () => {
-  const row = { title: "Angles", outline: "sum" };
-  const proposal: Record<string, unknown> = {
-    components: [row, null, "skip"],
-    raw: "x".repeat(40),
-    extra: { big: true },
-  };
-  const rows = takeComponentRows(proposal);
-  assert.deepEqual(rows, [row]);
-  assert.equal(rows[0]?.title, "Angles");
-  assert.deepEqual(proposal, {});
-
-  const empty: Record<string, unknown> = { raw: "big", components: "nope" };
-  assert.deepEqual(takeComponentRows(empty), []);
-  assert.deepEqual(empty, {});
-});
-
 test("releaseRecord drops every field on the model object", () => {
   const record: Record<string, unknown> = { subject: "Geometry", titles: ["Angles"], raw: "output" };
   releaseRecord(record);
   assert.deepEqual(record, {});
-});
-
-test("in-flight dedupe shares one call and drops it when the call ends", async () => {
-  const bucket = new Map<string, Promise<string>>();
-  let runs = 0;
-  const first = shareInFlight(bucket, "same", async () => {
-    runs += 1;
-    return "one";
-  });
-  const second = shareInFlight(bucket, "same", async () => {
-    runs += 1;
-    return "two";
-  });
-  assert.equal(await first, "one");
-  assert.equal(await second, "one");
-  assert.equal(runs, 1);
-  assert.equal(bucket.size, 0);
-
-  const third = await shareInFlight(bucket, "same", async () => {
-    runs += 1;
-    return "three";
-  });
-  assert.equal(third, "three");
-  assert.equal(runs, 2);
-  assert.equal(bucket.size, 0);
-});
-
-test("a failed in-flight call is not kept", async () => {
-  const bucket = new Map<string, Promise<string>>();
-  await assert.rejects(
-    shareInFlight(bucket, "same", async () => {
-      throw new Error("nope");
-    }),
-    /nope/,
-  );
-  assert.equal(bucket.size, 0);
-  const again = await shareInFlight(bucket, "same", async () => "next");
-  assert.equal(again, "next");
 });
 
 test("topic handoff keeps only the latest turn and a small set of topics", () => {
@@ -165,16 +108,13 @@ test("browser history appends a turn and keeps the newest last", () => {
 });
 
 test("prompt turn ids are stable for the same text", () => {
-  const parts = ["course", "explain angles", "Title pass", "system", "user"];
+  const parts = ["course", "explain angles", "Blueprint", "system", "user"];
   assert.equal(promptTurnId(parts), promptTurnId(parts));
   assert.notEqual(promptTurnId(parts), promptTurnId([...parts, "again"]));
 });
 
 test("draft calls record prompt text without keeping a finished draft", () => {
   const source = readFileSync(new URL("./kc-draft.ts", import.meta.url), "utf8");
-  assert.match(source, /shareInFlight\(inflight/);
-  assert.match(source, /takeComponentRows\(piece\)/);
-  assert.match(source, /components\.length = 0/);
   assert.match(source, /sent\.push\(\{ label, instructions, prompt \}\)/);
   assert.doesNotMatch(source, /cache\.set|const cache/);
 
