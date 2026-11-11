@@ -132,6 +132,22 @@ function NetworkFrame({
   );
 }
 
+/** The parent area keeps every link on /parent and hides the link into the child's tutor.
+ * Plain strings only: this component is a client component, so a server page cannot pass functions.
+ */
+export type ProgressArea = {
+  backHref: string;
+  backLabel: string;
+  /** Course cards append ?course=<id> to this path. */
+  progressPath: string;
+};
+
+function areaCourseHref(area: ProgressArea, courseId: string): string {
+  const params = new URLSearchParams();
+  params.set("course", courseId);
+  return `${area.progressPath}?${params}`;
+}
+
 export function KcCourseProgress({
   studentId,
   studentName,
@@ -140,7 +156,9 @@ export function KcCourseProgress({
   progress,
   network,
   error,
+  area,
 }: {
+  area?: ProgressArea;
   studentId: string;
   studentName: string;
   courses: KcTutorCourse[];
@@ -177,8 +195,8 @@ export function KcCourseProgress({
           <h1>Detailed Progress</h1>
           {studentName ? <p>{studentName}</p> : null}
         </div>
-        <Link className="learn-text-link" href={`/learn/${studentId}`}>
-          Back to home
+        <Link className="learn-text-link" href={area ? area.backHref : `/learn/${studentId}`}>
+          {area ? area.backLabel : "Back to home"}
         </Link>
       </header>
 
@@ -194,7 +212,7 @@ export function KcCourseProgress({
               return (
                 <Link
                   key={course.id}
-                  href={progressPath(studentId, course.id)}
+                  href={area ? areaCourseHref(area, course.id) : progressPath(studentId, course.id)}
                   className={selectedCard ? "progress-card is-selected" : "progress-card"}
                   aria-current={selectedCard ? "true" : undefined}
                 >
@@ -289,12 +307,14 @@ export function KcCourseProgress({
               <h2>{selected.title}</h2>
               <p>{componentScore(selected)}</p>
               {showed ? <p>{showed}</p> : null}
-              <Link
-                className="learn-text-link"
-                href={learnCoursePath(studentId, courseId, { kc: selected.id })}
-              >
-                Continue with your tutor
-              </Link>
+              {area ? null : (
+                <Link
+                  className="learn-text-link"
+                  href={learnCoursePath(studentId, courseId, { kc: selected.id })}
+                >
+                  Continue with your tutor
+                </Link>
+              )}
             </article>
           ) : null}
         </section>

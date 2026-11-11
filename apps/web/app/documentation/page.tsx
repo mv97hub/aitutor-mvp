@@ -6,6 +6,7 @@ const sections = [
   { href: "/documentation/kid-tutor", label: "Kid tutor" },
   { href: "/documentation/admin", label: "Admin" },
   { href: "/documentation/ai-safety", label: "AI Safety" },
+  { href: "/documentation/parent-portal", label: "Parent portal" },
   { href: "/documentation/create-course", label: "Create course" },
   { href: "/documentation/view-chats", label: "View chats" },
   { href: "/documentation/view-kc-chats", label: "View KC chats" },

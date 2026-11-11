@@ -1273,3 +1273,36 @@ class AiSafetyEvent(Base):
     tutor_reply: Mapped[str] = mapped_column(Text, nullable=False, default="")
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
+class Parent(Base):
+    """A grown-up who can see chats and progress for the children linked to them.
+
+    There is no login. The id in the URL is the only gate, like the kid pages.
+    """
+
+    __tablename__ = "parents"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class ParentStudent(Base):
+    """Many-to-many link: a child can have several parents and a parent several children."""
+
+    __tablename__ = "parent_students"
+    __table_args__ = (UniqueConstraint("parent_id", "student_id", name="uq_parent_students_pair"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    parent_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("parents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )

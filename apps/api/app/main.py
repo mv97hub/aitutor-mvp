@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routes.ai_safety import router as ai_safety_router
 from app.routes.catalog import router as catalog_router
 from app.routes.kc import router as kc_router
+from app.routes.parents import router as parents_router
 from app.routes.sessions import router as sessions_router
 from app.routes.studio import router as studio_router
 from app.routes.tutor_profile import router as tutor_profile_router
@@ -21,6 +22,7 @@ app.include_router(tutor_profile_router)
 app.include_router(studio_router)
 app.include_router(kc_router)
 app.include_router(ai_safety_router)
+app.include_router(parents_router)
 
 
 @app.get("/health")

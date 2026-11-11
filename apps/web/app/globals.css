@@ -5867,3 +5867,105 @@ a.ds-row { text-decoration: none; }
 
 
 
+
+/* Parent portal. Landing, settings, and dashboard reuse the learn-shell look. */
+.parent-card.is-picked {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 2px var(--teal);
+}
+
+.parent-card { min-height: 180px; }
+
+.parent-add-form {
+  align-items: stretch;
+  justify-content: center;
+  gap: 12px;
+  text-align: left;
+}
+
+.parent-add-form label { display: grid; gap: 6px; font-weight: 700; }
+
+.parent-add-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.parent-problem { margin: 0; color: rgb(185, 28, 28); font-size: 0.92rem; }
+
+.parent-links { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; }
+
+.parent-check-list {
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.parent-check {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper-2);
+  cursor: pointer;
+}
+
+.parent-check.is-on { border-color: var(--teal); box-shadow: 0 0 0 2px var(--teal); }
+.parent-check input { width: 20px; height: 20px; flex: none; }
+.parent-check span { display: grid; }
+
+.parent-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 22px; }
+
+.parent-choice-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.parent-choice {
+  display: grid;
+  gap: 6px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--paper-2);
+  box-shadow: var(--shadow);
+  color: inherit;
+  text-decoration: none;
+}
+
+.parent-choice strong { font-size: 1.3rem; }
+.parent-choice:hover { transform: translateY(-2px); }
+.parent-hint { margin-top: 24px; }
+
+.parent-side-title {
+  margin: 4px 10px 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.parent-summary {
+  display: grid;
+  gap: 12px;
+  margin: 18px 28px 0;
+  padding: 16px 18px;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 14px;
+  background: rgb(249, 250, 251);
+}
+
+.parent-summary-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+
+.parent-summary-thread { display: grid; gap: 10px; }
+.parent-summary-thread:empty { display: none; }
+
+.parent-reply { max-width: 100%; white-space: normal; }
+.parent-reply p { margin: 0 0 8px; }
+.parent-reply h3 { margin: 10px 0 4px; font-size: 14px; font-weight: 600; }
+.parent-reply ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+
+@media (max-width: 860px) {
+  .parent-summary { margin: 14px 16px 0; }
+}
