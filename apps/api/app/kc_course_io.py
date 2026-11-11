@@ -13,6 +13,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.block_catalog import BLOCK_AUTHORING_RULES, BLOCK_FIELDS
+from app.kc_blocks import clean_passage_ela_data
+from app.kc_pipeline import passage_ela_generation_lines
 from app.kc import (
     _clean_misconceptions,
     _clean_rubric,
@@ -93,6 +95,25 @@ _BLOCK_EXAMPLES: dict[str, dict] = {
         "bridge_to_unit": "How this leads into the idea.",
         "wonder_branches": None,
     },
+    "passage_ela": {
+        "passage_title": "River roads",
+        "passage_genre": "informational",
+        "passage_text": (
+            "Rivers carry fresh water from the hills to the sea.\n\n"
+            "Towns grow beside rivers because boats can move food and people."
+        ),
+        "central_idea_question": "What is the central idea of the passage?",
+        "expected_central_idea": "Rivers help towns because they move water, food, and people.",
+        "distractor_detail": "Boats can move food and people.",
+        "evidence_prompt": "Cite two sentences from the passage that support the central idea.",
+        "verbatim_evidence_quotes": [
+            "Rivers carry fresh water from the hills to the sea.",
+            "Towns grow beside rivers because boats can move food and people.",
+        ],
+        "analysis_focus": "inference",
+        "analysis_question": "What can a reader infer about a town far from a river?",
+        "expected_analysis": "A town far from a river would have a harder time moving food and people.",
+    },
 }
 
 
@@ -116,6 +137,8 @@ def normalize_blocks(raw: object) -> list[dict]:
             raise ValueError(f"Block {index} needs a data object.")
         allowed = {key for key, _label in BLOCK_FIELDS[kind]}
         kept = {key: data[key] for key in data if key in allowed}
+        if kind == "passage_ela":
+            kept = clean_passage_ela_data(kept)
         block_id = str(item.get("id") or "").strip() or f"blk_{index}"
         if block_id in seen:
             block_id = f"{block_id}-{index}"
@@ -694,6 +717,7 @@ def external_course_prompt(*, title: str, grade: str, audience: str, curriculum:
         curriculum.strip() or "No curriculum was pasted. Ask for one before you write the course.",
         "Block preferences:",
         block_notes.strip() or "Every component includes a topic_goal, an explanation, a worked_example, and one mcq.",
+        *passage_ela_generation_lines(title, grade, curriculum, block_notes),
         "Block types and one example of data for each:",
     ]
     for kind, rule in BLOCK_AUTHORING_RULES.items():

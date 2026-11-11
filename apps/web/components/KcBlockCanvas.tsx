@@ -320,6 +320,31 @@ function fieldsFor(type: KcBlockType): TextField[] {
       { key: "peer_follow_up_question", label: "Peer follow-up", kind: "text" },
     ];
   }
+  if (type === "passage_ela") {
+    return [
+      { key: "passage_title", label: "Passage title", kind: "text" },
+      {
+        key: "passage_genre",
+        label: "Passage genre",
+        kind: "enum",
+        options: ["informational", "literary", "argumentative", "historical_primary"],
+      },
+      { key: "passage_text", label: "Passage text", kind: "text" },
+      { key: "central_idea_question", label: "Central idea question", kind: "text" },
+      { key: "expected_central_idea", label: "Expected central idea", kind: "text" },
+      { key: "distractor_detail", label: "Distractor detail", kind: "text" },
+      { key: "evidence_prompt", label: "Evidence prompt", kind: "text" },
+      { key: "verbatim_evidence_quotes", label: "Verbatim evidence quotes, one per line", kind: "lines" },
+      {
+        key: "analysis_focus",
+        label: "Analysis focus",
+        kind: "enum",
+        options: ["inference", "vocab_in_context", "author_purpose_structure", "evaluate_argument"],
+      },
+      { key: "analysis_question", label: "Analysis question", kind: "text" },
+      { key: "expected_analysis", label: "Expected analysis", kind: "text" },
+    ];
+  }
   return [
     { key: "recall_prompt", label: "Recall prompt", kind: "text" },
     { key: "expected_fact", label: "Expected fact", kind: "text" },
@@ -384,7 +409,7 @@ function Field({
       {field.label}
       <textarea
         aria-label={field.label}
-        rows={2}
+        rows={field.key === "passage_text" ? 8 : 2}
         value={typeof data[field.key] === "string" ? String(data[field.key]) : ""}
         onChange={(event) => set(field.key, event.target.value)}
       />

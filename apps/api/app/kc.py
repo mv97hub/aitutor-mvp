@@ -456,6 +456,7 @@ def _block_title(data: dict, fallback: str) -> str:
         "rookie_work",
         "peer_persona_prompt",
         "recall_prompt",
+        "passage_title",
         "goal",
     ):
         text = str(data.get(key) or "").strip()
@@ -640,6 +641,10 @@ def _missing_block_fields(kind: str, data: dict) -> str:
             if not isinstance(item, dict) or not _has_text(item.get("title")) or not _has_text(item.get("explanation")):
                 return "needs a title and explanation on every topic"
         return ""
+    if kind == "passage_ela":
+        from app.kc_blocks import passage_ela_gap
+
+        return passage_ela_gap(data)
     return ""
 
 
@@ -3248,6 +3253,19 @@ _CATALOG_FIELDS: dict[str, list[tuple[str, str]]] = {
         ("topics", "Topics"),
         ("summary_takeaway", "Summary takeaway"),
     ],
+    "passage_ela": [
+        ("passage_title", "Passage title"),
+        ("passage_genre", "Passage genre"),
+        ("passage_text", "Passage text"),
+        ("central_idea_question", "Central idea question"),
+        ("expected_central_idea", "Expected central idea"),
+        ("distractor_detail", "Distractor detail"),
+        ("evidence_prompt", "Evidence prompt"),
+        ("verbatim_evidence_quotes", "Verbatim evidence quotes"),
+        ("analysis_focus", "Analysis focus"),
+        ("analysis_question", "Analysis question"),
+        ("expected_analysis", "Expected analysis"),
+    ],
 }
 
 _MCQ_STATIC = {"mode", "question_stem", "choices", "correct_explanation"}
@@ -3296,6 +3314,11 @@ _SETTING_LABELS = {
     "elaboration_style_on_question": "Elaboration style",
     "check_in_prompt_style": "Check-in style",
     "end_of_block_summary_style": "End-of-block summary",
+    "passage_ela_display_mode": "Passage display",
+    "passage_ela_evidence_mode": "Evidence mode",
+    "passage_ela_scaffold_style": "Passage scaffold",
+    "passage_ela_max_attempts_per_step": "Attempts per step",
+    "passage_ela_reread_policy": "Reread policy",
 }
 
 

@@ -64,6 +64,9 @@ SUBSTEP_LABELS: dict[str, str] = {
     "explain_topic": "Explain Topic",
     "explain": "",
     "summary_check": "Summary & Final Questions",
+    "central_idea": "Central Idea",
+    "cite_evidence": "Cite Evidence",
+    "craft_or_inference": "Craft or Inference",
 }
 
 
@@ -342,6 +345,8 @@ def default_substep_for_block(block: dict, cfg: dict | None = None) -> str:
         return "recall"
     if btype == "explanation":
         return "explain_topic"
+    if btype == "passage_ela":
+        return "central_idea"
     return "main"
 
 
@@ -391,6 +396,8 @@ def substeps_for_block(block: dict, cfg: dict | None = None) -> list[str]:
         return _with_summary_check(["recall"])
     if btype == "explanation":
         return ["explain_topic", "summary_check"]
+    if btype == "passage_ela":
+        return ["central_idea", "cite_evidence", "craft_or_inference"]
     return _with_summary_check(["main"])
 
 
@@ -602,6 +609,12 @@ def max_retries_for_block(block: dict, cfg: dict, goal: KcGoal | None = None) ->
         return max(1, int(bcfg.get("max_wonder_turns", 2) or 2))
     if btype == "explanation":
         return 99
+    if btype == "passage_ela":
+        try:
+            cap = int(bcfg.get("passage_ela_max_attempts_per_step", 2) or 2)
+        except (TypeError, ValueError):
+            cap = 2
+        return min(4, max(1, cap))
     return max(1, int(bcfg.get("max_retries_before_reveal", 2) or 2))
 
 
@@ -643,6 +656,10 @@ def block_material_summary(block: dict, substep: str = "") -> str:
             f"Explanatory walkthrough: {heading}. Topic 1 of {max(len(topics), 1)}: {first or 'the first topic'}. "
             "Do not quiz."
         )
+    if btype == "passage_ela":
+        title = str(data.get("passage_title") or "ELA reading passage").strip()
+        genre = str(data.get("passage_genre") or "informational").strip()
+        return f"ELA reading passage: {title} ({genre})."
     return str(data)
 
 
@@ -924,6 +941,7 @@ def _who_you_are_talking_to(
     interests: str,
     cfg: dict | None = None,
     active_block_state: dict | None = None,
+    passage_reprint: bool = False,
 ) -> list[str]:
     cp = effective_child_profile(student)
     parts = [f"Speak to {student.display_name}."]
@@ -967,6 +985,11 @@ def _who_you_are_talking_to(
     )
     if length_override:
         parts.append(length_override)
+    elif passage_reprint:
+        parts.append(
+            "The response_length sentence cap applies ONLY to your coaching and question below the passage, "
+            "never to the passage text itself."
+        )
     else:
         parts.append(_RESPONSE_LENGTH_LINES.get(cp["response_length"], _RESPONSE_LENGTH_LINES["balanced"]))
         bcfg = ((cfg or {}).get("blocks") or {}).get("explanation") or {}
@@ -1270,6 +1293,81 @@ def _topic_goal_earned_praise(encouragement_style: str) -> str:
     )
 
 
+def _passage_attempt_tier(turn_kind: str) -> str:
+    if turn_kind in {"ask", "nudge", "scaffold", "reveal"}:
+        return turn_kind
+    return "ask"
+
+
+def _passage_turn_lines(
+    block: dict,
+    substep: str,
+    turn_kind: str,
+    cfg: dict | None,
+    *,
+    opening: bool,
+    last_answer: str,
+) -> list[str]:
+    """Substep and passage-print rules. Empty for every block that is not passage_ela."""
+    if str(block.get("type") or "").strip() != "passage_ela":
+        return []
+    from app.kc_blocks import PASSAGE_CAP_RULE, PASSAGE_SUBSTEPS, clean_passage_ela_data, passage_paragraphs, passage_reprint_kind
+
+    steps = list(PASSAGE_SUBSTEPS)
+    current = substep if substep in steps else steps[0]
+    pos = steps.index(current) + 1
+    lines = [f"ELA substep {pos} of 3 ({current}). Attempt tier: {_passage_attempt_tier(turn_kind)}."]
+    kind = passage_reprint_kind(block, cfg, opening=opening, last_answer=last_answer)
+    if kind == "paragraph":
+        cleaned = clean_passage_ela_data(block.get("data") if isinstance(block.get("data"), dict) else {})
+        paragraphs = passage_paragraphs(cleaned["passage_text"])
+        first = paragraphs[0] if paragraphs else ""
+        lines.append(
+            "Opening display is chunked by paragraph. Include Paragraph 1 verbatim before asking the question. "
+            "Do not print later paragraphs on this opening turn."
+        )
+        if first:
+            lines.append(f"Paragraph 1:\n{first}")
+        lines.append(
+            "The response_length sentence cap (2 to 4 sentences) applies ONLY to your coaching and question below the passage, never to the passage text itself."
+        )
+    elif kind == "full":
+        lines.append(PASSAGE_CAP_RULE)
+    return lines
+
+
+def _passage_teach_lines(block: dict, substep: str) -> list[str]:
+    from app.kc_blocks import PASSAGE_SUBSTEPS, clean_passage_ela_data
+
+    data = clean_passage_ela_data(block.get("data") if isinstance(block.get("data"), dict) else {})
+    steps = list(PASSAGE_SUBSTEPS)
+    current = substep if substep in steps else steps[0]
+    pos = steps.index(current) + 1
+    lines = [
+        "Block type: passage_ela (ELA Reading Passage)",
+        f"Passage title: {data['passage_title']} ({data['passage_genre']})",
+        "Passage text:",
+        data["passage_text"],
+        f"Active substep ({pos}/3 {current}):",
+    ]
+    if current == "cite_evidence":
+        lines.append(f"Question: {data['evidence_prompt']}")
+        quotes = data["verbatim_evidence_quotes"]
+        if quotes:
+            lines.append("Verbatim evidence quotes (withhold until pass or reveal):")
+            lines.extend(f"- {quote}" for quote in quotes)
+    elif current == "craft_or_inference":
+        lines.append(f"Analysis focus: {data['analysis_focus']}")
+        lines.append(f"Question: {data['analysis_question']}")
+        lines.append(f"Expected analysis (withhold until pass or reveal): {data['expected_analysis']}")
+    else:
+        lines.append(f"Question: {data['central_idea_question']}")
+        lines.append(f"Expected central idea (withhold until pass or reveal): {data['expected_central_idea']}")
+        if data["distractor_detail"]:
+            lines.append(f"Distractor detail (true, but not the central idea): {data['distractor_detail']}")
+    return lines
+
+
 def _this_turn(
     *,
     node: KcNode,
@@ -1305,6 +1403,7 @@ def _this_turn(
     summary_phase: str = "",
     summary_stay: bool = False,
     last_answer: str = "",
+    cfg: dict | None = None,
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -1493,6 +1592,16 @@ def _this_turn(
     del prerequisite_support_policy
     del learning_support
     del communication_tone
+    lines.extend(
+        _passage_turn_lines(
+            block,
+            substep,
+            turn_kind,
+            cfg,
+            opening=opening,
+            last_answer=last_answer,
+        )
+    )
     return lines
 
 
@@ -1804,6 +1913,9 @@ def _what_to_teach(
 
     elif btype == "explanation":
         lines.extend(_explanation_teach_lines(block, substep, active_block_state, opening=opening))
+
+    elif btype == "passage_ela":
+        lines.extend(_passage_teach_lines(block, substep))
 
     lines.append(f"Evidence id for this active step: {ev_id}. Include '{ev_id}' in rubric_met when satisfied.")
     if next_block is not None and isinstance(next_block, dict):
@@ -2151,6 +2263,65 @@ def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> l
             lines.append(
                 "This block does not count toward known or fragile. Completing the walkthrough is engaged, never a miss."
             )
+
+    elif btype == "passage_ela":
+        data = block.get("data") if isinstance(block.get("data"), dict) else {}
+        display = str(bcfg.get("passage_ela_display_mode") or "full_on_open")
+        evidence = str(bcfg.get("passage_ela_evidence_mode") or "quote_or_close_paraphrase")
+        scaffold = str(bcfg.get("passage_ela_scaffold_style") or "point_to_paragraph")
+        try:
+            attempts = int(bcfg.get("passage_ela_max_attempts_per_step", 2) or 2)
+        except (TypeError, ValueError):
+            attempts = 2
+        attempts = 1 if timed else min(4, max(1, attempts))
+        if display == "chunked_by_paragraph":
+            lines.append(
+                "On the opening turn, print Paragraph 1 only, then ask the central-idea question. "
+                "Reveal a later paragraph when the learner needs it."
+            )
+        else:
+            lines.append(
+                "On the opening turn, print the passage title and the full passage text verbatim, "
+                "keeping the blank lines between paragraphs, then ask the central-idea question."
+            )
+        evidence_rules = {
+            "exact_quote_required": (
+                "Cite evidence counts only when the learner quotes words or a sentence from the passage."
+            ),
+            "paragraph_reference": (
+                "Cite evidence counts when the learner names the paragraph number and the key detail in it."
+            ),
+        }
+        lines.append(
+            evidence_rules.get(
+                evidence,
+                "Cite evidence counts when the learner quotes the passage or gives a close paraphrase of it.",
+            )
+        )
+        distractor = str(data.get("distractor_detail") or "").strip()
+        if scaffold == "contrast_main_vs_detail":
+            detail = f" The minor detail to contrast is: {distractor}" if distractor else ""
+            lines.append(
+                "On a miss about the central idea, contrast that one-paragraph detail with what the whole passage is about. "
+                f"Do not give the central idea away.{detail}"
+            )
+        elif scaffold == "sentence_starter":
+            lines.append(
+                "On a miss, offer a sentence frame such as: The author's central claim is ___, "
+                "which is supported where the text states '___'."
+            )
+        else:
+            lines.append(
+                "On a miss, point to the paragraph to re-read and ask what happens there. Do not give the answer away."
+            )
+        lines.append(_retry_sentence(attempts, "this close-reading step"))
+        lines.append(
+            "When the attempt cap is reached, model the close-reading move, quote the evidence from the passage, and advance."
+        )
+        lines.append(
+            "If the learner asks to see or re-read the passage, reprint the passage text verbatim and repeat the current question. "
+            "Set decision to stay, substep_passed to false, and block_complete to false. Do not count that turn as an attempt."
+        )
 
     return lines
 
@@ -2759,6 +2930,11 @@ def build_kc_prompt(
         hint_tier=hint_tier or "nudge",
         reveals=int(reveals or 0),
     )
+    from app.kc_blocks import passage_reprint_kind
+
+    passage_reprint = bool(
+        passage_reprint_kind(active_block, cfg, opening=opening, last_answer=last_answer or "")
+    )
 
     prompt = _blocks_text(
         [
@@ -2806,6 +2982,7 @@ def build_kc_prompt(
                     summary_phase=summary_phase,
                     summary_stay=summary_phase == "check" and is_last_block,
                     last_answer=last_answer,
+                    cfg=cfg,
                 ),
             ),
             (
@@ -2823,7 +3000,15 @@ def build_kc_prompt(
             ),
             (
                 "Who you are talking to",
-                _who_you_are_talking_to(student, profile, active_block, interests, cfg, state_dict),
+                _who_you_are_talking_to(
+                    student,
+                    profile,
+                    active_block,
+                    interests,
+                    cfg,
+                    state_dict,
+                    passage_reprint=passage_reprint,
+                ),
             ),
             (
                 "How to teach",

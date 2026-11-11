@@ -27,7 +27,7 @@ export default function KcStudioDocsPage() {
           encompasses, and the edge list under the picture.
         </p>
         <p>
-          AI Block Scope sits in the banner. It is the same multi-select as on KC Creator: how many of the ten block
+          AI Block Scope sits in the banner. It is the same multi-select as on KC Creator: how many of the eleven block
           types the course AI may recommend, Select All, and Topic + MCQ Only. The choice is saved on the course. The
           next structure draft uses it, so recommended blocks stay inside that scope.
         </p>
@@ -63,7 +63,7 @@ export default function KcStudioDocsPage() {
           <li>Audience: 6-8, 9-11, 12-14, or 15-17. A new course starts at 12-14.</li>
           <li>Kind: Mastery, Time boxed, or Curiosity. A new course starts at Mastery.</li>
           <li>Minutes, optional. A blank value is allowed. A number has to be greater than zero. The new-course popup asks for minutes only when the kind is Time boxed.</li>
-          <li>AI Block Scope. At least one of the ten block types. An empty stored list means Topic / Goal.</li>
+          <li>AI Block Scope. At least one of the eleven block types. An empty stored list means Topic / Goal.</li>
         </ul>
         <p>
           Component blocks are edited on KC Creator, not here. Readiness on a structure row is still the gap strings,

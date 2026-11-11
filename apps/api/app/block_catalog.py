@@ -13,6 +13,7 @@ BLOCK_LABELS: dict[str, str] = {
     "teach_back": "Teach-Back / Feynman",
     "retrieval_check": "Retrieval & Elaborative Interrogation",
     "explanation": "Explanatory Walkthrough",
+    "passage_ela": "ELA Reading Passage",
 }
 
 BLOCK_SHORT_LABELS: dict[str, str] = {
@@ -26,6 +27,7 @@ BLOCK_SHORT_LABELS: dict[str, str] = {
     "teach_back": "Teach-Back",
     "retrieval_check": "Retrieval Check",
     "explanation": "Explanation",
+    "passage_ela": "ELA Passage",
 }
 
 BLOCK_BANNER_LABELS = {
@@ -39,7 +41,15 @@ BLOCK_BANNER_LABELS = {
     "teach_back": "Teach back",
     "retrieval_check": "Retrieval check",
     "explanation": "Explanatory walkthrough",
+    "passage_ela": "ELA reading passage",
 }
+
+
+PASSAGE_LENGTH_GUIDELINES = (
+    "Grades 3-5 (ages 8-10): 1 to 2 paragraphs, about 100 to 180 words. "
+    "Grades 6-8 (ages 11-14): 2 to 3 paragraphs, about 200 to 320 words. "
+    "Grades 9-12 (ages 14-18): 3 to 4 paragraphs, about 320 to 450 words."
+)
 
 
 BLOCK_AUTHORING_RULES: dict[str, str] = {
@@ -88,6 +98,18 @@ BLOCK_AUTHORING_RULES: dict[str, str] = {
         "- explanation (Explanatory Walkthrough): Provide 1 to 8 topics. Each topic needs id, title, "
         "and explanation. key_points and examples_or_analogies are optional. "
         "block_title and summary_takeaway are optional. Do not write a quiz, a correct answer, or a score."
+    ),
+    "passage_ela": (
+        "- passage_ela (ELA Reading Passage): Provide passage_title (up to 160 characters), "
+        "passage_genre (informational, literary, argumentative, or historical_primary; default informational), "
+        "and passage_text (up to 4000 characters, keeping the blank line between paragraphs). "
+        f"Scale passage_text to the course grade band. {PASSAGE_LENGTH_GUIDELINES} "
+        "Substep central_idea needs central_idea_question, expected_central_idea, and distractor_detail "
+        "(a true but minor detail from one paragraph). "
+        "Substep cite_evidence needs evidence_prompt and verbatim_evidence_quotes, a list of 2 or 3 sentences "
+        "copied verbatim from passage_text. "
+        "Substep craft_or_inference needs analysis_focus (inference, vocab_in_context, "
+        "author_purpose_structure, or evaluate_argument; default inference), analysis_question, and expected_analysis."
     ),
 }
 
@@ -159,6 +181,19 @@ BLOCK_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ("topics", "Topics"),
         ("summary_takeaway", "Summary takeaway"),
     ),
+    "passage_ela": (
+        ("passage_title", "Passage title"),
+        ("passage_genre", "Passage genre"),
+        ("passage_text", "Passage text"),
+        ("central_idea_question", "Central idea question"),
+        ("expected_central_idea", "Expected central idea"),
+        ("distractor_detail", "Distractor detail"),
+        ("evidence_prompt", "Evidence prompt"),
+        ("verbatim_evidence_quotes", "Verbatim evidence quotes"),
+        ("analysis_focus", "Analysis focus"),
+        ("analysis_question", "Analysis question"),
+        ("expected_analysis", "Expected analysis"),
+    ),
 }
 
 
@@ -173,6 +208,7 @@ BLOCK_PLURAL_SHORT_LABELS: dict[str, str] = {
     "teach_back": "Teach-Backs",
     "retrieval_check": "Retrieval Checks",
     "explanation": "Explanations",
+    "passage_ela": "ELA Passages",
 }
 
 
@@ -356,6 +392,37 @@ BLOCK_DATA_SCHEMAS: dict[str, dict] = {
                 ),
             },
             "summary_takeaway": _NULLABLE_STRING,
+        },
+    ),
+    "passage_ela": _object_schema(
+        {
+            "passage_title": {"type": "string", "maxLength": 160},
+            "passage_genre": {
+                "type": "string",
+                "enum": ["informational", "literary", "argumentative", "historical_primary"],
+            },
+            "passage_text": {"type": "string", "maxLength": 4000},
+            "central_idea_question": _STRING,
+            "expected_central_idea": _STRING,
+            "distractor_detail": _STRING,
+            "evidence_prompt": _STRING,
+            "verbatim_evidence_quotes": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 3,
+                "items": _STRING,
+            },
+            "analysis_focus": {
+                "type": "string",
+                "enum": [
+                    "inference",
+                    "vocab_in_context",
+                    "author_purpose_structure",
+                    "evaluate_argument",
+                ],
+            },
+            "analysis_question": _STRING,
+            "expected_analysis": _STRING,
         },
     ),
 }

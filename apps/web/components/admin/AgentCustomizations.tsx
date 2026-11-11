@@ -51,6 +51,7 @@ const BLOCK_PILL_LABELS: Record<KcBlockType, string> = {
   teach_back: "Teach-Back",
   retrieval_check: "Retrieval Check",
   explanation: "Explanatory",
+  passage_ela: "ELA Passage",
 };
 
 type VoiceFieldSpec = {

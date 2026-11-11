@@ -12,6 +12,7 @@ import copy
 import re
 
 from app.block_catalog import BLOCK_AUTHORING_RULES, BLOCK_DATA_SCHEMAS, BLOCK_LABELS
+from app.kc_pipeline import passage_ela_generation_lines
 from app.models import ALL_BLOCK_TYPES
 
 
@@ -165,6 +166,8 @@ def derive_rubric_from_blocks(blocks: list[dict]) -> list[str]:
             criterion = str(data.get("expected_fact") or "").strip()
         elif btype == "explanation":
             criterion = ""
+        elif btype == "passage_ela":
+            criterion = str(data.get("expected_central_idea") or data.get("passage_title") or "").strip()
         if criterion and criterion not in rubric:
             rubric.append(criterion)
     return rubric[:16]
@@ -303,6 +306,7 @@ def _block_focus(bdata: dict) -> str:
         "peer_persona_prompt",
         "recall_prompt",
         "block_title",
+        "passage_title",
     ):
         if bdata.get(key):
             return str(bdata[key])
@@ -403,6 +407,7 @@ def creator_bundle(
         lines.extend(["Course brief:", course_brief.strip()])
     if outcome_lines:
         lines.extend(["Course outcomes:", outcome_lines])
+    lines.extend(passage_ela_generation_lines(course_title, course_description, audience))
     lines.append(f"Component: {node_title} ({node_code})")
     if (position or "").strip():
         lines.append(f"Position: {position.strip()}")

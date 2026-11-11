@@ -28,6 +28,31 @@ from app.kc_standards import (
 )
 
 MAX_COMPONENTS = 100
+
+_ELA_COURSE = re.compile(
+    r"\bela\b|english language arts|reading comprehension|informational text|ccss\.ela|\bliterature\b",
+    re.IGNORECASE,
+)
+
+
+def course_is_ela(*parts: object) -> bool:
+    """True when the course text is English language arts or reading comprehension."""
+    blob = " ".join(str(part or "") for part in parts)
+    return _ELA_COURSE.search(blob) is not None
+
+
+def passage_ela_generation_lines(*parts: object) -> list[str]:
+    """Extra authoring lines for an ELA course. Other courses get none."""
+    if not course_is_ela(*parts):
+        return []
+    from app.block_catalog import PASSAGE_LENGTH_GUIDELINES
+
+    return [
+        "This is an ELA or reading course. Include passage_ela blocks for the reading. "
+        f"Scale passage_text to the course age band. {PASSAGE_LENGTH_GUIDELINES} "
+        "Copy each verbatim_evidence_quotes item exactly from passage_text. Use 2 or 3 quotes."
+    ]
+
 MAX_FOLLOW_UPS = 2
 MINUTES_PER_COMPONENT = 12
 MAX_OUTCOMES = 8

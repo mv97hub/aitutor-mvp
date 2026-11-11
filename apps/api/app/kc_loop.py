@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.kc_blocks import learner_asks_for_passage, quote_in_text
 from app.kc_moves import Move
 from app.kc_prompt import (
     HINTS,
@@ -359,7 +360,56 @@ def answer_addresses_substep(
         return _matches(answer, rationale) if rationale else _substantive(answer)
     if btype == "explanation":
         return False
+    if btype == "passage_ela":
+        return _passage_answer_met(data, substep, answer, bcfg)
     return _substantive(answer)
+
+
+def _central_beyond_detail(answer: str, central: str, distractor: str) -> bool:
+    """A minor detail that also sits inside the central idea does not pass on its own."""
+    if not central:
+        return _substantive(answer)
+    if not _matches(answer, central):
+        return False
+    if not distractor or not _matches(answer, distractor):
+        return True
+    extra = [word for word in _words(central) if len(word) > 3 and word not in set(_words(distractor))]
+    if not extra:
+        return True
+    have = set(_words(answer))
+    hits = sum(1 for word in extra if word in have)
+    return hits >= max(1, (len(extra) + 1) // 2)
+
+
+def _passage_quotes(data: dict) -> list[str]:
+    raw = data.get("verbatim_evidence_quotes")
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item or "").strip()]
+
+
+def _passage_answer_met(data: dict, substep: str, answer: str, bcfg: dict) -> bool:
+    if substep == "cite_evidence":
+        quotes = _passage_quotes(data)
+        mode = str(bcfg.get("passage_ela_evidence_mode") or "quote_or_close_paraphrase")
+        if mode == "exact_quote_required":
+            return any(quote_in_text(quote, answer) for quote in quotes)
+        if mode == "paragraph_reference":
+            text = _proceed_text(answer)
+            numbered = "paragraph" in text and any(ch.isdigit() for ch in (answer or ""))
+            grounded = any(_matches(answer, quote) for quote in quotes) or _substantive(answer, 6)
+            return numbered and grounded
+        if any(quote_in_text(quote, answer) or _matches(answer, quote) for quote in quotes):
+            return True
+        return _matches(answer, str(data.get("expected_central_idea") or ""))
+    if substep == "craft_or_inference":
+        expected = str(data.get("expected_analysis") or "").strip()
+        return _matches(answer, expected) if expected else _substantive(answer, 4)
+    return _central_beyond_detail(
+        answer,
+        str(data.get("expected_central_idea") or "").strip(),
+        str(data.get("distractor_detail") or "").strip(),
+    )
 
 
 def _block_title(block: dict, step_index: int) -> str:
@@ -383,6 +433,8 @@ def _block_title(block: dict, step_index: int) -> str:
         return str(data.get("peer_persona_prompt") or f"Block {step_index + 1}").strip()
     if btype == "retrieval_check":
         return str(data.get("recall_prompt") or f"Block {step_index + 1}").strip()
+    if btype == "passage_ela":
+        return str(data.get("passage_title") or f"Block {step_index + 1}").strip()
     if btype == "explanation":
         title = str(data.get("block_title") or "").strip()
         if title:
@@ -740,6 +792,11 @@ def resolve_block_turn(
             cfg=cfg,
         )
 
+    if btype == "passage_ela" and learner_asks_for_passage(answer):
+        policy = str(bcfg.get("passage_ela_reread_policy") or "free_reprint")
+        if policy == "free_reprint":
+            return stay(move_attempts, tier)
+
     if btype == "topic_goal" and substep == "main" and learner_ready_to_proceed(answer, False):
         tries = note_try()
         if addressed and not state.get("revealed_substep"):
@@ -870,6 +927,8 @@ def resolve_block_turn(
                 state["substep"] = task_steps[position + 1]
                 state["probe_turns"] = 0
                 return stay(0, "nudge")
+            if btype == "passage_ela":
+                return finish("passed", int(state.get("block_attempts") or 1), reveals)
         if on_last_task:
             if move_attempts + 1 >= max_retries:
                 return _enter_summary(revealed=True)
@@ -881,6 +940,11 @@ def resolve_block_turn(
 
     tries = note_try()
     if move_attempts + 1 >= max_retries:
+        if btype == "passage_ela" and substep in task_steps:
+            position = task_steps.index(substep)
+            if position < len(task_steps) - 1:
+                state["substep"] = task_steps[position + 1]
+                return stay(0, "reveal", reveals_now=reveals + 1)
         if btype == "worked_example" and substep == "faded_step" and "solo_solve" in substeps:
             state["substep"] = "solo_solve"
             state["revealed_substep"] = True
@@ -977,6 +1041,8 @@ def _advance_or_close_component(
         advance_block=False,
         passed=not fragile,
     )
+
+
 @dataclass(frozen=True)
 class Resolution:
     decision: str

@@ -76,6 +76,25 @@ export const COMMUNICATION_TONE_OPTIONS = [
   ["direct_and_matter_of_fact", "Direct and matter-of-fact (No fluff; straight to the concept)"],
 ] as const;
 
+export const PASSAGE_ELA_DISPLAY_OPTIONS = [
+  ["full_on_open", "Full passage on open"],
+  ["chunked_by_paragraph", "Chunked by paragraph"],
+] as const;
+
+export const PASSAGE_ELA_EVIDENCE_OPTIONS = [
+  ["quote_or_close_paraphrase", "Quote or close paraphrase"],
+  ["exact_quote_required", "Exact quote required"],
+  ["paragraph_reference", "Paragraph reference"],
+] as const;
+
+export const PASSAGE_ELA_SCAFFOLD_OPTIONS = [
+  ["point_to_paragraph", "Point to the paragraph"],
+  ["contrast_main_vs_detail", "Contrast main idea and detail"],
+  ["sentence_starter", "Sentence starter"],
+] as const;
+
+export const PASSAGE_ELA_REREAD_OPTIONS = [["free_reprint", "Free reprint"]] as const;
+
 export const LEARNING_SUPPORT_OPTIONS = [
   ["none", "None (No special pacing rules)"],
   ["adhd_focus_friendly", "ADHD focus-friendly (Extra-crisp turns, immediate hook, no multi-part instructions)"],
@@ -304,7 +323,7 @@ export const LAYER_FIELDS: LayerField[] = [
   {
     layer: "Layer 1, Component",
     name: "Substep",
-    hover: "The active substep inside the current block. Leave it empty to use that block's opening substep. An explanatory walkthrough uses explain_topic, then summary_check.",
+    hover: "The active substep inside the current block. Leave it empty to use that block's opening substep. An explanatory walkthrough uses explain_topic, then summary_check. An ELA passage uses central_idea, cite_evidence, then craft_or_inference.",
     role: "Names which part of the block this preview turn is on.",
     kind: "Configured",
     where: "KC Prompt Tester",
