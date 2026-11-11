@@ -27,7 +27,7 @@ import {
 } from "@/lib/kc-layer-fields";
 import { KC_MODELS, kcModel, type KcModel } from "@/lib/kc-models";
 import { tutorPath } from "@/lib/kc-tutor-path";
-import { displayChildStatus, friendlyStrength, learnCoursePath, topicStars } from "@/lib/learn";
+import { friendlyStrength, learnCoursePath, topicStars } from "@/lib/learn";
 import type { Student, TutorProfile } from "@/lib/types";
 import { useRouter } from "next/navigation";
 
@@ -433,10 +433,7 @@ export function KcTutor({
   const jumpValue = components.some((item) => item.id === openKc) ? openKc : "";
   const topics = (progress?.units ?? []).filter((unit) => !unit.patch);
   const topicIndex = topics.findIndex((unit) => unit.id === (session?.kc_id || openKc));
-  const nextTopic =
-    topicIndex >= 0
-      ? topics.slice(topicIndex + 1).find((unit) => displayChildStatus(unit.child_status, unit.status, unit.mastery) !== "Locked")
-      : null;
+  const nextTopic = topicIndex >= 0 ? (topics[topicIndex + 1] ?? null) : null;
   const currentTopic = topicIndex >= 0 ? topics[topicIndex] : null;
   const homeHref = `/learn/${studentId}`;
 

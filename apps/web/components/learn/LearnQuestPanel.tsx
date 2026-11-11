@@ -105,14 +105,15 @@ export function LearnQuestPanel({
       <ol className="learn-trail" aria-label="Course quest trail">
         {topics.map((unit, index) => {
           const label = displayChildStatus(unit.child_status, unit.status, unit.mastery);
-          const shown = unit.practice_bonus && label === "Completed" ? "Completed (Practice Bonus Available)" : label;
-          const locked = label === "Locked";
+          const selectable = label === "Locked" ? "Up Next" : label;
+          const shown =
+            unit.practice_bonus && label === "Completed" ? "Completed (Practice Bonus Available)" : selectable;
           const active = unit.id === activeId;
           const stars = topicStars(unit);
           return (
-            <li key={unit.id} className={`is-${label.toLowerCase().replace(/\s+/g, "-")}${active ? " is-here" : ""}`}>
-              <button type="button" disabled={locked} onClick={() => onOpenTopic(unit.id)}>
-                <span className="learn-trail-index">{locked ? "🔒" : label === "Mastered" || label === "Completed" ? "✓" : index + 1}</span>
+            <li key={unit.id} className={`is-${selectable.toLowerCase().replace(/\s+/g, "-")}${active ? " is-here" : ""}`}>
+              <button type="button" onClick={() => onOpenTopic(unit.id)}>
+                <span className="learn-trail-index">{label === "Mastered" || label === "Completed" ? "✓" : index + 1}</span>
                 <span>
                   <strong>Topic {index + 1}</strong>
                   <small>{unit.title}</small>

@@ -246,7 +246,12 @@ export function KcLesson({
           ) : null}
           {session.messages.map((message, index) => {
             const previous = index > 0 ? session.messages[index - 1] : undefined;
-            const divider = blockStepDivider(previous?.step, message.step, session.block_progress, session.total_blocks);
+            const divider = blockStepDivider(
+              index === 0 ? undefined : previous?.step,
+              index === 0 ? (message.step ?? 0) : message.step,
+              session.block_progress,
+              session.total_blocks,
+            );
             return (
               <div key={message.id}>
               {divider ? (

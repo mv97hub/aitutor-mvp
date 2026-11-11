@@ -3863,3 +3863,34 @@ def test_word_overlap_does_not_finish_a_block_the_model_kept_open() -> None:
     assert exhausted.advance_block is True
 
 
+def test_session_block_progress_short_title() -> None:
+    from types import SimpleNamespace
+
+    from app.kc import _session_block_progress
+
+    node = SimpleNamespace(
+        title="Rome",
+        blocks=[
+            {
+                "id": "goal",
+                "type": "topic_goal",
+                "data": {"block_title": "Rise of Julius Caesar", "topic": "Rome", "goal": "Explain the rise."},
+            },
+            {
+                "id": "walk",
+                "type": "explanation",
+                "data": {"topics": [{"id": "t1", "title": "The Senate", "explanation": "They debated."}]},
+            },
+            {
+                "id": "check",
+                "type": "retrieval_check",
+                "data": {"recall_prompt": "Why did the rise matter?"},
+            },
+        ],
+    )
+    session = SimpleNamespace(step=0, status="in_progress", active_block_state={}, block_results=[])
+    progress = _session_block_progress(node, session)["block_progress"]
+    assert [item["short_title"] for item in progress] == ["Rise of Julius Caesar", "The Senate", ""]
+    assert progress[2]["title"] == "Why did the rise matter?"
+
+

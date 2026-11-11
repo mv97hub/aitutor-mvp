@@ -302,15 +302,27 @@ export function friendlyStrength(text: string | undefined): string {
 export const STAR_TOOLTIP =
   "10 stars for each finished block, 5 extra for a first-try pass, 25 for a finished topic, and 15 more when a topic is mastered with no reveals.";
 
+function stepHeading(
+  step: number,
+  counted: number,
+  block: { type_label?: string; short_title?: string } | undefined,
+): string {
+  const label = (block?.type_label || "").trim();
+  const short = (block?.short_title || "").trim();
+  const named = label ? `Step ${step + 1} of ${counted} — ${label}` : `Step ${step + 1} of ${counted}`;
+  return short ? `${named} — ${short}` : named;
+}
+
 export function blockStepDivider(
   previousStep: number | undefined,
   step: number | undefined,
-  blocks?: { index: number; type_label?: string }[],
+  blocks?: { index: number; type_label?: string; short_title?: string }[],
   totalBlocks?: number,
 ): string | null {
-  if (previousStep === undefined || step === undefined || step <= previousStep) return null;
+  if (step === undefined) return null;
   const counted = totalBlocks && totalBlocks > 0 ? totalBlocks : Math.max(step + 1, blocks?.length ?? 0);
-  const label = (blocks?.find((block) => block.index === step)?.type_label || "").trim();
-  const upcoming = label ? `Step ${step + 1} of ${counted} — ${label}` : `Step ${step + 1} of ${counted}`;
-  return `Step ${previousStep + 1} complete · Up next: ${upcoming}`;
+  const heading = stepHeading(step, counted, blocks?.find((block) => block.index === step));
+  if (previousStep === undefined) return step === 0 ? heading : null;
+  if (step <= previousStep) return null;
+  return `Step ${previousStep + 1} complete · Up next: ${heading}`;
 }

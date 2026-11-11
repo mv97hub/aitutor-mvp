@@ -86,15 +86,25 @@ test("topic stars and a passed block use the child star rules", () => {
 
 test("a step divider names the finished step and the one that is opening", () => {
   const blocks = [
-    { index: 0, type_label: "Topic + Goal" },
-    { index: 1, type_label: "Worked example" },
+    { index: 0, type_label: "Topic + Goal", short_title: "Rise of Julius Caesar" },
+    { index: 1, type_label: "Worked example", short_title: "" },
+    { index: 5, type_label: "Retrieval check", short_title: "Rise of Julius Caesar" },
   ];
-  assert.equal(blockStepDivider(undefined, 0, blocks, 4), null);
-  assert.equal(blockStepDivider(0, 0, blocks, 4), null);
+  assert.equal(
+    blockStepDivider(undefined, 0, blocks, 6),
+    "Step 1 of 6 — Topic + Goal — Rise of Julius Caesar",
+  );
+  assert.equal(blockStepDivider(undefined, 2, blocks, 6), null);
+  assert.equal(blockStepDivider(0, 0, blocks, 6), null);
   assert.equal(
     blockStepDivider(0, 1, blocks, 4),
     "Step 1 complete · Up next: Step 2 of 4 — Worked example",
   );
+  assert.equal(
+    blockStepDivider(4, 5, blocks, 6),
+    "Step 5 complete · Up next: Step 6 of 6 — Retrieval check — Rise of Julius Caesar",
+  );
+  assert.equal(blockStepDivider(undefined, 0, [{ index: 0, type_label: "Topic + Goal" }], 6), "Step 1 of 6 — Topic + Goal");
 });
 
 test("initials fall back when a child has not picked an icon", () => {

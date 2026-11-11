@@ -24,6 +24,7 @@ export type KcBlockProgress = {
   type: string;
   type_label: string;
   title: string;
+  short_title: string;
   status: "completed" | "active" | "upcoming";
   outcome?: string | null;
   attempts?: number;
