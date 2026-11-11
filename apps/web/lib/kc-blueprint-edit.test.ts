@@ -62,6 +62,15 @@ test("removing a unit drops its components and an emptied unit disappears", () =
   assert.equal(removeUnit(added, 0).units.length, 1);
 });
 
+test("adding a unit appends a unit and one new component", () => {
+  const added = addUnit(blueprint());
+  assert.equal(added.units.length, 3);
+  assert.equal(added.units[2]?.title, "New unit");
+  assert.equal(added.units[2]?.components.length, 1);
+  assert.equal(added.units[2]?.components[0]?.title, "New component");
+  assert.equal(added.units[2]?.components[0]?.code, "");
+});
+
 test("prune keeps only prerequisites that already appeared", () => {
   const row = blueprint();
   row.units[0]!.components[0]!.prerequisites = ["idea-3"];

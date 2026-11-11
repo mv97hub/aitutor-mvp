@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import block_catalog, kc, kc_model
-from app.kc_standards import coverage_matrix, parse_standard_text, statements_from_intake
+from app.kc_standards import MAX_STATEMENTS, coverage_matrix, parse_standard_text, statements_from_intake
 from app.kc_pipeline import (
     CHECKS,
     INSTRUCTION_RULES,
@@ -878,6 +878,79 @@ def test_a_pasted_syllabus_is_one_component_per_topic_and_not_clamped() -> None:
     assert component_range(kind="mastery", minutes=None, intake=wide, statements=statements_from_intake(wide)) == (42, 42)
     with pytest.raises(ValueError, match="100"):
         clean_intake({"component_count": 101})
+
+
+def test_a_42_unit_syllabus_is_stored_as_tracked_statements_and_a_matching_blueprint() -> None:
+    """No model call. A 42-unit paste is accepted, tracked, and planned one component per topic."""
+    lines = []
+    for index in range(1, 43):
+        lines.append(f"Unit {index}: Topic {index}")
+        lines.append(f"{index}. Topic {index} about scarcity and choice.")
+    text = "\n".join(lines)
+    assert MAX_STATEMENTS == 120
+    intake = clean_intake({"depth": "curriculum", "source_text": text})
+    statements = statements_from_intake(intake)
+    assert len(statements) == 42
+    assert len(statements) > 40
+    assert component_range(kind="mastery", minutes=None, intake=intake, statements=statements) == (42, 42)
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-scale",
+            "title": "AP Macroeconomics",
+            "description": OUTCOME,
+            "audience": "15-17",
+            "kind": "mastery",
+            "intake": {"depth": "curriculum", "source_text": text},
+        },
+    )
+    assert created.status_code == 200, created.text
+    course_id = created.json()["id"]
+    try:
+        brief = _stage(
+            course_id,
+            "brief",
+            {"brief": "A course that follows the pasted macroeconomics syllabus, one topic at a time. " * 2, "questions": []},
+        )
+        assert brief.status_code == 200, brief.text
+        stored = brief.json()["standards"]
+        assert len(stored) == 42
+        assert stored[0]["text"].startswith("Topic 1 about scarcity")
+        assert all(not item["text"].lower().startswith("unit ") for item in stored)
+        confirmed = client.put(
+            f"/kc/courses/{course_id}/pipeline/standards",
+            json={"confirm": True, "statements": stored},
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        plan = {
+            "outcomes": ["Explain scarcity.", "Use a supply curve."],
+            "units": [
+                {
+                    "title": f"Unit {index}",
+                    "summary": f"Topic {index}.",
+                    "components": [
+                        {
+                            "ref": f"c{index}",
+                            "title": f"Zz Topic {index}",
+                            "summary": f"Teaches topic {index}.",
+                            "prerequisites": [f"c{index - 1}"] if index > 1 else [],
+                            "standards": [stored[index - 1]["code"]],
+                        }
+                    ],
+                }
+                for index in range(1, 43)
+            ],
+        }
+        saved = _stage(course_id, "blueprint", plan)
+        assert saved.status_code == 200, saved.text
+        units = saved.json()["blueprint"]["units"]
+        assert len(units) == 42
+        assert sum(len(unit["components"]) for unit in units) == 42
+        assert units[0]["components"][0]["standards"] == [stored[0]["code"]]
+        assert units[41]["title"] == "Unit 42"
+    finally:
+        _wipe_zz()
 
 
 def test_an_empty_unit_is_dropped_and_chat_keeps_untouched_descriptions() -> None:
