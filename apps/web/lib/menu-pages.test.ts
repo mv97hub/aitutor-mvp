@@ -12,7 +12,7 @@ const previousDestinations = [
   ["/kc-creator", "KC Topic Creator"],
   ["/kc-tutor", "KC Tutor"],
   ["/kc-prompt-tester", "KC Prompt Tester"],
-  ["/kc-progress", "KC Course Progress"],
+  ["/kc-progress", "Detailed Progress"],
   ["/viewkcchats", "View KC chats"],
   ["/documentation", "Documentation"],
   ["/", "Home"],
@@ -54,7 +54,7 @@ test("menu sections keep every destination under the five headers", () => {
   assert.deepEqual(byTitle["Testing pages"], [
     ["KC Tutor", "/kc-tutor"],
     ["KC Prompt Tester", "/kc-prompt-tester"],
-    ["KC Course Progress", "/kc-progress"],
+    ["Detailed Progress", "/kc-progress"],
   ]);
   assert.equal(
     byTitle["Testing pages"].findIndex((link) => link[0] === "KC Prompt Tester"),
