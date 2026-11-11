@@ -1305,7 +1305,12 @@ def test_model_draft_recommends_every_field_and_push_keeps_the_description() -> 
 
         full = client.post(
             f"/kc/nodes/{river['id']}/model-turn",
-            json={"message": "Draft this component.", "discussion": _model_fields()["discussion"], "draft": _model_fields()},
+            json={
+                "message": "Draft this component.",
+                "discussion": _model_fields()["discussion"],
+                "draft": _model_fields(),
+                "allowed_block_types": ["topic_goal"],
+            },
         )
         assert full.status_code == 200, full.text
         draft = full.json()["draft"]
@@ -1371,6 +1376,7 @@ def test_push_keeps_every_block_from_the_model_reply() -> None:
                     prerequisite_codes=["zz-pairs-b"],
                     misconceptions=[{"wrong_move": "The river is red", "broken_kc": "zz-pairs-b"}],
                 ),
+                "allowed_block_types": ["topic_goal", "retrieval_check", "curiosity"],
             },
         )
         assert full.status_code == 200, full.text
@@ -3331,15 +3337,15 @@ def test_a_course_with_no_sibling_clears_a_bad_broken_kc() -> None:
 
 
 
-def _model_turn(node_id: str, draft: dict):
-    return client.post(
-        f"/kc/nodes/{node_id}/model-turn",
-        json={
-            "message": "Draft this component.",
-            "discussion": f"{_model_fields()['discussion']} MIX-LOG-SECRET",
-            "draft": draft,
-        },
-    )
+def _model_turn(node_id: str, draft: dict, allowed: list[str] | None = None):
+    body: dict = {
+        "message": "Draft this component.",
+        "discussion": f"{_model_fields()['discussion']} MIX-LOG-SECRET",
+        "draft": draft,
+    }
+    if allowed is not None:
+        body["allowed_block_types"] = allowed
+    return client.post(f"/kc/nodes/{node_id}/model-turn", json=body)
 
 
 def test_creator_drafts_store_blocks_instead_of_synthesis_mixes() -> None:
@@ -3386,6 +3392,7 @@ def test_creator_drafts_store_blocks_instead_of_synthesis_mixes() -> None:
                 misconceptions=[{"wrong_move": "The river is red", "broken_kc": "zz-mix-b"}],
                 prerequisite_codes=["zz-mix-b"],
             ),
+            ["topic_goal", "spot_the_flaw"],
         )
         assert turned.status_code == 200, turned.text
         draft = turned.json()["draft"]

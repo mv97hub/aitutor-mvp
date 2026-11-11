@@ -606,3 +606,164 @@ def test_an_unrepaired_mix_names_the_rejected_strings_and_the_allowed_codes(capl
         for message in messages
     )
     assert all("The rookie swaps them." not in message for message in messages)
+
+
+READING = (
+    "Read an informational passage about how rivers carve valleys "
+    "and cite evidence for the central idea."
+)
+
+
+def _reading_node():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(id="n1", code="valleys", title="Valleys", description=READING)
+
+
+def _reading_draft(**overrides: object) -> dict:
+    body: dict = {
+        "title": "Valleys",
+        "description": "A short summary of the component.",
+        "outline": "Read the passage, then cite evidence.",
+        "core_truth": "Rivers carve valleys by moving rock.",
+        "blocks": [
+            {
+                "id": "blk_goal",
+                "type": "topic_goal",
+                "data": {"topic": "valleys", "goal": "Explain one cause."},
+            }
+        ],
+        "misconceptions": [],
+        "prerequisite_codes": [],
+        "encompasses_codes": [],
+    }
+    body.update(overrides)
+    return body
+
+
+def test_a_reading_description_drafts_one_passage_when_the_scope_includes_it() -> None:
+    """Topic chat and Fast Create All share this draft path."""
+    from app.block_catalog import BLOCK_LABELS
+    from app.kc import clean_model_component
+    from app.kc_blocks import passage_ela_gap, passage_paragraphs
+    from app.kc_model import draft_scoped_blocks, passage_paragraph_bounds, passage_word_bounds
+    from app.models import default_allowed_block_types
+
+    assert "passage_ela" in default_allowed_block_types()
+    assert BLOCK_LABELS["passage_ela"] == "ELA Reading Passage"
+
+    shaped, _repairs, _mix = clean_model_component(
+        _reading_node(),
+        _reading_draft(),
+        [],
+        ["topic_goal", "mcq", "passage_ela"],
+        audience="12-14",
+    )
+    passages = [block for block in shaped["blocks"] if block["type"] == "passage_ela"]
+    assert len(passages) == 1
+    assert shaped["blocks"][0]["type"] == "topic_goal"
+    assert shaped["blocks"][0]["data"]["goal"] == "Explain one cause."
+    data = passages[0]["data"]
+    assert data["passage_title"] == "How Rivers Carve Valleys"
+    assert data["passage_genre"] == "informational"
+    assert "Read the following passage" not in data["passage_text"]
+    assert passage_ela_gap(data) == ""
+    quotes = data["verbatim_evidence_quotes"]
+    assert 2 <= len(quotes) <= 3
+    for quote in quotes:
+        assert quote in data["passage_text"]
+    assert data["distractor_detail"] in data["passage_text"]
+    assert data["central_idea_question"] and data["expected_central_idea"]
+    assert data["evidence_prompt"] and data["analysis_question"] and data["expected_analysis"]
+    assert data["analysis_focus"]
+    low, high = passage_paragraph_bounds("12-14")
+    assert low <= len(passage_paragraphs(data["passage_text"])) <= high
+    low_words, high_words = passage_word_bounds("12-14")
+    assert low_words <= len(data["passage_text"].split()) <= high_words
+
+    for audience, paragraphs in (("6-8", (1, 2)), ("9-11", (1, 2)), ("15-17", (3, 4))):
+        block = draft_scoped_blocks(READING, audience, ["passage_ela"])
+        assert len(block) == 1 and block[0]["type"] == "passage_ela"
+        text = block[0]["data"]["passage_text"]
+        assert paragraphs[0] <= len(passage_paragraphs(text)) <= paragraphs[1]
+        for quote in block[0]["data"]["verbatim_evidence_quotes"]:
+            assert quote in text
+
+    worked = {
+        "id": "blk_work",
+        "type": "worked_example",
+        "data": {"problem_statement": "Name the valley."},
+    }
+    placeholder = {
+        "id": "blk_bad",
+        "type": "passage_ela",
+        "data": {
+            "passage_title": "Rivers",
+            "passage_genre": "informational",
+            "passage_text": "Read the following passage about how rivers carve valleys.",
+            "central_idea_question": "What is it about?",
+            "expected_central_idea": "Rivers carve valleys.",
+            "distractor_detail": "A stone.",
+            "evidence_prompt": "Cite the passage.",
+            "verbatim_evidence_quotes": ["Read the following passage about how rivers carve valleys."],
+            "analysis_focus": "inference",
+            "analysis_question": "What follows?",
+            "expected_analysis": "The valley grows.",
+        },
+    }
+    replaced = draft_scoped_blocks(
+        READING,
+        "12-14",
+        ["worked_example", "passage_ela"],
+        blocks=[worked, placeholder],
+    )
+    assert replaced[0] == worked
+    assert [block["type"] for block in replaced].count("passage_ela") == 1
+    assert "Read the following passage" not in replaced[1]["data"]["passage_text"]
+    for quote in replaced[1]["data"]["verbatim_evidence_quotes"]:
+        assert quote in replaced[1]["data"]["passage_text"]
+
+    without, _repairs, _mix = clean_model_component(
+        _reading_node(),
+        _reading_draft(),
+        [],
+        ["topic_goal", "mcq"],
+        audience="12-14",
+    )
+    assert [block["type"] for block in without["blocks"]] == ["topic_goal"]
+
+    included = creator_bundle(
+        course_title="Grade 6 ELA",
+        course_description="Reading comprehension.",
+        audience="12-14",
+        kind="mastery",
+        minutes=None,
+        node_title="Valleys",
+        node_code="valleys",
+        node_description=READING,
+        allowed_block_types=["topic_goal", "passage_ela"],
+        siblings=_sib([]),
+        previous=None,
+        message="Create Draft",
+        model="gpt-4.1",
+    )
+    assert "exactly one passage_ela" in included["system_prompt"]
+    assert "Read the following passage about" in included["system_prompt"]
+    assert "2 to 3 paragraphs" in included["system_prompt"]
+    narrow = creator_bundle(
+        course_title="Grade 6 ELA",
+        course_description="Reading comprehension.",
+        audience="12-14",
+        kind="mastery",
+        minutes=None,
+        node_title="Valleys",
+        node_code="valleys",
+        node_description=READING,
+        allowed_block_types=["topic_goal", "mcq"],
+        siblings=_sib([]),
+        previous=None,
+        message="Create Draft",
+        model="gpt-4.1",
+    )
+    assert "exactly one passage_ela" not in narrow["system_prompt"]
+    assert "passage_ela" not in narrow["system_prompt"]
