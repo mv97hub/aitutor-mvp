@@ -1,5 +1,6 @@
 import { api } from "@/lib/api";
-import type { KcPipeline } from "@/lib/kc";
+import type { KcBlueprint, KcPipeline } from "@/lib/kc";
+import { isKcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { checkedStageModel, generateStageObject } from "@/lib/kc-stage-model";
 import { encodeEvent, isStage, runStage, type StageBundle, type StageEvent } from "@/lib/kc-stage";
 
@@ -21,6 +22,9 @@ type Body = {
   approve?: boolean;
   statements?: unknown;
   confirm?: boolean;
+  components?: boolean;
+  messages?: { role?: string; content?: string }[];
+  proposal?: unknown;
 };
 
 function failure(message: string, status: number) {
@@ -115,8 +119,77 @@ export async function POST(request: Request) {
       return Response.json({ pipeline });
     }
     if (body.action === "reset") {
-      const pipeline = await api<KcPipeline>(base, { method: "DELETE" });
+      const query = body.components ? "?components=true" : "";
+      const pipeline = await api<KcPipeline>(`${base}${query}`, { method: "DELETE" });
       return Response.json({ pipeline });
+    }
+    if (body.action === "chat") {
+      const model = modelForCall(String(body.model || ""));
+      if (!isKcModel(model)) return failure("That model is not allowed.", 400);
+      const bundle = await api<StageBundle>(`/kc/courses/${courseId}/chat/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ model, messages: body.messages ?? [] }),
+      });
+      const missing = missingKeyMessage(model);
+      if (missing) {
+        return Response.json(
+          { error: missing, instructions: bundle.system_prompt, prompt: bundle.user_prompt },
+          { status: 422 },
+        );
+      }
+      let proposal: unknown;
+      try {
+        proposal = await generateStageObject(
+          model,
+          {
+            instructions: bundle.system_prompt,
+            prompt: bundle.user_prompt,
+            schema: bundle.schema,
+            maxOutputTokens: 16000,
+            onPartial: () => undefined,
+          },
+          request.signal,
+        );
+      } catch (error) {
+        return Response.json(
+          { error: messageOf(error, "The chat did not answer."), instructions: bundle.system_prompt, prompt: bundle.user_prompt },
+          { status: 422 },
+        );
+      }
+      try {
+        const preview = await api<{
+          reply: string;
+          changes: string[];
+          changed_codes: string[];
+          blueprint: KcBlueprint;
+        }>(`/kc/courses/${courseId}/chat/preview`, {
+          method: "POST",
+          body: JSON.stringify({ proposal }),
+        });
+        return Response.json({
+          instructions: bundle.system_prompt,
+          prompt: bundle.user_prompt,
+          proposal,
+          ...preview,
+        });
+      } catch (error) {
+        return Response.json(
+          {
+            error: messageOf(error, "That change could not be read."),
+            instructions: bundle.system_prompt,
+            prompt: bundle.user_prompt,
+            proposal,
+          },
+          { status: 422 },
+        );
+      }
+    }
+    if (body.action === "chat-apply") {
+      const applied = await api<{ pipeline: KcPipeline; reply: string; changes: string[] }>(
+        `/kc/courses/${courseId}/chat/apply`,
+        { method: "POST", body: JSON.stringify({ proposal: body.proposal }) },
+      );
+      return Response.json(applied);
     }
   } catch (error) {
     return failure(messageOf(error, "That did not save."), 422);

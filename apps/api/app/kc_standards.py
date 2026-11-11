@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-MAX_STATEMENTS = 40
+MAX_STATEMENTS = 120
 
 STANDARDS: dict[str, dict[str, str]] = {
     "": {"label": "None", "site": "", "host": ""},
@@ -54,6 +54,7 @@ STANDARDS: dict[str, dict[str, str]] = {
 
 _CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9./-]{0,24}$")
 _BULLET = re.compile(r"^(?:[-*•]|\d+[.)])\s+")
+_UNIT_HEADER = re.compile(r"^(?:unit|chapter|module)\s+\d+\s*[:.\-–—]\s*(.+)$", re.IGNORECASE)
 _SPACE = re.compile(r"\s+")
 
 
@@ -72,9 +73,14 @@ def _looks_like_code(token: str) -> bool:
 
 
 def _too_many(count: int) -> ValueError:
-    return ValueError(
-        f"Keep the statements to one grade and one topic, usually 5 to 20 lines. This list has {count}."
-    )
+    return ValueError(f"Keep the statements to at most {MAX_STATEMENTS} lines. This list has {count}.")
+
+
+def _statement_row(line: str) -> dict[str, str]:
+    parts = line.split(None, 1)
+    if len(parts) == 2 and _looks_like_code(parts[0]):
+        return {"code": parts[0], "text": _clean(parts[1])}
+    return {"code": "", "text": _clean(line)}
 
 
 def parse_standard_text(text: str) -> list[dict[str, str]]:
@@ -84,12 +90,41 @@ def parse_standard_text(text: str) -> list[dict[str, str]]:
         line = _BULLET.sub("", raw.strip())
         if not line:
             continue
-        parts = line.split(None, 1)
-        if len(parts) == 2 and _looks_like_code(parts[0]):
-            rows.append({"code": parts[0], "text": _clean(parts[1])})
-        else:
-            rows.append({"code": "", "text": _clean(line)})
+        rows.append(_statement_row(line))
     return _finish(rows)
+
+
+def parse_syllabus(text: str) -> dict[str, Any]:
+    """A pasted syllabus. Unit headers group topics. They are not statements."""
+    buckets: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    loose: list[str] = []
+    for raw in str(text or "").splitlines():
+        line = _BULLET.sub("", raw.strip())
+        if not line:
+            continue
+        header = _UNIT_HEADER.match(line)
+        if header:
+            current = {"title": _clean(header.group(1)), "lines": []}
+            buckets.append(current)
+            continue
+        if current is None:
+            loose.append(line)
+        else:
+            current["lines"].append(line)
+    if not buckets:
+        return {"units": [], "statements": parse_standard_text(text)}
+    topic_lines = loose + [line for bucket in buckets for line in bucket["lines"]]
+    statements = parse_standard_text("\n".join(topic_lines))
+    index = len(loose)
+    units: list[dict[str, Any]] = []
+    for bucket in buckets:
+        count = len(bucket["lines"])
+        topics = statements[index : index + count]
+        index += count
+        if topics and bucket["title"]:
+            units.append({"title": bucket["title"], "statements": topics})
+    return {"units": units, "statements": statements}
 
 
 def clean_statements(raw: object) -> list[dict[str, str]]:
@@ -130,11 +165,39 @@ def _finish(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return finished
 
 
+def syllabus_requested(intake: dict) -> bool:
+    """The author asked for one component per pasted topic."""
+    return bool(intake.get("align_syllabus") or intake.get("depth") == "curriculum")
+
+
+def syllabus_source(intake: dict) -> str:
+    """Curriculum statements win. Source text counts when the syllabus should be tracked."""
+    pasted = str(intake.get("standard_text") or "").strip()
+    if pasted and (intake.get("standard") or syllabus_requested(intake)):
+        return pasted
+    if syllabus_requested(intake):
+        return str(intake.get("source_text") or "").strip()
+    return ""
+
+
 def statements_from_intake(intake: dict) -> list[dict[str, str]]:
-    """Pasted text wins. A named standard with no paste is recalled later."""
-    if not intake.get("standard") or not intake.get("standard_text"):
+    """Pasted text wins. A syllabus paste becomes tracked statements. A named standard with no paste is recalled later."""
+    text = syllabus_source(intake)
+    if not text:
         return []
-    return parse_standard_text(str(intake.get("standard_text") or ""))
+    if syllabus_requested(intake):
+        return list(parse_syllabus(text)["statements"])
+    return parse_standard_text(text)
+
+
+def syllabus_units(intake: dict) -> list[dict[str, Any]]:
+    """Unit titles from a pasted syllabus, each with the statements under it."""
+    if not syllabus_requested(intake):
+        return []
+    text = syllabus_source(intake)
+    if not text:
+        return []
+    return list(parse_syllabus(text)["units"])
 
 
 def read_statements(raw: object) -> list[dict[str, str]]:
@@ -252,7 +315,7 @@ def standard_brief_lines(intake: dict, statements: list[dict[str, str]]) -> list
             [
                 "No statements were pasted, so recall the statements for this grade and this topic. "
                 "Return them in statements, one object per statement, with its code when the standard has one. "
-                f"Keep it to the statements this course should cover, usually 5 to 20, not the whole subject on {host}. "
+                f"Keep it to the statements this course should cover, at most {MAX_STATEMENTS}, not a different subject on {host}. "
                 "The author will check this list before the blueprint. "
                 "Say in the brief that the list is recalled and should be checked.",
             ]

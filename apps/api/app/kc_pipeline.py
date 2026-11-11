@@ -19,9 +19,11 @@ from app.kc_standards import (
     standard_brief_lines,
     standard_label,
     statement_lines,
+    statements_from_intake,
+    syllabus_units,
 )
 
-MAX_COMPONENTS = 250
+MAX_COMPONENTS = 100
 MAX_FOLLOW_UPS = 2
 MINUTES_PER_COMPONENT = 12
 MAX_OUTCOMES = 8
@@ -31,6 +33,7 @@ DEPTHS: dict[str, tuple[str, int, int]] = {
     "intro": ("Quick intro", 4, 6),
     "standard": ("Standard", 8, 12),
     "deep": ("Deep dive", 15, 25),
+    "curriculum": ("Match curriculum (1 component per topic/statement)", 2, MAX_COMPONENTS),
 }
 READING_LEVELS: dict[str, str] = {
     "easier": "Easier than the age band. Short sentences and common words.",
@@ -56,6 +59,7 @@ INTAKE_TEXT_FIELDS: dict[str, int] = {
     "standard_grade": 80,
     "standard_name": 120,
     "standard_text": _LONG,
+    "subject": 160,
 }
 
 CHECKS: tuple[str, ...] = ("gaps", "overlap", "jumps", "capstone", "outcomes", "reading_level")
@@ -263,7 +267,12 @@ def clean_intake(raw: object) -> dict:
         raise ValueError("Reading level is easier, age, or stronger.")
     depth = str(data.get("depth") or "standard").strip()
     if depth not in DEPTHS:
-        raise ValueError("Depth is intro, standard, or deep.")
+        raise ValueError("Depth is intro, standard, deep, or curriculum.")
+    align_raw = data.get("align_syllabus")
+    if isinstance(align_raw, str):
+        align = align_raw.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        align = bool(align_raw)
     use = str(data.get("use") or "").strip()
     if use not in USES:
         raise ValueError("Use is enrichment, school_support, test_prep, or blank.")
@@ -285,6 +294,7 @@ def clean_intake(raw: object) -> dict:
         "component_count": count,
         "use": use,
         "standard": standard,
+        "align_syllabus": align,
     }
     for key, cap in INTAKE_TEXT_FIELDS.items():
         cleaned[key] = str(data.get(key) or "").strip()[:cap]
@@ -311,14 +321,45 @@ def missing_intake(*, title: str, description: str, audience: str, intake: dict)
     return missing
 
 
-def component_range(*, kind: str, minutes: int | None, intake: dict) -> tuple[int, int]:
+def _pasted_count(intake: dict, statements: list[dict] | None) -> int:
+    if statements is not None:
+        return len(statements)
+    return len(statements_from_intake(intake))
+
+
+def component_range(
+    *,
+    kind: str,
+    minutes: int | None,
+    intake: dict,
+    statements: list[dict] | None = None,
+) -> tuple[int, int]:
+    """How many components the blueprint may have.
+
+    An explicit count wins. A pasted curriculum that is longer than the depth,
+    or the match-curriculum depth, uses one component per statement instead of
+    the 8 to 12 default.
+    """
     count = intake.get("component_count")
     if count:
         return int(count), int(count)
-    if kind == "time_boxed" and minutes:
+    pasted = _pasted_count(intake, statements)
+    match = intake.get("depth") == "curriculum" or bool(intake.get("align_syllabus"))
+    if match and pasted:
+        target = min(MAX_COMPONENTS, max(2, pasted))
+        return target, target
+    if match:
+        return 2, MAX_COMPONENTS
+    if kind == "time_boxed" and minutes and pasted <= 0:
         target = max(3, round(minutes / MINUTES_PER_COMPONENT))
         return max(2, target - 1), min(MAX_COMPONENTS, target + 1)
     _label, low, high = DEPTHS[intake.get("depth") or "standard"]
+    if pasted > high:
+        target = min(MAX_COMPONENTS, max(2, pasted))
+        return target, target
+    if kind == "time_boxed" and minutes:
+        target = max(3, round(minutes / MINUTES_PER_COMPONENT))
+        return max(2, target - 1), min(MAX_COMPONENTS, target + 1)
     return low, high
 
 
@@ -467,9 +508,15 @@ def _blueprint_schema(statements: list[dict]) -> dict:
     }
 
 
+def _one_to_one(low: int, high: int, statements: list[dict]) -> bool:
+    return bool(statements) and low == high and low == min(MAX_COMPONENTS, len(statements))
+
+
 def blueprint_bundle(*, course: dict, brief: str, model: str) -> dict:
-    low, high = component_range(kind=course["kind"], minutes=course["minutes"], intake=course["intake"])
     statements = list(course.get("statements") or [])
+    low, high = component_range(
+        kind=course["kind"], minutes=course["minutes"], intake=course["intake"], statements=statements
+    )
     lines = [
         BLUEPRINT_RULES,
         INSTRUCTION_RULES,
@@ -482,18 +529,35 @@ def blueprint_bundle(*, course: dict, brief: str, model: str) -> dict:
         "Course brief:",
         brief,
     ]
+    matched = _one_to_one(low, high, statements)
+    if matched:
+        lines.append(
+            "One component per statement, in the same order. "
+            "Each component's standards list is exactly that one statement's code. "
+            "Do not merge two statements into one component and do not add a component that covers nothing. "
+            "Use the curriculum's units when they are listed. A unit may have more or fewer than 3 to 8 components."
+        )
+        groups = syllabus_units(course["intake"])
+        if groups and sum(len(group["statements"]) for group in groups) == len(statements):
+            lines.append("Curriculum units:")
+            for index, group in enumerate(groups, start=1):
+                lines.append(f"Unit {index}: {group['title']}")
+                lines.extend(f"- {item['code']}: {item['text']}" for item in group["statements"])
     if statements:
         label = standard_label(course["intake"].get("standard") or "", course["intake"].get("standard_name") or "")
-        lines.extend(
-            [
-                f"Map every {label} statement onto one or more components. "
-                "Put the statement codes in that component's standards list. "
-                "A component that covers none is an extension, and its standards list is empty. "
-                "Do not invent codes. Do not leave a statement with no component.",
-                "Standard statements:",
-                statement_lines(statements),
-            ]
-        )
+        if matched:
+            lines.extend(["Standard statements:", statement_lines(statements)])
+        else:
+            lines.extend(
+                [
+                    f"Map every {label} statement onto one or more components. "
+                    "Put the statement codes in that component's standards list. "
+                    "A component that covers none is an extension, and its standards list is empty. "
+                    "Do not invent codes. Do not leave a statement with no component.",
+                    "Standard statements:",
+                    statement_lines(statements),
+                ]
+            )
     intake = course["intake"]
     for key, label in (("must_cover", "Must cover"), ("must_avoid", "Must avoid"), ("starting_point", "Starting point")):
         if intake.get(key):
@@ -657,7 +721,11 @@ def clean_blueprint_edit(
             raise ValueError("Each unit needs a title and components.")
         title = _clean_text(raw_unit.get("title"))
         raw_components = raw_unit.get("components")
-        if not title or not isinstance(raw_components, list) or not raw_components:
+        if not isinstance(raw_components, list):
+            raise ValueError("Each unit needs a title and at least one component.")
+        if not raw_components:
+            continue
+        if not title:
             raise ValueError("Each unit needs a title and at least one component.")
         components: list[dict] = []
         for raw_item in raw_components:
@@ -693,6 +761,8 @@ def clean_blueprint_edit(
                 }
             )
         units.append({"title": title, "summary": _clean_text(raw_unit.get("summary")), "components": components})
+    if not units:
+        raise ValueError("Add at least one unit.")
     blueprint = {"outcomes": outcomes, "units": units}
     _check_blueprint(blueprint)
     return blueprint
@@ -1009,6 +1079,232 @@ def final_components(blueprint: dict, descriptions: dict[str, str]) -> list[dict
         }
         for row in components_of(blueprint)
     ]
+
+
+def _chat_schema(statements: list[dict]) -> dict:
+    standards: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
+    if statements:
+        standards = {"type": "array", "items": {"type": "string", "enum": [item["code"] for item in statements]}}
+    component = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "code": {"type": "string"},
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "prerequisites": {"type": "array", "items": {"type": "string"}},
+            "standards": standards,
+            "description": _nullable(_STRING),
+        },
+        "required": ["code", "title", "summary", "prerequisites", "standards", "description"],
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "reply": {"type": "string"},
+            "changed_codes": {"type": "array", "items": {"type": "string"}},
+            "outcomes": {"type": "array", "items": {"type": "string"}},
+            "units": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "title": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "components": {"type": "array", "items": component},
+                    },
+                    "required": ["title", "summary", "components"],
+                },
+            },
+        },
+        "required": ["reply", "changed_codes", "outcomes", "units"],
+    }
+
+
+CHAT_RULES = (
+    "You edit the course the author already has. "
+    "The reply is one or two plain sentences that say what changed. "
+    "Return the whole blueprint after that change. "
+    "Keep the code of every component you keep. An added component has an empty code. "
+    "Set description to null on every component you did not change. "
+    "Write a new description, 3 to 4 plain sentences, only for a component you add or change. "
+    "Put the code of each changed component in changed_codes. Leave a new component out of that list. "
+    "Do not rewrite, reorder, or drop anything the author did not ask about. "
+    "Prerequisites name codes of components that come earlier. "
+    "Do not invent curriculum statements."
+)
+
+
+def _blueprint_summary(blueprint: dict, descriptions: dict[str, str]) -> str:
+    units = (blueprint or {}).get("units") or []
+    if not units:
+        return "No blueprint yet."
+    lines = ["Outcomes:", _outcome_lines(blueprint), _blueprint_outline(blueprint)]
+    written = [f"- {row['code']}: {descriptions[row['code']]}" for row in components_of(blueprint) if descriptions.get(row["code"])]
+    if written:
+        lines.extend(["Descriptions:", *written])
+    return "\n".join(lines)
+
+
+def chat_bundle(
+    *,
+    course: dict,
+    brief: str,
+    blueprint: dict,
+    descriptions: dict[str, str],
+    statements: list[dict],
+    components: list[dict],
+    messages: list[dict],
+    model: str,
+) -> dict:
+    """Prompt for one chat turn. It proposes a change and does not write the course."""
+    lines = [
+        CHAT_RULES,
+        "Course schema:",
+        "outcomes: sentences.",
+        "units: title, summary, components.",
+        "component: code, title, summary, prerequisites, standards, description.",
+        f"Course topic: {course['title']}",
+        f"Age band: {course['audience']}",
+        f"By the end the child can: {course['description'] or 'None given.'}",
+        "Brief:",
+        brief or "None yet.",
+        "Blueprint:",
+        _blueprint_summary(blueprint, descriptions),
+    ]
+    if statements:
+        lines.extend(["Curriculum statements:", statement_lines(statements)])
+    if components:
+        lines.append("Pushed components:")
+        lines.extend(f"- {item.get('code')}: {item.get('title')}" for item in components)
+    if messages:
+        lines.append("Chat:")
+        for item in messages:
+            who = "Author" if item.get("role") == "user" else "Editor"
+            text = _clean_text(item.get("content"))
+            if text:
+                lines.append(f"{who}: {text}")
+    latest = ""
+    for item in reversed(messages):
+        if item.get("role") == "user":
+            latest = _clean_text(item.get("content"))
+            if latest:
+                break
+    return {
+        "model": model,
+        "system_prompt": "\n".join(lines),
+        "user_prompt": latest or "Say what you want to change.",
+        "schema": _chat_schema(statements),
+    }
+
+
+def _raw_components(result: dict) -> list[dict]:
+    rows: list[dict] = []
+    for unit in result.get("units") or []:
+        if not isinstance(unit, dict):
+            continue
+        components = unit.get("components")
+        if isinstance(components, list) and components:
+            rows.extend(item for item in components if isinstance(item, dict))
+    return rows
+
+
+def interpret_chat(
+    result: object,
+    *,
+    blueprint: dict,
+    descriptions: dict[str, str],
+    statements: list[dict] | None,
+    taken: set[str],
+    make_code: Callable[[str, set[str]], str],
+) -> dict:
+    """The proposed course. Unchanged components keep the description they already have."""
+    if not isinstance(result, dict):
+        raise ValueError("The model reply could not be read.")
+    reply = _clean_text(result.get("reply"))
+    if len(reply) < 2:
+        raise ValueError("Say what changed, in plain language.")
+    listed: list[str] = []
+    for code in result.get("changed_codes") or []:
+        key = _clean_text(code)
+        if key and key not in listed:
+            listed.append(key)
+    raw_rows = _raw_components(result)
+    proposed = clean_blueprint_edit(result, taken=taken, make_code=make_code, statements=statements)
+    cleaned_rows = components_of(proposed)
+    if len(raw_rows) != len(cleaned_rows):
+        raise ValueError("Each component needs a title.")
+    old_rows = {row["code"]: row for row in components_of(blueprint or {})}
+    old_notes = dict(descriptions or {})
+    had_notes = any(str(text or "").strip() for text in old_notes.values())
+    notes: dict[str, str] = {}
+    rewritten: list[str] = []
+    structural_codes: list[str] = []
+    for raw, row in zip(raw_rows, cleaned_rows, strict=True):
+        code = row["code"]
+        previous = old_rows.get(code)
+        structural = previous is None or any(previous.get(key) != row.get(key) for key in ("title", "summary", "prerequisites", "standards"))
+        if structural:
+            structural_codes.append(code)
+        untouched = previous is not None and not structural and code not in listed
+        model_text = raw.get("description")
+        if untouched:
+            if code in old_notes:
+                notes[code] = old_notes[code]
+            continue
+        if model_text not in (None, ""):
+            notes[code] = clean_description(model_text, f"The description for {row['title']}")
+            if notes[code] != old_notes.get(code):
+                rewritten.append(code)
+        elif code in old_notes and not structural:
+            notes[code] = old_notes[code]
+        elif had_notes:
+            raise ValueError(f"Write the description for {row['title']}. Leave every unchanged description null.")
+    changes = _chat_changes(blueprint or {}, proposed, old_rows, structural_codes, rewritten)
+    return {
+        "reply": reply,
+        "blueprint": proposed,
+        "descriptions": notes,
+        "changed_codes": structural_codes + [code for code in rewritten if code not in structural_codes],
+        "changes": changes,
+    }
+
+
+def _chat_changes(
+    before: dict,
+    after: dict,
+    old_rows: dict[str, dict],
+    structural_codes: list[str],
+    rewritten: list[str],
+) -> list[str]:
+    old_titles = [str(unit.get("title") or "") for unit in before.get("units") or []]
+    new_titles = [str(unit.get("title") or "") for unit in after.get("units") or []]
+    new_rows = {row["code"]: row for row in components_of(after)}
+    lines: list[str] = []
+    for title in old_titles:
+        if title and title not in new_titles:
+            lines.append(f"Removed unit {title}.")
+    for title in new_titles:
+        if title and title not in old_titles:
+            lines.append(f"Added unit {title}.")
+    for code, row in old_rows.items():
+        if code not in new_rows:
+            lines.append(f"Removed {row['title']}.")
+    for code in structural_codes:
+        row = new_rows.get(code)
+        if row is None:
+            continue
+        if code not in old_rows:
+            lines.append(f"Added {row['title']}.")
+        else:
+            lines.append(f"Updated {row['title']}.")
+    for code in rewritten:
+        if code in structural_codes or code not in old_rows:
+            continue
+        lines.append(f"Rewrote the description of {old_rows[code]['title']}.")
+    return lines
 
 
 def position_text(blueprint: dict, code: str) -> str:

@@ -55,12 +55,23 @@ from app.kc import (
 )
 from app.kc_course_draft import (
     answer_follow_ups,
+    apply_chat,
+    course_chat_prompt,
+    delete_unit,
+    preview_chat,
     pipeline_out,
     reset_pipeline,
     save_blueprint,
     save_statements,
     store_stage,
     stage_prompt,
+)
+from app.kc_course_io import (
+    export_course,
+    external_course_prompt,
+    import_into_course,
+    import_new_course,
+    preview_document,
 )
 from app.kc_prompt_tester import PromptTesterIn, preview_kc_prompt
 from app.schemas import KcChatDetail, KcChatSummary, ModelPromptIn, ModelPromptOut
@@ -118,6 +129,32 @@ class StatementsIn(BaseModel):
 class AnswersIn(BaseModel):
     answers: list[dict] = Field(default_factory=list)
     skip: bool = False
+
+
+class ChatPromptIn(BaseModel):
+    model: str = ""
+    messages: list[dict] = Field(default_factory=list)
+
+
+class ChatApplyIn(BaseModel):
+    proposal: dict
+
+
+class CourseFileIn(BaseModel):
+    document: dict
+    mode: str = "replace"
+
+
+class ExternalPromptIn(BaseModel):
+    title: str = ""
+    grade: str = ""
+    audience: str = ""
+    curriculum: str = ""
+    block_notes: str = ""
+
+
+def _course_file(exc: ValueError) -> HTTPException:
+    return HTTPException(status_code=422, detail=str(exc))
 
 
 class ModelTurnIn(BaseModel):
@@ -243,6 +280,36 @@ def post_course(body: CourseIn, db: Session = Depends(get_db)) -> dict:
     return course_out(db, goal)
 
 
+@router.post("/kc/courses/import-preview")
+def post_import_preview(body: CourseFileIn) -> dict:
+    try:
+        return preview_document(body.document)
+    except ValueError as exc:
+        raise _course_file(exc) from exc
+
+
+@router.post("/kc/courses/external-prompt")
+def post_external_prompt(body: ExternalPromptIn) -> dict:
+    return {
+        "prompt": external_course_prompt(
+            title=body.title,
+            grade=body.grade,
+            audience=body.audience,
+            curriculum=body.curriculum,
+            block_notes=body.block_notes,
+        )
+    }
+
+
+@router.post("/kc/courses/import")
+def post_course_import(body: CourseFileIn, db: Session = Depends(get_db)) -> dict:
+    try:
+        goal = import_new_course(db, body.document)
+    except ValueError as exc:
+        raise _course_file(exc) from exc
+    return course_out(db, goal)
+
+
 @router.get("/kc/courses/{course_id}")
 def get_course(course_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return course_out(db, _course_or_404(db, course_id))
@@ -267,8 +334,44 @@ def get_course_pipeline(course_id: uuid.UUID, db: Session = Depends(get_db)) -> 
 
 
 @router.delete("/kc/courses/{course_id}/pipeline")
-def delete_course_pipeline(course_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
-    return reset_pipeline(db, _course_or_404(db, course_id))
+def delete_course_pipeline(
+    course_id: uuid.UUID, components: bool = False, db: Session = Depends(get_db)
+) -> dict:
+    return reset_pipeline(db, _course_or_404(db, course_id), clear_components=components)
+
+
+@router.delete("/kc/courses/{course_id}/units/{unit_index}")
+def delete_course_unit(course_id: uuid.UUID, unit_index: int, db: Session = Depends(get_db)) -> dict:
+    return delete_unit(db, _course_or_404(db, course_id), unit_index)
+
+
+@router.get("/kc/courses/{course_id}/export")
+def get_course_export(course_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    return export_course(db, _course_or_404(db, course_id))
+
+
+@router.post("/kc/courses/{course_id}/import")
+def post_course_file(course_id: uuid.UUID, body: CourseFileIn, db: Session = Depends(get_db)) -> dict:
+    try:
+        goal = import_into_course(db, _course_or_404(db, course_id), body.document, body.mode)
+    except ValueError as exc:
+        raise _course_file(exc) from exc
+    return course_out(db, goal)
+
+
+@router.post("/kc/courses/{course_id}/chat/prompt")
+def post_course_chat_prompt(course_id: uuid.UUID, body: ChatPromptIn, db: Session = Depends(get_db)) -> dict:
+    return course_chat_prompt(db, _course_or_404(db, course_id), body.model, body.messages)
+
+
+@router.post("/kc/courses/{course_id}/chat/preview")
+def post_course_chat_preview(course_id: uuid.UUID, body: ChatApplyIn, db: Session = Depends(get_db)) -> dict:
+    return preview_chat(db, _course_or_404(db, course_id), body.proposal)
+
+
+@router.post("/kc/courses/{course_id}/chat/apply")
+def post_course_chat_apply(course_id: uuid.UUID, body: ChatApplyIn, db: Session = Depends(get_db)) -> dict:
+    return apply_chat(db, _course_or_404(db, course_id), body.proposal)
 
 
 @router.post("/kc/courses/{course_id}/pipeline/answers")

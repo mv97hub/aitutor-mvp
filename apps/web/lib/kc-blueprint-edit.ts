@@ -83,17 +83,47 @@ export function pruneLinks(blueprint: KcBlueprint): KcBlueprint {
   return blueprint;
 }
 
-/** Drop a component and any prerequisite link that pointed at it. */
+/** Drop a component and any prerequisite link that pointed at it. An emptied unit is removed. */
 export function removeComponent(blueprint: KcBlueprint, spot: Spot): KcBlueprint {
   const next = copy(blueprint);
   const [gone] = next.units[spot.unit]?.components.splice(spot.index, 1) ?? [];
   if (!gone) return blueprint;
-  for (const unit of next.units) {
+  if (next.units[spot.unit] && next.units[spot.unit].components.length === 0) {
+    next.units.splice(spot.unit, 1);
+  }
+  return dropCode(next, gone.code);
+}
+
+/** Remove a unit and the components in it. The last remaining unit stays. */
+export function removeUnit(blueprint: KcBlueprint, unit: number): KcBlueprint {
+  if (blueprint.units.length < 2 || !blueprint.units[unit]) return blueprint;
+  const next = copy(blueprint);
+  const [gone] = next.units.splice(unit, 1);
+  let dropped = next;
+  for (const item of gone?.components ?? []) {
+    if (item.code) dropped = dropCode(dropped, item.code);
+  }
+  return dropped;
+}
+
+export function addUnit(blueprint: KcBlueprint): KcBlueprint {
+  const next = copy(blueprint);
+  next.units.push({
+    title: "New unit",
+    summary: "",
+    components: [{ code: "", title: "New component", summary: "", prerequisites: [], standards: [] }],
+  });
+  return next;
+}
+
+function dropCode(blueprint: KcBlueprint, code: string): KcBlueprint {
+  if (!code) return blueprint;
+  for (const unit of blueprint.units) {
     for (const item of unit.components) {
-      item.prerequisites = item.prerequisites.filter((code) => code !== gone.code);
+      item.prerequisites = item.prerequisites.filter((itemCode) => itemCode !== code);
     }
   }
-  return next;
+  return blueprint;
 }
 
 /** A new row has no code. The API assigns one when the blueprint is saved. */
