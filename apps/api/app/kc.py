@@ -59,6 +59,7 @@ from app.kc_prompt import (
     topic_goal,
 )
 from app.learn_stars import child_status_label, empty_stars, explorer_progress, stars_from_units
+from app.token_usage import session_token_usage
 from app.tutor_profile import (
     BLOCK_CONFIG_SPECS,
     PROFILE_ID,
@@ -4093,6 +4094,7 @@ def kc_chat_detail(db: Session, session_id: uuid.UUID) -> dict:
             for message in session.messages
         ],
         "prompts": [kc_prompt_out(row) for row in session.prompts],
+        "token_usage": session_token_usage(db, session.id),
     }
 
 

@@ -644,6 +644,42 @@ class KcChatMessage(BaseModel):
     created_at: datetime
 
 
+class TokenUsageTotals(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    total_tokens: int = 0
+
+
+class TokenUsageTurn(BaseModel):
+    id: UUID
+    created_at: datetime
+    student_id: UUID
+    session_id: UUID
+    course_id: UUID | None = None
+    message_id: UUID | None = None
+    kind: Literal["speak", "answer"]
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    total_tokens: int = 0
+
+
+class SessionTokenUsage(BaseModel):
+    total: TokenUsageTotals = Field(default_factory=TokenUsageTotals)
+    turns: list[TokenUsageTurn] = Field(default_factory=list)
+
+
+class TokenUsageIn(BaseModel):
+    kind: Literal["speak", "answer"]
+    model: str = Field(default="", max_length=120)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    message_id: UUID | None = None
+
+
 class KcChatDetail(BaseModel):
     id: UUID
     status: str
@@ -665,6 +701,7 @@ class KcChatDetail(BaseModel):
     component: KcChatComponent
     messages: list[KcChatMessage]
     prompts: list[ModelPromptOut] = Field(default_factory=list)
+    token_usage: SessionTokenUsage = Field(default_factory=SessionTokenUsage)
 
 
 StudioDepth = Literal["survey", "standard", "go_deep"]

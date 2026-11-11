@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 
-import type { KcChatDetail } from "@/lib/kc";
+import type { KcChatDetail, KcTokenTurn, KcTokenUsage } from "@/lib/kc";
 import { promptsOnTranscript } from "@/lib/kc-chat-prompts";
 
 type KcPrompt = KcChatDetail["prompts"][number];
@@ -16,6 +16,7 @@ export type ChatViewData = Pick<
   course: { title: string };
   component: { code: string; title: string };
   prompts?: KcPrompt[];
+  token_usage?: KcTokenUsage;
 };
 
 export function when(iso: string) {
@@ -130,6 +131,10 @@ function PromptDialog({
   );
 }
 
+function tokenSummary(turn: KcTokenTurn) {
+  return `${turn.kind} · in ${turn.input_tokens} · out ${turn.output_tokens} · cached ${turn.cached_tokens} · total ${turn.total_tokens}`;
+}
+
 function scoreCountLabel(score: number | null) {
   return score == null ? "None yet" : "1 score";
 }
@@ -150,6 +155,18 @@ export function SessionView({
   const { placed, leftover } = debug
     ? promptsOnTranscript(session.messages, session.prompts ?? [])
     : { placed: new Map<string, KcPrompt>(), leftover: [] as KcPrompt[] };
+  const usage = debug ? session.token_usage : undefined;
+  const usageByMessage = new Map<string, KcTokenTurn[]>();
+  const usageUnmatched: KcTokenTurn[] = [];
+  for (const turn of usage?.turns ?? []) {
+    if (turn.message_id && session.messages.some((message) => message.id === turn.message_id)) {
+      const list = usageByMessage.get(turn.message_id) ?? [];
+      list.push(turn);
+      usageByMessage.set(turn.message_id, list);
+    } else {
+      usageUnmatched.push(turn);
+    }
+  }
   useEffect(() => {
     setPrompt(null);
     setScoresOpen(false);
@@ -212,6 +229,16 @@ export function SessionView({
           )}
         </div>
       </div>
+      {usage ? (
+        <div className="score-fold">
+          <h3>Token usage</h3>
+          <p className="meta">
+            Session total · in {usage.total.input_tokens} · out {usage.total.output_tokens} · cached{" "}
+            {usage.total.cached_tokens} · total {usage.total.total_tokens}
+          </p>
+          {usage.turns.length === 0 ? <p className="help">No token usage stored for this chat.</p> : null}
+        </div>
+      ) : null}
       <h3>Transcript</h3>
       {session.messages.length === 0 ? <p className="help">No messages stored yet.</p> : null}
       <ol className="transcript-list">
@@ -224,6 +251,11 @@ export function SessionView({
                   <strong>{message.role === "user" ? session.student.display_name : "Tutor"}</strong>
                   <span className="quiet">{when(message.created_at)}</span>
                   <p style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{message.content}</p>
+                  {(usageByMessage.get(message.id) ?? []).map((turn) => (
+                    <p key={turn.id} className="quiet">
+                      {tokenSummary(turn)}
+                    </p>
+                  ))}
                 </div>
                 {turnPrompt ? (
                   <button type="button" className="ds-debug" onClick={() => setPrompt(turnPrompt)}>
@@ -235,6 +267,20 @@ export function SessionView({
           );
         })}
       </ol>
+      {usageUnmatched.length > 0 ? (
+        <div>
+          <h3>Token usage without a matching turn</h3>
+          <ul className="score-list">
+            {usageUnmatched.map((turn) => (
+              <li key={turn.id}>
+                <span className="quiet">
+                  {tokenSummary(turn)} · {turn.model || "Model"} · {when(turn.created_at)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {leftover.length > 0 ? (
         <div>
           <h3>Other model calls</h3>

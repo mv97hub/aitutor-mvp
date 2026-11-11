@@ -465,6 +465,27 @@ export type KcChatDetail = {
     misconception?: string | null;
     created_at: string;
   }[];
+  token_usage?: KcTokenUsage;
+};
+
+export type KcTokenCounts = {
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+};
+
+export type KcTokenTurn = KcTokenCounts & {
+  id: string;
+  created_at: string;
+  kind: "speak" | "answer" | string;
+  model: string;
+  message_id?: string | null;
+};
+
+export type KcTokenUsage = {
+  total: KcTokenCounts;
+  turns: KcTokenTurn[];
 };
 
 export type KcDebugVariable = {

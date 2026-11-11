@@ -102,6 +102,33 @@ test("the download payload matches the loaded session, including the prompt", ()
   assert.equal(kcChatDownloadFilename(loaded), `kc-chat-Ada-Lovelace-${sessionId}.json`);
 });
 
+test("the download includes the session token usage when the chat loaded it", () => {
+  const loaded = session({
+    token_usage: {
+      total: { input_tokens: 20, output_tokens: 8, cached_tokens: 5, total_tokens: 28 },
+      turns: [
+        {
+          id: "turn-1",
+          kind: "speak",
+          model: "gpt-4.1",
+          created_at: "2026-11-11T12:01:00Z",
+          message_id: null,
+          input_tokens: 20,
+          output_tokens: 8,
+          cached_tokens: 5,
+          total_tokens: 28,
+        },
+      ],
+    },
+  });
+  const payload = kcChatDownload(loaded);
+  assert.deepEqual(payload.token_usage, loaded.token_usage);
+  const file = JSON.parse(kcChatDownloadJson(loaded));
+  assert.equal(file.token_usage.total.input_tokens, 20);
+  assert.equal(file.token_usage.turns[0].kind, "speak");
+  assert.equal(file.token_usage.turns[0].cached_tokens, 5);
+});
+
 test("a session with no stored prompt still downloads the messages and an empty prompt list", () => {
   const loaded = session({ prompts: [] });
   const payload = kcChatDownload(loaded);
@@ -126,7 +153,7 @@ test("the parent chat view does not gain a download or prompts", () => {
   const parent = readFileSync(new URL("../components/parent/ParentChats.tsx", import.meta.url), "utf8");
   const admin = readFileSync(new URL("../components/ViewKcChats.tsx", import.meta.url), "utf8");
   assert.match(parent, /<SessionView session=\{session\} \/>/);
-  assert.doesNotMatch(parent, /downloadKcChat|Download|prompts/);
+  assert.doesNotMatch(parent, /downloadKcChat|Download|prompts|token_usage|input_tokens/);
   assert.match(admin, /downloadKcChat\(session\)/);
   assert.match(admin, /\bdebug\b/);
 });

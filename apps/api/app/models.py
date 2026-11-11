@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -1192,6 +1193,41 @@ class KcModelPrompt(Base):
     )
 
     session: Mapped[KcSession] = relationship(back_populates="prompts")
+
+
+class TutorTokenUsage(Base):
+    """One provider usage row per tutor model call. Counts are not re-tokenized here."""
+
+    __tablename__ = "tutor_token_usage"
+    __table_args__ = (
+        CheckConstraint("kind IN ('speak', 'answer')", name="ck_tutor_token_usage_kind"),
+        Index("ix_tutor_token_usage_student_created", "student_id", "created_at"),
+        Index("ix_tutor_token_usage_created_at", "created_at"),
+        Index("ix_tutor_token_usage_session_id", "session_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    course_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_goals.id", ondelete="SET NULL"), nullable=True
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_messages.id", ondelete="SET NULL"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class KcCreatorMessage(Base):
