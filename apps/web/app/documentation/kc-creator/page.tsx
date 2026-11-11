@@ -102,8 +102,9 @@ export default function KcCreatorDocsPage() {
         <h3>Component</h3>
         <ul>
           <li>
-            <strong>Outline</strong> (outline). The big-picture framing before Block 1. On the first turn, This turn
-            elaborates it in two sentences, then asks Block 1&apos;s question. A later block does not repeat the outline.
+            <strong>Outline</strong> (outline). The big-picture framing before Block 1. When Block 1 is a topic or
+            goal, the first turn explains the idea and does not ask. Otherwise This turn elaborates the outline, then
+            asks Block 1&apos;s question. A later block does not repeat the outline.
           </li>
           <li>
             <strong>Core truth</strong> (core_truth). The overarching takeaway for the component. It stays on the
@@ -136,7 +137,8 @@ export default function KcCreatorDocsPage() {
         <ul>
           <li>
             <strong>Topic</strong> (topic). Required. The single concept, step, or causal link to introduce on this
-            block. This turn introduces it and asks toward the goal. What to teach includes the topic.
+            block. The first turn explains what it is and why it matters, and does not ask. The goal question comes
+            only after the learner moves on. What to teach includes the topic.
           </li>
           <li>
             <strong>Goal</strong> (goal). Required. What the learner must explain, justify, or demonstrate in their own

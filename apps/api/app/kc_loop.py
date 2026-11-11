@@ -243,6 +243,30 @@ def learner_asks_question_or_background(answer: str) -> bool:
     return "background" in text or "more context" in text or "some context" in text
 
 
+_STOP_EXPLAINING = (
+    "dont want to learn more",
+    "do not want to learn more",
+    "dont want more",
+    "no more explanation",
+    "stop explaining",
+    "enough explanation",
+    "thats enough explanation",
+    "that is enough",
+)
+
+
+def learner_done_with_explanation(answer: str) -> bool:
+    """True when the learner is leaving the opening explanation for the goal question.
+
+    Got it - move on, a typed reply that means move on, and a typed reply that
+    means they do not want to learn more all take this path. Tell me more does not.
+    """
+    text = _proceed_text(answer)
+    if any(phrase in text for phrase in _STOP_EXPLAINING):
+        return True
+    return learner_ready_to_proceed(answer, False)
+
+
 def answer_addresses_substep(
     block: dict,
     substep: str,
@@ -564,6 +588,34 @@ def resolve_block_turn(
             work_text=(work_on or "").strip(),
             enrichment_turns=enrichment_turns,
         )
+    if btype == "topic_goal" and substep == "explain":
+        # The goal question waits. Only move-on leaves this explanation.
+        if learner_done_with_explanation(answer):
+            state["substep"] = "main"
+            state["elaboration_turns"] = 0
+            # A short reply during the explanation is not the goal answer.
+            state["fragment_prompted"] = True
+        else:
+            state["elaboration_turns"] = int(state.get("elaboration_turns") or 0) + 1
+        return BlockResolution(
+            decision="stay",
+            hint_tier="nudge",
+            move_attempts=0,
+            reveals=reveals,
+            enrichment_turns=enrichment_turns,
+            rubric_met=met,
+            misconception="",
+            next_step=index,
+            next_block_id=bid,
+            next_block_state=state,
+            block_results=results,
+            mark_known=False,
+            mark_fragile=False,
+            redirect=False,
+            unit_complete=False,
+            advance_block=False,
+            passed=False,
+        )
     max_retries = max_retries_for_block(block, cfg, goal)
 
     # Misconception handling
@@ -709,7 +761,9 @@ def resolve_block_turn(
             "explain",
             "tell",
         }
-        if not addressed or opens_as_question:
+        # A question that does not answer the goal is not a miss. A reply that
+        # does answer it, and that the model accepts, still opens the summary.
+        if not addressed or (opens_as_question and not substep_passed):
             return stay(move_attempts, tier)
 
     if (

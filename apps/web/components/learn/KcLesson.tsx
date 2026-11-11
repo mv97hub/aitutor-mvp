@@ -7,6 +7,7 @@ import { ChoiceWidget } from "@/components/LessonBlocks";
 import type { TutorMood } from "@/components/learn/LearnQuestPanel";
 import { TutorAvatar } from "@/components/TutorAvatar";
 import type { KcTutorSession } from "@/lib/kc";
+import { goalStartActions } from "@/lib/kc-goal-start";
 import { choiceShowing, lessonComposerVisible, quizFor } from "@/lib/learn-mobile";
 import { blockStepDivider, starBurst } from "@/lib/learn";
 import { getTutorAvatarPreset } from "@/lib/tutor-avatars";
@@ -79,6 +80,13 @@ export function KcLesson({
     needsSpeech: session.needs_speech,
     choosing,
     hideWhileChoosing: hideComposerWhileChoosing,
+  });
+  const goalActions = goalStartActions({
+    status: session.status,
+    needsSpeech: session.needs_speech,
+    blockType: session.active_block_type,
+    substep: session.active_substep,
+    choosing,
   });
   const echoedMatches = pendingLine
     ? session.messages.filter((message) => message.role === "user" && message.content === pendingLine.text).length
@@ -334,6 +342,15 @@ export function KcLesson({
       {replyError ? (
         <div className="banner" role="alert">
           <p>{replyError}</p>
+        </div>
+      ) : null}
+      {goalActions.length > 0 ? (
+        <div className="kc-explain-chips">
+          {goalActions.map((label) => (
+            <button key={label} type="button" onClick={() => void sendAnswer(label)}>
+              {label}
+            </button>
+          ))}
         </div>
       ) : null}
       {composerOpen && session.active_block_type === "explanation" && !choosing ? (

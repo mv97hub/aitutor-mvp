@@ -62,6 +62,7 @@ SUBSTEP_LABELS: dict[str, str] = {
     "recall": "Cued Recall",
     "elaborate_why": "Elaborative Why",
     "explain_topic": "Explain Topic",
+    "explain": "",
     "summary_check": "Summary & Final Questions",
 }
 
@@ -319,7 +320,7 @@ def default_substep_for_block(block: dict, cfg: dict | None = None) -> str:
     btype = str(block.get("type") or "topic_goal").strip()
     bcfg = ((cfg or {}).get("blocks") or {}).get(btype) or {}
     if btype == "topic_goal":
-        return "main"
+        return "explain"
     if btype == "mcq":
         return "choice"
     if btype == "case_study":
@@ -356,7 +357,7 @@ def substeps_for_block(block: dict, cfg: dict | None = None) -> list[str]:
     data = block.get("data") if isinstance(block.get("data"), dict) else {}
     bcfg = ((cfg or {}).get("blocks") or {}).get(btype) or {}
     if btype == "topic_goal":
-        return _with_summary_check(["main"])
+        return _with_summary_check(["explain", "main"])
     if btype == "mcq":
         confirm = str(bcfg.get("confirm_why_on_correct") or "on_retry_only")
         if confirm == "always":
@@ -585,7 +586,7 @@ def block_evidence_id(block: dict, step_index: int, substep: str = "") -> str:
     btype = str(block.get("type") or "topic_goal").strip()
     if btype in {"curiosity", "explanation"}:
         return f"{bid}:engaged"
-    if substep and substep not in {"main", "choice", "critique"}:
+    if substep and substep not in {"main", "choice", "critique", "explain"}:
         return f"{bid}:{substep}"
     return bid
 
@@ -1086,6 +1087,33 @@ def _ready_to_move_on(answer: str) -> bool:
     return learner_ready_to_proceed(answer, False)
 
 
+_GOAL_START_EXPLAIN = (
+    "Goal start: Explain what this topic is and why it matters. "
+    "Write it as teaching, not a question. Do not ask the goal question. Do not ask any question."
+)
+_GOAL_START_DEEPEN = (
+    "Goal start: The learner wants to keep learning. Explain this same topic more deeply, from a fresh angle. "
+    "Write it as teaching, not a question. Do not ask the goal question. Do not ask any question."
+)
+_GOAL_START_ASK = (
+    "Goal question: The learner moved on. Ask the opening question for this goal. "
+    "One question, and it comes last. Do not answer it."
+)
+
+
+def _goal_start_mode(block: dict, substep: str, *, opening: bool, last_answer: str) -> str:
+    """explain, deepen, or ask on the opening explanation. Empty once the question is open."""
+    if str(block.get("type") or "") != "topic_goal" or substep != "explain":
+        return ""
+    if opening:
+        return "explain"
+    from app.kc_loop import learner_done_with_explanation
+
+    if learner_done_with_explanation(last_answer):
+        return "ask"
+    return "deepen"
+
+
 def _summary_close_lines(
     *,
     phase: str,
@@ -1289,7 +1317,18 @@ def _this_turn(
         f"{step_line} Active turn kind: {turn_kind}.",
     ]
     outline = stored_outline(node)
-    if opening and step_index == 0:
+    goal_start = _goal_start_mode(block, substep, opening=opening, last_answer=last_answer)
+    if goal_start == "explain":
+        lines.append(_GOAL_START_EXPLAIN)
+        if opening and step_index == 0 and outline:
+            lines.append(
+                f"Component outline to weave into that explanation, not as a question: {_finish(outline)}"
+            )
+    elif goal_start == "deepen":
+        lines.append(_GOAL_START_DEEPEN)
+    elif goal_start == "ask":
+        lines.append(_GOAL_START_ASK)
+    elif opening and step_index == 0:
         if presenting:
             lines.append(
                 "Turn 1 Zero Dead Turns: Open Block 1 with a short lead-in only. "
@@ -1319,7 +1358,7 @@ def _this_turn(
         lines.append(
             "Turn Stance: Give a short lead-in for the choice card. Do not ask the multiple-choice question in the reply."
         )
-    elif turn_kind in {"orient", "ask"}:
+    elif turn_kind in {"orient", "ask"} and goal_start not in {"explain", "deepen"}:
         if instructional_stance == "direct_instruction_first":
             lines.append(
                 "Turn Stance (direct_instruction_first): Model the key rule or idea concisely before asking the block question."
@@ -1393,6 +1432,7 @@ def _this_turn(
         and str(block.get("type")) == "topic_goal"
         and not (unit_complete or course_complete)
         and not _ready_to_move_on(last_answer)
+        and goal_start not in {"explain", "deepen"}
     ):
         lines.append(
             "The learner answered with a 1-2 word fragment. Ask one follow-up to state the idea in a complete sentence before completing this block."
@@ -1566,6 +1606,7 @@ def _what_to_teach(
     active_block_state: dict,
     next_block: dict | None = None,
     opening: bool = False,
+    last_answer: str = "",
 ) -> list[str]:
     """Strict block isolation: injects ONLY the currently active block and its active substep."""
     btype = str(block.get("type") or "topic_goal").strip()
@@ -1583,6 +1624,13 @@ def _what_to_teach(
         lines.append(f"Acceptance criteria to check ( withhold until pass or reveal ): {_finish(criteria)}")
         if notes:
             lines.append(f"Teaching notes: {_finish(notes)}")
+        phase = _goal_start_mode(block, substep, opening=opening, last_answer=last_answer)
+        if phase == "ask":
+            lines.append("Ask the opening question for this goal now. Do not give the answer.")
+        elif phase in {"explain", "deepen"}:
+            lines.append(
+                "Explain what this topic is and why it matters. Do not ask the learner to state the goal yet."
+            )
 
     elif btype == "mcq":
         mode = str(data.get("mode") or "static").strip()
@@ -2135,6 +2183,7 @@ def _how_to_teach(
     presenting_dynamic_mcq: bool = False,
     close_block_only: bool = False,
     last_answer: str = "",
+    opening: bool = False,
 ) -> list[str]:
     over = cfg.get("overarching") or {}
     orient_mode = str(over.get("orient_framing") or "elaborate_outline")
@@ -2150,6 +2199,7 @@ def _how_to_teach(
     challenge_appetite = str(cp.get("challenge_appetite") or "steady")
 
     lines = _block_config_rules(block, substep, cfg, goal)
+    goal_start = _goal_start_mode(block, substep, opening=opening, last_answer=last_answer)
     move_on_close = str(block.get("type") or "") == "topic_goal" and substep == "main" and _ready_to_move_on(last_answer)
     if move_on_close:
         lines = [line for line in lines if "ask for the idea in a full sentence" not in line]
@@ -2170,6 +2220,8 @@ def _how_to_teach(
         lines.append(
             "Instructional stance (guided_discovery): one short concrete anchor, then a guiding question."
         )
+    if goal_start in {"explain", "deepen"}:
+        lines.append("On this goal-start turn that stance does not ask. Teach only. Do not ask yet.")
 
     if escalation == "socratic_probing":
         lines.append(
@@ -2290,6 +2342,13 @@ def _how_to_teach(
             lines.append(
                 "The learner already asked to move on. Close this block with a brief statement only. Do not ask a question."
             )
+        elif goal_start in {"explain", "deepen"}:
+            lines.append("Do not end this turn with a question. The goal question waits until the learner moves on.")
+        elif goal_start == "ask":
+            lines.append(
+                "Ask the opening question for this goal. One question, and it comes last. Do not answer it."
+            )
+            lines.append("End a teaching or probing turn with a single clear question.")
         else:
             q_line = "End a teaching or probing turn with a single clear question."
             if include_close:
@@ -2759,6 +2818,7 @@ def build_kc_prompt(
                 active_block_state=state_dict,
                 next_block=blocks[index + 1] if close_block_only else None,
                 opening=opening,
+                last_answer=last_answer,
             ),
             ),
             (
@@ -2783,6 +2843,7 @@ def build_kc_prompt(
                     presenting_dynamic_mcq=presenting_dynamic_mcq,
                     close_block_only=close_block_only,
                     last_answer=last_answer,
+                    opening=opening,
                 ),
             ),
             ("How to sound", _how_to_sound(profile=profile, student=student, turn_kind=turn_kind)),
