@@ -344,11 +344,11 @@ export function KcLesson({
             </button>
           ) : (
             <>
-              <button type="button" onClick={() => void sendAnswer("Got it — ready for the next topic!")}>
-                Got it — ready for the next topic!
-              </button>
               <button type="button" onClick={() => void sendAnswer("Can you elaborate with an example?")}>
-                Can you elaborate with an example?
+                Tell me more
+              </button>
+              <button type="button" onClick={() => void sendAnswer("Got it — ready for the next topic!")}>
+                Got it - move on
               </button>
             </>
           )}
