@@ -12,6 +12,7 @@ import { KcCourseChat } from "@/components/KcCourseChat";
 import { KcCourseTransfer } from "@/components/KcCourseTransfer";
 import { KcPipelinePanel } from "@/components/KcPipeline";
 import { KcStructureList } from "@/components/KcStructureList";
+import { PASTE_OVERRIDE_NOTE, intakeCutNotes, pasteOverridesDepth, pastedCurriculumCount } from "@/lib/kc-curriculum";
 import type { KcCourse, KcNetwork, KcPipeline, KcStructure } from "@/lib/kc";
 import type { PromptTurn } from "@/lib/kc-prompt-log";
 
@@ -42,6 +43,11 @@ export function KcStudio({
   const order = course?.components.map((item) => item.id) ?? [];
   const componentCount = initialStructure?.groups.reduce((sum, group) => sum + group.components.length, 0) ?? 0;
   const syllabus = [course?.intake.standard_text, course?.intake.source_text].filter(Boolean).join("\n");
+  const pasteNote =
+    course && pasteOverridesDepth(course.intake.depth, pastedCurriculumCount(course.intake.standard_text, course.intake.source_text))
+      ? PASTE_OVERRIDE_NOTE
+      : "";
+  const cutNotes = course ? intakeCutNotes(course.intake) : [];
 
   return (
     <CreatorDebugShell className="ds-shell studio-shell kc-screen" scope={promptScope} turn={promptTurn}>
@@ -111,6 +117,8 @@ export function KcStudio({
                         model={initialModel}
                         pipeline={initialPipeline}
                         componentCount={componentCount}
+                        pasteNote={pasteNote}
+                        cutNotes={cutNotes}
                       />
                     )}
                   </div>

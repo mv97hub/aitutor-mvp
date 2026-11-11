@@ -1,8 +1,12 @@
 "use client";
 
+import { useState } from "react";
+
 import { addKcComponent, deleteKcUnit, moveKcComponent, removeKcComponent } from "@/lib/kc-actions";
 import { blockSummary } from "@/lib/kc-blocks";
 import type { KcComponent, KcStructure } from "@/lib/kc";
+import { pipelineAction } from "@/lib/kc-pipeline";
+import { structureControls, unitsAfterStartOver, type StartOverChoice } from "@/lib/kc-structure";
 
 function rowStatus(row: { missing: string[]; marked_complete: boolean }) {
   if (row.missing.length) return row.missing.join(", ");
@@ -25,15 +29,61 @@ export function KcStructureList({
   mode?: "wizard" | "chat";
 }) {
   const unitGroups = (structure?.groups ?? []).filter((group) => typeof group.unit_index === "number");
+  const controls = structureControls(unitGroups.length);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  async function confirmStartOver(choice: StartOverChoice) {
+    const remaining = unitsAfterStartOver(unitGroups, choice);
+    const clearComponents = choice === "delete-components" && remaining.length === 0;
+    setResetOpen(false);
+    setResetError(null);
+    try {
+      await pipelineAction(courseId, "reset", { components: clearComponents });
+      const modeQuery = mode === "chat" ? "&mode=chat" : "";
+      window.location.assign(`/kc-studio?course=${courseId}${modeQuery}`);
+    } catch (error) {
+      setResetError(error instanceof Error ? error.message : "The draft did not reset.");
+    }
+  }
+
   return (
     <div className="kc-structure">
-      <h2>Course structure</h2>
+      <div className="kc-blueprint-row">
+        <h2>Course structure</h2>
+        {controls.startOver ? (
+          <button className="ghost" type="button" onClick={() => setResetOpen(true)}>
+            Start over
+          </button>
+        ) : null}
+      </div>
+      {resetError ? (
+        <p className="banner" role="alert">
+          {resetError}
+        </p>
+      ) : null}
+      {resetOpen ? (
+        <div className="kc-confirm" role="dialog" aria-modal="true" aria-label="Start over">
+          <p>Start over clears the draft. Deleting components also removes the ones already on this course.</p>
+          <div className="kc-pipeline-actions">
+            <button className="ghost" type="button" onClick={() => void confirmStartOver("draft")}>
+              Reset draft only
+            </button>
+            <button className="button" type="button" onClick={() => void confirmStartOver("delete-components")}>
+              Start over and delete components
+            </button>
+            <button className="ghost" type="button" onClick={() => setResetOpen(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
       {(structure?.groups ?? []).map((group, groupIndex) => (
         <section key={`${group.title ?? "group"}-${groupIndex}`} aria-label={group.title || "Components"}>
           {group.title ? (
             <div className="kc-blueprint-row">
               <h3>{group.title}</h3>
-              {typeof group.unit_index === "number" && unitGroups.length > 1 ? (
+              {typeof group.unit_index === "number" && controls.deleteUnit ? (
                 <form
                   action={deleteKcUnit}
                   onSubmit={(event) => {

@@ -2,7 +2,7 @@ import { api } from "@/lib/api";
 import type { KcBlueprint, KcPipeline } from "@/lib/kc";
 import { isKcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { checkedStageModel, generateStageObject } from "@/lib/kc-stage-model";
-import { encodeEvent, isStage, runStage, type StageBundle, type StageEvent } from "@/lib/kc-stage";
+import { encodeEvent, isStage, runStage, STAGE_TOKEN_LIMITS, type StageBundle, type StageEvent } from "@/lib/kc-stage";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -145,7 +145,7 @@ export async function POST(request: Request) {
             instructions: bundle.system_prompt,
             prompt: bundle.user_prompt,
             schema: bundle.schema,
-            maxOutputTokens: 16000,
+            maxOutputTokens: STAGE_TOKEN_LIMITS.unit,
             onPartial: () => undefined,
           },
           request.signal,

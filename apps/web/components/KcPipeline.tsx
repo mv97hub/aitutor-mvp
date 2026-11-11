@@ -37,11 +37,15 @@ export function KcPipelinePanel({
   model,
   pipeline,
   componentCount = 0,
+  pasteNote = "",
+  cutNotes = [],
 }: {
   courseId: string;
   model: string;
   pipeline: KcPipeline;
   componentCount?: number;
+  pasteNote?: string;
+  cutNotes?: string[];
 }) {
   const [state, setState] = useState(pipeline);
   const [modelId, setModelId] = useState(kcModel(model));
@@ -156,6 +160,12 @@ export function KcPipelinePanel({
 
   return (
     <div className="kc-pipeline">
+      {pasteNote ? <p className="ds-quiet">{pasteNote}</p> : null}
+      {cutNotes.map((note) => (
+        <p key={note} className="ds-quiet">
+          {note}
+        </p>
+      ))}
       {state.missing.length && state.stage === "brief" ? (
         <p className="ds-quiet">Fill in {state.missing.join(", ")} before drafting.</p>
       ) : null}

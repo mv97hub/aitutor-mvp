@@ -9,6 +9,7 @@ from app import block_catalog, kc, kc_model
 from app.kc_standards import MAX_STATEMENTS, coverage_matrix, parse_standard_text, statements_from_intake
 from app.kc_pipeline import (
     CHECKS,
+    components_of,
     INSTRUCTION_RULES,
     MAX_COMPONENTS,
     MAX_FOLLOW_UPS,
@@ -26,6 +27,7 @@ from app.kc_pipeline import (
     interpret_chat,
     missing_intake,
     review_bundle,
+    sentence_count,
     unit_bundle,
 )
 from app.main import app
@@ -106,7 +108,15 @@ def test_intake_defaults_caps_and_required_fields() -> None:
     assert intake["standard"] == ""
     assert intake["standard_grade"] == ""
     assert intake["standard_text"] == ""
-    assert len(clean_intake({"source_text": "x" * 30000})["source_text"]) == 20000
+    short_paste = clean_intake({"source_text": "x" * 30000})
+    assert len(short_paste["source_text"]) == 30000
+    assert short_paste["source_text_cut"] is False
+    cut = clean_intake({"source_text": "y" * 100_001, "standard_text": "z" * 100_001})
+    assert len(cut["source_text"]) == 100_000
+    assert len(cut["standard_text"]) == 100_000
+    assert cut["source_text_cut"] is True
+    assert cut["standard_text_cut"] is True
+    assert clean_intake(cut)["source_text_cut"] is True
     with pytest.raises(ValueError, match="Depth"):
         clean_intake({"depth": "huge"})
     with pytest.raises(ValueError, match="Component count"):
@@ -226,8 +236,21 @@ def test_an_edited_blueprint_keeps_codes_names_new_rows_and_checks_order() -> No
 def test_descriptions_are_plain_text_with_no_block_line() -> None:
     good = clean_description(_sentences("angle sum"))
     assert good.count(".") == 3
+    decimal = (
+        "The child can read 3.2 percent as a rate. "
+        "The idea is a part of one hundred. "
+        "A mix-up is treating the point as a stop."
+    )
+    assert sentence_count(decimal) == 3
+    assert clean_description(decimal) == decimal
+    assert sentence_count("The value is 3. 2 percent of the whole. The child can name it.") == 2
+    initial = "J. K. Rowling wrote the story. The child can name the author. A mix-up is another writer."
+    assert sentence_count(initial) == 3
+    assert clean_description("The child can name the sum. The idea is one hundred eighty degrees.")
+    seven = " ".join(f"Sentence {index} stands alone." for index in range(1, 8))
     for bad, message in (
-        ("One. Two.", "3 to 4 sentences"),
+        ("Only one sentence here.", "2 to 6 sentences"),
+        (seven, "2 to 6 sentences"),
         (_sentences("angle sum") + " Recommended blocks: 1. MCQ (angle sum) -> 2. Case Study (SSA).", "does not list blocks"),
         ("- Know the sum\n- Use the sum\n- Check the sum", "not a list"),
         ("", "empty"),
@@ -237,7 +260,7 @@ def test_descriptions_are_plain_text_with_no_block_line() -> None:
     assert "\n" not in clean_description("The child can state it.\nThe idea is simple.\nA mix-up is common.")
 
 
-def test_unit_prompt_sees_the_brief_the_blueprint_and_earlier_descriptions() -> None:
+def test_unit_prompt_has_outcomes_titles_and_only_this_unit() -> None:
     blueprint = assemble_blueprint(_model_blueprint(5), bounds=(4, 6), taken=set(), make_code=_slug)
     written = {item["code"]: _sentences(item["title"]) for item in blueprint["units"][0]["components"]}
     bundle = unit_bundle(
@@ -250,15 +273,18 @@ def test_unit_prompt_sees_the_brief_the_blueprint_and_earlier_descriptions() -> 
     )
     prompt = bundle["system_prompt"]
     assert "A brief about triangles." in prompt
+    assert "Course outcomes:" in prompt
     assert "- Name the angle sum." in prompt
-    assert "Unit 2 of 2: Congruence" in prompt
+    assert "Unit titles:" in prompt
+    assert "1. Angles" in prompt
+    assert "2. Congruence" in prompt
     assert "- idea-4: Idea 4 (needs: idea-3) - Teaches idea 4." in prompt
-    assert "Descriptions already written:" in prompt
-    assert f"- idea-1: {written['idea-1']}" in prompt
+    assert "Descriptions already written:" not in prompt
+    assert written["idea-1"] not in prompt
     assert "Write now: unit 2 of 2, Congruence." in prompt
+    assert "Components to describe:" in prompt
     assert INSTRUCTION_RULES in prompt
-    assert "3 to 4 sentences" in prompt
-    assert "Do not repeat or contradict the descriptions already written." in prompt
+    assert "2 to 6 sentences" in prompt
     codes = bundle["schema"]["properties"]["components"]["items"]["properties"]["code"]["enum"]
     assert codes == ["idea-4", "idea-5"]
 
@@ -271,7 +297,7 @@ def test_a_unit_result_must_describe_exactly_its_components() -> None:
         clean_unit({"components": result["components"][:1]}, codes)
     with pytest.raises(ValueError, match="not a component in this unit"):
         clean_unit({"components": [{"code": "idea-1", "description": _sentences("x")}]}, codes)
-    with pytest.raises(ValueError, match="3 to 4 sentences"):
+    with pytest.raises(ValueError, match="2 to 6 sentences"):
         clean_unit({"components": [{"code": "idea-4", "description": "Short."}]}, codes)
 
 
@@ -527,7 +553,12 @@ def test_the_staged_pipeline_runs_end_to_end_and_the_creator_gets_sibling_contex
 
         second = _stage(course_id, "unit", unit=1)
         assert second.status_code == 200
-        assert f"- {first_codes[0]}: {_sentences(first_codes[0])}" in second.json()["system_prompt"]
+        unit_prompt = second.json()["system_prompt"]
+        assert f"- {first_codes[0]}: {_sentences(first_codes[0])}" not in unit_prompt
+        assert "Course outcomes:" in unit_prompt
+        assert "Unit titles:" in unit_prompt
+        assert "Angles" in unit_prompt
+        assert "Congruence" in unit_prompt
         rest = [item["code"] for item in approved.json()["blueprint"]["units"][1]["components"]]
         unit_two = {"components": [{"code": code, "description": _sentences(code)} for code in rest]}
         done = _stage(course_id, "unit", unit_two, unit=1)
@@ -984,11 +1015,19 @@ def test_an_empty_unit_is_dropped_and_chat_keeps_untouched_descriptions() -> Non
         ],
     }
     interpreted = interpret_chat(proposal, blueprint=stored, descriptions=notes, statements=[], taken=set(), make_code=_slug)
-    assert interpreted["changes"]
-    assert any(line.startswith("Removed") for line in interpreted["changes"])
-    kept_codes = [item["code"] for item in kept["components"]]
+    assert [unit["title"] for unit in interpreted["blueprint"]["units"]] == ["Angles", "Congruence"]
+    kept_codes = [item["code"] for item in components_of(stored)]
     assert all(interpreted["descriptions"][code] == notes[code] for code in kept_codes)
-    assert "idea-4" not in interpreted["descriptions"] or interpreted["descriptions"].get("idea-4") != notes.get("idea-4")
+    removal = {
+        "reply": "Removed unit 2.",
+        "changed_codes": [],
+        "outcomes": stored["outcomes"],
+        "units": [{"title": "Congruence", "summary": "", "components": []}],
+    }
+    removed = interpret_chat(removal, blueprint=stored, descriptions=notes, statements=[], taken=set(), make_code=_slug)
+    assert [unit["title"] for unit in removed["blueprint"]["units"]] == ["Angles"]
+    assert any(line.startswith("Removed") for line in removed["changes"])
+    assert all(removed["descriptions"][code] == notes[code] for code in [item["code"] for item in kept["components"]])
     bundle = chat_bundle(
         course=_course(statements=[]),
         brief="A brief about triangles that is long enough.",
@@ -1001,6 +1040,8 @@ def test_an_empty_unit_is_dropped_and_chat_keeps_untouched_descriptions() -> Non
     )
     assert "Delete unit 2." in bundle["user_prompt"]
     assert "Course schema:" in bundle["system_prompt"]
+    assert "Return only the units you changed" in bundle["system_prompt"]
+    assert "Do not return the whole blueprint" in bundle["system_prompt"]
     assert INSTRUCTION_RULES not in bundle["system_prompt"]
     assert "Group components into units of 3 to 8" not in bundle["system_prompt"]
 
@@ -1112,6 +1153,11 @@ def test_chat_apply_changes_the_same_course_and_preview_does_not() -> None:
                 }
             ],
         }
+        kept_only = client.post(f"/kc/courses/{course_id}/chat/preview", json={"proposal": proposal})
+        assert kept_only.status_code == 200, kept_only.text
+        assert [unit["title"] for unit in kept_only.json()["blueprint"]["units"]] == ["Angles", "Congruence"]
+        proposal["units"].append({"title": "Congruence", "summary": "", "components": []})
+        proposal["reply"] = "Removed the congruence unit."
         preview = client.post(f"/kc/courses/{course_id}/chat/preview", json={"proposal": proposal})
         assert preview.status_code == 200, preview.text
         assert any("Removed" in line for line in preview.json()["changes"])
@@ -1123,6 +1169,8 @@ def test_chat_apply_changes_the_same_course_and_preview_does_not() -> None:
         assert prompt.status_code == 200, prompt.text
         assert "Delete unit 2." in prompt.json()["user_prompt"]
         assert "Angles" in prompt.json()["system_prompt"]
+        assert "Return only the units you changed" in prompt.json()["system_prompt"]
+        assert "Return the whole blueprint" not in prompt.json()["system_prompt"]
         assert INSTRUCTION_RULES not in prompt.json()["system_prompt"]
         applied = client.post(f"/kc/courses/{course_id}/chat/apply", json={"proposal": proposal})
         assert applied.status_code == 200, applied.text
@@ -1130,3 +1178,147 @@ def test_chat_apply_changes_the_same_course_and_preview_does_not() -> None:
         assert applied.json()["pipeline"]["brief"].startswith("A course on triangle congruence")
     finally:
         _wipe_zz()
+
+
+def _forty_two_units() -> str:
+    lines = []
+    for index in range(1, 43):
+        lines.append(f"Unit {index}: Topic {index}")
+        lines.append(f"{index}. Topic {index} about scarcity and choice.")
+    return "\n".join(lines)
+
+
+def _forty_two_plan(standards: list[dict] | None = None) -> dict:
+    return {
+        "outcomes": ["Explain scarcity.", "Use a supply curve."]
+        + [f"Apply topic {index}." for index in range(3, 10)],
+        "units": [
+            {
+                "title": f"Unit {index}",
+                "summary": f"Topic {index}.",
+                "components": [
+                    {
+                        "ref": f"c{index}",
+                        "title": f"Zz Topic {index}",
+                        "summary": f"Teaches topic {index}.",
+                        "prerequisites": [f"c{number}" for number in range(max(1, index - 5), index)] if index > 1 else [],
+                        "standards": [standards[index - 1]["code"]] if standards else [],
+                    }
+                ],
+            }
+            for index in range(1, 43)
+        ],
+    }
+
+
+def test_standard_depth_with_a_42_unit_paste_accepts_42_components() -> None:
+    """No model call. A Standard course follows the paste instead of 8 to 12."""
+    text = _forty_two_units()
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-standard-42",
+            "title": "AP Macroeconomics",
+            "description": OUTCOME,
+            "audience": "15-17",
+            "kind": "mastery",
+            "intake": {"depth": "standard", "source_text": text},
+        },
+    )
+    assert created.status_code == 200, created.text
+    course_id = created.json()["id"]
+    try:
+        brief = _stage(
+            course_id,
+            "brief",
+            {"brief": "A standard course that follows the pasted macroeconomics syllabus one topic at a time. " * 2, "questions": []},
+        )
+        assert brief.status_code == 200, brief.text
+        assert brief.json()["stage"] == "blueprint"
+        prompt = _stage(course_id, "blueprint")
+        assert prompt.status_code == 200, prompt.text
+        system = prompt.json()["system_prompt"]
+        assert "Return exactly 42 components." in system
+        assert "A longer paste overrides the depth." in system
+        assert "Return between 8 and 12" not in system
+        assert prompt.json()["combine"] == "blueprint"
+        assert len(prompt.json()["calls"]) == 42
+        assert "Return exactly 1 component" in prompt.json()["calls"][0]["system_prompt"]
+        assert "Return between 8 and 12" not in prompt.json()["calls"][0]["system_prompt"]
+        assert "Topic 42" not in prompt.json()["calls"][0]["system_prompt"]
+        short = _stage(course_id, "blueprint", _model_blueprint(13, title_prefix="Zz Idea"))
+        assert short.status_code == 422
+        assert "exactly 42" in short.json()["detail"]
+        assert "8 and 12" not in short.json()["detail"]
+        assert "Return between 8 and 12" not in short.json()["detail"]
+        saved = _stage(course_id, "blueprint", _forty_two_plan())
+        assert saved.status_code == 200, saved.text
+        units = saved.json()["blueprint"]["units"]
+        assert len(units) == 42
+        assert sum(len(unit["components"]) for unit in units) == 42
+        assert len(saved.json()["blueprint"]["outcomes"]) == 9
+        assert len(units[6]["components"][0]["prerequisites"]) == 5
+    finally:
+        _wipe_zz()
+
+
+def test_a_matched_curriculum_over_12_is_one_call_per_unit_and_review() -> None:
+    topics = [f"{index}. Topic {index} about scarcity and choice." for index in range(1, 16)]
+    text = "Unit 1: Opening\n" + "\n".join(topics[:5]) + "\nUnit 2: Middle\n" + "\n".join(topics[5:10]) + "\nUnit 3: Close\n" + "\n".join(topics[10:])
+    intake = clean_intake({"depth": "curriculum", "source_text": text})
+    statements = statements_from_intake(intake)
+    assert len(statements) == 15
+    course = _course(intake=intake, statements=statements)
+    bundle = blueprint_bundle(course=course, brief="B" * 50, model="gpt-4.1")
+    assert bundle["combine"] == "blueprint"
+    assert len(bundle["calls"]) == 3
+    assert "Return exactly 5 components" in bundle["calls"][0]["system_prompt"]
+    assert "Opening" in bundle["calls"][0]["system_prompt"]
+    assert "Topic 15" not in bundle["calls"][0]["system_prompt"]
+    plan = {
+        "outcomes": [f"Explain idea {index}." for index in range(1, 9)],
+        "units": [
+            {
+                "title": title,
+                "summary": title,
+                "components": [
+                    {
+                        "ref": f"c{number}",
+                        "title": f"Idea {number}",
+                        "summary": f"Teaches idea {number}.",
+                        "prerequisites": [f"c{earlier}" for earlier in range(max(1, number - 5), number)],
+                        "standards": [statements[number - 1]["code"]],
+                    }
+                    for number in numbers
+                ],
+            }
+            for title, numbers in (("Opening", range(1, 6)), ("Middle", range(6, 11)), ("Close", range(11, 16)))
+        ],
+    }
+    blueprint = assemble_blueprint(
+        plan, bounds=(15, 15), taken=set(), make_code=_slug, statements=statements, matched=True
+    )
+    assert len(blueprint["outcomes"]) == 8
+    descriptions = {
+        item["code"]: _sentences(item["title"]) + f" Unit note {item['title']}."
+        for unit in blueprint["units"]
+        for item in unit["components"]
+    }
+    review = review_bundle(
+        course=course, brief="B" * 50, blueprint=blueprint, descriptions=descriptions, model="gpt-4.1"
+    )
+    assert review["combine"] == "review"
+    assert len(review["calls"]) == 3
+    first_note = descriptions[blueprint["units"][0]["components"][0]["code"]]
+    assert first_note not in review["calls"][1]["system_prompt"]
+    assert "Opening" in review["calls"][1]["system_prompt"]
+    assert blueprint["units"][1]["components"][0]["code"] in review["calls"][1]["system_prompt"]
+    too_many = json.loads(json.dumps(plan))
+    too_many["units"][-1]["components"][-1]["prerequisites"] = [f"c{number}" for number in range(1, 14)]
+    with pytest.raises(ValueError, match="more than 12"):
+        assemble_blueprint(too_many, bounds=(15, 15), taken=set(), make_code=_slug, statements=statements, matched=True)
+    ordinary = _model_blueprint(6)
+    ordinary["units"][1]["components"][-1]["prerequisites"] = ["c1", "c2", "c3", "c4", "c5"]
+    with pytest.raises(ValueError, match="more than 4"):
+        assemble_blueprint(ordinary, bounds=(6, 6), taken=set(), make_code=_slug)

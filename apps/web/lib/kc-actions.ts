@@ -38,6 +38,8 @@ function intakeOf(formData: FormData) {
     interests: text("interests"),
     misconceptions_seen: text("misconceptions_seen"),
     source_text: text("source_text"),
+    source_text_cut: formData.get("source_text_cut") === "yes",
+    standard_text_cut: formData.get("standard_text_cut") === "yes",
   };
 }
 
