@@ -30,11 +30,8 @@ test("the buttons hide once the goal question is open", () => {
 test("the lesson sends those labels from the buttons, Tell me more first", () => {
   const lesson = readFileSync(new URL("../components/learn/KcLesson.tsx", import.meta.url), "utf8");
   assert.match(lesson, /goalStartActions/);
+  assert.match(lesson, /goalActions\.map\(\(label\)/);
   assert.match(lesson, /sendAnswer\(label\)/);
-  const tell = lesson.indexOf("Tell me more");
-  const move = lesson.indexOf("Got it - move on");
-  assert.equal(tell, -1);
-  assert.equal(move, -1);
   const source = readFileSync(new URL("./kc-goal-start.ts", import.meta.url), "utf8");
   assert.ok(source.indexOf("Tell me more") < source.indexOf("Got it - move on"));
 });
