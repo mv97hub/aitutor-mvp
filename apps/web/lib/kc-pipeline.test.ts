@@ -344,7 +344,7 @@ test("the course draft route streams with a token limit and a long duration", ()
   const model = readFileSync(new URL("./kc-stage-model.ts", import.meta.url), "utf8");
   assert.match(route, /maxDuration = 300/);
   assert.match(route, /application\/x-ndjson/);
-  assert.match(route, /STAGE_TOKEN_LIMITS\.unit/);
+  assert.match(route, /maxOutputTokens: STAGE_TOKEN_LIMITS\.blueprint/);
   assert.match(model, /maxOutputTokens: input.maxOutputTokens/);
   assert.match(model, /partialOutputStream/);
 });

@@ -53,8 +53,14 @@ STANDARDS: dict[str, dict[str, str]] = {
 }
 
 _CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9./-]{0,24}$")
-_BULLET = re.compile(r"^(?:[-*•]|\d+[.)])\s+")
-_LIST_ITEM = re.compile(r"^(?:[-*•]\s+|\d+(?:\.\d+)*[.)]?\s+)\S")
+# Hyphen, asterisk, bullet, en dash, em dash, middot, and the other marks a paste uses.
+_BULLET_MARK = r"[-*•–—·∙●○◦▪▸►‣⁃]"
+_BULLET = re.compile(rf"^(?:{_BULLET_MARK}|\d+[.)])\s+")
+# A topic line, with or without a bullet: "Topic 1.1", "1.1", "1.", "1)", "(1)", or a bullet mark.
+_LIST_ITEM = re.compile(
+    rf"^(?:{_BULLET_MARK}\s+|(?:topic\s+)?\d+(?:\.\d+)*[.):]?\s+|\(\d+(?:\.\d+)*\)\s+)\S",
+    re.IGNORECASE,
+)
 # Unit words, or a markdown heading. A dotted topic such as "1.2 Demand" is not a header.
 _UNIT_HEADER = re.compile(
     r"^(?:(?:unit|chapter|module|week|part|section|topic|lesson)\s+\d+\b"
@@ -149,11 +155,13 @@ def parse_syllabus(text: str) -> dict[str, Any]:
 def paste_count(text: str, *, syllabus: bool = False, flat: bool = False) -> int:
     """Units or statements in pasted text. A long list is counted, not rejected.
 
-    syllabus=True counts unit headers, and also a bulleted or numbered topic
-    list of at least two lines when there is no unit header. A prose paragraph
-    does not set the course size. flat=True also counts a single bulleted or
-    numbered line. The count is the larger of the unit headers and the topic
-    lines: one component per pasted topic, not one per header plus one per topic.
+    syllabus=True counts unit headers, and also a topic list of at least two
+    lines when there is no unit header. A topic line is a bullet (including an
+    en dash or a middot), a leading number in the usual shapes, or "Topic 1.1"
+    with no bullet. A prose paragraph does not set the course size. flat=True
+    also counts a single topic line. The count is the larger of the unit
+    headers and the topic lines: one component per pasted topic, not one per
+    header plus one per topic.
     """
     units = 0
     statements = 0

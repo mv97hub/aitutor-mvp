@@ -83,4 +83,8 @@ test("an AP Macro outline counts the numbered topics, and a flat list counts wit
   const numbered = Array.from({ length: 42 }, (_, index) => `${index + 1}. Topic ${index + 1} about scarcity and choice.`).join("\n");
   assert.equal(pastedCurriculumCount("", numbered), 42);
   assert.equal(pastedCurriculumCount("", "- Only one topic about scarcity."), 0);
+  const topics = Array.from({ length: 42 }, (_, index) => `Topic 1.${index + 1} Idea ${index + 1} about scarcity and choice.`).join("\n");
+  assert.equal(pastedCurriculumCount("", topics), 42);
+  const bullets = ["– 1.1 Scarcity", "— 1.2 Opportunity cost", "· 1.3 Comparative advantage"].join("\n");
+  assert.equal(pastedCurriculumCount("", bullets), 3);
 });

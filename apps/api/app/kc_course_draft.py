@@ -33,6 +33,7 @@ from app.kc_pipeline import (
     component_range,
     components_of,
     interpret_chat,
+    locked_paste_count,
     is_matched_curriculum,
     missing_intake,
     pipeline_state,
@@ -173,6 +174,7 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
             brief, questions = clean_brief(result, answered=bool(answers))
             pasted = statements_from_intake(intake)
             recall = bool(intake["standard"]) and not pasted
+            kept_paste = False
             if recall:
                 raw_statements = result.get("statements") if isinstance(result, dict) else None
                 if not raw_statements:
@@ -183,8 +185,14 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
                 statements = pasted
                 source = "pasted"
             else:
-                statements = []
-                source = ""
+                stored_statements = read_statements(goal.standards)
+                if stored_statements and paste_count(str(intake.get("source_text") or ""), syllabus=True) >= 2:
+                    statements = stored_statements
+                    source = "pasted"
+                    kept_paste = True
+                else:
+                    statements = []
+                    source = ""
             if intake["standard"]:
                 label = standard_label(intake["standard"], intake.get("standard_name") or "")
                 note = f"The standard is {label}, {intake['standard_grade']}."
@@ -198,7 +206,7 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
             goal.drafting = {
                 "questions": questions,
                 "answers": answers,
-                "standards_confirmed": not _statement_course(intake, statements),
+                "standards_confirmed": (not _statement_course(intake, statements)) or kept_paste,
                 "standards_source": source,
             }
         elif stage == "blueprint":
@@ -493,6 +501,15 @@ def course_chat_prompt(db: Session, goal: KcGoal, model: str, messages: list[dic
     )
 
 
+def _chat_lock(goal: KcGoal, statements: list) -> int | None:
+    return locked_paste_count(
+        clean_intake(goal.intake),
+        statements,
+        kind=goal.kind,
+        minutes=goal.minutes,
+    )
+
+
 def preview_chat(db: Session, goal: KcGoal, result: object) -> dict:
     """Describe a chat proposal without writing it."""
     drafting = _drafting(goal)
@@ -506,6 +523,7 @@ def preview_chat(db: Session, goal: KcGoal, result: object) -> dict:
             taken=set(_nodes_by_code(db)),
             make_code=slug_code,
             matched=is_matched_curriculum(clean_intake(goal.intake), statements),
+            locked_count=_chat_lock(goal, statements),
         )
     except ValueError as exc:
         raise _fail(422, str(exc)) from exc
@@ -530,6 +548,7 @@ def apply_chat(db: Session, goal: KcGoal, result: object) -> dict:
             taken=set(_nodes_by_code(db)),
             make_code=slug_code,
             matched=is_matched_curriculum(clean_intake(goal.intake), statements),
+            locked_count=_chat_lock(goal, statements),
         )
     except ValueError as exc:
         raise _fail(422, str(exc)) from exc

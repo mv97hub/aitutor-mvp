@@ -717,18 +717,17 @@ def create_course(
     _validate_course_fields(title=title, audience=audience, kind=kind, minutes=minutes)
     cleaned_intake = _clean_course_intake(intake)
     original = (description or "").strip()
-    had_paste = bool(
-        str(cleaned_intake.get("source_text") or "").strip() or str(cleaned_intake.get("standard_text") or "").strip()
-    )
+    source_before = str(cleaned_intake.get("source_text") or "").strip()
     stored_description, cleaned_intake = absorb_description_syllabus(original, cleaned_intake)
-    promoted = (
-        not had_paste
-        and paste_count(original, syllabus=True) >= 2
-        and bool(str(cleaned_intake.get("source_text") or "").strip())
+    source_after = str(cleaned_intake.get("source_text") or "").strip()
+    copied = (
+        paste_count(original, syllabus=True) >= 2
+        and source_after != source_before
+        and paste_count(source_after, syllabus=True) >= 2
     )
     standards = statements_from_intake(cleaned_intake)
-    if promoted:
-        filled = syllabus_statements(str(cleaned_intake.get("source_text") or ""))
+    if not standards and copied:
+        filled = syllabus_statements(source_after)
         if filled:
             standards = filled
     taken = set(_nodes_by_code(db)) | {goal.code for goal in db.scalars(select(KcGoal))}
@@ -783,24 +782,23 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
         # A paste the caller clears is remembered, so the blueprint does not plan Standard.
         goal.intake = note_missing_paste(clean_intake(current), _clean_course_intake({**current, **incoming}))
     intake_now = clean_intake(goal.intake)
-    had_paste = bool(
-        str(intake_now.get("source_text") or "").strip() or str(intake_now.get("standard_text") or "").strip()
-    )
+    source_before = str(intake_now.get("source_text") or "").strip()
     stored_description, intake_now = absorb_description_syllabus(original, intake_now)
     goal.description = stored_description
     goal.intake = intake_now
-    promoted = (
-        not had_paste
-        and paste_count(original, syllabus=True) >= 2
-        and bool(str(intake_now.get("source_text") or "").strip())
+    source_after = str(intake_now.get("source_text") or "").strip()
+    copied = (
+        paste_count(original, syllabus=True) >= 2
+        and source_after != source_before
+        and paste_count(source_after, syllabus=True) >= 2
     )
     if _brief_signature(goal) != before and (goal.brief or goal.blueprint or goal.drafting or goal.standards):
         goal.brief = ""
         goal.blueprint = {}
         goal.drafting = {}
         goal.standards = statements_from_intake(clean_intake(goal.intake))
-    if promoted:
-        filled = syllabus_statements(str(goal.intake.get("source_text") or ""))
+    if copied and not read_statements(goal.standards):
+        filled = syllabus_statements(source_after)
         if filled:
             goal.standards = filled
     if "allowed_block_types" in body:
