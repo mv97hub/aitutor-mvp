@@ -149,11 +149,11 @@ def parse_syllabus(text: str) -> dict[str, Any]:
 def paste_count(text: str, *, syllabus: bool = False, flat: bool = False) -> int:
     """Units or statements in pasted text. A long list is counted, not rejected.
 
-    syllabus=True counts source text only when it has unit headers, so a prose
-    source does not set the course size. flat=True counts bulleted or numbered
-    lines when there is no unit header. The count is the larger of the unit
-    headers and the topic lines: one component per pasted topic, not one per
-    header plus one per topic.
+    syllabus=True counts unit headers, and also a bulleted or numbered topic
+    list of at least two lines when there is no unit header. A prose paragraph
+    does not set the course size. flat=True also counts a single bulleted or
+    numbered line. The count is the larger of the unit headers and the topic
+    lines: one component per pasted topic, not one per header plus one per topic.
     """
     units = 0
     statements = 0
@@ -172,10 +172,39 @@ def paste_count(text: str, *, syllabus: bool = False, flat: bool = False) -> int
         if _LIST_ITEM.match(line):
             listed += 1
     if syllabus and units == 0:
+        if listed >= 2:
+            return listed
         return listed if flat else 0
     if units:
         return max(units, statements)
     return statements
+
+
+def syllabus_statements(text: str) -> list[dict[str, str]]:
+    """Topics from a pasted syllabus. A paragraph or a single line is an empty list."""
+    if paste_count(text, syllabus=True) < 2:
+        return []
+    try:
+        return list(parse_syllabus(text)["statements"])
+    except ValueError:
+        return []
+
+
+def syllabus_outcome(text: str) -> str:
+    """A short outcome sentence for a pasted syllabus of more than one topic."""
+    try:
+        parsed = parse_syllabus(text)
+    except ValueError:
+        parsed = {"units": [], "statements": []}
+    units = [unit for unit in parsed.get("units") or [] if str(unit.get("title") or "").strip()]
+    if len(units) >= 2:
+        return f"Work through {units[0]['title']} through {units[-1]['title']}."
+    if len(units) == 1:
+        return f"Work through {units[0]['title']}."
+    count = paste_count(text, syllabus=True)
+    if count > 1:
+        return f"Work through {count} pasted topics, one at a time."
+    return "Work through the pasted syllabus, one topic at a time."
 
 
 def clean_statements(raw: object) -> list[dict[str, str]]:

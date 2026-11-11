@@ -61,6 +61,15 @@ export function KcNewCourse() {
                 <textarea aria-label="New course description" name="description" rows={3} />
               </label>
               <label>
+                Syllabus or source text
+                <textarea
+                  aria-label="Syllabus or source text"
+                  name="source_text"
+                  rows={6}
+                  placeholder="Optional. Paste a unit outline or a numbered topic list."
+                />
+              </label>
+              <label>
                 Audience
                 <select aria-label="New course audience" name="audience" defaultValue="12-14">
                   {AUDIENCES.map((band) => (

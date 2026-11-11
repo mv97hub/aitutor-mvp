@@ -27,6 +27,7 @@ from app.kc_pipeline import (
     chat_bundle,
     clean_blueprint_edit,
     clean_brief,
+    INTAKE_TEXT_FIELDS,
     clean_intake,
     clean_unit,
     component_range,
@@ -40,10 +41,12 @@ from app.kc_pipeline import (
 )
 from app.kc_standards import (
     clean_statements,
+    paste_count,
     read_statements,
     standard_label,
     statements_from_intake,
     syllabus_requested,
+    syllabus_statements,
 )
 from app.models import KcNode
 from app.models import KcGoal
@@ -440,10 +443,13 @@ def _sync_chat_components(db: Session, goal: KcGoal, blueprint: dict, descriptio
 
 
 def course_chat_prompt(db: Session, goal: KcGoal, model: str, messages: list[dict]) -> dict:
-    """The prompt for one chat turn. The course is not changed."""
+    """The prompt for one chat turn.
+
+    A syllabus pasted in the chat is saved as source text when the course has
+    none, so the reply can make one component per pasted topic.
+    """
     chosen = _model(model)
-    course = _course(goal)
-    drafting = _drafting(goal)
+    paste_limit = INTAKE_TEXT_FIELDS["source_text"]
     cleaned: list[dict] = []
     for item in messages:
         if not isinstance(item, dict):
@@ -452,11 +458,31 @@ def course_chat_prompt(db: Session, goal: KcGoal, model: str, messages: list[dic
         if not content:
             continue
         role = "user" if item.get("role") == "user" else "assistant"
-        cleaned.append({"role": role, "content": content[:4000]})
+        cleaned.append({"role": role, "content": content[:paste_limit]})
     if not any(item["role"] == "user" for item in cleaned):
         raise _fail(422, "Say what you want to change.")
+    intake = clean_intake(goal.intake)
+    if not str(intake.get("source_text") or "").strip():
+        pasted = ""
+        best = 0
+        for item in cleaned:
+            if item["role"] != "user":
+                continue
+            count = paste_count(item["content"], syllabus=True)
+            if count >= 2 and count >= best:
+                pasted = item["content"]
+                best = count
+        if pasted:
+            intake = clean_intake({**intake, "source_text": pasted})
+            goal.intake = intake
+            statements = statements_from_intake(intake) or syllabus_statements(intake.get("source_text") or "")
+            if statements:
+                goal.standards = statements
+            goal.updated_at = _now()
+            db.flush()
+    drafting = _drafting(goal)
     return chat_bundle(
-        course=course,
+        course=_course(goal),
         brief=goal.brief or "",
         blueprint=_blueprint(goal),
         descriptions=dict(drafting.get("units") or {}),

@@ -72,12 +72,15 @@ Unit 6: Open Economy—International Trade and Finance
 * 6.6 Real Interest Rates and International Capital Flows
 `;
 
-test("an AP Macro outline counts the numbered topics, and a flat list counts when asked", () => {
+test("an AP Macro outline counts the numbered topics, and a flat list counts without unit headers", () => {
   assert.equal(pastedCurriculumCount("", AP_MACRO), 42);
   const flat = Array.from({ length: 13 }, (_, index) => `- Topic ${index + 1} about scarcity and choice.`).join("\n");
-  assert.equal(pastedCurriculumCount("", flat), 0);
+  assert.equal(pastedCurriculumCount("", flat), 13);
   assert.equal(pastedCurriculumCount("", flat, { alignSyllabus: true }), 13);
   assert.equal(pastedCurriculumCount("", flat, { depth: "curriculum" }), 13);
   const weeks = Array.from({ length: 13 }, (_, index) => `Week ${index + 1}: Topic ${index + 1} about scarcity.`).join("\n");
   assert.equal(pastedCurriculumCount("", weeks), 13);
+  const numbered = Array.from({ length: 42 }, (_, index) => `${index + 1}. Topic ${index + 1} about scarcity and choice.`).join("\n");
+  assert.equal(pastedCurriculumCount("", numbered), 42);
+  assert.equal(pastedCurriculumCount("", "- Only one topic about scarcity."), 0);
 });

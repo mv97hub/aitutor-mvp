@@ -13,6 +13,7 @@ from app.kc_pipeline import (
     INSTRUCTION_RULES,
     MAX_COMPONENTS,
     MAX_FOLLOW_UPS,
+    absorb_description_syllabus,
     apply_review,
     assemble_blueprint,
     blueprint_bundle,
@@ -199,8 +200,8 @@ def test_blueprint_refs_become_codes_and_bad_plans_are_rejected() -> None:
         assemble_blueprint(_model_blueprint(8), bounds=(4, 6), taken=set(), make_code=_slug)
     forward = _model_blueprint(5)
     forward["units"][0]["components"][0]["prerequisites"] = ["c3"]
-    with pytest.raises(ValueError, match="comes earlier"):
-        assemble_blueprint(forward, bounds=(4, 6), taken=set(), make_code=_slug)
+    dropped = assemble_blueprint(forward, bounds=(4, 6), taken=set(), make_code=_slug)
+    assert components_of(dropped)[0]["prerequisites"] == []
     twice = _model_blueprint(5)
     twice["units"][1]["components"][0]["title"] = "Idea 1"
     with pytest.raises(ValueError, match="distinct"):
@@ -226,8 +227,8 @@ def test_an_edited_blueprint_keeps_codes_names_new_rows_and_checks_order() -> No
     assert first[-1]["prerequisites"] == ["idea-1", "idea-2"]
     cycle = json.loads(json.dumps(stored))
     cycle["units"][0]["components"][0]["prerequisites"] = ["idea-2"]
-    with pytest.raises(ValueError, match="comes earlier"):
-        clean_blueprint_edit(cycle, taken=set(), make_code=_slug)
+    cleaned_cycle = clean_blueprint_edit(cycle, taken=set(), make_code=_slug)
+    assert cleaned_cycle["units"][0]["components"][0]["prerequisites"] == []
     gone = json.loads(json.dumps(stored))
     gone["units"] = []
     with pytest.raises(ValueError, match="at least one unit"):
@@ -1422,18 +1423,20 @@ def test_a_soft_depth_band_allows_a_few_past_the_high_and_an_exact_count_does_no
         assemble_blueprint(_model_blueprint(13), bounds=(12, 12), taken=set(), make_code=_slug, intake=typed)
 
 
-def test_a_flat_topic_list_counts_when_the_syllabus_is_requested() -> None:
+def test_a_flat_topic_list_counts_without_unit_headers() -> None:
     lines = [f"- Topic {index} about scarcity and choice." for index in range(1, 14)]
     flat = "\n".join(lines)
-    assert paste_count(flat, syllabus=True) == 0
+    assert paste_count(flat, syllabus=True) == 13
     assert paste_count(flat, syllabus=True, flat=True) == 13
     assert paste_count("A prose source with no unit headers.", syllabus=True) == 0
+    assert paste_count("- Only one topic about scarcity.", syllabus=True) == 0
+    assert paste_count("- Only one topic about scarcity.", syllabus=True, flat=True) == 1
     aligned = clean_intake({"depth": "standard", "align_syllabus": True, "source_text": flat})
     assert component_range(kind="mastery", minutes=None, intake=aligned) == (13, 13)
     curriculum = clean_intake({"depth": "curriculum", "source_text": flat})
     assert component_range(kind="mastery", minutes=None, intake=curriculum) == (13, 13)
     plain = clean_intake({"depth": "standard", "source_text": flat})
-    assert component_range(kind="mastery", minutes=None, intake=plain) == (8, 12)
+    assert component_range(kind="mastery", minutes=None, intake=plain) == (13, 13)
     weeks = "\n".join(f"Week {index}: Topic {index} about scarcity and choice." for index in range(1, 14))
     assert paste_count(weeks, syllabus=True) == 13
     week_intake = clean_intake({"depth": "standard", "source_text": weeks})
@@ -1584,12 +1587,16 @@ def test_ap_macro_is_six_units_and_a_title_or_forward_prerequisite_does_not_fail
         )
     unknown = json.loads(json.dumps(plan))
     unknown["units"][0]["components"][1]["prerequisites"] = ["Not a topic"]
-    with pytest.raises(ValueError, match="comes earlier"):
-        assemble_blueprint(unknown, bounds=(42, 42), taken=set(), make_code=_slug, matched=True, intake=intake)
+    dropped_unknown = assemble_blueprint(
+        unknown, bounds=(42, 42), taken=set(), make_code=_slug, matched=True, intake=intake
+    )
+    assert components_of(dropped_unknown)[1]["prerequisites"] == []
     forward = json.loads(json.dumps(plan))
     forward["units"][0]["components"][1]["prerequisites"] = ["short-run-vs-long-run-equilibrium"]
-    with pytest.raises(ValueError, match="comes earlier"):
-        assemble_blueprint(forward, bounds=(42, 42), taken=set(), make_code=_slug, matched=True, intake=intake)
+    dropped_forward = assemble_blueprint(
+        forward, bounds=(42, 42), taken=set(), make_code=_slug, matched=True, intake=intake
+    )
+    assert components_of(dropped_forward)[1]["prerequisites"] == []
 
     named = _review_prerequisites(built, rows[1]["code"], ["Scarcity"])
     assert components_of(named)[1]["prerequisites"] == [rows[0]["code"]]
@@ -1673,5 +1680,249 @@ def test_a_wiped_syllabus_paste_is_named_instead_of_planning_standard() -> None:
         assert ready.status_code == 200, ready.text
         assert "Return exactly 42 components" in ready.json()["system_prompt"]
         assert "Return between 8 and 12" not in ready.json()["system_prompt"]
+    finally:
+        _wipe_zz()
+
+
+def test_a_numbered_topic_list_counts_without_unit_headers() -> None:
+    numbered = "\n".join(f"{index}. Topic {index} about scarcity and choice." for index in range(1, 43))
+    assert paste_count(numbered, syllabus=True) == 42
+    bare = "\n".join(line for line in AP_MACRO.splitlines() if not line.startswith("Unit "))
+    assert paste_count(bare, syllabus=True) == 42
+    intake = clean_intake({"depth": "standard", "source_text": numbered})
+    assert component_range(kind="mastery", minutes=None, intake=intake) == (42, 42)
+    two = "1. Scarcity\n2. Opportunity cost and choice."
+    assert paste_count(two, syllabus=True) == 2
+    small = clean_intake({"depth": "standard", "source_text": two})
+    assert component_range(kind="mastery", minutes=None, intake=small) == (8, 12)
+
+
+def test_opportunity_cost_names_scarcity_by_title_slug_or_section_number() -> None:
+    plan = _model_blueprint(5)
+    plan["units"][0]["components"][0]["title"] = "1.1 Scarcity"
+    plan["units"][0]["components"][1]["title"] = "Opportunity Cost and the Production Possibilities Curve (PPC)"
+    plan["units"][0]["components"][1]["prerequisites"] = ["Scarcity"]
+    built = assemble_blueprint(plan, bounds=(4, 6), taken=set(), make_code=_slug)
+    rows = components_of(built)
+    assert rows[1]["prerequisites"] == [rows[0]["code"]]
+
+    numbered = json.loads(json.dumps(plan))
+    numbered["units"][0]["components"][1]["prerequisites"] = ["1-1-scarcity", "Not a topic"]
+    resolved = assemble_blueprint(numbered, bounds=(4, 6), taken=set(), make_code=_slug)
+    assert components_of(resolved)[1]["prerequisites"] == [components_of(resolved)[0]["code"]]
+
+    edited = json.loads(json.dumps(built))
+    edited["units"][0]["components"][1]["prerequisites"] = ["1.1 Scarcity", "Later capstone"]
+    cleaned = clean_blueprint_edit(edited, taken=set(), make_code=_slug)
+    assert cleaned["units"][0]["components"][1]["prerequisites"] == [rows[0]["code"]]
+
+    notes = {item["code"]: _sentences(item["title"]) for item in rows}
+    proposal = {
+        "reply": "Opportunity Cost still builds on Scarcity.",
+        "changed_codes": [rows[1]["code"]],
+        "outcomes": built["outcomes"],
+        "units": [
+            {
+                "title": built["units"][0]["title"],
+                "summary": built["units"][0]["summary"],
+                "components": [
+                    {
+                        "code": item["code"],
+                        "title": item["title"],
+                        "summary": item["summary"],
+                        "prerequisites": ["Scarcity"] if item["code"] == rows[1]["code"] else list(item["prerequisites"]),
+                        "standards": [],
+                        "description": None,
+                    }
+                    for item in built["units"][0]["components"]
+                ],
+            }
+        ],
+    }
+    interpreted = interpret_chat(
+        proposal, blueprint=built, descriptions=notes, statements=[], taken=set(), make_code=_slug
+    )
+    second = next(item for item in components_of(interpreted["blueprint"]) if item["code"] == rows[1]["code"])
+    assert second["prerequisites"] == [rows[0]["code"]]
+
+
+def test_ap_macro_in_the_outcome_box_locks_the_blueprint_to_42() -> None:
+    """A syllabus pasted as the outcome is stored as source text and counted as 42 topics."""
+    text, intake = absorb_description_syllabus(AP_MACRO, {"depth": "standard"})
+    assert text.startswith("Work through Basic Economic Concepts through ")
+    assert "1.1 Scarcity" not in text
+    assert paste_count(intake["source_text"], syllabus=True) == 42
+    kept, held = absorb_description_syllabus(AP_MACRO, {"depth": "standard", "source_text": "Notes about skateboards."})
+    assert "Unit 1:" in kept
+    assert held["source_text"] == "Notes about skateboards."
+
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-macro-outcome",
+            "title": "AP Macroeconomics",
+            "description": AP_MACRO,
+            "audience": "15-17",
+            "kind": "mastery",
+            "intake": {"depth": "standard"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    course_id = created.json()["id"]
+    try:
+        body = created.json()
+        assert paste_count(body["intake"]["source_text"], syllabus=True) == 42
+        assert body["description"].startswith("Work through Basic Economic Concepts through ")
+        assert len(body["standards"]) == 42
+        assert body["standards"][0]["text"] == "Scarcity"
+        assert body["standards"][1]["text"] == "Opportunity Cost and the Production Possibilities Curve (PPC)"
+        brief = _stage(
+            course_id,
+            "brief",
+            {"brief": "A standard course that follows the pasted macroeconomics syllabus one topic at a time. " * 2, "questions": []},
+        )
+        assert brief.status_code == 200, brief.text
+        prompt = _stage(course_id, "blueprint")
+        assert prompt.status_code == 200, prompt.text
+        assert "Return exactly 42 components" in prompt.json()["system_prompt"]
+        assert "Return between 8 and 12" not in prompt.json()["system_prompt"]
+        assert len(prompt.json()["calls"]) == 6
+        fresh = client.post(
+            "/kc/courses",
+            json={
+                "code": "zz-macro-update",
+                "title": "AP Macroeconomics",
+                "description": OUTCOME,
+                "audience": "15-17",
+                "kind": "mastery",
+                "intake": {"depth": "standard"},
+            },
+        )
+        assert fresh.status_code == 200, fresh.text
+        patched = client.patch(f"/kc/courses/{fresh.json()['id']}", json={"description": AP_MACRO})
+        assert patched.status_code == 200, patched.text
+        assert paste_count(patched.json()["intake"]["source_text"], syllabus=True) == 42
+        assert patched.json()["description"].startswith("Work through Basic Economic Concepts through ")
+        assert len(patched.json()["standards"]) == 42
+        held = client.post(
+            "/kc/courses",
+            json={
+                "code": "zz-macro-held",
+                "title": "AP Macroeconomics",
+                "description": AP_MACRO,
+                "audience": "15-17",
+                "kind": "mastery",
+                "intake": {"depth": "standard", "source_text": "Notes about skateboards."},
+            },
+        )
+        assert held.status_code == 200, held.text
+        assert held.json()["intake"]["source_text"] == "Notes about skateboards."
+        assert "Unit 1:" in held.json()["description"]
+        assert held.json()["standards"] == []
+    finally:
+        _wipe_zz()
+
+
+def test_a_syllabus_pasted_in_chat_is_saved_and_not_cut_at_4000() -> None:
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-macro-chat",
+            "title": "AP Macroeconomics",
+            "description": OUTCOME,
+            "audience": "15-17",
+            "kind": "mastery",
+            "intake": {"depth": "standard"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    course_id = created.json()["id"]
+    long = AP_MACRO.rstrip() + (" capital" * 300) + " ENDMARKER"
+    assert len(long) > 4000
+    assert paste_count(long, syllabus=True) == 42
+    try:
+        prompt = client.post(
+            f"/kc/courses/{course_id}/chat/prompt",
+            json={"model": "gpt-4.1", "messages": [{"role": "user", "content": long}]},
+        )
+        assert prompt.status_code == 200, prompt.text
+        system = prompt.json()["system_prompt"]
+        assert "42 components across the 6 units" in system
+        assert "1.1 Scarcity" in system
+        assert "ENDMARKER" in system
+        saved = client.get(f"/kc/courses/{course_id}").json()
+        assert paste_count(saved["intake"]["source_text"], syllabus=True) == 42
+        assert "ENDMARKER" in saved["intake"]["source_text"]
+        assert len(saved["standards"]) == 42
+        again = client.post(
+            f"/kc/courses/{course_id}/chat/prompt",
+            json={"model": "gpt-4.1", "messages": [{"role": "user", "content": "1. Alpha topic\n2. Beta topic"}]},
+        )
+        assert again.status_code == 200, again.text
+        kept = client.get(f"/kc/courses/{course_id}").json()
+        assert "1.1 Scarcity" in kept["intake"]["source_text"]
+        assert "ENDMARKER" in kept["intake"]["source_text"]
+    finally:
+        _wipe_zz()
+
+
+def test_chat_preview_resolves_scarcity_on_opportunity_cost() -> None:
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-scarcity",
+            "title": "AP Macroeconomics",
+            "description": OUTCOME,
+            "audience": "12-14",
+            "kind": "mastery",
+            "intake": {"depth": "intro"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    course_id = created.json()["id"]
+    try:
+        brief = "A course on scarcity and opportunity cost for twelve to fourteen year olds. " * 2
+        assert _stage(course_id, "brief", {"brief": brief, "questions": []}).status_code == 200
+        plan = _model_blueprint(5, title_prefix="Zz Idea")
+        plan["units"][0]["components"][0]["title"] = "1.1 Scarcity"
+        plan["units"][0]["components"][1]["title"] = "Opportunity Cost and the Production Possibilities Curve (PPC)"
+        plan["units"][0]["components"][1]["prerequisites"] = ["Scarcity"]
+        planned = _stage(course_id, "blueprint", plan)
+        assert planned.status_code == 200, planned.text
+        blueprint = planned.json()["blueprint"]
+        rows = [item for unit in blueprint["units"] for item in unit["components"]]
+        assert rows[0]["title"] == "1.1 Scarcity"
+        assert rows[1]["title"] == "Opportunity Cost and the Production Possibilities Curve (PPC)"
+        assert rows[1]["prerequisites"] == [rows[0]["code"]]
+        unit = blueprint["units"][0]
+        proposal = {
+            "reply": "Opportunity Cost still builds on Scarcity.",
+            "changed_codes": [rows[1]["code"]],
+            "outcomes": blueprint["outcomes"],
+            "units": [
+                {
+                    "title": unit["title"],
+                    "summary": unit["summary"],
+                    "components": [
+                        {
+                            "code": item["code"],
+                            "title": item["title"],
+                            "summary": item["summary"],
+                            "prerequisites": ["Scarcity", "Not a topic"] if item["code"] == rows[1]["code"] else item["prerequisites"],
+                            "standards": [],
+                            "description": None,
+                        }
+                        for item in unit["components"]
+                    ],
+                }
+            ],
+        }
+        preview = client.post(f"/kc/courses/{course_id}/chat/preview", json={"proposal": proposal})
+        assert preview.status_code == 200, preview.text
+        preview_rows = [item for unit in preview.json()["blueprint"]["units"] for item in unit["components"]]
+        assert preview_rows[1]["prerequisites"] == [rows[0]["code"]]
     finally:
         _wipe_zz()
