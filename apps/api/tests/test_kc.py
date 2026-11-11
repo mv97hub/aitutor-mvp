@@ -4209,6 +4209,103 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
     assert missed_recall.next_block_state["revealed_substep"] is True
 
 
+def test_first_move_on_and_next_part_finish_the_block() -> None:
+    from app.kc_loop import learner_ready_to_proceed, resolve_block_turn
+    from app.models import default_kc_tutor_config
+
+    for phrase in ("move on", "next part", "we can move to the next part", "move to the next part"):
+        assert learner_ready_to_proceed(phrase, False), phrase
+    assert not learner_ready_to_proceed("Why is the river blue?", False)
+    assert not learner_ready_to_proceed("Can you give me the background?", False)
+
+    topic = {
+        "id": "topic",
+        "type": "topic_goal",
+        "data": {"topic": "River color", "goal": "The river is blue.", "acceptance_criteria": "The river is blue."},
+    }
+    blocks = [topic, {"id": "next", "type": "topic_goal", "data": {"topic": "Next", "goal": "Explain next."}}]
+
+    def turn(answer: str, *, fragment: bool = False, move_attempts: int = 0):
+        return resolve_block_turn(
+            decision="stay",
+            substep_passed=False,
+            block_complete=False,
+            rubric_met=[],
+            stored_rubric=[],
+            matched_wrong="",
+            blocks=blocks,
+            step=0,
+            active_block_state={"substep": "main"},
+            block_results=[],
+            move_attempts=move_attempts,
+            hint_tier="nudge",
+            reveals=0,
+            enrichment_turns=0,
+            cfg=default_kc_tutor_config(),
+            goal=None,
+            last_misconception="",
+            answer=answer,
+            fragment=fragment,
+        )
+
+    for phrase in ("move on", "next part", "we can move to the next part"):
+        closed = turn(phrase, fragment=phrase in {"move on", "next part"})
+        assert closed.advance_block is True, phrase
+        assert closed.next_step == 1
+        assert closed.block_results[-1]["outcome"] == "revealed"
+        assert closed.next_block_state.get("substep") != "summary_check"
+
+    met = turn("The river is blue, so we can move on.")
+    assert met.advance_block is True
+    assert met.block_results[-1]["outcome"] == "passed"
+
+
+def test_a_question_or_background_request_does_not_count_as_a_miss() -> None:
+    from app.kc_loop import resolve_block_turn
+    from app.models import default_kc_tutor_config
+
+    topic = {
+        "id": "topic",
+        "type": "topic_goal",
+        "data": {"topic": "River color", "goal": "The river is blue.", "acceptance_criteria": "The river is blue."},
+    }
+    blocks = [topic, {"id": "next", "type": "topic_goal", "data": {"topic": "Next", "goal": "Explain next."}}]
+
+    def turn(answer: str, *, move_attempts: int = 0):
+        return resolve_block_turn(
+            decision="stay",
+            substep_passed=False,
+            block_complete=False,
+            rubric_met=[],
+            stored_rubric=[],
+            matched_wrong="",
+            blocks=blocks,
+            step=0,
+            active_block_state={"substep": "main"},
+            block_results=[],
+            move_attempts=move_attempts,
+            hint_tier="nudge",
+            reveals=0,
+            enrichment_turns=0,
+            cfg=default_kc_tutor_config(),
+            goal=None,
+            last_misconception="",
+            answer=answer,
+        )
+
+    for phrase in ("Why is the river blue?", "Can you give me the background?", "Tell me the background of this"):
+        stayed = turn(phrase, move_attempts=1)
+        assert stayed.advance_block is False, phrase
+        assert stayed.move_attempts == 1, phrase
+        assert stayed.next_block_state["substep"] == "main"
+        assert stayed.block_results == []
+
+    missed = turn("I think the river is red.")
+    assert missed.advance_block is False
+    assert missed.move_attempts == 1
+    assert missed.next_block_state["substep"] == "main"
+
+
 def test_session_block_progress_short_title() -> None:
     from types import SimpleNamespace
 
