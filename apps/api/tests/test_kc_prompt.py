@@ -126,9 +126,11 @@ def _bundle(**overrides: object) -> dict:
         "others_known": False,
     }
     values.update(overrides)
+    check_schema = bool(values.pop("check_schema", True))
     bundle = build_kc_prompt(**values)
     assert bundle["temperature"] == TEMPERATURE
-    assert bundle["response_schema"] == RESPONSE_SCHEMA
+    if check_schema:
+        assert bundle["response_schema"] == RESPONSE_SCHEMA
     return bundle
 
 
@@ -710,4 +712,63 @@ def test_a_non_topic_block_still_praises_on_a_nudge() -> None:
     assert "Active turn kind: nudge." in turn
     assert _UNCONDITIONAL_PRAISE in turn
     assert "Topic/goal feedback:" not in text
+
+
+def test_a_dynamic_mcq_reply_is_a_short_lead_in() -> None:
+    node = _node(
+        blocks=[
+            {
+                "id": "blk_1",
+                "type": "mcq",
+                "data": {
+                    "mode": "dynamic",
+                    "target_skill": "Name the river color",
+                    "distractor_guidance": "A color the river is not",
+                },
+            }
+        ],
+        misconceptions=[],
+    )
+    bundle = _bundle(node=node, opening=True, attempts=0, last_answer="", check_schema=False)
+    text = bundle["system_prompt"]
+    assert "reply is a short lead-in only" in text
+    assert "Put the question stem and the choices only in generated_mcq" in text
+    assert "do not ask the child to type a letter" in text
+    assert "You MUST populate generated_mcq with question_stem" in text
+    assert "The child will type." not in text
+    assert "reply is the only text the child reads." not in text
+    assert "End a teaching or probing turn with a single clear question." not in text
+    assert "ends with Block 1's question" not in text
+    description = bundle["response_schema"]["properties"]["reply"]["description"]
+    assert "short lead-in only" in description
+    assert "generated_mcq" in description
+    assert "The only text the child sees" not in description
+
+    before = _text(
+        node=_node(
+            blocks=[
+                {
+                    "id": "blk_1",
+                    "type": "topic_goal",
+                    "data": {"topic": "River color", "goal": "Explain the river color."},
+                },
+                {
+                    "id": "blk_2",
+                    "type": "mcq",
+                    "data": {
+                        "mode": "dynamic",
+                        "target_skill": "Name the river color",
+                        "distractor_guidance": "A color the river is not",
+                    },
+                },
+            ],
+            misconceptions=[],
+        ),
+        opening=True,
+        attempts=0,
+    )
+    assert "The child will type." in before
+    assert "If this reply opens the dynamic multiple choice, reply is a short lead-in only." in before
+    assert "do not ask the child to type a letter" in before
+    assert "question_stem" in before
 

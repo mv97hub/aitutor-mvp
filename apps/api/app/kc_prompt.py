@@ -441,6 +441,33 @@ def block_step_label(
     return base
 
 
+def _presenting_dynamic_mcq(block: dict, needs_dynamic_mcq: bool, active_block_state: dict | None) -> bool:
+    """The reply on this turn is the one that first shows a dynamic multiple choice."""
+    if not needs_dynamic_mcq:
+        return False
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    return (
+        str(block.get("type") or "") == "mcq"
+        and str(data.get("mode") or "static") == "dynamic"
+        and _cached_generated_mcq(active_block_state) is None
+    )
+
+
+def _dynamic_mcq_schema(schema: dict) -> dict:
+    """Reply schema for the turn that presents a dynamic multiple choice."""
+    reply = dict(schema["properties"]["reply"])
+    reply["description"] = (
+        "A short lead-in only. Do not include the question stem, the choices, "
+        "or a request to type a letter. Those belong in generated_mcq. "
+        "Include the unit close and the course outro when this turn ends the unit."
+    )
+    properties = dict(schema["properties"])
+    properties["reply"] = reply
+    copied = dict(schema)
+    copied["properties"] = properties
+    return copied
+
+
 def _cached_generated_mcq(active_block_state: dict | None) -> dict | None:
     """The dynamic question stored by speech or the previous decision."""
     if not isinstance(active_block_state, dict):
@@ -1116,33 +1143,47 @@ def _this_turn(
     active_block_state: dict | None = None,
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
-    mode_note = "The child will pick on screen." if choice_on_screen else "The child will type."
+    presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
+    mode_note = "" if presenting else ("The child will pick on screen." if choice_on_screen else "The child will type.")
+    step_line = f"Active step: {label}."
+    if mode_note:
+        step_line = f"{step_line} {mode_note}"
     lines = [
         "You are the knowledge-component tutor.",
-        f"Active step: {label}. {mode_note} Active turn kind: {turn_kind}.",
+        f"{step_line} Active turn kind: {turn_kind}.",
     ]
     outline = stored_outline(node)
     if opening and step_index == 0:
-        eff_orient = "brief_hook" if kind == "time_boxed" else orient_framing
-        if outline and eff_orient == "elaborate_outline":
+        if presenting:
             lines.append(
-                f"Turn 1 Zero Dead Turns: Begin with a 2-sentence elaboration of the component outline ({_finish(outline)}), "
-                "and immediately open Block 1 in the same reply so Turn 1 ends with Block 1's question or choice prompt."
-            )
-        elif outline and eff_orient == "brief_hook":
-            lines.append(
-                f"Turn 1 Zero Dead Turns: Begin with a 1-sentence hook from the component outline ({_finish(outline)}), "
-                "and immediately open Block 1 in the same reply."
+                "Turn 1 Zero Dead Turns: Open Block 1 with a short lead-in only. "
+                "Do not put the question or the choices in the reply."
             )
         else:
-            lines.append("Turn 1 Zero Dead Turns: Open Block 1 directly with its question or choice prompt.")
+            eff_orient = "brief_hook" if kind == "time_boxed" else orient_framing
+            if outline and eff_orient == "elaborate_outline":
+                lines.append(
+                    f"Turn 1 Zero Dead Turns: Begin with a 2-sentence elaboration of the component outline ({_finish(outline)}), "
+                    "and immediately open Block 1 in the same reply so Turn 1 ends with Block 1's question or choice prompt."
+                )
+            elif outline and eff_orient == "brief_hook":
+                lines.append(
+                    f"Turn 1 Zero Dead Turns: Begin with a 1-sentence hook from the component outline ({_finish(outline)}), "
+                    "and immediately open Block 1 in the same reply."
+                )
+            else:
+                lines.append("Turn 1 Zero Dead Turns: Open Block 1 directly with its question or choice prompt.")
     if transition_from_block is not None:
         prev_type = BLOCK_LABELS.get(str(transition_from_block.get("type") or ""), "previous block")
         lines.append(
             f"Block Transition: The learner just completed Block {step_index} ({prev_type}). "
             f"Briefly affirm their work on that block and immediately introduce {label} in this same reply."
         )
-    if turn_kind in {"orient", "ask"}:
+    if presenting and turn_kind in {"orient", "ask"}:
+        lines.append(
+            "Turn Stance: Give a short lead-in for the choice card. Do not ask the multiple-choice question in the reply."
+        )
+    elif turn_kind in {"orient", "ask"}:
         if instructional_stance == "direct_instruction_first":
             lines.append(
                 "Turn Stance (direct_instruction_first): Model the key rule or idea concisely before asking the block question."
@@ -1195,10 +1236,22 @@ def _this_turn(
             lines.append(
                 "Turn Feedback (process_praise): Praise the specific strategy or reasoning move the learner used."
             )
-    if needs_dynamic_mcq:
+    if presenting:
         lines.append(
-            "Dynamic MCQ Generation Required: Populate `generated_mcq` with a fresh question_stem, choices (a, b, c, ...), "
-            "correct_index, and distractor_rationales matching the active MCQ block's target_skill and distractor_guidance."
+            "Dynamic MCQ: reply is a short lead-in only. "
+            "Put the question stem and the choices only in generated_mcq, "
+            "with correct_index and distractor_rationales for this block's target_skill and distractor_guidance. "
+            "Do not list the options in reply, and do not ask the child to type a letter. "
+            "The choice card shows the stem and the choices."
+        )
+    elif needs_dynamic_mcq:
+        lines.append(
+            "Dynamic MCQ: If this reply opens the dynamic multiple choice, reply is a short lead-in only. "
+            "Put the question stem and the choices only in generated_mcq, "
+            "with correct_index and distractor_rationales for that block's target_skill and distractor_guidance. "
+            "Do not list the options in reply, and do not ask the child to type a letter. "
+            "The choice card shows the stem and the choices. "
+            "If this reply stays on the current block, keep teaching that block."
         )
     if fragment and fragment_self_explanation and str(block.get("type")) == "topic_goal" and not (unit_complete or course_complete):
         lines.append(
@@ -1546,7 +1599,10 @@ def _what_to_teach(
             lines.append(
                 f"For Block {step_index + 2} (dynamic MCQ), populate generated_mcq for target_skill="
                 f"{_finish(str(nb_data.get('target_skill') or ''))} and distractor_guidance="
-                f"{_finish(str(nb_data.get('distractor_guidance') or ''))}"
+                f"{_finish(str(nb_data.get('distractor_guidance') or ''))}. "
+                "If this reply opens that question, reply is a short lead-in only. "
+                "Put the question stem and the choices only in generated_mcq. "
+                "Do not list the options in reply, and do not ask the child to type a letter."
             )
     wrongs = _wrong_moves(node)
     if wrongs:
@@ -1910,6 +1966,7 @@ def _how_to_teach(
     has_misconceptions: bool,
     include_close: bool,
     student: Student | None = None,
+    presenting_dynamic_mcq: bool = False,
 ) -> list[str]:
     over = cfg.get("overarching") or {}
     orient_mode = str(over.get("orient_framing") or "elaborate_outline")
@@ -2050,7 +2107,7 @@ def _how_to_teach(
             "Explanatory block override: do not quiz, score, or reveal an answer. "
             "The only questions you ask are whether the learner has questions, wants elaboration, or is ready to continue."
         )
-    elif not choice_on_screen:
+    elif not choice_on_screen and not presenting_dynamic_mcq:
         q_line = "End a teaching or probing turn with a single clear question."
         if include_close:
             q_line += " A unit close or course outro asks no new question."
@@ -2134,12 +2191,21 @@ def _what_happened(
 def _what_to_return(
     *,
     needs_dynamic_mcq: bool = False,
+    presenting_dynamic_mcq: bool = False,
     block_type: str = "",
     safety: dict | None = None,
 ) -> list[str]:
+    if presenting_dynamic_mcq:
+        reply_line = (
+            "reply is a short lead-in only. "
+            "Put the question stem and the choices only in generated_mcq. "
+            "Do not list the options in reply, and do not ask the child to type a letter."
+        )
+    else:
+        reply_line = "reply is the only text the child reads."
     lines = [
         "Return reply, decision, substep_passed, block_complete, generated_mcq, rubric_met, misconception, hint_tier, help_requested, off_course, affect, confidence, score_justification, what_was_strong, and what_to_work_on.",
-        "reply is the only text the child reads.",
+        reply_line,
         (
             "decision is stay, advance, complete, or redirect. "
             "Set substep_passed=true when the learner's answer satisfies the active substep. "
@@ -2158,9 +2224,14 @@ def _what_to_return(
             "and substep_passed=true when they are ready to proceed. "
             "Set block_complete=true only on the summary check when they have no final questions. Never quiz."
         )
-    if needs_dynamic_mcq:
+    if presenting_dynamic_mcq:
         lines.append(
-            "Because the active block is a dynamic MCQ without a cached question, you MUST populate generated_mcq with question_stem, choices, correct_index, and distractor_rationales."
+            "You MUST populate generated_mcq with question_stem, choices, correct_index, and distractor_rationales."
+        )
+    elif needs_dynamic_mcq:
+        lines.append(
+            "If this reply opens the next dynamic MCQ, you MUST populate generated_mcq with question_stem, choices, correct_index, and distractor_rationales. "
+            "Otherwise set generated_mcq to null."
         )
     else:
         lines.append("Set generated_mcq to null when not generating a new dynamic MCQ.")
@@ -2259,11 +2330,12 @@ def build_kc_prompt(
     is_final_block_and_substep = is_last_block and is_last_substep
 
     data = active_block.get("data") if isinstance(active_block.get("data"), dict) else {}
-    needs_dynamic_mcq = (
+    presenting_dynamic_mcq = (
         btype == "mcq"
         and str(data.get("mode") or "static") == "dynamic"
         and _cached_generated_mcq(state_dict) is None
     )
+    needs_dynamic_mcq = presenting_dynamic_mcq
     if (
         not needs_dynamic_mcq
         and index + 1 < len(blocks)
@@ -2361,6 +2433,7 @@ def build_kc_prompt(
                     has_misconceptions=bool(_wrong_moves(node)),
                     include_close=include_close,
                     student=student,
+                    presenting_dynamic_mcq=presenting_dynamic_mcq,
                 ),
             ),
             ("How to sound", _how_to_sound(profile=profile, student=student, turn_kind=turn_kind)),
@@ -2388,6 +2461,7 @@ def build_kc_prompt(
                 "What to return",
                 _what_to_return(
                     needs_dynamic_mcq=needs_dynamic_mcq,
+                    presenting_dynamic_mcq=presenting_dynamic_mcq,
                     block_type=btype,
                     safety=safety_cfg,
                 ),
@@ -2396,7 +2470,7 @@ def build_kc_prompt(
     )
     return {
         "system_prompt": prompt,
-        "response_schema": RESPONSE_SCHEMA,
+        "response_schema": _dynamic_mcq_schema(RESPONSE_SCHEMA) if presenting_dynamic_mcq else RESPONSE_SCHEMA,
         "temperature": TEMPERATURE,
     }
 

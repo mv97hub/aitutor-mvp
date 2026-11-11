@@ -12,6 +12,13 @@ export const maxDuration = 60;
 const ANSWER_PROMPT =
   "The child's latest message is their answer. Return the decision object. The reply is the only text the child sees. Follow the system instructions. Do not set the type, the edges, or the score.";
 
+const ANSWER_DYNAMIC_PROMPT =
+  "The child's latest message is their answer. Return the decision object. If this reply opens a dynamic multiple choice, reply is a short lead-in only. Put the stem and the choices only in generated_mcq. Do not list options or ask the child to type a letter. Follow the system instructions. Do not set the type, the edges, or the score.";
+
+function answerPrompt(systemPrompt: string) {
+  return systemPrompt.includes("short lead-in only") ? ANSWER_DYNAMIC_PROMPT : ANSWER_PROMPT;
+}
+
 type TurnBundle = KcTutorSession & {
   system_prompt: string;
   response_schema: Record<string, unknown>;
@@ -126,7 +133,7 @@ export async function POST(req: Request) {
     const result = await generateText({
       model: wrapLanguageModel({ model: languageModel(modelName), middleware: captureRequest }),
       instructions: bundle.system_prompt,
-      prompt: ANSWER_PROMPT,
+      prompt: answerPrompt(bundle.system_prompt),
       temperature: bundle.temperature,
       output: Output.object({ schema: jsonSchema(bundle.response_schema) }),
     });
@@ -160,7 +167,7 @@ export async function POST(req: Request) {
   const added = [...session.messages].reverse().find((message) => message.role === "assistant");
   const stored = captured ?? {
     system_prompt: bundle.system_prompt,
-    messages: [{ role: "user", content: ANSWER_PROMPT }],
+    messages: [{ role: "user", content: answerPrompt(bundle.system_prompt) }],
     model: modelName,
   };
   try {

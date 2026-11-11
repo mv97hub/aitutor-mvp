@@ -2542,6 +2542,16 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         missed = _decide(dynamic["id"], "Red", decision="complete", reply="Try the other color.", block_complete=True)
         assert missed["passed"] is False
         assert missed["status"] == "in_progress"
+        stored = client.get(f"/kc/sessions/{dynamic['id']}")
+        assert stored.status_code == 200, stored.text
+        picked_text = next(
+            message["content"]
+            for message in reversed(stored.json()["messages"])
+            if message["role"] == "user"
+        )
+        assert picked_text.splitlines()[0] == "Red"
+        assert "a. Blue" in picked_text
+        assert "b. Red" in picked_text
         picked = _decide(dynamic["id"], "Blue", decision="complete", reply="Say why that color fits.", block_complete=True)
         assert picked["passed"] is False
         assert "Explain Why" in picked["step_label"]

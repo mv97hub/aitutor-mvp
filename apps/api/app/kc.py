@@ -3895,6 +3895,28 @@ def _mark_fragile(db: Session, session: KcSession, node: KcNode) -> None:
     session.score = MISS_SCORE
 
 
+def _choice_answer_text(answer: str, choice: dict) -> str:
+    """Selected label on the first line, then the options that were on screen.
+
+    Grading reads only the first line. Chats already stored are left unchanged.
+    """
+    selected = answer.splitlines()[0].strip()
+    trailing = [line.strip() for line in answer.splitlines()[1:] if line.strip()]
+    options: list[str] = []
+    for item in choice.get("choices") or []:
+        if not isinstance(item, dict):
+            continue
+        letter = str(item.get("id") or "").strip()
+        text = str(item.get("text") or "").strip()
+        if letter and text:
+            options.append(f"{letter}. {text}")
+        elif text:
+            options.append(text)
+    if not options:
+        return answer
+    return "\n".join([selected, *options, *trailing])
+
+
 def turn(db: Session, session: KcSession, answer: str) -> dict:
     """Store the child's answer and return the layer bundle. Scoring waits for the decision."""
     if session.status == "completed":
@@ -3902,7 +3924,14 @@ def turn(db: Session, session: KcSession, answer: str) -> dict:
     cleaned = answer.strip()
     if not cleaned:
         raise HTTPException(status_code=422, detail="Write an answer first.")
-    _add_message(db, session, "user", cleaned)
+    node = db.get(KcNode, session.kc_id)
+    _profile, _goal, messages, _fragment, cfg, _blocks, _index, block, state = _block_context(db, session, node)
+    substep = str(state.get("substep") or "")
+    choice = None
+    if block is not None and not _needs_speech(session, messages):
+        choice = on_screen_choice(block, substep, state, cfg)
+    content = _choice_answer_text(cleaned, choice) if choice else cleaned
+    _add_message(db, session, "user", content)
     session.updated_at = _now()
     body = session_out(db, session)
     body.update(prompt_for(db, session))
