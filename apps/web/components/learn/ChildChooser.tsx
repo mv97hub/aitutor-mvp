@@ -15,14 +15,24 @@ import {
   type ChildDraft,
   type LearnerCard,
 } from "@/lib/learn";
+import { LEARN_MOBILE } from "@/lib/learn-mobile";
 import type { Student } from "@/lib/types";
 
-export function ChildChooser({ learners, error }: { learners: LearnerCard[]; error: string | null }) {
+export function ChildChooser({
+  learners,
+  error,
+  basePath = "/learn",
+}: {
+  learners: LearnerCard[];
+  error: string | null;
+  basePath?: string;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const phone = basePath === LEARN_MOBILE;
 
   return (
-    <main className="learn-shell">
+    <main className={phone ? "learn-shell learn-mobile-shell" : "learn-shell"}>
       <BrandMark />
       <section className="learn-chooser">
         <p className="eyebrow">Child experience</p>
@@ -43,7 +53,7 @@ export function ChildChooser({ learners, error }: { learners: LearnerCard[]; err
                 key={student.id}
                 type="button"
                 className="learn-child-card"
-                onClick={() => router.push(`/learn/${student.id}`)}
+                onClick={() => router.push(`${basePath}/${student.id}`)}
               >
                 <ChildMark
                   name={student.display_name}
@@ -83,7 +93,7 @@ export function ChildChooser({ learners, error }: { learners: LearnerCard[]; err
           onClose={() => setOpen(false)}
           onCreated={(student) => {
             setOpen(false);
-            router.push(`/learn/${student.id}`);
+            router.push(`${basePath}/${student.id}`);
             router.refresh();
           }}
         />

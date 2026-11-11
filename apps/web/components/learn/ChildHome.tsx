@@ -20,6 +20,7 @@ import {
   sumStars,
   type ChildDraft,
 } from "@/lib/learn";
+import { LEARN_MOBILE } from "@/lib/learn-mobile";
 import type { Student, TutorProfile } from "@/lib/types";
 
 export function ChildHome({
@@ -27,12 +28,15 @@ export function ChildHome({
   courses,
   tutors,
   error,
+  basePath = "/learn",
 }: {
   student: Student;
   courses: KcTutorCourse[];
   tutors: TutorProfile[];
   error: string | null;
+  basePath?: string;
 }) {
+  const phone = basePath === LEARN_MOBILE;
   const router = useRouter();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [picker, setPicker] = useState<{ course: KcTutorCourse; mode: "start" | "change" } | null>(null);
@@ -58,7 +62,7 @@ export function ChildHome({
         method: "POST",
         body: JSON.stringify({ student_id: student.id, course_id: courseId }),
       });
-      router.push(`/learn/${student.id}/course/${courseId}`);
+      router.push(`${basePath}/${student.id}/course/${courseId}`);
       router.refresh();
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Could not open that course.");
@@ -90,7 +94,7 @@ export function ChildHome({
         });
         const courseId = picker.course.id;
         setPicker(null);
-        router.push(`/learn/${student.id}/course/${courseId}`);
+        router.push(`${basePath}/${student.id}/course/${courseId}`);
         router.refresh();
       }
     } catch (err) {
@@ -101,7 +105,7 @@ export function ChildHome({
   }
 
   return (
-    <main className="learn-shell">
+    <main className={phone ? "learn-shell learn-mobile-shell" : "learn-shell"}>
       <BrandMark />
       <header className="learn-home-bar">
         <div className="learn-who">
@@ -113,7 +117,7 @@ export function ChildHome({
           />
           <div>
             <h1>Hi, {student.display_name}!</h1>
-            <Link href="/learn" className="learn-switch">
+            <Link href={basePath} className="learn-switch">
               Switch learner
             </Link>
           </div>
