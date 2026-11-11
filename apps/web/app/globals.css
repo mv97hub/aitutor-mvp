@@ -552,6 +552,15 @@ textarea { min-height: 88px; resize: vertical; }
 .score-list li, .transcript-list li { padding: 10px 12px; border-radius: 12px; background: var(--paper); }
 .transcript-list .user { background: #f6e7c8; }
 
+.transcript-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transcript-actions > div:first-child { flex: 1; min-width: 0; }
+
 .transcript-line {
   display: flex;
   align-items: flex-start;

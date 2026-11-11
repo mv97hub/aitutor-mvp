@@ -15,6 +15,7 @@ import {
   type SafetyEvent,
   type SafetyEventPage,
 } from "@/lib/ai-safety";
+import { downloadKcChat } from "@/lib/kc-chat-download";
 import type { KcChatDetail, KcChatSummary } from "@/lib/kc";
 import type { Student } from "@/lib/types";
 
@@ -145,7 +146,15 @@ export function ViewKcChats({
         </div>
       ) : null}
       {session ? (
-        <SessionView session={session} debug />
+        <SessionView
+          session={session}
+          debug
+          actions={
+            <button type="button" className="ghost" onClick={() => downloadKcChat(session)}>
+              Download
+            </button>
+          }
+        />
       ) : (
         <article className="transcript-view">
           <h2>Pick a chat</h2>
