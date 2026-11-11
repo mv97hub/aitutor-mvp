@@ -11,7 +11,13 @@ from __future__ import annotations
 import copy
 import re
 
-from app.block_catalog import BLOCK_AUTHORING_RULES, BLOCK_DATA_SCHEMAS, BLOCK_LABELS
+from app.block_catalog import (
+    BLOCK_AUTHORING_RULES,
+    BLOCK_DATA_SCHEMAS,
+    BLOCK_LABELS,
+    PASSAGE_LENGTH_GUIDELINES,
+)
+from app.kc_blocks import clean_passage_ela_data, passage_ela_gap, passage_paragraphs
 from app.kc_pipeline import passage_ela_generation_lines
 from app.models import ALL_BLOCK_TYPES
 
@@ -333,6 +339,240 @@ def _link_line(label: str, items: list[dict]) -> str:
     return f"{label}: {shown or 'none'}"
 
 
+_PASSAGE_PLACEHOLDER = re.compile(r"read the following passage\b", re.IGNORECASE)
+_WORD = re.compile(r"\b[\w']+\b")
+_ABOUT = re.compile(r"\b(?:about|on)\s+(.+)$", re.IGNORECASE)
+_SUBJECT_STOP = re.compile(r"\s+\b(?:and|so that|while|by)\b", re.IGNORECASE)
+_ARGUMENT = re.compile(r"\b(argument|argumentative|persuade|persuasive|editorial|opinion)\b", re.IGNORECASE)
+_PRIMARY = re.compile(r"\b(primary source|historical document|diary|speech)\b", re.IGNORECASE)
+_LITERARY = re.compile(r"\b(story|stories|character|poem|novel|fiction|narrative|literary)\b", re.IGNORECASE)
+
+_ANALYSIS_FOR_GENRE = {
+    "argumentative": "evaluate_argument",
+    "literary": "author_purpose_structure",
+    "historical_primary": "inference",
+    "informational": "inference",
+}
+
+
+def passage_paragraph_bounds(audience: str) -> tuple[int, int]:
+    """Paragraph count for a course audience, using the passage grade bands.
+
+    Ages 6-11 follow Grades 3-5. Ages 12-14 follow Grades 6-8. Ages 15-17 follow Grades 9-12.
+    """
+    band = (audience or "").strip()
+    if band == "15-17":
+        return 3, 4
+    if band == "12-14":
+        return 2, 3
+    return 1, 2
+
+
+def passage_word_bounds(audience: str) -> tuple[int, int]:
+    """Word count that goes with passage_paragraph_bounds for this audience."""
+    _low, high = passage_paragraph_bounds(audience)
+    if high <= 2:
+        return 100, 180
+    if high <= 3:
+        return 200, 320
+    return 320, 450
+
+
+def _word_count(text: str) -> int:
+    return len(_WORD.findall(text or ""))
+
+
+def passage_subject(description: str) -> str:
+    """A short topic phrase taken from the component description."""
+    text = " ".join((description or "").split()).strip().rstrip(".")
+    if not text:
+        return "this idea"
+    match = _ABOUT.search(text)
+    if match:
+        subject = _SUBJECT_STOP.split(match.group(1).strip(), maxsplit=1)[0]
+        subject = subject.strip(" .,:;\"'")
+        if subject:
+            text = subject
+    words = text.split()
+    if len(words) > 8:
+        words = words[:8]
+    subject = " ".join(words).strip()
+    if not subject:
+        return "this idea"
+    return subject[:1].lower() + subject[1:]
+
+
+def passage_genre_for(description: str) -> str:
+    """The passage genre named by the description, or informational."""
+    text = description or ""
+    if _ARGUMENT.search(text):
+        return "argumentative"
+    if _PRIMARY.search(text):
+        return "historical_primary"
+    if _LITERARY.search(text):
+        return "literary"
+    return "informational"
+
+
+def _passage_title(subject: str) -> str:
+    words = [word for word in subject.split() if word]
+    if not words:
+        return "Reading passage"
+    return " ".join(word[:1].upper() + word[1:] for word in words)[:160]
+
+
+def _passage_groups(subject: str) -> list[list[str]]:
+    """Sentences for up to four paragraphs. The first sentence of each paragraph can be quoted."""
+    name = subject[:1].upper() + subject[1:]
+    lower = subject
+    return [
+        [
+            f"{name} begins where a reader can point, in a place with a person and one clear action.",
+            "A brass key sits on the table in the first scene.",
+            "The key is real, and it is small.",
+            "A reader who stops there knows a fact, not the idea the rest of the passage builds.",
+            f"That opening keeps {lower} concrete, so the later scenes have something to return to.",
+        ],
+        [
+            f"The next scene returns to {lower} in a new place.",
+            "What stays the same is the idea, and what changes is the setting.",
+            "A careful reader checks the first guess against this new scene.",
+            "If the guess only fit the first object, it is too small to be the central idea.",
+            "The passage keeps both scenes so the reader can tell a detail from the thread that runs through them.",
+            "A second example arrives, then a third, and each one does the same kind of work.",
+        ],
+        [
+            "By the middle of the passage, the same kind of work shows up again.",
+            "The repeated work is the evidence, and it is not a list of unrelated events.",
+            "Each return shows the idea holding, even when the surface looks different.",
+            "A reader can cite those returns because the words sit on the page in full sentences.",
+            "One moment is quiet, the next is busy, and both point back to the same cause.",
+            "Seeing the pair together is what turns a single fact into a central idea.",
+        ],
+        [
+            "The ending does not add a new topic.",
+            f"The scenes, taken together, show {lower} at work.",
+            "The first object is still true, and it is still minor next to the larger change.",
+            "The central idea is the thread, not the key on the table.",
+            "A reader who can say that thread in their own words has used the whole passage, not one line of it.",
+            "The last picture is quiet: the people are still there, the action has finished, and the cause is the one named at the start.",
+            "Nothing in the close asks the reader to leave the passage for a definition.",
+            "The proof is the set of scenes, read in order, each one adding to the same point.",
+        ],
+    ]
+
+
+def draft_passage_ela_block(description: str, audience: str, block_id: str = "blk_passage") -> dict:
+    """One filled passage_ela block written from the topic description."""
+    subject = passage_subject(description)
+    genre = passage_genre_for(description)
+    count = passage_paragraph_bounds(audience)[1]
+    groups = _passage_groups(subject)[:count]
+    paragraphs = [" ".join(group) for group in groups]
+    passage_text = "\n\n".join(paragraphs)
+    quotes = [groups[0][0], groups[-1][0]]
+    focus = _ANALYSIS_FOR_GENRE.get(genre, "inference")
+    data = clean_passage_ela_data(
+        {
+            "passage_title": _passage_title(subject),
+            "passage_genre": genre,
+            "passage_text": passage_text,
+            "central_idea_question": "What is the central idea of this passage?",
+            "expected_central_idea": (
+                f"The central idea is that {subject} ties the scenes together, "
+                "and the brass key is only a minor detail."
+            ),
+            "distractor_detail": "A brass key sits on the table in the first scene.",
+            "evidence_prompt": "Cite two sentences from the passage that support the central idea.",
+            "verbatim_evidence_quotes": quotes,
+            "analysis_focus": focus,
+            "analysis_question": f"What can a reader infer about {subject} from the way the passage ends?",
+            "expected_analysis": (
+                f"The ending shows that {subject} holds the scenes together, "
+                "so the central idea is that thread rather than the brass key."
+            ),
+        }
+    )
+    return {"id": block_id or "blk_passage", "type": "passage_ela", "data": data}
+
+
+def _ready_passage(block: dict, audience: str) -> dict | None:
+    """A model passage that already has the text, the quotes, and the three questions."""
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    text = str(data.get("passage_text") or "")
+    if _PASSAGE_PLACEHOLDER.search(text) or _word_count(text) < 40:
+        return None
+    cleaned = clean_passage_ela_data(data)
+    if passage_ela_gap(cleaned):
+        return None
+    low, high = passage_paragraph_bounds(audience)
+    count = len(passage_paragraphs(cleaned["passage_text"]))
+    if count < low or count > high:
+        return None
+    block_id = str(block.get("id") or "").strip() or "blk_passage"
+    return {"id": block_id, "type": "passage_ela", "data": cleaned}
+
+
+def draft_scoped_blocks(
+    description: str,
+    audience: str,
+    allowed_block_types: list[str] | None,
+    blocks: list[dict] | None = None,
+) -> list[dict]:
+    """Keep the other blocks. Add one passage_ela block when that type is in scope."""
+    allowed = clean_allowed_block_types(allowed_block_types)
+    incoming = [block for block in (blocks or []) if isinstance(block, dict)]
+    if "passage_ela" not in allowed:
+        return [block for block in incoming if str(block.get("type") or "") != "passage_ela"]
+    kept: list[dict] = []
+    placed = False
+    fallback_id = "blk_passage"
+    seen_passage = False
+    for block in incoming:
+        if str(block.get("type") or "") != "passage_ela":
+            kept.append(block)
+            continue
+        if not seen_passage:
+            fallback_id = str(block.get("id") or "").strip() or fallback_id
+            seen_passage = True
+        if placed:
+            continue
+        ready = _ready_passage(block, audience)
+        if ready is None:
+            continue
+        kept.append(ready)
+        placed = True
+    if not placed:
+        kept.append(draft_passage_ela_block(description, audience, fallback_id))
+    return kept
+
+
+def _passage_scope_lines(allowed: list[str], audience: str) -> list[str]:
+    if "passage_ela" not in allowed:
+        return []
+    low, high = passage_paragraph_bounds(audience)
+    low_words, high_words = passage_word_bounds(audience)
+    return [
+        "passage_ela is in this course's AI Block Scope. "
+        "Emit exactly one passage_ela block for this component. "
+        "Write passage_text as an original passage from this component's description. "
+        'It is not a placeholder such as "Read the following passage about...". '
+        f"This course audience is {audience or 'unspecified'}. "
+        f"Use {low} to {high} paragraphs (about {low_words} to {high_words} words), "
+        "with a blank line between paragraphs. "
+        f"{PASSAGE_LENGTH_GUIDELINES} "
+        "Set passage_title and passage_genre from that description. "
+        "passage_genre is informational, literary, argumentative, or historical_primary. "
+        "Fill the three questions on that same block. "
+        "Central idea: central_idea_question, expected_central_idea, and distractor_detail "
+        "(a true but minor detail from one paragraph). "
+        "Cite evidence: evidence_prompt and two or three verbatim_evidence_quotes copied exactly from passage_text. "
+        "Craft or inference: analysis_focus, analysis_question, and expected_analysis. "
+        "Do not put the reading in a worked example, and do not name a passage without writing it. "
+        "Other allowed block types stay as they are."
+    ]
+
+
 def creator_bundle(
     *,
     course_title: str,
@@ -407,7 +647,8 @@ def creator_bundle(
         lines.extend(["Course brief:", course_brief.strip()])
     if outcome_lines:
         lines.extend(["Course outcomes:", outcome_lines])
-    lines.extend(passage_ela_generation_lines(course_title, course_description, audience))
+    if "passage_ela" in allowed:
+        lines.extend(passage_ela_generation_lines(course_title, course_description, audience))
     lines.append(f"Component: {node_title} ({node_code})")
     if (position or "").strip():
         lines.append(f"Position: {position.strip()}")
@@ -441,6 +682,7 @@ def creator_bundle(
             "Do not generate any other block type.",
             "Allowed block type specifications:",
             allowed_rules,
+            *_passage_scope_lines(allowed, audience),
             "Return an ordered blocks[] array of 1 to 6 blocks using only the allowed block types, "
             "the outline in the outline field, the core_truth, misconceptions, prerequisites, and encompasses.",
             _creator_links(other_codes),
