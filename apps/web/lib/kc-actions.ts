@@ -54,6 +54,7 @@ function creatorBack(courseId: string, nodeId: string, formData: FormData) {
 
 export async function createKcCourse(formData: FormData) {
   let created: KcCourse | null = null;
+  const sourceText = String(formData.get("source_text") || "").trim();
   try {
     created = await api<KcCourse>("/kc/courses", {
       method: "POST",
@@ -63,6 +64,7 @@ export async function createKcCourse(formData: FormData) {
         audience: String(formData.get("audience") || "12-14"),
         kind: String(formData.get("kind") || "mastery"),
         minutes: minutesOf(formData),
+        ...(sourceText ? { intake: { source_text: sourceText } } : {}),
       }),
     });
   } catch (error) {

@@ -22,6 +22,7 @@ from app.kc_standards import (
     standard_label,
     statement_lines,
     statements_from_intake,
+    syllabus_outcome,
     syllabus_requested,
     syllabus_units,
 )
@@ -328,6 +329,22 @@ def clean_intake(raw: object) -> dict:
         except (TypeError, ValueError):
             cleaned["paste_topics"] = 0
     return cleaned
+
+
+def absorb_description_syllabus(description: str, intake: dict) -> tuple[str, dict]:
+    """Copy a syllabus pasted into the outcome box into source text.
+
+    Source text or standard text that is already set stays as it is. A paste
+    of more than one topic leaves a short outcome sentence in the description.
+    """
+    text = str(description or "").strip()
+    cleaned = clean_intake(intake)
+    if str(cleaned.get("source_text") or "").strip() or str(cleaned.get("standard_text") or "").strip():
+        return text, cleaned
+    if paste_count(text, syllabus=True) < 2:
+        return text, cleaned
+    stored = clean_intake({**cleaned, "source_text": text})
+    return syllabus_outcome(text), stored
 
 
 def missing_intake(*, title: str, description: str, audience: str, intake: dict) -> list[str]:
@@ -900,20 +917,46 @@ def _clean_outcomes(value: object, *, limit: int = MAX_OUTCOMES) -> list[str]:
     return outcomes
 
 
-def _match_earlier(key: str, earlier: list[dict]) -> str:
-    """The code of an earlier component named by ref, code, or title."""
-    cleaned = _clean_text(key)
+_SECTION_PREFIX = re.compile(r"^(?:\d+(?:\.\d+)+|\d+[.)])\s+")
+
+
+def _slug_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+
+
+def _name_forms(value: str) -> set[str]:
+    """Case-insensitive title, the title without a leading section number, and its slug."""
+    cleaned = _clean_text(value)
     if not cleaned:
+        return set()
+    forms = {cleaned.casefold()}
+    stripped = _SECTION_PREFIX.sub("", cleaned).strip()
+    if stripped and stripped.casefold() != cleaned.casefold():
+        forms.add(stripped.casefold())
+    for item in (cleaned, stripped):
+        slug = _slug_key(item)
+        if slug:
+            forms.add(slug)
+    return forms
+
+
+def _match_earlier(key: str, earlier: list[dict]) -> str:
+    """The code of an earlier component named by ref, code, title, or slug.
+
+    `1.1 Scarcity` and `Scarcity` name the same component. A slug of the title
+    matches the stored code or the slug of that title.
+    """
+    wanted = _name_forms(key)
+    if not wanted:
         return ""
     for item in earlier:
-        if cleaned == item.get("ref") or cleaned == item.get("code"):
-            return str(item.get("code") or "")
-    folded = cleaned.casefold()
-    for item in earlier:
-        title = _clean_text(item.get("title"))
         code = _clean_text(item.get("code"))
-        ref = _clean_text(item.get("ref"))
-        if folded in {title.casefold(), code.casefold(), ref.casefold()} and code:
+        if not code:
+            continue
+        names: set[str] = set()
+        for field in ("ref", "code", "title"):
+            names |= _name_forms(str(item.get(field) or ""))
+        if wanted & names:
             return code
     return ""
 
@@ -1009,10 +1052,7 @@ def assemble_blueprint(
                     continue
                 found = _match_earlier(key, earlier)
                 if not found:
-                    raise ValueError(
-                        f"{name} names {key!r} as a prerequisite. "
-                        "A prerequisite is a component that comes earlier in the course."
-                    )
+                    continue
                 if found not in prerequisites:
                     prerequisites.append(found)
             if len(prerequisites) > prereq_cap:
@@ -1118,6 +1158,7 @@ def clean_blueprint_edit(
         units.append({"title": title, "summary": _clean_text(raw_unit.get("summary")), "components": components})
     if not units:
         raise ValueError("Add at least one unit.")
+    _drop_forward_prerequisites(units)
     blueprint = {"outcomes": outcomes, "units": units}
     _check_blueprint(blueprint)
     return blueprint
@@ -1580,6 +1621,25 @@ def _blueprint_summary(blueprint: dict, descriptions: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def syllabus_prompt_line(intake: dict | None) -> str:
+    """Tell the chat to make one component per pasted topic."""
+    source = str((intake or {}).get("source_text") or "")
+    count = paste_count(source, syllabus=True)
+    if count < 2:
+        return ""
+    units = len(_safe_syllabus(source).get("units") or [])
+    if units:
+        return (
+            f"The author pasted a syllabus with {units} units and {count} topics. "
+            f"Make one component per pasted topic: {count} components across the {units} units. "
+            "Do not plan a shorter course."
+        )
+    return (
+        f"The author pasted a syllabus with {count} topics. "
+        "Make one component per pasted topic. Do not plan a shorter course."
+    )
+
+
 def chat_bundle(
     *,
     course: dict,
@@ -1606,6 +1666,9 @@ def chat_bundle(
         "Blueprint:",
         _blueprint_summary(blueprint, descriptions),
     ]
+    note = syllabus_prompt_line(course.get("intake"))
+    if note:
+        lines.append(note)
     if statements:
         lines.extend(["Curriculum statements:", statement_lines(statements)])
     if components:

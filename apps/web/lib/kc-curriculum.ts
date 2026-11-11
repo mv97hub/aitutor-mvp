@@ -33,7 +33,10 @@ function countPaste(text: string, syllabusOnly: boolean, flat = false): number {
     statements += 1;
     if (LIST_ITEM.test(line)) listed += 1;
   }
-  if (syllabusOnly && units === 0) return flat ? listed : 0;
+  if (syllabusOnly && units === 0) {
+    if (listed >= 2) return listed;
+    return flat ? listed : 0;
+  }
   if (units) return Math.max(units, statements);
   return statements;
 }

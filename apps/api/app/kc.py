@@ -70,8 +70,8 @@ from app.tutor_profile import (
     normalize_avatar_preset,
     resolve_active_profile,
 )
-from app.kc_pipeline import clean_intake, note_missing_paste
-from app.kc_standards import component_standards, read_statements, statements_from_intake
+from app.kc_pipeline import absorb_description_syllabus, clean_intake, note_missing_paste
+from app.kc_standards import component_standards, paste_count, read_statements, statements_from_intake, syllabus_statements
 from app.block_catalog import BLOCK_BANNER_LABELS, BLOCK_FIELDS, BLOCK_LABELS, block_summary_label
 from app.models import (
     ALL_BLOCK_TYPES,
@@ -716,6 +716,21 @@ def create_course(
 
     _validate_course_fields(title=title, audience=audience, kind=kind, minutes=minutes)
     cleaned_intake = _clean_course_intake(intake)
+    original = (description or "").strip()
+    had_paste = bool(
+        str(cleaned_intake.get("source_text") or "").strip() or str(cleaned_intake.get("standard_text") or "").strip()
+    )
+    stored_description, cleaned_intake = absorb_description_syllabus(original, cleaned_intake)
+    promoted = (
+        not had_paste
+        and paste_count(original, syllabus=True) >= 2
+        and bool(str(cleaned_intake.get("source_text") or "").strip())
+    )
+    standards = statements_from_intake(cleaned_intake)
+    if promoted:
+        filled = syllabus_statements(str(cleaned_intake.get("source_text") or ""))
+        if filled:
+            standards = filled
     taken = set(_nodes_by_code(db)) | {goal.code for goal in db.scalars(select(KcGoal))}
     chosen = (code or "").strip() or slug_code(title, taken)
     if db.scalar(select(KcGoal).where(KcGoal.code == chosen)) is not None:
@@ -723,7 +738,7 @@ def create_course(
     goal = KcGoal(
         code=chosen,
         title=title.strip(),
-        description=(description or "").strip(),
+        description=stored_description,
         audience=audience,
         kind=kind,
         minutes=minutes,
@@ -731,7 +746,7 @@ def create_course(
         ready=False,
         allowed_block_types=clean_allowed_block_types(allowed_block_types),
         intake=cleaned_intake,
-        standards=statements_from_intake(cleaned_intake),
+        standards=standards,
     )
     db.add(goal)
     db.flush()
@@ -757,7 +772,7 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
     _validate_course_fields(title=title, audience=audience, kind=kind, minutes=minutes)
     before = _brief_signature(goal)
     goal.title = title.strip()
-    goal.description = str(body.get("description", goal.description) or "").strip()
+    original = str(body.get("description", goal.description) or "").strip()
     goal.audience = audience
     goal.kind = kind
     goal.minutes = minutes
@@ -767,11 +782,27 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
         # A partial intake must not drop a saved paste the caller did not send.
         # A paste the caller clears is remembered, so the blueprint does not plan Standard.
         goal.intake = note_missing_paste(clean_intake(current), _clean_course_intake({**current, **incoming}))
+    intake_now = clean_intake(goal.intake)
+    had_paste = bool(
+        str(intake_now.get("source_text") or "").strip() or str(intake_now.get("standard_text") or "").strip()
+    )
+    stored_description, intake_now = absorb_description_syllabus(original, intake_now)
+    goal.description = stored_description
+    goal.intake = intake_now
+    promoted = (
+        not had_paste
+        and paste_count(original, syllabus=True) >= 2
+        and bool(str(intake_now.get("source_text") or "").strip())
+    )
     if _brief_signature(goal) != before and (goal.brief or goal.blueprint or goal.drafting or goal.standards):
         goal.brief = ""
         goal.blueprint = {}
         goal.drafting = {}
         goal.standards = statements_from_intake(clean_intake(goal.intake))
+    if promoted:
+        filled = syllabus_statements(str(goal.intake.get("source_text") or ""))
+        if filled:
+            goal.standards = filled
     if "allowed_block_types" in body:
         from app.kc_model import clean_allowed_block_types
 
