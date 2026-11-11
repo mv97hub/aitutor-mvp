@@ -426,6 +426,16 @@ def _public_blocks(node: KcNode | None) -> list[dict]:
     return blocks
 
 
+def _block_short_title(data: dict) -> str:
+    titled = str(data.get("block_title") or "").strip()
+    if titled:
+        return titled
+    topics = data.get("topics")
+    if isinstance(topics, list) and topics and isinstance(topics[0], dict):
+        return str(topics[0].get("title") or "").strip()
+    return ""
+
+
 def _block_title(data: dict, fallback: str) -> str:
     titled = str(data.get("block_title") or "").strip()
     if titled:
@@ -2956,6 +2966,7 @@ def _session_block_progress(node: KcNode | None, session: KcSession) -> dict:
                 "type": kind,
                 "type_label": BLOCK_BANNER_LABELS.get(kind, kind),
                 "title": _block_title(data, node.title),
+                "short_title": _block_short_title(data),
                 "status": status,
                 "outcome": stored.get("outcome"),
                 "attempts": int(stored.get("attempts") or 0),
