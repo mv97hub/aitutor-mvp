@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { ChildMark } from "@/components/learn/ChildFields";
 import { ParentFrame } from "@/components/parent/ParentFrame";
 import { api } from "@/lib/api";
+import { KC_MODEL_OPTIONS, kcModel } from "@/lib/kc-models";
 import { gradePill } from "@/lib/learn";
 import { parentHome, toggledIds, type Parent } from "@/lib/parent";
 import type { Student } from "@/lib/types";
@@ -25,6 +26,9 @@ export function ParentSettings({
   const router = useRouter();
   const linkedIds = linked.map((student) => student.id);
   const [picked, setPicked] = useState<string[]>(linkedIds);
+  const [models, setModels] = useState<Record<string, string>>(() =>
+    Object.fromEntries(students.map((student) => [student.id, kcModel(student.tutor_model || student.child_profile?.tutor_model)])),
+  );
   const [menuChild, setMenuChild] = useState<string | null>(linkedIds.length === 1 ? linkedIds[0] : null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -37,6 +41,18 @@ export function ParentSettings({
     setProblem(null);
     setNotice(null);
     try {
+      for (const student of students) {
+        const next = kcModel(models[student.id]);
+        const current = kcModel(student.tutor_model || student.child_profile?.tutor_model);
+        if (next === current) continue;
+        await api<Student>(`/students/${student.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            tutor_model: next,
+            child_profile: { ...(student.child_profile ?? {}), tutor_model: next },
+          }),
+        });
+      }
       await api<Student[]>(`/parents/${parent.id}/students`, {
         method: "PUT",
         body: JSON.stringify({ student_ids: picked }),
@@ -104,6 +120,23 @@ export function ParentSettings({
                       {gradePill(student.age, student.child_profile?.grade_band || student.grade_band)}
                     </span>
                   </span>
+                </label>
+                <label className="learn-field">
+                  AI Model
+                  <select
+                    aria-label={`AI Model for ${student.display_name}`}
+                    value={models[student.id] ?? kcModel(student.tutor_model || student.child_profile?.tutor_model)}
+                    disabled={saving}
+                    onChange={(event) =>
+                      setModels((current) => ({ ...current, [student.id]: kcModel(event.target.value) }))
+                    }
+                  >
+                    {KC_MODEL_OPTIONS.map(([id, label]) => (
+                      <option key={id} value={id}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </li>
             );

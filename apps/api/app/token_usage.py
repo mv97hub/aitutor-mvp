@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import KcMessage, KcSession, Student, TutorTokenUsage
+from app.models import KcMessage, KcSession, Student, TutorTokenUsage, effective_child_profile
 
 
 def _count(value: object) -> int:
@@ -75,13 +75,17 @@ def record_token_usage(
     incoming = _count(input_tokens)
     outgoing = _count(output_tokens)
     cached = _count(cached_tokens)
+    stored_model = (model or "").strip()
+    if not stored_model:
+        student = db.get(Student, session.student_id)
+        stored_model = effective_child_profile(student)["tutor_model"]
     row = TutorTokenUsage(
         student_id=session.student_id,
         session_id=session.id,
         course_id=session.goal_id,
         message_id=linked.id if linked is not None else None,
         kind=kind,
-        model=(model or "").strip(),
+        model=stored_model,
         input_tokens=incoming,
         output_tokens=outgoing,
         cached_tokens=cached,

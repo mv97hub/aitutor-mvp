@@ -23,6 +23,7 @@ import {
   type LayerField,
 } from "./kc-layer-fields.ts";
 import { BLOCK_LABELS, BLOCK_TYPES, isBlockType } from "./kc-blocks.ts";
+import { DEFAULT_KC_MODEL, KC_MODEL_OPTIONS, kcModel } from "./kc-models.ts";
 import { AUDIENCES, KINDS, type KcBlock, type KcBlockType, type KcComponent, type KcCourse } from "./kc.ts";
 import {
   DEFAULT_KC_TUTOR_CONFIG,
@@ -150,6 +151,7 @@ export const FIELD_OPTIONS: Record<string, readonly (readonly [string, string])[
   Metaphors: METAPHOR_OPTIONS,
   "Humor and wit": HUMOR_AND_WIT_OPTIONS,
   Sidekick: SIDEKICK_OPTIONS,
+  "AI Model": KC_MODEL_OPTIONS,
   "Orient framing": overarchingOptions("orient_framing"),
   "Instructional stance": overarchingOptions("instructional_stance"),
   "Scaffolding escalation": overarchingOptions("scaffolding_escalation"),
@@ -220,6 +222,7 @@ export type PromptTesterRequest = {
   course_position: string;
   display_name: string;
   age: number | null;
+  tutor_model: string;
   grade_band: string;
   reading_level: string;
   response_length: string;
@@ -372,6 +375,7 @@ export function emptyTesterValues(profile: TutorProfile = DEFAULT_TUTOR_PROFILE)
     "Move index": "1",
     "Choice widget": "no",
     "Grade band": "upper_elementary",
+    "AI Model": DEFAULT_KC_MODEL,
     "Response length": "balanced",
     "Expression style": "short_phrases",
     "Explanation style": "concrete_examples",
@@ -434,6 +438,7 @@ export function applyChild(values: TesterValues, child: Student): TesterValues {
     ...values,
     "Display name": child.display_name ?? "",
     Age: child.age == null ? "" : String(child.age),
+    "AI Model": kcModel(child.tutor_model || cp?.tutor_model),
     "Grade band": child.grade_band ?? cp?.grade_band ?? (child.age == null ? "" : gradeBandForAge(child.age)),
     "Reading level": child.reading_level || cp?.reading_level || "",
     "Response length": child.response_length ?? cp?.response_length ?? "balanced",
@@ -609,6 +614,7 @@ export function testerPayload(
     course_position: values["Course position"] ?? "",
     display_name: values["Display name"] ?? "",
     age: optionalInt(values.Age ?? ""),
+    tutor_model: values["AI Model"] || DEFAULT_KC_MODEL,
     grade_band: values["Grade band"] ?? "",
     reading_level: values["Reading level"] ?? "",
     response_length: values["Response length"] ?? "",

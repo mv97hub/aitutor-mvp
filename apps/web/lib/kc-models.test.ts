@@ -5,6 +5,7 @@ import {
   DEFAULT_KC_MODEL,
   DEEPSEEK_FLASH_MODEL,
   KC_MODELS,
+  KC_MODEL_OPTIONS,
   LEGACY_DEEPSEEK_FLASH_MODEL,
   MISSING_OPENAI_KEY,
   MISSING_OPENROUTER_KEY,
@@ -19,6 +20,10 @@ test("the KC menu keeps the CreateCourse models and adds a capable default and a
   assert.equal(KC_MODELS.includes("gpt-6.1-sol"), true);
   assert.equal(DEEPSEEK_FLASH_MODEL, "~deepseek/deepseek-flash-latest");
   assert.equal(KC_MODELS.at(-1), DEEPSEEK_FLASH_MODEL);
+  assert.deepEqual(
+    KC_MODEL_OPTIONS.map(([id]) => id),
+    [...KC_MODELS],
+  );
   assert.equal(kcModel("gpt-6.1-sol"), "gpt-6.1-sol");
   assert.equal(kcModel(DEEPSEEK_FLASH_MODEL), DEEPSEEK_FLASH_MODEL);
   assert.equal(kcModel(LEGACY_DEEPSEEK_FLASH_MODEL), DEEPSEEK_FLASH_MODEL);

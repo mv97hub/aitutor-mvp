@@ -162,8 +162,30 @@ def normalize_interest_tags(raw: object) -> list[str]:
     return out
 
 
+DEEPSEEK_FLASH_MODEL = "~deepseek/deepseek-flash-latest"
+LEGACY_DEEPSEEK_FLASH_MODEL = "deepseek/deepseek-flash-latest"
+TUTOR_MODELS = (
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-6.1-sol",
+    DEEPSEEK_FLASH_MODEL,
+)
+DEFAULT_TUTOR_MODEL = "gpt-4.1"
+
+
+def normalize_tutor_model(raw: object) -> str:
+    """The child tutor model. Unknown ids fall back to gpt-4.1. The legacy DeepSeek id maps to the tilde alias."""
+    chosen = str(raw or "").strip()
+    if chosen == LEGACY_DEEPSEEK_FLASH_MODEL:
+        chosen = DEEPSEEK_FLASH_MODEL
+    return chosen if chosen in TUTOR_MODELS else DEFAULT_TUTOR_MODEL
+
+
 def default_child_profile(age: int | None = 10) -> dict:
     return {
+        "tutor_model": DEFAULT_TUTOR_MODEL,
         "grade_band": grade_band_for_age(age),
         "reading_level": "on_grade",
         "response_length": "balanced",
@@ -196,9 +218,11 @@ def normalize_child_profile(
     reading_level: str | None = None,
     modality: str | None = None,
     interests: list[str] | str | None = None,
+    tutor_model: str | None = None,
 ) -> dict:
     src = raw if isinstance(raw, dict) else {}
     base = default_child_profile(age)
+    base["tutor_model"] = normalize_tutor_model(src.get("tutor_model") or tutor_model)
 
     gb = str(src.get("grade_band") or "").strip()
     base["grade_band"] = gb if gb in GRADE_BANDS else grade_band_for_age(age)

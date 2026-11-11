@@ -78,6 +78,7 @@ def _apply_child_profile_updates(student: Student, body, provided: set[str], *, 
         "communication_tone",
         "learning_support",
         "interest_tags",
+        "tutor_model",
     ):
         if key in provided and getattr(body, key) is not None:
             raw[key] = getattr(body, key)

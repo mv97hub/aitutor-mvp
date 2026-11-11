@@ -119,6 +119,7 @@ export function ViewKcChats({
                     {item.kc_title} · {item.course_title} · {item.status.replace("_", " ")} · {when(item.updated_at)}
                   </small>
                   <small>
+                    {item.tutor_model ? `${item.tutor_model} · ` : ""}
                     {item.message_count} messages · {item.score == null ? "no score" : "1 score"}
                   </small>
                 </button>

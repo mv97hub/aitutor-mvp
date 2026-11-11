@@ -12,7 +12,8 @@ export type ChatViewData = Pick<
   KcChatDetail,
   "id" | "status" | "step_label" | "score" | "created_at" | "updated_at" | "messages"
 > & {
-  student: { display_name: string };
+  tutor_model?: string;
+  student: { display_name: string; tutor_model?: string };
   course: { title: string };
   component: { code: string; title: string };
   prompts?: KcPrompt[];
@@ -205,6 +206,12 @@ export function SessionView({
           ? `${session.component.code} · opened ${when(session.created_at)} · ${now}`
           : `${session.component.code} · ${session.course.title} · ${session.status.replaceAll("_", " ")} · opened ${when(session.created_at)} · ${now}`}
       </p>
+      {debug && (session.student.tutor_model || session.tutor_model) ? (
+        <p className="meta">
+          AI Model {session.student.tutor_model || session.tutor_model}
+          {session.tutor_model ? ` · latest turn ${session.tutor_model}` : ""}
+        </p>
+      ) : null}
       <div className="score-fold">
         <h3>
           <button

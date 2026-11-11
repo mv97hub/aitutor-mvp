@@ -402,6 +402,15 @@ export const LAYER_FIELDS: LayerField[] = [
   },
   {
     layer: "Layer 2, Child",
+    name: "AI Model",
+    hover:
+      "Which model speaks for this child. The list is the same ChatGPT and DeepSeek models used elsewhere. The default is gpt-4.1. Changing it changes the voice of the reply. It does not change mastery.",
+    role: "Selects the model for tutor speak and answer turns.",
+    kind: "Configured",
+    where: "Child settings, KC Tutor settings, parent settings, and the prompt tester. Saved on the student.",
+  },
+  {
+    layer: "Layer 2, Child",
     name: "Grade band",
     hover: "Developmental band: early elementary (K-2), upper elementary (3-5), middle school (6-8), or high school (9-12). Auto-derived from age by default, or overridden.",
     role: "Frames example maturity and conceptual scaffolding for the learner's developmental stage.",

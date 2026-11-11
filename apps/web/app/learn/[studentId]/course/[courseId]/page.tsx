@@ -4,7 +4,6 @@ import { KcTutor } from "@/components/KcTutor";
 import { api } from "@/lib/api";
 import type { KcChatDetail, KcChatSummary, KcDebugVariable, KcProgress, KcTutorCourse, KcTutorSession } from "@/lib/kc";
 import { debugTurns, type KcDebugTurn } from "@/lib/kc-debug";
-import { kcModel } from "@/lib/kc-models";
 import { learnCoursePath } from "@/lib/learn";
 import type { Student, TutorProfile } from "@/lib/types";
 
@@ -94,7 +93,7 @@ export default async function CourseTutorPage({
       studentId={studentId}
       courseId={courseId}
       kcId={query.kc ?? session?.kc_id ?? ""}
-      model={kcModel(query.model)}
+      model={query.model ?? ""}
       progress={progress}
       session={session}
       error={error}

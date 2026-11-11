@@ -13,6 +13,7 @@ export type ChildProfile = {
   interests: string;
   avatar_preset?: string;
   avatar_url?: string;
+  tutor_model?: string;
 };
 
 export type Student = {
@@ -32,6 +33,7 @@ export type Student = {
   communication_tone?: string;
   learning_support?: string;
   interest_tags?: string[];
+  tutor_model?: string;
   child_profile?: ChildProfile;
   tutor_persona: string;
   tutor_lexicon: string;

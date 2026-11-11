@@ -78,6 +78,7 @@ def student_out(student) -> StudentOut:
         communication_tone=cp["communication_tone"],
         learning_support=cp["learning_support"],
         interest_tags=list(cp["interest_tags"]),
+        tutor_model=cp["tutor_model"],
         child_profile=cp,
         tutor_persona=student.tutor_persona or "",
         tutor_lexicon=student.tutor_lexicon or "",

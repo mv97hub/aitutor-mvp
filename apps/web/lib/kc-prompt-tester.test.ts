@@ -90,6 +90,7 @@ test("layer headings keep their numbers", () => {
 
 test("the form skips the model and keeps computed fields read-only", () => {
   assert.equal(formFields().some((field) => field.name === "Model"), false);
+  assert.equal(formFields().some((field) => field.name === "AI Model"), true);
   assert.deepEqual([...READ_ONLY_DERIVED], [
     "Move name",
     "Evidence",
@@ -104,6 +105,7 @@ test("the form skips the model and keeps computed fields read-only", () => {
   assert.equal("asks_why" in payload, false);
   assert.equal(payload.unit_close, "no");
   assert.equal(payload.persona, "coach");
+  assert.equal(payload.tutor_model, "gpt-4.1");
   assert.equal(payload.vocabulary_register, "adaptive_to_child");
   assert.equal(payload.interest_weaving, "subtle_natural");
   assert.equal(payload.humor_and_wit, "light_warm");
@@ -208,6 +210,7 @@ test("choosing a child fills the layer 2 settings and leaves session fields", ()
   values["Support band"] = "stretch";
   const filled = applyChild(values, child());
   assert.equal(filled["Display name"], "Ada");
+  assert.equal(filled["AI Model"], "gpt-4.1");
   assert.equal(filled.Age, "11");
   assert.equal(filled["Grade band"], "middle_school");
   assert.equal(filled["Reading level"], "middle-grade");

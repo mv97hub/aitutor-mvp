@@ -3,7 +3,7 @@ import { generateText, jsonSchema, Output, wrapLanguageModel, type LanguageModel
 import { api } from "@/lib/api";
 import type { KcTutorSession } from "@/lib/kc";
 import { languageModel } from "@/lib/language-model";
-import { DEFAULT_KC_MODEL, isKcModel, missingKeyMessage } from "@/lib/kc-models";
+import { isKcModel, kcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { readModelUsage, type ModelUsageCounts } from "@/lib/model-usage";
 import { requestForCall, type ModelCall } from "@/lib/stored-prompt";
 
@@ -84,10 +84,19 @@ export async function POST(req: Request) {
   if (!answer) return new Response("Write an answer first.", { status: 400 });
 
   const requested = typeof body.model === "string" ? body.model.trim() : "";
-  if (requested && !isKcModel(requested)) {
+  const called = requested ? modelForCall(requested) : "";
+  if (requested && !isKcModel(called)) {
     return new Response("That model is not allowed.", { status: 422 });
   }
-  const modelName = requested && isKcModel(requested) ? requested : DEFAULT_KC_MODEL;
+
+  let prior: KcTutorSession;
+  try {
+    prior = await api<KcTutorSession>(`/kc/tutor/sessions/${sessionId}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not load the session.";
+    return new Response(message, { status: 502 });
+  }
+  const modelName = called && isKcModel(called) ? called : kcModel(prior.tutor_model);
   const missingKey = missingKeyMessage(modelName);
   if (missingKey) {
     return new Response(missingKey, {

@@ -19,22 +19,17 @@ from app.block_catalog import (
 )
 from app.kc_blocks import clean_passage_ela_data, passage_ela_gap, passage_paragraphs
 from app.kc_pipeline import passage_ela_generation_lines
-from app.models import ALL_BLOCK_TYPES
-
-
-DEEPSEEK_FLASH_MODEL = "~deepseek/deepseek-flash-latest"
-LEGACY_DEEPSEEK_FLASH_MODEL = "deepseek/deepseek-flash-latest"
-
-
-KC_CHAT_MODELS = (
-    "gpt-4o-mini",
-    "gpt-4o",
-    "gpt-4.1-mini",
-    "gpt-4.1",
-    "gpt-6.1-sol",
+from app.models import (
+    ALL_BLOCK_TYPES,
+    DEFAULT_TUTOR_MODEL,
     DEEPSEEK_FLASH_MODEL,
+    LEGACY_DEEPSEEK_FLASH_MODEL,
+    TUTOR_MODELS,
 )
-DEFAULT_KC_CHAT_MODEL = "gpt-4.1"
+
+
+KC_CHAT_MODELS = TUTOR_MODELS
+DEFAULT_KC_CHAT_MODEL = DEFAULT_TUTOR_MODEL
 
 
 CREATOR_RULES = (
