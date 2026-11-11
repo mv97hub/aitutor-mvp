@@ -20,6 +20,8 @@ import {
   explanationChoices,
   initials,
   toneChoices,
+  withChildAvatarPreset,
+  withChildAvatarUrl,
   type ChildDraft,
 } from "@/lib/learn";
 
@@ -142,7 +144,7 @@ export function PersonaFields({
   includeCore = true,
 }: {
   draft: ChildDraft;
-  onChange: (next: ChildDraft) => void;
+  onChange: (next: ChildDraft | ((current: ChildDraft) => ChildDraft)) => void;
   showAll: boolean;
   showAvatar: boolean;
   includeCore?: boolean;
@@ -154,9 +156,9 @@ export function PersonaFields({
           preset={draft.avatar_preset || "default_circle"}
           avatarUrl={draft.avatar_url || null}
           onChangePreset={(avatar_preset) =>
-            onChange({ ...draft, avatar_preset: avatar_preset === "default_circle" ? "" : avatar_preset, avatar_url: "" })
+            onChange((current) => withChildAvatarPreset(current, avatar_preset))
           }
-          onChangeUrl={(avatar_url) => onChange({ ...draft, avatar_url: avatar_url ?? "" })}
+          onChangeUrl={(avatar_url) => onChange((current) => withChildAvatarUrl(current, avatar_url))}
         />
       ) : null}
       {showAll ? (

@@ -185,6 +185,28 @@ export function childDraftError(draft: ChildDraft): string | null {
   return null;
 }
 
+/** Gray circle is stored blank so a child who never picks an icon still shows initials. */
+export function withChildAvatarPreset(draft: ChildDraft, preset: string): ChildDraft {
+  const trimmed = preset.trim();
+  return {
+    ...draft,
+    avatar_preset: !trimmed || trimmed === "default_circle" ? "" : trimmed,
+    avatar_url: "",
+  };
+}
+
+export function withChildAvatarUrl(draft: ChildDraft, url: string | null): ChildDraft {
+  return { ...draft, avatar_url: url ?? "" };
+}
+
+/**
+ * An icon click emits a preset change and then a URL clear. Each step has to
+ * see the draft from the step before it, or the URL clear puts the old preset back.
+ */
+export function childAvatarAfterIconClick(draft: ChildDraft, preset: string): ChildDraft {
+  return withChildAvatarUrl(withChildAvatarPreset(draft, preset), null);
+}
+
 export function childWriteBody(draft: ChildDraft, opts: { includeName: boolean }) {
   const age = Number(draft.age);
   const favorites = draft.interests.trim().slice(0, 120);
