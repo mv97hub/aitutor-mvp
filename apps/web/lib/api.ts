@@ -1,3 +1,6 @@
+/** Server renders fail closed so a stuck API cannot hold the document open. */
+const SERVER_FETCH_TIMEOUT_MS = 20_000;
+
 export function apiBase(): string {
   const configured =
     typeof window === "undefined"
@@ -27,15 +30,29 @@ export function detailFrom(body: unknown, fallback: string): string {
   return fallback;
 }
 
+function fetchTimedOut(err: unknown): boolean {
+  return err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBase()}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    cache: "no-store",
-  });
+  const server = typeof window === "undefined";
+  let response: Response;
+  try {
+    response = await fetch(`${apiBase()}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+      cache: "no-store",
+      signal: init?.signal ?? (server ? AbortSignal.timeout(SERVER_FETCH_TIMEOUT_MS) : undefined),
+    });
+  } catch (err) {
+    if (server && fetchTimedOut(err)) {
+      throw new Error("The tutor service is not reachable.");
+    }
+    throw err;
+  }
   if (response.status === 204) return undefined as T;
   const text = await response.text();
   const body = text ? (JSON.parse(text) as unknown) : null;
