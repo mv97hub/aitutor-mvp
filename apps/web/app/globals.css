@@ -6457,19 +6457,13 @@ body:has(.learn-mobile-chat) {
   color: #0f172a;
 }
 
-.parent-dashboard {
-  display: grid;
-  gap: 28px;
-  margin-top: 28px;
+.parent-child-boxes { margin: 20px 0 28px; }
+
+button.progress-card {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
 }
-.parent-dashboard > section > h2 {
-  margin: 0;
-  font-size: 1.15rem;
-}
-.parent-dashboard > section > p { margin: 8px 0 0; }
-.parent-dashboard .progress-totals { margin-top: 10px; }
-.parent-dashboard .progress-list { margin-top: 12px; max-height: none; }
-.parent-dashboard .progress-recommend { margin-top: 0; }
 .parent-card.is-picked {
   border-color: var(--teal);
   box-shadow: 0 0 0 2px var(--teal);
@@ -6528,18 +6522,19 @@ body:has(.learn-mobile-chat) {
 .parent-choice {
   display: grid;
   gap: 6px;
-  padding: 20px;
+  padding: 16px 18px;
   border: 1px solid var(--line);
-  border-radius: 20px;
-  background: var(--paper-2);
-  box-shadow: var(--shadow);
+  border-radius: 16px;
+  background: #fff;
   color: inherit;
   text-decoration: none;
 }
 
-.parent-choice strong { font-size: 1.3rem; }
-.parent-choice:hover { transform: translateY(-2px); }
-.parent-hint { margin-top: 24px; }
+.parent-choice strong { font-size: 1.05rem; line-height: 1.3; }
+.parent-choice span { color: var(--ink-soft); font-size: 0.92rem; }
+.parent-choice:hover { border-color: var(--teal-deep); }
+.parent-choice.is-disabled { cursor: default; }
+.parent-choice.is-disabled:hover { border-color: var(--line); }
 
 .parent-side-title {
   margin: 4px 10px 8px;
