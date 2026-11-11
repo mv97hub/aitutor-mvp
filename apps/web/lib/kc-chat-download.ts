@@ -29,6 +29,27 @@ export type ChatDownloadSession = {
   messages: ChatDownloadMessage[];
   prompts?: ChatDownloadPrompt[];
   safety_events?: unknown;
+  token_usage?: ChatDownloadTokenUsage;
+};
+
+export type ChatDownloadTokenCounts = {
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+};
+
+export type ChatDownloadTokenTurn = ChatDownloadTokenCounts & {
+  id?: string;
+  kind: string;
+  model: string;
+  created_at: string;
+  message_id?: string | null;
+};
+
+export type ChatDownloadTokenUsage = {
+  total: ChatDownloadTokenCounts;
+  turns: ChatDownloadTokenTurn[];
 };
 
 export type KcChatDownloadMessage = {
@@ -59,6 +80,7 @@ export type KcChatDownload = {
   messages: KcChatDownloadMessage[];
   prompts: KcChatDownloadPrompt[];
   safety_events?: unknown;
+  token_usage?: ChatDownloadTokenUsage;
 };
 
 function blockStep(message: ChatDownloadMessage): string | undefined {
@@ -104,6 +126,9 @@ export function kcChatDownload(session: ChatDownloadSession): KcChatDownload {
   };
   if (Object.prototype.hasOwnProperty.call(session, "safety_events")) {
     download.safety_events = session.safety_events;
+  }
+  if (session.token_usage) {
+    download.token_usage = session.token_usage;
   }
   return download;
 }

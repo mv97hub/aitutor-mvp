@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -74,7 +75,8 @@ from app.kc_course_io import (
     preview_document,
 )
 from app.kc_prompt_tester import PromptTesterIn, preview_kc_prompt
-from app.schemas import KcChatDetail, KcChatSummary, ModelPromptIn, ModelPromptOut
+from app.schemas import KcChatDetail, KcChatSummary, ModelPromptIn, ModelPromptOut, TokenUsageIn, TokenUsageTurn
+from app.token_usage import record_token_usage, usage_out, usage_report
 
 router = APIRouter()
 
@@ -699,3 +701,32 @@ def post_kc_model_prompt(
             body.misconception,
         )
     )
+
+
+@router.post("/kc/sessions/{session_id}/token-usage", response_model=TokenUsageTurn)
+def post_token_usage(
+    session_id: uuid.UUID, body: TokenUsageIn, db: Session = Depends(get_db)
+) -> dict:
+    return usage_out(
+        record_token_usage(
+            db,
+            _session_or_404(db, session_id),
+            kind=body.kind,
+            model=body.model,
+            input_tokens=body.input_tokens,
+            output_tokens=body.output_tokens,
+            cached_tokens=body.cached_tokens,
+            message_id=body.message_id,
+        )
+    )
+
+
+@router.get("/kc/token-usage")
+def get_token_usage(
+    student_id: uuid.UUID | None = None,
+    start: date | None = None,
+    end: date | None = None,
+    all_time: bool = False,
+    db: Session = Depends(get_db),
+) -> dict:
+    return usage_report(db, student_id=student_id, start=start, end=end, all_time=all_time)

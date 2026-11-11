@@ -4,20 +4,13 @@ import { api } from "@/lib/api";
 import type { KcTutorSession } from "@/lib/kc";
 import { languageModel } from "@/lib/language-model";
 import { DEFAULT_KC_MODEL, isKcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
+import { readModelUsage, type ModelUsageCounts } from "@/lib/model-usage";
 import { requestForCall, type ModelCall } from "@/lib/stored-prompt";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const SPEAK_PROMPT =
-  "Say the opening now. Return the decision object. The reply is the only text the child sees. Follow the system instructions. Do not set the type, the edges, or the score.";
-
-const SPEAK_DYNAMIC_PROMPT =
-  "Say the opening now. Return the decision object. reply is a short lead-in only. Put the stem and the choices only in generated_mcq. Do not list options or ask the child to type a letter. Follow the system instructions. Do not set the type, the edges, or the score.";
-
-function speakPrompt(systemPrompt: string) {
-  return systemPrompt.includes("short lead-in only") ? SPEAK_DYNAMIC_PROMPT : SPEAK_PROMPT;
-}
+const SPEAK_PROMPT = "Say the opening now. Return the decision object.";
 
 type PromptBundle = {
   system_prompt: string;
@@ -97,14 +90,16 @@ export async function POST(req: Request) {
   let spoken = "";
   let safetyFlag = "none";
   let generatedMcq: Record<string, unknown> | null = null;
+  let usage: ModelUsageCounts = readModelUsage(undefined);
   try {
     const result = await generateText({
       model: wrapLanguageModel({ model: languageModel(modelName), middleware: captureRequest }),
       instructions: bundle.system_prompt,
-      prompt: speakPrompt(bundle.system_prompt),
+      prompt: SPEAK_PROMPT,
       temperature: bundle.temperature,
       output: Output.object({ schema: jsonSchema(bundle.response_schema) }),
     });
+    usage = readModelUsage(result.usage);
     const decision = result.output as Decision | undefined;
     spoken = (decision?.reply || result.text || "").trim();
     safetyFlag = typeof decision?.safety_flag === "string" && decision.safety_flag ? decision.safety_flag : "none";
@@ -136,7 +131,7 @@ export async function POST(req: Request) {
   const messageId = added && added.role === "assistant" ? added.id : null;
   const stored = captured ?? {
     system_prompt: bundle.system_prompt,
-    messages: [{ role: "user", content: speakPrompt(bundle.system_prompt) }],
+    messages: [{ role: "user", content: SPEAK_PROMPT }],
     model: modelName,
   };
   try {
@@ -147,6 +142,15 @@ export async function POST(req: Request) {
         messages: stored.messages,
         model: stored.model,
         message_id: messageId,
+      }),
+    });
+    await api(`/kc/sessions/${sessionId}/token-usage`, {
+      method: "POST",
+      body: JSON.stringify({
+        kind: "speak",
+        model: stored.model,
+        message_id: messageId,
+        ...usage,
       }),
     });
   } catch (error) {

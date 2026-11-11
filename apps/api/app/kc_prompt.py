@@ -468,6 +468,24 @@ def _dynamic_mcq_schema(schema: dict) -> dict:
     return copied
 
 
+def _schema_without_generated_mcq(schema: dict) -> dict:
+    properties = {key: value for key, value in schema["properties"].items() if key != "generated_mcq"}
+    required = [key for key in schema["required"] if key != "generated_mcq"]
+    copied = dict(schema)
+    copied["properties"] = properties
+    copied["required"] = required
+    return copied
+
+
+def turn_response_schema(*, presenting_dynamic_mcq: bool = False, needs_dynamic_mcq: bool = False) -> dict:
+    """Include generated_mcq only when this turn presents one or is the last substep before one."""
+    include = bool(presenting_dynamic_mcq or needs_dynamic_mcq)
+    schema = RESPONSE_SCHEMA if include else _schema_without_generated_mcq(RESPONSE_SCHEMA)
+    if presenting_dynamic_mcq:
+        return _dynamic_mcq_schema(schema)
+    return schema
+
+
 def _cached_generated_mcq(active_block_state: dict | None) -> dict | None:
     """The dynamic question stored by speech or the previous decision."""
     if not isinstance(active_block_state, dict):
@@ -689,7 +707,7 @@ _VOCABULARY_REGISTER_RULES = {
 
 _INTEREST_WEAVING_RULES = {
     "subtle_natural": (
-        "interest_weaving is subtle_natural: weave one of the child's personal interests into the opening hook or a single example when it fits naturally; never force a hobby into every turn."
+        "interest_weaving is subtle_natural: one personal interest in the hook or one example when it fits. Do not force a hobby into every turn."
     ),
     "frequent_thematic": (
         "interest_weaving is frequent_thematic: frame examples, scenarios, and word problems around the child's personal interests whenever possible."
@@ -777,7 +795,8 @@ def _how_to_sound(
     tone = str(cp.get("communication_tone") or "warm_and_encouraging")
     support = str(cp.get("learning_support") or "none")
     anxiety_or_gentle = support == "math_or_test_anxiety" or tone == "calm_and_gentle"
-    missed_turn = turn_kind in {"nudge", "scaffold", "reveal"}
+    # A miss rewrites humor in This turn, so this section stays byte-identical across turns.
+    del turn_kind
 
     lines: list[str] = [_voice_paragraph(profile)]
     tutor_name = str(getattr(profile, "name", "") or "").strip()
@@ -791,7 +810,7 @@ def _how_to_sound(
         else:
             lines.append(f"Active tutor profile: {label}.")
     lines.append(
-        f"Persona framing: persona ({persona_label}) sets the framing metaphor, while the child's communication_tone ({tone}) governs emotional intensity."
+        f"Persona ({persona_label}) is the frame. communication_tone ({tone}) sets emotional intensity."
     )
     lines.append(
         "The child profile (reading_level, response_length, learning_support) exclusively owns sentence length, reading complexity, and paragraph length. "
@@ -799,29 +818,25 @@ def _how_to_sound(
     )
     lines.append(
         _INTEREST_WEAVING_RULES.get(weaving, _INTEREST_WEAVING_RULES["subtle_natural"])
-        + f" Fallback analogy domain ({meta_label}): use this fallback domain when interest_weaving is off, when the child has no personal interests set, or when the child's personal interests do not fit the concept cleanly."
+        + f" Fallback analogy domain ({meta_label}): use it when interest_weaving is off, the child has no interests, or an interest does not fit."
     )
 
-    if missed_turn or anxiety_or_gentle or humor_key == "none_straightforward":
+    if anxiety_or_gentle or humor_key == "none_straightforward":
         reason = (
-            "an incorrect attempt (nudge/scaffold/reveal)"
-            if missed_turn
-            else (
-                "math_or_test_anxiety or calm_and_gentle tone"
-                if anxiety_or_gentle
-                else "humor_and_wit is none_straightforward"
-            )
+            "math_or_test_anxiety or calm_and_gentle tone"
+            if anxiety_or_gentle
+            else "humor_and_wit is none_straightforward"
         )
         lines.append(
             f"Humor guardrail ({humor_key}): suppress jokes and banter on this turn ({reason}); stay clear, earnest, and supportive."
         )
     elif humor_key == "playful_banter":
         lines.append(
-            "Humor & wit (playful_banter): bring playful, witty energy on hooks and passes, while automatically suppressing jokes on any nudge, scaffold, or reveal turn."
+            "Humor & wit (playful_banter): witty energy on hooks and passes. No jokes on a nudge, scaffold, or reveal."
         )
     else:
         lines.append(
-            "Humor & wit (light_warm): use occasional warm, gentle wit on hooks and passes, and suppress jokes on any nudge, scaffold, or reveal turn."
+            "Humor & wit (light_warm): occasional warm wit on hooks and passes. No jokes on a nudge, scaffold, or reveal."
         )
 
     if sidekick_key in _SIDEKICK_RULES:
@@ -829,7 +844,7 @@ def _how_to_sound(
     elif sidekick_key not in {"", "none", "off"}:
         sidekick_label = _lower_first(_label(SIDEKICKS, sidekick_key)) or sidekick_key
         lines.append(
-            f"Sidekick ({sidekick_label}): may voice at most one short line on hooks or hints and never asks a second competing question."
+            f"Sidekick ({sidekick_label}): at most one short line on a hook or hint, and never a second question."
         )
     else:
         lines.append("Sidekick (none): do not include a sidekick character.")
@@ -845,44 +860,44 @@ _GRADE_BAND_LABELS = {
 }
 
 _READING_LEVEL_LINES = {
-    "emerging": "The reading level is emerging, so use very short sentences, everyday sight words, and define any new term right away.",
-    "early_fluent": "The reading level is early fluent, so use concrete sentences, one clause at a time, with plain transitions.",
-    "on_grade": "The reading level is on grade, so use natural grade-level vocabulary and sentence flow.",
-    "advanced": "The reading level is advanced, so use precise academic terms and richer compound sentences.",
+    "emerging": "Reading level emerging: very short sentences, sight words, and define new terms immediately.",
+    "early_fluent": "Reading level early fluent: concrete sentences, one clause at a time.",
+    "on_grade": "Reading level on grade: natural grade-level words and flow.",
+    "advanced": "Reading level advanced: precise terms and richer sentences.",
 }
 
 _RESPONSE_LENGTH_LINES = {
-    "bite_sized": "Keep response length bite-sized: write 1 to 2 short sentences per turn for low working-memory load.",
-    "balanced": "Keep response length balanced: write 2 to 4 sentences per turn.",
-    "detailed": "Use a detailed response length: give fuller explanations with explicit connections when needed.",
+    "bite_sized": "Keep response length bite-sized: 1 to 2 short sentences.",
+    "balanced": "Keep response length balanced: 2 to 4 sentences.",
+    "detailed": "Keep response length detailed: fuller explanations when a connection needs them.",
 }
 
 _EXPRESSION_STYLE_LINES = {
-    "one_word_or_taps": "The learner's expression style is one-word replies or taps: when they type 1 to 3 words, validate the core idea and model a clean sentence back.",
-    "short_phrases": "The learner's expression style is short phrases: expect brief phrases or single sentences and keep follow-ups crisp.",
-    "conversational": "The learner's expression style is conversational: invite back-and-forth dialogue and thinking out loud.",
-    "analytical": "The learner's expression style is analytical: welcome fuller reasoning and offer precise pushback.",
+    "one_word_or_taps": "Expression style one-word replies or taps: on 1 to 3 words, validate the idea and model a full sentence.",
+    "short_phrases": "Expression style short phrases: brief phrases or one sentence, and crisp follow-ups.",
+    "conversational": "Expression style conversational: invite thinking out loud.",
+    "analytical": "Expression style analytical: welcome fuller reasoning and precise pushback.",
 }
 
 _EXPLANATION_STYLE_LINES = {
-    "concrete_examples": "Lead explanations with concrete examples: ground the idea in everyday real-world objects and familiar situations first.",
-    "step_by_step": "Lead explanations step by step: walk through a sequential breakdown of one piece at a time.",
-    "visual_spatial": "Lead explanations with visual-spatial framing: paint vivid mental pictures, spatial layouts, and diagram descriptions.",
-    "story_and_analogy": "Lead explanations with story and analogy: use a short narrative hook or an 'imagine if' comparison.",
-    "pattern_and_rule": "Lead explanations with pattern and rule: state the underlying rule or structure first, then apply it.",
+    "concrete_examples": "Explanations use concrete examples from familiar objects and situations.",
+    "step_by_step": "Explanations go step by step, one piece at a time.",
+    "visual_spatial": "Explanations use visual-spatial framing: pictures, layouts, and described diagrams.",
+    "story_and_analogy": "Explanations use a short story or an imagine-if comparison.",
+    "pattern_and_rule": "Explanations state the rule first, then apply it.",
 }
 
 _CHALLENGE_APPETITE_LINES = {
-    "needs_reassurance": "For challenge appetite, this learner needs reassurance: normalize mistakes early and lower the stakes of trying.",
-    "steady": "For challenge appetite, this learner is steady: keep normal scaffolding and a comfortable pace.",
-    "loves_a_challenge": "For challenge appetite, this learner loves a challenge: use brisk pacing, stretch prompts, and minimal hints before they try.",
+    "needs_reassurance": "Challenge appetite needs reassurance: normalize mistakes and keep stakes low.",
+    "steady": "Challenge appetite steady: normal scaffolding and pace.",
+    "loves_a_challenge": "Challenge appetite loves a challenge: brisk pace, stretch prompts, few hints before they try.",
 }
 
 _COMMUNICATION_TONE_LINES = {
-    "calm_and_gentle": "Keep your communication tone calm and gentle: low-stimulation, patient, and zero pressure.",
-    "warm_and_encouraging": "Keep your communication tone warm and encouraging: sound like a friendly, upbeat coach.",
-    "playful_and_curious": "Keep your communication tone playful and curious: bring light humor and wonder-driven energy.",
-    "direct_and_matter_of_fact": "Keep your communication tone direct and matter-of-fact: skip fluff and go straight to the concept.",
+    "calm_and_gentle": "Tone calm and gentle: patient, low stimulation, no pressure.",
+    "warm_and_encouraging": "Tone warm and encouraging: friendly and upbeat.",
+    "playful_and_curious": "Tone playful and curious: light humor and wonder.",
+    "direct_and_matter_of_fact": "Tone direct and matter-of-fact: the concept, without fluff.",
 }
 
 _LEARNING_SUPPORT_LINES = {
@@ -914,9 +929,9 @@ def _who_you_are_talking_to(
             f"Age {age} ({grade_label}) and an early reading level both mean shorter sentences and simpler examples."
         )
     elif young:
-        parts.append(f"Age {age} ({grade_label}) means shorter sentences and simpler examples.")
+        parts.append(f"Age {age} ({grade_label}): shorter sentences and simpler examples.")
     elif age is not None:
-        parts.append(f"Keep the examples right for a {age}-year-old in {grade_label}.")
+        parts.append(f"Examples for a {age}-year-old in {grade_label}.")
     else:
         parts.append(f"No age is set ({grade_label}).")
 
@@ -970,11 +985,11 @@ def _who_you_are_talking_to(
             parts.append("Stay in words on this block. " + _EXPLANATION_STYLE_LINES["visual_spatial"])
     elif raw_modality and raw_modality not in _EXPLANATION_STYLE_LINES:
         parts.append(
-            f"This child takes an example in through {raw_modality}, so stay in words. "
+            f"Examples come through {raw_modality}. Stay in words. "
             + _EXPLANATION_STYLE_LINES.get(expl_style, _EXPLANATION_STYLE_LINES["concrete_examples"])
         )
     elif not raw_modality and not (student.child_profile or {}).get("explanation_style"):
-        parts.append("No modality is set, so stay in words.")
+        parts.append("No modality is set. Stay in words.")
     else:
         parts.append(_EXPLANATION_STYLE_LINES.get(expl_style, _EXPLANATION_STYLE_LINES["concrete_examples"]))
 
@@ -1216,15 +1231,13 @@ def _this_turn(
             )
     if turn_kind in {"nudge", "scaffold", "reveal"}:
         lines.append(
-            "Turn Humor Guardrail: Because this turn follows a missed attempt (nudge/scaffold/reveal), suppress all jokes and playful banter."
+            "Humor guardrail: suppress jokes and banter on this turn "
+            "(an incorrect attempt (nudge/scaffold/reveal)); stay clear, earnest, and supportive."
         )
-    elif learning_support == "math_or_test_anxiety" or communication_tone == "calm_and_gentle":
-        lines.append(
-            "Turn Humor Guardrail: Suppress jokes and banter for this learner's anxiety or calm_and_gentle profile."
-        )
-    if str(block.get("type") or "") == "topic_goal" and turn_kind in {"ask", "nudge", "scaffold"}:
-        lines.append(_topic_goal_earned_praise(encouragement_style))
-    elif turn_kind in {"pass", "nudge", "scaffold"}:
+    topic_feedback_here = (
+        str(block.get("type") or "") == "topic_goal" and turn_kind in {"ask", "nudge", "scaffold"}
+    )
+    if not topic_feedback_here and turn_kind in {"pass", "nudge", "scaffold"}:
         if encouragement_style == "matter_of_fact_confirm":
             lines.append(
                 "Turn Feedback (matter_of_fact_confirm): Confirm clearly and warmly without extra fanfare."
@@ -1301,6 +1314,8 @@ def _this_turn(
             )
     del misconception_policy
     del prerequisite_support_policy
+    del learning_support
+    del communication_tone
     return lines
 
 
@@ -1999,20 +2014,20 @@ def _how_to_teach(
     lines = _block_config_rules(block, substep, cfg, goal)
 
     lines.append(
-        f"Representation harmony: whenever teaching rules call for an explanation, scaffold, or reveal, format the explanation using the child's explanation_style ({expl_style})."
+        f"Representation harmony: when you explain, scaffold, or reveal, use explanation_style ({expl_style})."
     )
 
     if stance == "direct_instruction_first":
         lines.append(
-            "Instructional stance (direct_instruction_first): model the key rule or idea concisely before asking the learner to respond."
+            "Instructional stance (direct_instruction_first): model the key rule briefly, then ask."
         )
     elif stance == "productive_challenge_first":
         lines.append(
-            "Instructional stance (productive_challenge_first): let the learner try the problem first and teach contingently from their attempt."
+            "Instructional stance (productive_challenge_first): the learner tries first; teach from that attempt."
         )
     else:
         lines.append(
-            "Instructional stance (guided_discovery): pair a short concrete anchor with a guiding question."
+            "Instructional stance (guided_discovery): one short concrete anchor, then a guiding question."
         )
 
     if escalation == "socratic_probing":
@@ -2025,7 +2040,7 @@ def _how_to_teach(
         )
     else:
         lines.append(
-            "Scaffolding escalation (progressive_nudge_then_scaffold): give a brief nudge on the first miss, then a concrete breakdown or partial step on the next miss."
+            "Scaffolding escalation (progressive_nudge_then_scaffold): a nudge on the first miss, then a concrete partial step."
         )
 
     if goal.kind == "time_boxed":
@@ -2042,7 +2057,7 @@ def _how_to_teach(
     elif stay_mode == "exploratory":
         lines.append("You may follow a short tangent, then come back to this block.")
     else:
-        lines.append("Answer a tangent in one brief sentence, then return to this block.")
+        lines.append("Answer a tangent in one sentence, then return to this block.")
 
     if has_misconceptions:
         if misc_policy == "immediate_redirect":
@@ -2055,7 +2070,7 @@ def _how_to_teach(
             )
         else:
             lines.append(
-                "the first time a stored wrong move matches, explain the trap and retry this block. The second time, redirect."
+                "the first time a stored wrong move matches, explain the trap and retry once. The second time, redirect."
             )
     else:
         if misc_policy == "nudge_without_naming":
@@ -2068,7 +2083,7 @@ def _how_to_teach(
             )
         else:
             lines.append(
-                "Misconception policy (explain_and_retry_once): contrast why a trap is tempting versus how the concept actually works, then give one retry."
+                "Misconception policy (explain_and_retry_once): say why the trap tempts, then one retry."
             )
 
     if prereq_policy == "scaffold_heavily":
@@ -2081,7 +2096,7 @@ def _how_to_teach(
         )
     else:
         lines.append(
-            "Prerequisite support policy (inline_micro_recap): weave a 1-sentence reminder of any fragile prerequisite when relevant."
+            "Prerequisite support policy (inline_micro_recap): one sentence on a fragile prerequisite when it matters."
         )
 
     if support_band == "hold":
@@ -2100,7 +2115,7 @@ def _how_to_teach(
     )
     if praise_style == "process_praise":
         lines.append(
-            "When you encourage, name the specific reasoning move the learner made. Do not use generic praise."
+            "When you encourage, name the specific reasoning move. No generic praise."
             + reassurance_note
         )
     elif praise_style == "matter_of_fact_confirm":
@@ -2140,6 +2155,18 @@ def _how_to_teach(
     return lines
 
 
+def _recent_without_last_answer(last_messages: str, last_answer: str) -> str:
+    """Drop the newest user line when The last answer already states it."""
+    text = (last_messages or "").strip()
+    answer = (last_answer or "").strip()
+    if not text:
+        return ""
+    parts = [part.strip() for part in text.split("|") if part.strip()]
+    if answer and parts and parts[-1] == f"user: {answer}":
+        parts = parts[:-1]
+    return " | ".join(parts)
+
+
 def _what_happened(
     *,
     attempts: int,
@@ -2165,32 +2192,38 @@ def _what_happened(
     lines = [
         "This is what already happened on the active block. Do not treat it as a new rule.",
         f"Active substep: {substep}.",
-        f"Attempts on this block/substep so far: {attempts}.",
-        f"Dialogue turns on this block: {dialogue_turns}.",
     ]
+    if int(attempts or 0):
+        lines.append(f"Attempts on this block/substep so far: {attempts}.")
+    lines.append(f"Dialogue turns on this block: {dialogue_turns}.")
     if substep in {"explain_topic", "summary_check"}:
         lines.append(f"Topic index: {int(active_block_state.get('topic_index') or 0)}.")
         lines.append(
             f"Elaboration turns on this topic: {int(active_block_state.get('elaboration_turns') or 0)}."
         )
-    lines.extend([
-        f"The last answer was: {last_answer or 'none yet'}.",
-        f"The hint tier already given is: {hint_tier or 'nudge'}.",
-        f"Eliminated MCQ choice indices: {eliminated if eliminated else 'none'}.",
-        f"The child seems {affect}." if affect else "No affect is recorded yet.",
-        "The child has asked for help." if help_requested else "The child has not asked for help.",
-        f"Off-course turns so far: {off_course_count}.",
-        f"Recent messages: {last_messages or 'none yet'}.",
-        (
-            f"The last matched wrong move was: {last_misconception}."
-            if last_misconception
-            else "No wrong move has matched yet."
-        ),
-        f"Reveals used so far: {reveals}.",
-        f"Extra enrichment turns so far: {enrichment_turns}.",
-        "Evidence points already met: " + (", ".join(rubric_met) if rubric_met else "none") + ".",
-        "A redirect is already pending." if redirect_pending else "No redirect is pending.",
-    ])
+    lines.append(f"The last answer was: {last_answer or 'none yet'}.")
+    tier = (hint_tier or "").strip()
+    if tier and tier != "none":
+        lines.append(f"The hint tier already given is: {tier}.")
+    if eliminated:
+        lines.append(f"Eliminated MCQ choice indices: {eliminated}.")
+    if (affect or "").strip():
+        lines.append(f"The child seems {affect}.")
+    lines.append("The child has asked for help." if help_requested else "The child has not asked for help.")
+    lines.append(f"Off-course turns so far: {off_course_count}.")
+    recent = _recent_without_last_answer(last_messages, last_answer)
+    lines.append(f"Recent messages: {recent or 'none yet'}.")
+    lines.append(
+        f"The last matched wrong move was: {last_misconception}."
+        if last_misconception
+        else "No wrong move has matched yet."
+    )
+    if int(reveals or 0):
+        lines.append(f"Reveals used so far: {reveals}.")
+    lines.append(f"Extra enrichment turns so far: {enrichment_turns}.")
+    if rubric_met:
+        lines.append("Evidence points already met: " + ", ".join(rubric_met) + ".")
+    lines.append("A redirect is already pending." if redirect_pending else "No redirect is pending.")
     if (component_status or "").strip():
         lines.append(f"This component status is {component_status}.")
     earlier = [item for item in (block_results or []) if isinstance(item, dict)]
@@ -2270,7 +2303,137 @@ def _what_to_return(
     return lines
 
 
+_SECTION_ORDER = (
+    "Safety",
+    "Who you are talking to",
+    "How to sound",
+    "How to teach",
+    "What to return",
+    "What to teach",
+    "This turn",
+    "What just happened",
+)
+
+_RETURN_SCHEMA_RESTATE = (
+    "Return reply, decision,",
+    "reply is the only text the child reads.",
+    "reply is a short lead-in only.",
+    "decision is stay,",
+    "rubric_met lists",
+    "misconception is the stored",
+    "hint_tier is nudge",
+    "affect is engaged",
+)
+
+_SUMMARY_CHECKIN_PREFIXES = (
+    "Explain the topic clearly, then ask if they have any questions",
+    "The learner is on the block summary.",
+    "Close each topic",
+    "On the summary step,",
+    "You are on the summary step",
+)
+
+_MISS_LADDER_PREFIXES = (
+    "Scaffolding escalation",
+    "Answer a tangent",
+    "You may follow a short tangent",
+    "Stay on this component. If the learner leaves",
+    "Misconception policy",
+    "If a stored wrong move matches",
+    "the first time a stored wrong move matches",
+)
+
+_COMPLETING_REPLY = (
+    "That completing reply is a brief affirmation only. "
+    "Ask no question. Do not open the next block."
+)
+
+
+def _line_starts(line: str, prefixes: tuple[str, ...]) -> bool:
+    text = line.strip()
+    return any(text.startswith(prefix) for prefix in prefixes)
+
+
+def _fit_prompt_sections(
+    sections: list[tuple[str, list[str]]],
+    *,
+    include_generated_mcq: bool,
+) -> list[tuple[str, list[str]]]:
+    """Drop repeated rules and put the byte-stable sections first."""
+    by_title = {title: [line for line in lines if line and str(line).strip()] for title, lines in sections}
+    teach = by_title.get("What to teach") or []
+    explanation = any(line.startswith("Active block type: explanation") for line in teach)
+    summary = explanation and any("summary_check" in line for line in teach)
+
+    returned: list[str] = []
+    for line in by_title.get("What to return", []):
+        if _line_starts(line, _RETURN_SCHEMA_RESTATE):
+            continue
+        if not include_generated_mcq and line.strip() == "Set generated_mcq to null when not generating a new dynamic MCQ.":
+            continue
+        if not include_generated_mcq and "set generated_mcq to null" in line.lower():
+            line = line.replace(" Otherwise set generated_mcq to null.", "")
+            line = line.replace("Set generated_mcq to null.", "")
+            line = line.strip()
+            if not line:
+                continue
+        returned.append(line)
+    by_title["What to return"] = returned
+
+    by_title["This turn"] = [
+        line for line in by_title.get("This turn", []) if not line.startswith("Turn Stance (")
+    ]
+
+    if explanation:
+        kept_teach: list[str] = []
+        for line in by_title.get("How to teach", []):
+            if _line_starts(line, _MISS_LADDER_PREFIXES):
+                continue
+            if line.startswith("Explanatory block override:") and "do not open the next block" not in line.lower():
+                line = (
+                    f"{line.rstrip()} When block_complete=true, ask no question, "
+                    "including no check-in about final questions, and do not open the next block."
+                )
+            kept_teach.append(line)
+        by_title["How to teach"] = kept_teach
+
+    if summary:
+        for title in ("What to teach", "This turn", "How to teach"):
+            kept: list[str] = []
+            for line in by_title.get(title, []):
+                lowered = line.lower()
+                if _line_starts(line, _SUMMARY_CHECKIN_PREFIXES) and "do not ask" not in lowered and "ask no question" not in lowered:
+                    continue
+                if ", affirm Block" in line and "open Block" in line:
+                    head = line.split(", affirm", 1)[0]
+                    line = (
+                        f"{head}, close that block with a brief affirmation only. "
+                        "Ask no question. Do not mention the next block and do not open it."
+                    )
+                if line.startswith("For Block") and "populate generated_mcq" in line:
+                    continue
+                if line.startswith("Give a cohesive summary") and "do not open the next block" not in line.lower():
+                    line = f"{line.rstrip()} {_COMPLETING_REPLY}"
+                kept.append(line)
+            by_title[title] = kept
+
+    ordered: list[tuple[str, list[str]]] = []
+    seen: set[str] = set()
+    for title in _SECTION_ORDER:
+        if title in by_title:
+            ordered.append((title, by_title[title]))
+            seen.add(title)
+    for title, lines in sections:
+        if title not in seen:
+            ordered.append((title, by_title.get(title, lines)))
+    return ordered
+
+
 def _blocks_text(sections: list[tuple[str, list[str]]]) -> str:
+    include_generated_mcq = any(
+        "populate generated_mcq" in line for _, lines in sections for line in lines
+    )
+    sections = _fit_prompt_sections(sections, include_generated_mcq=include_generated_mcq)
     chunks: list[str] = []
     for title, lines in sections:
         body = [line.strip() for line in lines if line and line.strip()]
@@ -2496,7 +2659,10 @@ def build_kc_prompt(
     )
     return {
         "system_prompt": prompt,
-        "response_schema": _dynamic_mcq_schema(RESPONSE_SCHEMA) if presenting_dynamic_mcq else RESPONSE_SCHEMA,
+        "response_schema": turn_response_schema(
+            presenting_dynamic_mcq=presenting_dynamic_mcq,
+            needs_dynamic_mcq=needs_dynamic_mcq,
+        ),
         "temperature": TEMPERATURE,
     }
 

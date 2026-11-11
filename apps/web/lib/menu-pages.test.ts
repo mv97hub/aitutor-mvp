@@ -55,6 +55,7 @@ test("menu sections keep every destination under the six headers", () => {
     ["View KC chats", "/viewkcchats"],
     ["AI Tutor Configurations", "/admin/agent-customizations"],
     ["AI Safety", "/admin/ai-safety"],
+    ["Token usage", "/admin/token-usage"],
     ["Documentation", "/documentation"],
   ]);
   assert.deepEqual(byTitle["KC course creation"], [

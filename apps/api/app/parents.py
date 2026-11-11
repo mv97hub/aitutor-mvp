@@ -2,7 +2,7 @@
 
 There is no login. A parent id in the URL is the only gate, the same as the kid
 pages. The link check below keeps one parent's pages on the children they chose.
-A parent never receives model prompts: the chat detail here has no prompts key.
+A parent never receives model prompts or token counts: the chat detail here has neither key.
 """
 
 from __future__ import annotations
@@ -184,5 +184,6 @@ def parent_chat_detail(
         raise HTTPException(status_code=404, detail="That chat was not found.")
     detail = kc_chat_detail(db, session_id)
     detail.pop("prompts", None)
+    detail.pop("token_usage", None)
     detail["student"] = {"id": detail["student"]["id"], "display_name": detail["student"]["display_name"]}
     return ParentChatDetail(**detail)

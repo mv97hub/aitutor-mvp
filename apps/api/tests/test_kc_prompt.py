@@ -1,16 +1,16 @@
 """The KC model prompt states each setting once, as the behavior it asks for."""
 
-from app.kc_prompt import RESPONSE_SCHEMA, TEMPERATURE, build_kc_prompt, moves_for
+from app.kc_prompt import RESPONSE_SCHEMA, TEMPERATURE, build_kc_prompt, moves_for, turn_response_schema
 from app.models import KcGoal, KcNode, Student, TutorProfile
 
 HEADINGS = (
-    "This turn",
-    "What to teach",
     "Who you are talking to",
-    "How to teach",
     "How to sound",
-    "What just happened",
+    "How to teach",
     "What to return",
+    "What to teach",
+    "This turn",
+    "What just happened",
 )
 
 CODES = ("zz-hidden-code", "zz-prereq-code", "zz-broken-code", "zz-enc-code")
@@ -130,7 +130,13 @@ def _bundle(**overrides: object) -> dict:
     bundle = build_kc_prompt(**values)
     assert bundle["temperature"] == TEMPERATURE
     if check_schema:
-        assert bundle["response_schema"] == RESPONSE_SCHEMA
+        schema = bundle["response_schema"]
+        include = "generated_mcq" in schema.get("properties", {})
+        presenting = "short lead-in only" in schema["properties"]["reply"]["description"]
+        assert schema == turn_response_schema(
+            presenting_dynamic_mcq=presenting,
+            needs_dynamic_mcq=include and not presenting,
+        )
     return bundle
 
 
@@ -176,6 +182,8 @@ def test_a_factual_opening_states_each_setting_once() -> None:
         "When the decision ends the unit on this final substep",
     ):
         _once(text, phrase)
+    assert "Set generated_mcq to null" not in text
+    assert "Turn Stance (guided_discovery)" not in text
     assert text.count("name the specific reasoning move") == 2
     assert "Praise only when the answer meets the goal or names a real step toward it." in text
     assert "On a miss, nudge with no praise." in text
@@ -630,7 +638,9 @@ def test_layer_3_and_layer_4_revamp_and_precedence_contract() -> None:
     assert "Active turn kind: nudge." in miss_text
     assert "Turn Escalation (worked_example_on_first_miss)" in miss_text
     assert "Reassurance on miss (challenge_appetite=needs_reassurance)" in miss_text
-    assert "suppress jokes and banter on this turn (an incorrect attempt (nudge/scaffold/reveal))" in miss_text
+    assert "suppress jokes and banter on this turn (an incorrect attempt (nudge/scaffold/reveal))" in _section(miss_text, "This turn")
+    assert "suppress jokes and banter on this turn (an incorrect attempt" not in _section(miss_text, "How to sound")
+    assert _section(orient_text, "How to sound") == _section(miss_text, "How to sound")
 
     anxious_student = _student(
         child_profile={
@@ -666,12 +676,13 @@ def test_topic_goal_ask_nudge_and_scaffold_praise_only_an_earned_step() -> None:
         turn = _section(text, "This turn")
         teach = _section(text, "How to teach")
         assert f"Active turn kind: {kind}." in turn
-        for section in (turn, teach):
-            assert _EARNED_PRAISE in section
-            assert _MISS_NUDGE in section
-            assert _NO_FALSE_PRAISE in section
-            assert "This holds on the first reply to an answer and on later nudge and scaffold turns." in section
-        assert "name the specific reasoning move the learner made" in turn
+        assert _EARNED_PRAISE in teach
+        assert _MISS_NUDGE in teach
+        assert _NO_FALSE_PRAISE in teach
+        assert "This holds on the first reply to an answer and on later nudge and scaffold turns." in teach
+        assert text.count(_EARNED_PRAISE) == 1
+        assert _EARNED_PRAISE not in turn
+        assert "name the specific reasoning move the learner made" in teach
         assert _UNCONDITIONAL_PRAISE not in text
         assert "warm and encouraging" in text
 
@@ -735,6 +746,7 @@ def test_a_dynamic_mcq_reply_is_a_short_lead_in() -> None:
     assert "Put the question stem and the choices only in generated_mcq" in text
     assert "do not ask the child to type a letter" in text
     assert "You MUST populate generated_mcq with question_stem" in text
+    assert "generated_mcq" in bundle["response_schema"]["required"]
     assert "The child will type." not in text
     assert "reply is the only text the child reads." not in text
     assert "End a teaching or probing turn with a single clear question." not in text

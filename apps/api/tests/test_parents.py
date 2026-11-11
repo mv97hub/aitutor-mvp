@@ -121,7 +121,7 @@ def test_upgrade_head_includes_the_parent_tables() -> None:
 
     ini = Path(__file__).resolve().parents[1] / "alembic.ini"
     script = ScriptDirectory.from_config(Config(str(ini)))
-    assert script.get_heads() == ["033_kc_message_step"]
+    assert script.get_heads() == ["034_tutor_token_usage"]
     revisions = {rev.revision for rev in script.walk_revisions()}
     assert {"030_parent_portal", "031_course_standards"} <= revisions
 
@@ -204,6 +204,8 @@ def test_parent_chats_omit_prompts_and_refuse_an_unlinked_child() -> None:
         assert detail.status_code == 200, detail.text
         body = detail.json()
         assert "prompts" not in body
+        assert "token_usage" not in body
+        assert "input_tokens" not in body
         assert "SECRET-SYSTEM-PROMPT" not in detail.text
         assert "SECRET-PROMPT-MESSAGE" not in detail.text
         assert set(body["student"]) == {"id", "display_name"}
