@@ -180,7 +180,8 @@ def test_a_factual_opening_states_each_setting_once() -> None:
         "The last answer was: blue.",
         "You do not set the block order, the edges, or the final mastery score.",
         "The unit is not finished.",
-        "If this answer satisfies the substep, set substep_passed=true and block_complete=false.",
+        "Goal start: Explain what this topic is and why it matters.",
+        "Do not ask the goal question.",
     ):
         _once(text, phrase)
     assert "Set generated_mcq to null" not in text
@@ -833,7 +834,7 @@ def test_summary_check_is_the_last_substep_and_hides_the_choice_widget() -> None
     from types import SimpleNamespace
 
     topic = {"id": "topic", "type": "topic_goal", "data": {"topic": "Color", "goal": "The river is blue."}}
-    assert substeps_for_block(topic) == ["main", "summary_check"]
+    assert substeps_for_block(topic) == ["explain", "main", "summary_check"]
     assert substeps_for_block({"id": "talk", "type": "socratic", "data": {}}) == [
         "initial_thesis",
         "counterexample_probe",

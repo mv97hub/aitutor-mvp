@@ -725,6 +725,7 @@ def test_pass_bumps_an_encompassed_component() -> None:
         assert held.status_code == 200, held.text
         assert held.json()["passed"] is False
         assert held.json()["step_label"] == "Block 1 of 1: Topic / Goal"
+        _open_goal(opened.json()["id"])
         client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
             json={"answer": "I can explain the later fact."},
@@ -804,6 +805,7 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": sas["id"]},
         )
         assert opened.status_code == 200, opened.text
+        _open_goal(opened.json()["id"])
         client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
             json={"answer": "SSA proves congruence"},
@@ -849,6 +851,7 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
         )
         assert again.status_code == 200, again.text
         session_id = again.json()["id"]
+        _open_goal(session_id)
         steps = (
             ("The outline is clear.", "advance", []),
             ("I can explain SAS versus SSA.", "complete", ["rule"]),
@@ -983,6 +986,7 @@ def test_time_box_synthesis_and_factual_recipe() -> None:
         )
         assert held.status_code == 200, held.text
         assert held.json()["passed"] is False
+        _open_goal(opened.json()["id"])
         client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
             json={"answer": "Explain the triangle angle sum."},
@@ -1742,7 +1746,7 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         assert live["Encompass codes"] == ""
         assert live["Block index"] == "1 of 1"
         assert live["Block type"] == "topic_goal (Topic / Goal)"
-        assert live["Substep"] == "main"
+        assert live["Substep"] == "explain"
         assert live["Choice on screen"] == "no"
         assert live["Topic"] == "River fact"
         assert live["Goal"] == "Explain River fact."
@@ -1768,6 +1772,7 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         )
         assert held.status_code == 200, held.text
         assert held.json()["passed"] is False
+        _open_goal(session_id)
         client.post(
             f"/kc/tutor/sessions/{session_id}/turn",
             json={"answer": "Explain the river fact."},
@@ -1904,7 +1909,7 @@ def test_tutor_variables_follow_the_active_block() -> None:
         assert "Minecraft redstone" in prompt_text
         assert topic["Block index"] == "1 of 2"
         assert topic["Block type"] == "topic_goal (Topic / Goal)"
-        assert topic["Substep"] == "main"
+        assert topic["Substep"] == "explain"
         assert topic["Choice on screen"] == "no"
         assert topic["Topic"] == "Sky light"
         assert topic["Goal"] == "The sky sends blue light."
@@ -2003,6 +2008,7 @@ def test_decision_overrides_and_course_outro() -> None:
         assert "How to sound" in prompt["system_prompt"]
         assert "Layer 3, Voice" not in prompt["system_prompt"]
         assert "Layer 6, Metacognition" not in prompt["system_prompt"]
+        _open_goal(opened["id"])
         client.post(f"/kc/tutor/sessions/{opened['id']}/turn", json={"answer": "180"})
         held = client.post(
             f"/kc/tutor/sessions/{opened['id']}/decision",
@@ -2046,6 +2052,7 @@ def test_decision_overrides_and_course_outro() -> None:
         ).json()
         other_prompt = client.get(f"/kc/tutor/sessions/{other['id']}/prompt").json()["system_prompt"]
         assert "How Second fact works." in other_prompt
+        _open_goal(other["id"])
         client.post(f"/kc/tutor/sessions/{other['id']}/turn", json={"answer": "The outline is clear."})
         stepped = client.post(
             f"/kc/tutor/sessions/{other['id']}/decision",
@@ -2277,6 +2284,7 @@ def test_closing_a_component_saves_the_result_on_that_child() -> None:
         assert "Topic / Goal" in topic_prompt
         assert "Explain Floating." in topic_prompt
         assert "The child will type." in topic_prompt
+        _open_goal(session_id)
         client.post(
             f"/kc/tutor/sessions/{session_id}/turn",
             json={"answer": "I can explain floating."},
@@ -2327,7 +2335,31 @@ def test_closing_a_component_saves_the_result_on_that_child() -> None:
         _wipe_zz()
 
 
+def _open_goal(session_id: str) -> None:
+    """Leave the opening explanation so the next answer is the goal answer."""
+    current = client.get(f"/kc/tutor/sessions/{session_id}")
+    assert current.status_code == 200, current.text
+    if current.json().get("active_substep") != "explain":
+        return
+    posted = client.post(
+        f"/kc/tutor/sessions/{session_id}/turn",
+        json={"answer": "Got it - move on"},
+    )
+    assert posted.status_code == 200, posted.text
+    decided = client.post(
+        f"/kc/tutor/sessions/{session_id}/decision",
+        json={"reply": "What is the idea?", "decision": "stay", "rubric_met": []},
+    )
+    assert decided.status_code == 200, decided.text
+    assert decided.json()["active_substep"] == "main"
+
+
 def _decide(session_id: str, answer: str, decision: str = "stay", reply: str = "Noted.", **extra: object) -> dict:
+    # A goal answer is graded only after the learner leaves the opening explanation.
+    if extra.get("substep_passed"):
+        current = client.get(f"/kc/tutor/sessions/{session_id}")
+        if current.status_code == 200 and current.json().get("active_substep") == "explain":
+            _decide(session_id, "Got it - move on", reply="What is the idea?")
     posted = client.post(f"/kc/tutor/sessions/{session_id}/turn", json={"answer": answer})
     assert posted.status_code == 200, posted.text
     body = {"reply": reply, "decision": decision, "rubric_met": [], **extra}
@@ -2898,6 +2930,10 @@ def test_course_progress_reports_percent_and_unit_status() -> None:
 
 
 def _miss_until_revealed(session_id: str, **extra: object) -> dict:
+    current = client.get(f"/kc/tutor/sessions/{session_id}").json()
+    if current.get("active_substep") == "explain":
+        opened = _decide(session_id, "Got it - move on", reply="What is the idea?")
+        assert opened["active_substep"] == "main"
     revealed = {}
     for index in range(4):
         revealed = _decide(

@@ -8,7 +8,7 @@ export const metadata = { title: "KC Tutor · Documentation · AI Tutor" };
 const LEARNER: { type: keyof typeof BLOCK_CONFIG_TITLES; text: string }[] = [
   {
     type: "topic_goal",
-    text: "The tutor teaches one topic toward its goal, then asks the learner to say it. A thin fragment can be asked again as a full sentence.",
+    text: "The tutor explains the topic first, with no question. Tell me more keeps that explanation going. Got it - move on, or a typed reply that means move on, is what asks the learner to say the goal. A thin fragment can be asked again as a full sentence.",
   },
   {
     type: "mcq",

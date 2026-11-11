@@ -63,8 +63,8 @@ export const BLOCK_CLOSE_FLOWS: BlockCloseFlowProps[] = [
   },
   {
     title: "Topic / Goal",
-    intro: "The goal is checked on main. summary_check is the only close, whether the goal was met or the attempt limit was reached.",
-    tracks: [{ name: "topic_goal", steps: ["main", "summary_check"] }],
+    intro: "The topic starts as an explanation. The goal question is asked on main only after the learner moves on. summary_check is the only close, whether the goal was met or the attempt limit was reached.",
+    tracks: [{ name: "topic_goal", steps: ["explain", "main", "summary_check"] }],
   },
   {
     title: "Guided Discussion",

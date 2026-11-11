@@ -166,7 +166,7 @@ def test_prompt_tester_matches_build_kc_prompt_and_writes_nothing() -> None:
         assert second.json()["active_block_type"] == "topic_goal"
         assert "Topic / Goal" in second.json()["move_name"]
         assert second.json()["evidence"] == "blk_1"
-        assert second.json()["active_substep"] == "main"
+        assert second.json()["active_substep"] == "explain"
         boxed = _body(kind="time_boxed", minutes=20, struggle_window="long", enrichment="offer")
         timed = client.post("/kc/prompt-tester", json=boxed)
         assert timed.status_code == 200, timed.text

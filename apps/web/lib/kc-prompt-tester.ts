@@ -121,6 +121,7 @@ export const FIELD_OPTIONS: Record<string, readonly (readonly [string, string])[
   Type: [["", "Unset"], ...BLOCK_TYPES.map((type) => [type, BLOCK_LABELS[type]] as const)],
   Substep: [
     ["", "Default"],
+    ["explain", "Explain the topic"],
     ["main", "Main"],
     ["choice", "Choose option"],
     ["awaiting_why", "Explain why"],
