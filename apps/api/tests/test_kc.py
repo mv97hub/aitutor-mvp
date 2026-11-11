@@ -1518,7 +1518,9 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
     try:
         blank = _variable_map(client.get("/kc/tutor/variables"))
         layers = [row["layer"] for row in client.get("/kc/tutor/variables").json()["variables"]]
-        assert layers[:1] == ["Layer 1, Component"]
+        assert layers[:3] == ["Safety", "Safety", "Layer 1, Component"]
+        assert blank["Safety text"].startswith("Safety\n")
+        assert blank["Latest safety flag"] == "none"
         assert "Layer 7, Feedback loop" in layers
         for name in (
             "Course title",

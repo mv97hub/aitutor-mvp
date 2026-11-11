@@ -34,6 +34,7 @@ type Decision = {
   score_justification: string;
   what_was_strong: string;
   what_to_work_on: string;
+  safety_flag: string;
 };
 
 type StoredCall = {
@@ -66,6 +67,7 @@ function asDecision(value: unknown): Decision | null {
     score_justification: typeof row.score_justification === "string" ? row.score_justification : "",
     what_was_strong: typeof row.what_was_strong === "string" ? row.what_was_strong : "",
     what_to_work_on: typeof row.what_to_work_on === "string" ? row.what_to_work_on : "",
+    safety_flag: typeof row.safety_flag === "string" && row.safety_flag ? row.safety_flag : "none",
   };
 }
 

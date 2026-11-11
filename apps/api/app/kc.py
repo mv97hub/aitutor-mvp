@@ -17,6 +17,16 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import and_, delete, func, or_, select
+
+from app.ai_safety import (
+    AiSafetyError,
+    latest_safety_flag,
+    normalize_safety_flag,
+    read_ai_safety,
+    record_safety_event,
+    safety_counts,
+    safety_text,
+)
 from sqlalchemy.orm import Session, selectinload
 
 from app.engine.choices import (
@@ -3733,7 +3743,14 @@ def tutor_variables(
             _row("Close course", close_course, _LAYER_7),
         ]
     )
-    return rows
+    age = student.age if student is not None and isinstance(student.age, int) else None
+    safety = read_ai_safety(db)
+    latest = latest_safety_flag(db, session.id) if session is not None else "none"
+    return [
+        _row("Safety text", safety_text(safety, age=age), "Safety"),
+        _row("Latest safety flag", latest, "Safety"),
+        *rows,
+    ]
 
 
 def prompt_for(db: Session, session: KcSession) -> dict:
@@ -3794,6 +3811,7 @@ def prompt_for(db: Session, session: KcSession) -> dict:
         active_block_state=block_state,
         transition_from_block=transition,
         block_results=list(session.block_results or []),
+        safety=read_ai_safety(db),
     )
     bundle["recipe"] = session.recipe
     bundle["step"] = session.step
@@ -3907,6 +3925,10 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     reply = str(body.get("reply") or "").strip()
     if not reply:
         raise HTTPException(status_code=422, detail="The tutor did not write a reply.")
+    try:
+        safety_flag = normalize_safety_flag(body.get("safety_flag", "none"))
+    except AiSafetyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     decision = str(body.get("decision") or "").strip()
     if decision not in DECISIONS:
         raise HTTPException(status_code=422, detail="The decision is stay, advance, complete, or redirect.")
@@ -3921,6 +3943,28 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     if not any(message.role == "user" for message in messages):
         raise HTTPException(status_code=422, detail="Write an answer first.")
     answer = next(message.content for message in reversed(messages) if message.role == "user")
+    if safety_flag != "none":
+        stored = _add_message(db, session, "assistant", reply)
+        record_safety_event(
+            db,
+            student_id=session.student_id,
+            kc_session_id=session.id,
+            kc_message_id=stored.id,
+            course_id=session.goal_id,
+            node_id=session.kc_id,
+            tutor_profile_id=session.tutor_profile_id,
+            category=safety_flag,
+            child_message=answer,
+            tutor_reply=reply,
+        )
+        session.updated_at = _now()
+        result = session_out(db, session)
+        result["reply"] = reply
+        result["passed"] = False
+        result["unit_complete"] = False
+        result["course_complete"] = False
+        result["safety_flag"] = safety_flag
+        return result
     reported = body.get("misconception")
     matched = _stored_wrong(node, answer, None if reported is None else str(reported))
     rubric = [str(item).strip() for item in (body.get("rubric_met") or []) if str(item).strip()]
@@ -4039,7 +4083,12 @@ def kc_prompt_out(row: KcModelPrompt) -> dict:
     }
 
 
-def _chat_summary(session: KcSession) -> dict:
+def _chat_summary(
+    session: KcSession,
+    *,
+    safety_event_count: int = 0,
+    unreviewed_safety_count: int = 0,
+) -> dict:
     node = session.component
     goal = session.goal
     return {
@@ -4061,6 +4110,8 @@ def _chat_summary(session: KcSession) -> dict:
         "created_at": session.created_at,
         "updated_at": session.updated_at,
         "message_count": len(session.messages),
+        "safety_event_count": safety_event_count,
+        "unreviewed_safety_count": unreviewed_safety_count,
     }
 
 
@@ -4068,7 +4119,15 @@ def kc_chat_summaries(db: Session, student_id: uuid.UUID | None) -> list[dict]:
     stmt = select(KcSession).options(*_chat_load_options()).order_by(KcSession.updated_at.desc())
     if student_id is not None:
         stmt = stmt.where(KcSession.student_id == student_id)
-    return [_chat_summary(row) for row in db.scalars(stmt).unique().all()]
+    rows = db.scalars(stmt).unique().all()
+    counts = safety_counts(db, [row.id for row in rows])
+    summaries = []
+    for row in rows:
+        total, unreviewed = counts.get(row.id, (0, 0))
+        summaries.append(
+            _chat_summary(row, safety_event_count=total, unreviewed_safety_count=unreviewed)
+        )
+    return summaries
 
 
 def kc_chat_detail(db: Session, session_id: uuid.UUID) -> dict:
@@ -4147,7 +4206,11 @@ def append_kc_model_prompt(
 
 
 def record_speech(
-    db: Session, session: KcSession, content: str, generated_mcq: dict | None = None
+    db: Session,
+    session: KcSession,
+    content: str,
+    generated_mcq: dict | None = None,
+    safety_flag: str = "none",
 ) -> dict:
     """Store the model's wording of the current step. Scoring stays in turn."""
     if session.status != "in_progress":
@@ -4162,9 +4225,29 @@ def record_speech(
     messages = _session_messages(db, session)
     if not _needs_speech(session, messages):
         return session_out(db, session)
-    _add_message(db, session, "assistant", text)
+    try:
+        flag = normalize_safety_flag(safety_flag)
+    except AiSafetyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    stored = _add_message(db, session, "assistant", text)
+    child_message = next((message.content for message in reversed(messages) if message.role == "user"), "")
+    if flag != "none":
+        record_safety_event(
+            db,
+            student_id=session.student_id,
+            kc_session_id=session.id,
+            kc_message_id=stored.id,
+            course_id=session.goal_id,
+            node_id=session.kc_id,
+            tutor_profile_id=session.tutor_profile_id,
+            category=flag,
+            child_message=child_message,
+            tutor_reply=text,
+        )
     session.updated_at = _now()
-    return session_out(db, session)
+    result = session_out(db, session)
+    result["safety_flag"] = flag
+    return result
 
 
 def mark_node_complete(db: Session, node: KcNode) -> KcNode:

@@ -28,6 +28,7 @@ export const menuSections: readonly MenuSection[] = [
       { href: "/admin/kc-chats", label: "KC View Chats" },
       { href: "/viewkcchats", label: "View KC chats" },
       { href: "/admin/agent-customizations", label: "AI Tutor Configurations" },
+      { href: "/admin/ai-safety", label: "AI Safety" },
       { href: "/documentation", label: "Documentation" },
     ],
   },

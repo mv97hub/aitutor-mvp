@@ -620,6 +620,8 @@ class KcChatSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     message_count: int
+    safety_event_count: int = 0
+    unreviewed_safety_count: int = 0
 
 
 class KcChatCourse(BaseModel):

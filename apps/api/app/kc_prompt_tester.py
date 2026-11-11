@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.ai_safety import current_ai_safety
 from app.engine.choices import (
     HUMOR_MODES,
     INTEREST_WEAVING_MODES,
@@ -431,6 +432,7 @@ def preview_kc_prompt(body: PromptTesterIn) -> dict:
         fragment=fragment,
         others_known=False,
         active_block_state=active_state,
+        safety=current_ai_safety(),
     )
     ev_id = block_evidence_id(active_block, index, substep)
     step_label = block_step_label(active_block, index, len(blocks), substep, active_state)

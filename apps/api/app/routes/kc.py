@@ -192,11 +192,13 @@ class DecisionIn(BaseModel):
     justification: str = ""
     strong: str = ""
     work_on: str = ""
+    safety_flag: str = "none"
 
 
 class SpeechIn(BaseModel):
     content: str
     generated_mcq: dict | None = None
+    safety_flag: str = "none"
 
 
 @router.get("/kc/courses")
@@ -519,7 +521,13 @@ def get_tutor_prompt(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
 
 @router.post("/kc/tutor/sessions/{session_id}/speech")
 def post_tutor_speech(session_id: uuid.UUID, body: SpeechIn, db: Session = Depends(get_db)) -> dict:
-    return record_speech(db, _session_or_404(db, session_id), body.content, body.generated_mcq)
+    return record_speech(
+        db,
+        _session_or_404(db, session_id),
+        body.content,
+        body.generated_mcq,
+        body.safety_flag,
+    )
 
 
 @router.post("/kc/tutor/sessions/{session_id}/turn")

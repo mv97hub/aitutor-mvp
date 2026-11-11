@@ -10,6 +10,7 @@ export type LayerField = {
 };
 
 export const LAYER_HEADINGS = [
+  "Safety",
   "Layer 1, Component",
   "Layer 2, Child",
   "Layer 3, Voice",
