@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import block_catalog, kc, kc_model
-from app.kc_standards import MAX_STATEMENTS, coverage_matrix, parse_standard_text, paste_count, statements_from_intake
+from app.kc_standards import MAX_STATEMENTS, coverage_matrix, parse_standard_text, parse_syllabus, paste_count, statements_from_intake
 from app.kc_pipeline import (
     CHECKS,
     components_of,
@@ -25,6 +25,7 @@ from app.kc_pipeline import (
     clean_unit,
     component_range,
     interpret_chat,
+    note_missing_paste,
     missing_intake,
     review_bundle,
     sentence_count,
@@ -1501,5 +1502,176 @@ def test_a_saved_ap_macro_paste_survives_a_partial_intake_update() -> None:
         assert saved_plan.status_code == 200, saved_plan.text
         units = saved_plan.json()["blueprint"]["units"]
         assert sum(len(unit["components"]) for unit in units) == 42
+    finally:
+        _wipe_zz()
+
+
+def _macro_topic_plan() -> dict:
+    """One component per numbered AP Macro topic, grouped into the six units."""
+    parsed = parse_syllabus(AP_MACRO)
+    number = 0
+    units = []
+    for group in parsed["units"]:
+        components = []
+        for topic in group["statements"]:
+            number += 1
+            components.append(
+                {
+                    "ref": f"c{number}",
+                    "title": topic["text"],
+                    "summary": f"Teaches {topic['text']}.",
+                    "prerequisites": ["Scarcity"] if number == 2 else ([f"c{number - 1}"] if number > 1 else []),
+                    "standards": [],
+                }
+            )
+        units.append({"title": group["title"], "summary": group["title"], "components": components})
+    return {
+        "outcomes": ["Explain scarcity.", "Use a supply and demand graph."]
+        + [f"Apply topic {index}." for index in range(3, 8)],
+        "units": units,
+    }
+
+
+def _review_prerequisites(blueprint: dict, code: str, prerequisites: list[str]) -> dict:
+    descriptions = {
+        row["code"]: _sentences(row["title"]) for row in components_of(blueprint)
+    }
+    fixed, _notes, _review = apply_review(
+        {
+            "checks": _ok_checks(),
+            "outcomes": None,
+            "revisions": [
+                {
+                    "code": code,
+                    "title": None,
+                    "summary": None,
+                    "description": None,
+                    "prerequisites": prerequisites,
+                }
+            ],
+            "additions": [],
+        },
+        blueprint=blueprint,
+        descriptions=descriptions,
+        taken=set(),
+        make_code=_slug,
+    )
+    return fixed
+
+
+def test_ap_macro_is_six_units_and_a_title_or_forward_prerequisite_does_not_fail() -> None:
+    """42 topics stay 42. Scarcity-by-title resolves. A later name is dropped on review."""
+    parsed = parse_syllabus(AP_MACRO)
+    assert len(parsed["units"]) == 6
+    assert len(parsed["statements"]) == 42
+    assert parsed["statements"][0]["text"] == "Scarcity"
+    assert parsed["statements"][1]["text"] == "Opportunity Cost and the Production Possibilities Curve (PPC)"
+    intake = clean_intake({"depth": "standard", "source_text": AP_MACRO})
+    assert component_range(kind="mastery", minutes=None, intake=intake) == (42, 42)
+    plan = _macro_topic_plan()
+    built = assemble_blueprint(
+        plan, bounds=(42, 42), taken=set(), make_code=_slug, matched=True, intake=intake
+    )
+    rows = components_of(built)
+    assert len(built["units"]) == 6
+    assert len(rows) == 42
+    assert rows[0]["title"] == "Scarcity"
+    assert rows[1]["title"] == "Opportunity Cost and the Production Possibilities Curve (PPC)"
+    assert rows[1]["prerequisites"] == [rows[0]["code"]]
+    with pytest.raises(ValueError, match="exactly 42"):
+        assemble_blueprint(
+            _model_blueprint(14), bounds=(42, 42), taken=set(), make_code=_slug, intake=intake
+        )
+    unknown = json.loads(json.dumps(plan))
+    unknown["units"][0]["components"][1]["prerequisites"] = ["Not a topic"]
+    with pytest.raises(ValueError, match="comes earlier"):
+        assemble_blueprint(unknown, bounds=(42, 42), taken=set(), make_code=_slug, matched=True, intake=intake)
+    forward = json.loads(json.dumps(plan))
+    forward["units"][0]["components"][1]["prerequisites"] = ["short-run-vs-long-run-equilibrium"]
+    with pytest.raises(ValueError, match="comes earlier"):
+        assemble_blueprint(forward, bounds=(42, 42), taken=set(), make_code=_slug, matched=True, intake=intake)
+
+    named = _review_prerequisites(built, rows[1]["code"], ["Scarcity"])
+    assert components_of(named)[1]["prerequisites"] == [rows[0]["code"]]
+    dropped = _review_prerequisites(built, rows[-1]["code"], ["short-run-vs-long-run-equilibrium", rows[0]["code"]])
+    assert components_of(dropped)[-1]["prerequisites"] == [rows[0]["code"]]
+    assert "short-run-vs-long-run-equilibrium" not in components_of(dropped)[-1]["prerequisites"]
+
+    course = _course(intake=intake)
+    bundle = blueprint_bundle(course=course, brief="B" * 50, model="gpt-4.1")
+    assert "Return exactly 42 components" in bundle["system_prompt"]
+    assert "does not add a capstone beyond the pasted topics" in bundle["system_prompt"]
+    assert len(bundle["calls"]) == 6
+    last = bundle["calls"][-1]["system_prompt"]
+    assert "does not add a capstone beyond the pasted topics" in last
+    assert "Do not add a component beyond the count above." in last
+    assert "Return exactly 6 components" in last
+
+
+def test_a_wiped_syllabus_paste_is_named_instead_of_planning_standard() -> None:
+    old = clean_intake({"depth": "standard", "source_text": AP_MACRO})
+    wiped = note_missing_paste(old, clean_intake({"depth": "standard", "source_text": ""}))
+    assert wiped["paste_missing"] is True
+    assert wiped["paste_topics"] == 42
+    assert clean_intake(wiped)["paste_missing"] is True
+    with pytest.raises(ValueError, match="missing from the saved course"):
+        component_range(kind="mastery", minutes=None, intake=wiped)
+    kept = note_missing_paste(old, clean_intake({**old, "reading_level": "stronger"}))
+    assert "paste_missing" not in kept
+    assert component_range(kind="mastery", minutes=None, intake=kept) == (42, 42)
+    short = clean_intake({"depth": "standard", "standard_text": "3.NF.A.1 Understand a fraction."})
+    assert "paste_missing" not in note_missing_paste(short, clean_intake({"depth": "standard"}))
+
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-macro-missing",
+            "title": "AP Macroeconomics",
+            "description": OUTCOME,
+            "audience": "15-17",
+            "kind": "mastery",
+            "intake": {"depth": "standard", "source_text": AP_MACRO},
+        },
+    )
+    assert created.status_code == 200, created.text
+    course_id = created.json()["id"]
+    try:
+        brief = _stage(
+            course_id,
+            "brief",
+            {"brief": "A standard course that follows the pasted macroeconomics syllabus one topic at a time. " * 2, "questions": []},
+        )
+        assert brief.status_code == 200, brief.text
+        cleared = client.patch(f"/kc/courses/{course_id}", json={"intake": {"source_text": ""}})
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["intake"]["paste_missing"] is True
+        assert "1.1 Scarcity" not in cleared.json()["intake"]["source_text"]
+        again = _stage(
+            course_id,
+            "brief",
+            {"brief": "A standard course that follows the pasted macroeconomics syllabus one topic at a time. " * 2, "questions": []},
+        )
+        assert again.status_code == 200, again.text
+        prompt = _stage(course_id, "blueprint")
+        assert prompt.status_code == 422
+        assert "missing from the saved course" in prompt.json()["detail"]
+        assert "8 and 12" not in prompt.json()["detail"]
+        stored = _stage(course_id, "blueprint", _model_blueprint(14, title_prefix="Zz Idea"))
+        assert stored.status_code == 422
+        assert "missing from the saved course" in stored.json()["detail"]
+        restored = client.patch(f"/kc/courses/{course_id}", json={"intake": {"source_text": AP_MACRO}})
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["intake"].get("paste_missing") is not True
+        brief = _stage(
+            course_id,
+            "brief",
+            {"brief": "A standard course that follows the pasted macroeconomics syllabus one topic at a time. " * 2, "questions": []},
+        )
+        assert brief.status_code == 200, brief.text
+        ready = _stage(course_id, "blueprint")
+        assert ready.status_code == 200, ready.text
+        assert "Return exactly 42 components" in ready.json()["system_prompt"]
+        assert "Return between 8 and 12" not in ready.json()["system_prompt"]
     finally:
         _wipe_zz()

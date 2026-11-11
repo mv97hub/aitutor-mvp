@@ -84,26 +84,44 @@ export class StageError extends Error {
   }
 }
 
+function componentsIn(grouped: unknown): number {
+  const rows = Array.isArray(grouped) ? grouped : grouped && typeof grouped === "object" ? [grouped] : [];
+  let items = 0;
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const inner = (row as Record<string, unknown>).components;
+    if (Array.isArray(inner)) items += inner.length;
+  }
+  return items;
+}
+
 /** How many components the model has written so far. Shown as streaming progress. */
 export function partialItems(partial: unknown): number {
   if (!partial || typeof partial !== "object") return 0;
   const record = partial as Record<string, unknown>;
-  if ("units" in record || "unit" in record) {
-    const grouped = record.units ?? record.unit;
-    const rows = Array.isArray(grouped) ? grouped : grouped && typeof grouped === "object" ? [grouped] : [];
-    let items = 0;
-    for (const row of rows) {
-      if (!row || typeof row !== "object") continue;
-      const inner = (row as Record<string, unknown>).components;
-      if (Array.isArray(inner)) items += inner.length;
-    }
-    return items;
+  if ("units" in record || "unit" in record) return componentsIn(record.units ?? record.unit);
+  // Outcomes arrive before units. They are not components, so the count stays put
+  // until a component is written instead of falling back to 0 when units starts.
+  if ("outcomes" in record && !("checks" in record) && !("revisions" in record)) {
+    return Array.isArray(record.components) ? record.components.length : 0;
   }
+  if (Array.isArray(record.components)) return record.components.length;
   let items = 0;
   for (const value of Object.values(record)) {
     if (Array.isArray(value)) items += value.length;
   }
   return items;
+}
+
+type ProgressMark = { items: number; label: string };
+
+/** The blueprint count never moves backwards when the next unit or the units key starts. */
+function emitProgress(emit: (event: StageEvent) => void, mark: ProgressMark, label: string, items: number) {
+  if (items < mark.items) return;
+  if (items === mark.items && (label === mark.label || items === 0)) return;
+  mark.items = items;
+  mark.label = label;
+  emit({ type: "progress", label, items });
 }
 
 /** The streaming line. A blueprint counts components, and a retry says so. */
@@ -223,53 +241,51 @@ export async function runStage(
     }
     const calls = callsOf(bundle);
     const split = calls.length > 1;
+    const mark: ProgressMark = { items: 0, label: "" };
+    let carried = 0;
     try {
       if (!split) {
         const call = calls[0];
         const instructions = noted(call.system_prompt, note);
         emit({ type: "prompt", label: attempt ? `${label} (retry)` : label, instructions, prompt: call.user_prompt });
         const progressLabel = attempt ? `${label} (retry)` : label;
-        let seen = 0;
         const result = await deps.generate({
           instructions,
           prompt: call.user_prompt,
           schema: call.schema,
           maxOutputTokens: STAGE_TOKEN_LIMITS[request.stage],
           onPartial: (partial) => {
-            const items = partialItems(partial);
-            if (items === seen) return;
-            seen = items;
-            emit({ type: "progress", label: progressLabel, items });
+            emitProgress(emit, mark, progressLabel, partialItems(partial));
           },
         });
         if (!result || typeof result !== "object") throw new Error("The model reply could not be read.");
         return await deps.store(result);
       }
       const parts: unknown[] = [];
+      const blueprint = request.stage === "blueprint";
       for (const call of calls) {
         const callLabel = call.label || label;
         const instructions = noted(call.system_prompt, note);
         const progressLabel = attempt ? `${callLabel} (retry)` : callLabel;
+        const callMark = blueprint ? mark : { items: 0, label: "" };
         emit({
           type: "prompt",
           label: progressLabel,
           instructions,
           prompt: call.user_prompt,
         });
-        let seen = 0;
         const result = await deps.generate({
           instructions,
           prompt: call.user_prompt,
           schema: call.schema,
           maxOutputTokens: STAGE_TOKEN_LIMITS.unit,
           onPartial: (partial) => {
-            const items = partialItems(partial);
-            if (items === seen) return;
-            seen = items;
-            emit({ type: "progress", label: progressLabel, items });
+            const base = blueprint ? carried : 0;
+            emitProgress(emit, callMark, progressLabel, base + partialItems(partial));
           },
         });
         if (!result || typeof result !== "object") throw new Error("The model reply could not be read.");
+        if (blueprint) carried += partialItems(result);
         parts.push(result);
       }
       const combined = bundle.combine === "review" ? combineReview(parts) : combineBlueprint(parts);

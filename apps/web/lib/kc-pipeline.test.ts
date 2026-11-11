@@ -124,6 +124,9 @@ test("a stage that keeps failing does not store a result", async () => {
 
 test("streaming progress counts components, not outcomes or units", () => {
   assert.equal(partialItems(null), 0);
+  assert.equal(partialItems({ outcomes: ["Name it.", "Use it.", "Apply it.", "Check it."] }), 0);
+  assert.equal(partialItems({ outcomes: ["Name it.", "Use it.", "Apply it.", "Check it."], units: [] }), 0);
+  assert.equal(partialItems({ outcomes: ["Name it."], units: [{ title: "Next" }] }), 0);
   assert.equal(partialItems({ outcomes: ["Name it.", "Use it."], units: [{ components: [{}, {}] }, { components: [{}] }] }), 3);
   assert.equal(partialItems({ outcomes: ["Name it."], unit: { components: [{}] } }), 1);
   assert.equal(partialItems({ components: [{}, {}, {}] }), 3);
@@ -159,6 +162,68 @@ test("a blueprint retry labels the counter instead of resetting it", async () =>
   assert.equal(progress[1]?.label, "Blueprint (retry)");
   assert.equal(progress[1]?.items, 3);
   assert.equal(progressLine("Blueprint (retry)", 3), "Blueprint (retry): 3 components so far");
+});
+
+function progressCounts(events: StageEvent[]): number[] {
+  return events.filter((event) => event.type === "progress").map((event) => (event.type === "progress" ? event.items : 0));
+}
+
+test("blueprint progress does not fall back when outcomes or the next unit start", async () => {
+  const single: StageEvent[] = [];
+  await runStage(
+    { stage: "blueprint", unit: null },
+    {
+      bundle: async () => ({ model: "gpt-4.1", system_prompt: "Plan.", user_prompt: "Go.", schema: {} }),
+      generate: async (input) => {
+        input.onPartial({ outcomes: ["a", "b", "c", "d"] });
+        input.onPartial({ outcomes: ["a", "b", "c", "d"], units: [] });
+        input.onPartial({ outcomes: ["a", "b", "c", "d"], units: [{ components: [{}, {}] }] });
+        return { outcomes: ["a", "b"], units: [{ components: [{}, {}] }] };
+      },
+      store: async () => pipeline(null),
+    },
+    (event) => single.push(event),
+  );
+  assert.deepEqual(progressCounts(single), [2]);
+
+  const split: StageEvent[] = [];
+  let calls = 0;
+  await runStage(
+    { stage: "blueprint", unit: null },
+    {
+      bundle: async () => ({
+        model: "gpt-4.1",
+        system_prompt: "Plan.",
+        user_prompt: "Go.",
+        schema: {},
+        combine: "blueprint",
+        calls: [1, 2].map((number) => ({
+          label: `Blueprint unit ${number} of 2`,
+          system_prompt: "Plan.",
+          user_prompt: `Plan unit ${number}.`,
+          schema: {},
+        })),
+      }),
+      generate: async (input) => {
+        calls += 1;
+        if (calls === 1) {
+          input.onPartial({ outcomes: ["a", "b", "c", "d"] });
+          input.onPartial({ outcomes: ["a", "b", "c", "d"], unit: { title: "One" } });
+          input.onPartial({
+            outcomes: ["a", "b", "c", "d"],
+            unit: { title: "One", components: [{}, {}, {}, {}, {}, {}] },
+          });
+          return { outcomes: ["a", "b"], unit: { title: "One", components: [{}, {}, {}, {}, {}, {}] } };
+        }
+        input.onPartial({ unit: { title: "Two" } });
+        input.onPartial({ unit: { title: "Two", components: [{}] } });
+        return { unit: { title: "Two", components: [{}] } };
+      },
+      store: async () => pipeline(null),
+    },
+    (event) => split.push(event),
+  );
+  assert.deepEqual(progressCounts(split), [6, 6, 7]);
 });
 
 test("a blueprint retry fetches the corrected bounds", async () => {

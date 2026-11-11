@@ -320,6 +320,13 @@ def clean_intake(raw: object) -> dict:
                 cleaned[f"{key}_cut"] = already_cut
         else:
             cleaned[key] = raw[:cap]
+    # A wiped syllabus stays marked so the blueprint does not fall back to a depth band.
+    if not cleaned["source_text"] and not cleaned["standard_text"] and data.get("paste_missing"):
+        cleaned["paste_missing"] = True
+        try:
+            cleaned["paste_topics"] = max(0, int(data.get("paste_topics") or 0))
+        except (TypeError, ValueError):
+            cleaned["paste_topics"] = 0
     return cleaned
 
 
@@ -376,6 +383,46 @@ def is_matched_curriculum(intake: dict, statements: list[dict] | None = None) ->
     return paste_overrides_depth(intake, statements)
 
 
+def _has_paste_text(intake: dict) -> bool:
+    return bool(str(intake.get("source_text") or "").strip() or str(intake.get("standard_text") or "").strip())
+
+
+def _paste_locks(intake: dict, statements: list[dict] | None = None) -> bool:
+    """True when source or standard text on the course is one component per topic."""
+    if intake.get("component_count") or not _has_paste_text(intake):
+        return False
+    if _pasted_count(intake, statements) <= 0:
+        return False
+    if intake.get("depth") == "curriculum" or intake.get("align_syllabus"):
+        return True
+    return paste_overrides_depth(intake, statements)
+
+
+def note_missing_paste(old: dict, new: dict) -> dict:
+    """Remember a wiped syllabus so planning does not fall back to a depth band.
+
+    Source text or standard text locks the course to one component per pasted
+    topic. When that text is gone, the blueprint says the paste is missing
+    instead of planning a Standard course.
+    """
+    fresh = {key: value for key, value in new.items() if key not in {"paste_missing", "paste_topics"}}
+    if _has_paste_text(fresh):
+        return fresh
+    if new.get("paste_missing"):
+        try:
+            topics = int(new.get("paste_topics") or old.get("paste_topics") or 0)
+        except (TypeError, ValueError):
+            topics = 0
+        fresh["paste_missing"] = True
+        fresh["paste_topics"] = max(0, topics)
+        return fresh
+    if _paste_locks(old):
+        fresh["paste_missing"] = True
+        fresh["paste_topics"] = _pasted_count(old, None)
+        return fresh
+    return fresh
+
+
 def outcome_limit(*, matched: bool, units: int) -> int:
     """Matched courses may have one outcome per unit. Fewer units keep the usual cap of 8."""
     if not matched:
@@ -396,13 +443,15 @@ def component_range(
 ) -> tuple[int, int]:
     """How many components the blueprint may have.
 
-    An explicit count wins. A pasted curriculum that is longer than the depth,
-    or the match-curriculum depth, uses one component per statement instead of
-    the 8 to 12 default.
+    An explicit count wins. Source text or standard text on the course stays
+    one component per pasted topic. A wiped paste is named instead of planning
+    the depth band. A short reply against that exact count is rejected.
     """
     count = intake.get("component_count")
     if count:
         return int(count), int(count)
+    if intake.get("paste_missing"):
+        raise ValueError("The pasted syllabus is missing from the saved course.")
     pasted = _pasted_count(intake, statements)
     match = intake.get("depth") == "curriculum" or bool(intake.get("align_syllabus"))
     if match and pasted:
@@ -611,6 +660,11 @@ def blueprint_bundle(*, course: dict, brief: str, model: str) -> dict:
             if paste_overrides_depth(course["intake"], statements)
             else ""
         ),
+        (
+            "A pasted course does not add a capstone beyond the pasted topics."
+            if is_matched_curriculum(course["intake"], statements) and low == high
+            else ""
+        ),
         f"Course topic: {course['title']}",
         f"By the end the child can: {course['description']}",
         f"Age band: {course['audience']}",
@@ -809,7 +863,7 @@ def _blueprint_unit_calls(
             lines.append("Do not invent curriculum codes.")
         if index == total:
             lines.append(
-                "If the course needs a capstone, the last component of this unit is that capstone. "
+                "A pasted course does not add a capstone beyond the pasted topics. "
                 "Do not add a component beyond the count above."
             )
         calls.append(
@@ -844,6 +898,42 @@ def _clean_outcomes(value: object, *, limit: int = MAX_OUTCOMES) -> list[str]:
     if len(outcomes) > limit:
         raise ValueError(f"Write at most {limit} course outcomes.")
     return outcomes
+
+
+def _match_earlier(key: str, earlier: list[dict]) -> str:
+    """The code of an earlier component named by ref, code, or title."""
+    cleaned = _clean_text(key)
+    if not cleaned:
+        return ""
+    for item in earlier:
+        if cleaned == item.get("ref") or cleaned == item.get("code"):
+            return str(item.get("code") or "")
+    folded = cleaned.casefold()
+    for item in earlier:
+        title = _clean_text(item.get("title"))
+        code = _clean_text(item.get("code"))
+        ref = _clean_text(item.get("ref"))
+        if folded in {title.casefold(), code.casefold(), ref.casefold()} and code:
+            return code
+    return ""
+
+
+def _drop_forward_prerequisites(units: list[dict]) -> None:
+    """Keep a prerequisite that names an earlier component, and drop the rest.
+
+    A title or a code resolves to that earlier component. A name that is not
+    earlier, including a later capstone, is removed so the review can finish.
+    """
+    earlier: list[dict] = []
+    for unit in units:
+        for item in unit.get("components") or []:
+            kept: list[str] = []
+            for needed in item.get("prerequisites") or []:
+                found = _match_earlier(str(needed), earlier)
+                if found and found not in kept:
+                    kept.append(found)
+            item["prerequisites"] = kept
+            earlier.append({"ref": "", "code": item.get("code") or "", "title": item.get("title") or ""})
 
 
 def _check_blueprint(blueprint: dict) -> None:
@@ -893,6 +983,7 @@ def assemble_blueprint(
     codes: dict[str, str] = {}
     taken_now = set(taken)
     units: list[dict] = []
+    earlier: list[dict] = []
     for raw_unit in raw_units:
         if not isinstance(raw_unit, dict):
             raise ValueError("Each unit needs a title and components.")
@@ -914,18 +1005,22 @@ def assemble_blueprint(
             prerequisites: list[str] = []
             for needed in raw.get("prerequisites") or []:
                 key = _clean_text(needed)
-                if key not in codes:
+                if not key:
+                    continue
+                found = _match_earlier(key, earlier)
+                if not found:
                     raise ValueError(
                         f"{name} names {key!r} as a prerequisite. "
-                        "A prerequisite is the ref of a component that comes earlier."
+                        "A prerequisite is a component that comes earlier in the course."
                     )
-                if codes[key] not in prerequisites:
-                    prerequisites.append(codes[key])
+                if found not in prerequisites:
+                    prerequisites.append(found)
             if len(prerequisites) > prereq_cap:
                 raise ValueError(f"{name} has more than {prereq_cap} prerequisites.")
             code = make_code(name, taken_now)
             taken_now.add(code)
             codes[ref] = code
+            earlier.append({"ref": ref, "code": code, "title": name})
             covered, extension = component_standards(raw.get("standards"), statements, name)
             components.append(
                 {
@@ -1385,6 +1480,7 @@ def apply_review(
         added.append(code)
 
     fixed = {"outcomes": outcomes, "units": units}
+    _drop_forward_prerequisites(units)
     _check_blueprint(fixed)
     missing = [row["code"] for row in components_of(fixed) if row["code"] not in notes]
     if missing:
