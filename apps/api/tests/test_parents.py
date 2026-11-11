@@ -113,6 +113,19 @@ def _drop_course(code: str) -> None:
             client.post(f"/kc/courses/{item['id']}/delete", json={"password": DELETE_PASSWORD})
 
 
+def test_upgrade_head_includes_the_parent_tables() -> None:
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+    script = ScriptDirectory.from_config(Config(str(ini)))
+    assert script.get_heads() == ["032_merge_parent_portal"]
+    revisions = {rev.revision for rev in script.walk_revisions()}
+    assert {"030_parent_portal", "031_course_standards"} <= revisions
+
+
 def test_create_list_and_name_checks() -> None:
     parent = _parent("  ZZ   Parent  Spacing ")
     try:
