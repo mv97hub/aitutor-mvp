@@ -1,4 +1,10 @@
 import { BLOCK_TYPES } from "./kc-blocks.ts";
+import {
+  PASSAGE_ELA_DISPLAY_OPTIONS,
+  PASSAGE_ELA_EVIDENCE_OPTIONS,
+  PASSAGE_ELA_REREAD_OPTIONS,
+  PASSAGE_ELA_SCAFFOLD_OPTIONS,
+} from "./kc-layer-fields.ts";
 import type { KcBlockType } from "./kc.ts";
 
 export type ConfigField =
@@ -227,6 +233,39 @@ export const BLOCK_CONFIG_FIELDS: Record<KcBlockType, ConfigField[]> = {
       "Off by default. Completing the walkthrough never marks the component fragile.",
     ),
   ],
+  passage_ela: [
+    ENUM(
+      "passage_ela_display_mode",
+      "Passage display",
+      "Print the full passage when the block opens, or start with paragraph 1.",
+      PASSAGE_ELA_DISPLAY_OPTIONS,
+    ),
+    ENUM(
+      "passage_ela_evidence_mode",
+      "Evidence mode",
+      "How closely a cite-evidence answer must match the passage.",
+      PASSAGE_ELA_EVIDENCE_OPTIONS,
+    ),
+    ENUM(
+      "passage_ela_scaffold_style",
+      "Passage scaffold",
+      "How a miss points the learner back into the passage.",
+      PASSAGE_ELA_SCAFFOLD_OPTIONS,
+    ),
+    INT(
+      "passage_ela_max_attempts_per_step",
+      "Attempts per step",
+      "Misses on one close-reading step before the tutor models the move and advances.",
+      1,
+      4,
+    ),
+    ENUM(
+      "passage_ela_reread_policy",
+      "Reread policy",
+      "Reprinting the passage when the learner asks is not an attempt.",
+      PASSAGE_ELA_REREAD_OPTIONS,
+    ),
+  ],
 };
 
 export const BLOCK_CONFIG_TITLES: Record<KcBlockType, string> = {
@@ -240,6 +279,7 @@ export const BLOCK_CONFIG_TITLES: Record<KcBlockType, string> = {
   teach_back: "Teach-Back / Feynman",
   retrieval_check: "Retrieval & Elaborative Interrogation",
   explanation: "Explanatory Walkthrough",
+  passage_ela: "ELA Reading Passage",
 };
 
 function fieldDefault(field: ConfigField): string | number | boolean {
@@ -310,6 +350,11 @@ function defaults(): KcTutorConfig {
   blocks.explanation.check_in_prompt_style = "questions_or_elaborate";
   blocks.explanation.end_of_block_summary_style = "bulleted_recap_with_takeaway";
   blocks.explanation.counts_toward_mastery_score = false;
+  blocks.passage_ela.passage_ela_display_mode = "full_on_open";
+  blocks.passage_ela.passage_ela_evidence_mode = "quote_or_close_paraphrase";
+  blocks.passage_ela.passage_ela_scaffold_style = "point_to_paragraph";
+  blocks.passage_ela.passage_ela_max_attempts_per_step = 2;
+  blocks.passage_ela.passage_ela_reread_policy = "free_reprint";
   return { overarching, blocks };
 }
 

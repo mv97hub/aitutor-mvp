@@ -311,6 +311,7 @@ ALL_BLOCK_TYPES = (
     "teach_back",
     "retrieval_check",
     "explanation",
+    "passage_ela",
 )
 
 
@@ -403,6 +404,13 @@ def default_kc_tutor_config() -> dict:
                 "check_in_prompt_style": "questions_or_elaborate",
                 "end_of_block_summary_style": "bulleted_recap_with_takeaway",
                 "counts_toward_mastery_score": False,
+            },
+            "passage_ela": {
+                "passage_ela_display_mode": "full_on_open",
+                "passage_ela_evidence_mode": "quote_or_close_paraphrase",
+                "passage_ela_scaffold_style": "point_to_paragraph",
+                "passage_ela_max_attempts_per_step": 2,
+                "passage_ela_reread_policy": "free_reprint",
             },
         },
     }

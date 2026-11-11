@@ -11,6 +11,7 @@ export const BLOCK_TYPES: KcBlockType[] = [
   "teach_back",
   "retrieval_check",
   "explanation",
+  "passage_ela",
 ];
 
 /** Long names, the same strings the stored draft reply and the API catalog use. */
@@ -25,6 +26,7 @@ export const BLOCK_REPLY_LABELS: Record<KcBlockType, string> = {
   teach_back: "Teach-Back / Feynman",
   retrieval_check: "Retrieval & Elaborative Interrogation",
   explanation: "Explanatory Walkthrough",
+  passage_ela: "ELA Reading Passage",
 };
 
 /** Field order and labels for one block, shared by the draft reply and the catalog. */
@@ -95,6 +97,19 @@ export const BLOCK_FIELD_LABELS: Record<KcBlockType, [string, string][]> = {
     ["topics", "Topics"],
     ["summary_takeaway", "Summary takeaway"],
   ],
+  passage_ela: [
+    ["passage_title", "Passage title"],
+    ["passage_genre", "Passage genre"],
+    ["passage_text", "Passage text"],
+    ["central_idea_question", "Central idea question"],
+    ["expected_central_idea", "Expected central idea"],
+    ["distractor_detail", "Distractor detail"],
+    ["evidence_prompt", "Evidence prompt"],
+    ["verbatim_evidence_quotes", "Verbatim evidence quotes"],
+    ["analysis_focus", "Analysis focus"],
+    ["analysis_question", "Analysis question"],
+    ["expected_analysis", "Expected analysis"],
+  ],
 };
 
 /** Short names for the canvas and the course structure. */
@@ -109,6 +124,7 @@ export const BLOCK_LABELS: Record<KcBlockType, string> = {
   teach_back: "Teach back",
   retrieval_check: "Retrieval check",
   explanation: "Explanatory walkthrough",
+  passage_ela: "ELA reading passage",
 };
 
 const SHORT_LABELS: Record<KcBlockType, [string, string]> = {
@@ -122,6 +138,7 @@ const SHORT_LABELS: Record<KcBlockType, [string, string]> = {
   teach_back: ["Teach back", "Teach backs"],
   retrieval_check: ["Retrieval", "Retrievals"],
   explanation: ["Explanation", "Explanations"],
+  passage_ela: ["ELA passage", "ELA passages"],
 };
 
 export function isBlockType(value: string): value is KcBlockType {
@@ -234,6 +251,21 @@ export function blankData(type: KcBlockType): Record<string, unknown> {
       block_title: "",
       topics: [blankExplanationTopic(1)],
       summary_takeaway: "",
+    };
+  }
+  if (type === "passage_ela") {
+    return {
+      passage_title: "",
+      passage_genre: "informational",
+      passage_text: "",
+      central_idea_question: "",
+      expected_central_idea: "",
+      distractor_detail: "",
+      evidence_prompt: "",
+      verbatim_evidence_quotes: ["", ""],
+      analysis_focus: "inference",
+      analysis_question: "",
+      expected_analysis: "",
     };
   }
   return {

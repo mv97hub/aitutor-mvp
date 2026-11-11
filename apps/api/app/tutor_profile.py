@@ -571,6 +571,19 @@ BLOCK_CONFIG_SPECS: dict[str, dict[str, tuple]] = {
         ),
         "counts_toward_mastery_score": ("bool",),
     },
+    "passage_ela": {
+        "passage_ela_display_mode": ("enum", {"full_on_open", "chunked_by_paragraph"}),
+        "passage_ela_evidence_mode": (
+            "enum",
+            {"quote_or_close_paraphrase", "exact_quote_required", "paragraph_reference"},
+        ),
+        "passage_ela_scaffold_style": (
+            "enum",
+            {"point_to_paragraph", "contrast_main_vs_detail", "sentence_starter"},
+        ),
+        "passage_ela_max_attempts_per_step": ("int", 1, 4),
+        "passage_ela_reread_policy": ("enum", {"free_reprint"}),
+    },
 }
 
 

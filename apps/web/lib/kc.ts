@@ -10,7 +10,8 @@ export type KcBlockType =
   | "spot_the_flaw"
   | "teach_back"
   | "retrieval_check"
-  | "explanation";
+  | "explanation"
+  | "passage_ela";
 
 export type KcBlock = {
   id: string;

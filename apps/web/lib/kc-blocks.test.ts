@@ -16,7 +16,7 @@ import {
 test("an empty scope falls back to topic and goal, in canvas order", () => {
   assert.deepEqual(orderScope([]), ["topic_goal"]);
   assert.deepEqual(orderScope(["retrieval_check", "curiosity", "nope"]), ["curiosity", "retrieval_check"]);
-  assert.deepEqual(scopeFromCourse(undefined).length, 10);
+  assert.deepEqual(scopeFromCourse(undefined).length, 11);
   assert.deepEqual(scopeFromCourse([]), ["topic_goal"]);
 });
 

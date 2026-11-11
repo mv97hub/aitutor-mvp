@@ -40,8 +40,8 @@ export default function KcCreatorDocsPage() {
           Changing a card&apos;s type starts that type&apos;s empty fields and keeps the card&apos;s place.
         </p>
         <p>
-          AI Block Scope sits at the top right, beside Fast Create All. It is a multi-select of the ten block types,
-          labeled with how many are on, or All 10 blocks when every type is on. Select All checks every type. Topic +
+          AI Block Scope sits at the top right, beside Fast Create All. It is a multi-select of the eleven block types,
+          labeled with how many are on, or All 11 blocks when every type is on. Select All checks every type. Topic +
           MCQ Only leaves Topic / Goal and Multiple choice. Clearing the last checked type leaves Topic / Goal. The
           choice is saved on the course and is sent with the component chat, so the draft stays inside that scope. The
           canvas can still hold any type you add by hand.
