@@ -8,9 +8,13 @@ import { NETWORK_WIDTH, NetworkMap, networkHeight } from "@/components/KcNetwork
 import type { KcNetwork, KcProgress, KcTutorCourse } from "@/lib/kc";
 import { friendlyStrength, learnCoursePath } from "@/lib/learn";
 import {
+  blockScore,
   childComponentLabel,
   childNoteByCode,
   courseScore,
+  finishedComponents,
+  finishedSentence,
+  passedCourseRubric,
   portfolioCount,
   portfolioCourseStatus,
   statusByCode,
@@ -162,6 +166,8 @@ export function KcCourseProgress({
   const score = progress ? courseScore(units, progress.known ?? progress.known_count ?? 0) : null;
   const lastActivity = formatTimestamp(progress?.last_active_at);
   const showed = selected ? showedText(selected) : "";
+  const finished = finishedComponents(units);
+  const rubric = progress ? passedCourseRubric(progress) : { completed: "", struggled: "" };
 
   return (
     <main className="learn-shell progress-page">
@@ -249,6 +255,35 @@ export function KcCourseProgress({
               })}
             </ul>
           </div>
+          {finished.length > 0 ? (
+            <ul className="progress-finished" aria-label="Finished components">
+              {finished.map((unit) => {
+                const label = childComponentLabel(unit);
+                const updated = formatTimestamp(unit.updated_at || unit.completed_at);
+                const sentence = finishedSentence(unit, progress.accomplishments);
+                const pressed = unit.code === selectedCode;
+                return (
+                  <li key={unit.id}>
+                    <button
+                      type="button"
+                      className={pressed ? "is-selected" : undefined}
+                      aria-pressed={pressed}
+                      onClick={() => setSelectedCode(unit.code)}
+                    >
+                      <span>{[unit.title, label, blockScore(unit), updated].filter(Boolean).join(" · ")}</span>
+                      {sentence ? <span className="progress-finished-sentence">{sentence}</span> : null}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          {finished.length > 0 && progress.course_complete && (rubric.completed || rubric.struggled) ? (
+            <div className="progress-rubric">
+              {rubric.completed ? <p>{rubric.completed}</p> : null}
+              {rubric.struggled ? <p>{rubric.struggled}</p> : null}
+            </div>
+          ) : null}
           {selected ? (
             <article className="progress-detail" ref={detailRef}>
               <h2>{selected.title}</h2>

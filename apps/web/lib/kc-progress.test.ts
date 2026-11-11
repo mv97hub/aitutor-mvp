@@ -4,11 +4,15 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 
 import {
+  blockScore,
   childComponentLabel,
   courseScore,
   coursesStartedFirst,
+  finishedComponents,
+  finishedSentence,
   masteryByCode,
   networkStatusClass,
+  passedCourseRubric,
   portfolioCourseStatus,
   portfolioCount,
   statusByCode,
@@ -136,6 +140,53 @@ test("a finished fragile component counts as Completed", () => {
       { id: "quiet" },
     ]).map((course) => course.id),
     ["now", "earlier", "later", "quiet"],
+  );
+});
+
+test("a selected course lists finished components, and a passed course adds the stored rubric", () => {
+  const known = {
+    ...unit("halves", "completed"),
+    mastery: "known" as const,
+    finished_blocks: 3,
+    total_blocks: 3,
+    what_was_strong: "You split the pizza.",
+    result: { strong: "You split the pizza.", work_on: "Use this on the next piece." },
+  };
+  const fragile = {
+    ...unit("thirds", "completed"),
+    mastery: "fragile" as const,
+    finished_blocks: 3,
+    total_blocks: 3,
+    what_was_strong: "The last try failed.",
+    what_to_work_on: "Practice the rule in your own words.",
+    result: { strong: "The last try failed.", work_on: "Practice the rule in your own words." },
+  };
+  const open = unit("quarters", "in_progress");
+  assert.deepEqual(
+    finishedComponents([known, open, fragile]).map((item) => item.code),
+    ["halves", "thirds"],
+  );
+  assert.equal(blockScore(known), "3 of 3");
+  assert.equal(
+    finishedSentence(known, [{ component_code: "halves", summary: "You split the pizza into equal parts." }]),
+    "You split the pizza into equal parts.",
+  );
+  assert.equal(finishedSentence(fragile, []), "You finished this topic.");
+  assert.equal(finishedComponents([open]).length, 0);
+  assert.deepEqual(passedCourseRubric({ course_complete: true, units: [known, fragile, open] }), {
+    completed: "You split the pizza.",
+    struggled: "Practice the rule in your own words.",
+  });
+  assert.deepEqual(passedCourseRubric({ course_complete: false, units: [known, fragile] }), {
+    completed: "",
+    struggled: "",
+  });
+  assert.deepEqual(
+    passedCourseRubric({
+      course_complete: true,
+      units: [{ ...known, result: { strong: "The finished blocks held.", work_on: "" }, what_was_strong: "" }],
+    }),
+    { completed: "", struggled: "" },
   );
 });
 

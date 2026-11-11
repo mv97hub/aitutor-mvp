@@ -5614,6 +5614,45 @@ a.ds-row { text-decoration: none; }
   background: #fff;
 }
 
+.progress-finished {
+  margin: 28px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 16px;
+}
+
+.progress-finished button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-weight: 600;
+}
+
+.progress-finished-sentence {
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+.progress-finished button.is-selected span:first-child {
+  color: var(--teal-deep);
+}
+
+.progress-rubric {
+  margin-top: 16px;
+  display: grid;
+  gap: 4px;
+}
+
+.progress-rubric p {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
 .progress-detail {
   margin-top: 28px;
   padding-top: 18px;

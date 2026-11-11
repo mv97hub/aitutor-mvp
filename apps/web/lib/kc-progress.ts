@@ -170,6 +170,83 @@ export function portfolioCount(course: PortfolioCourse): string {
   return `${done} of ${total}`;
 }
 
+const STORED_FILLER = new Set([
+  "the finished blocks held.",
+  "a required block was revealed.",
+  "none stored.",
+  "use this on the next piece.",
+  "look at this component again.",
+  "known.",
+  "fragile.",
+]);
+
+function storedSentence(text: string | undefined, hiddenAsFinished: boolean): string {
+  const value = (text || "").trim();
+  if (!value || STORED_FILLER.has(value.toLowerCase())) return "";
+  if (/fragile|fail/i.test(value)) return hiddenAsFinished ? "You finished this topic." : "";
+  return value;
+}
+
+export function finishedComponents<T extends { status?: string; mastery?: string }>(units: T[]): T[] {
+  return units.filter((unit) => {
+    const label = childComponentLabel(unit);
+    return label === "Mastered" || label === "Completed";
+  });
+}
+
+export function blockScore(unit: {
+  finished_blocks?: number;
+  completed_blocks?: number;
+  total_blocks?: number;
+}): string {
+  const done = unit.finished_blocks ?? unit.completed_blocks ?? 0;
+  const total = unit.total_blocks ?? 0;
+  return total > 0 ? `${done} of ${total}` : "";
+}
+
+/** Accomplishment summary when there is one, otherwise what they showed. */
+export function finishedSentence(
+  unit: {
+    code: string;
+    what_was_strong?: string;
+    strengths?: string;
+    close_text?: string;
+    result?: { strong?: string } | null;
+  },
+  accomplishments?: { component_code: string; summary?: string }[],
+): string {
+  const summary = (accomplishments ?? []).find((item) => item.component_code === unit.code)?.summary?.trim() || "";
+  const showed = (unit.what_was_strong || unit.result?.strong || unit.strengths || unit.close_text || "").trim();
+  return storedSentence(summary || showed, true);
+}
+
+export type PassedCourseRubric = { completed: string; struggled: string };
+
+/** Two lines from the stored component result, and only after the course is passed. */
+export function passedCourseRubric(course: {
+  course_complete?: boolean;
+  units?: {
+    status?: string;
+    mastery?: string;
+    what_was_strong?: string;
+    what_to_work_on?: string;
+    result?: { strong?: string; work_on?: string } | null;
+  }[];
+}): PassedCourseRubric {
+  const empty = { completed: "", struggled: "" };
+  if (!course.course_complete) return empty;
+  const finished = finishedComponents(course.units ?? []);
+  const completed = finished
+    .map((unit) => storedSentence(unit.result?.strong || unit.what_was_strong, false))
+    .filter(Boolean)
+    .join(" ");
+  const struggled = finished
+    .map((unit) => storedSentence(unit.result?.work_on || unit.what_to_work_on, false))
+    .filter(Boolean)
+    .join(" ");
+  return { completed, struggled };
+}
+
 /** Started courses first. Relative order is kept when activity matches. */
 export function coursesStartedFirst<T extends PortfolioCourse>(courses: T[]): T[] {
   return courses
