@@ -11,11 +11,21 @@ export const STAGE_TOKEN_LIMITS: Record<KcPipelineStage, number> = {
 /** A stage that the API rejects, or that the model fails to answer, is tried once more with the reason. */
 export const STAGE_ATTEMPTS = 2;
 
+export type StageCall = {
+  label?: string;
+  system_prompt: string;
+  user_prompt: string;
+  schema: Record<string, unknown>;
+};
+
 export type StageBundle = {
   model: string;
   system_prompt: string;
   user_prompt: string;
   schema: Record<string, unknown>;
+  /** More than one call means the stage is planned one unit at a time, then combined. */
+  calls?: StageCall[];
+  combine?: "blueprint" | "review";
 };
 
 export type StageRequest = { stage: KcPipelineStage; unit: number | null };
@@ -95,6 +105,73 @@ function noted(prompt: string, note: string): string {
   return note ? `${prompt}\n${note}` : prompt;
 }
 
+const REVIEW_CHECKS = ["gaps", "overlap", "jumps", "capstone", "outcomes", "reading_level"];
+const REVIEW_RANK: Record<string, number> = { ok: 0, fixed: 1, issue: 2 };
+
+function callsOf(bundle: StageBundle): StageCall[] {
+  if (bundle.calls && bundle.calls.length > 1) return bundle.calls;
+  return [{ system_prompt: bundle.system_prompt, user_prompt: bundle.user_prompt, schema: bundle.schema }];
+}
+
+/** Unit plans from separate calls become one blueprint the store already accepts. */
+export function combineBlueprint(parts: unknown[]): { outcomes: string[]; units: unknown[] } {
+  const units: unknown[] = [];
+  let outcomes: string[] = [];
+  for (const part of parts) {
+    if (!part || typeof part !== "object") throw new Error("The model reply could not be read.");
+    const row = part as Record<string, unknown>;
+    if (!outcomes.length && Array.isArray(row.outcomes)) outcomes = row.outcomes.map((item) => String(item));
+    if (!row.unit || typeof row.unit !== "object") throw new Error("Each unit needs a title and components.");
+    units.push(row.unit);
+  }
+  if (!units.length) throw new Error("Return at least one unit.");
+  return { outcomes, units };
+}
+
+/** Per-unit reviews become the one check record the course stores. */
+export function combineReview(parts: unknown[]): {
+  checks: { name: string; result: string; note: string }[];
+  outcomes: unknown;
+  revisions: unknown[];
+  additions: unknown[];
+} {
+  const found = new Map<string, { name: string; result: string; note: string }>();
+  const revisions: unknown[] = [];
+  const additions: unknown[] = [];
+  let outcomes: unknown = null;
+  for (const part of parts) {
+    if (!part || typeof part !== "object") throw new Error("The model reply could not be read.");
+    const row = part as Record<string, unknown>;
+    if (!Array.isArray(row.checks)) throw new Error("Return every check.");
+    for (const item of row.checks) {
+      if (!item || typeof item !== "object") continue;
+      const check = item as Record<string, unknown>;
+      const name = String(check.name || "");
+      const result = String(check.result || "");
+      if (!REVIEW_CHECKS.includes(name) || !(result in REVIEW_RANK)) continue;
+      const note = String(check.note || "").trim();
+      const previous = found.get(name);
+      if (!previous) {
+        found.set(name, { name, result, note });
+        continue;
+      }
+      const winner = REVIEW_RANK[result] > REVIEW_RANK[previous.result] ? result : previous.result;
+      found.set(name, { name, result: winner, note: [previous.note, note].filter(Boolean).join(" ") });
+    }
+    if (Array.isArray(row.revisions)) revisions.push(...row.revisions);
+    if (Array.isArray(row.additions)) additions.push(...row.additions);
+    if (outcomes == null && Array.isArray(row.outcomes)) outcomes = row.outcomes;
+  }
+  const missing = REVIEW_CHECKS.filter((name) => !found.has(name));
+  if (missing.length) throw new Error(`Return every check. Missing: ${missing.join(", ")}.`);
+  return {
+    checks: REVIEW_CHECKS.map((name) => found.get(name) as { name: string; result: string; note: string }),
+    outcomes,
+    revisions,
+    additions,
+  };
+}
+
 function messageOf(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
@@ -123,24 +200,64 @@ export async function runStage(
   let note = "";
   let last = "The model reply could not be read.";
   for (let attempt = 0; attempt < STAGE_ATTEMPTS; attempt += 1) {
-    const instructions = noted(bundle.system_prompt, note);
-    emit({ type: "prompt", label: attempt ? `${label} (retry)` : label, instructions, prompt: bundle.user_prompt });
-    let seen = 0;
+    if (attempt > 0) {
+      try {
+        bundle = await deps.bundle();
+      } catch {
+        /* Keep the prompt already fetched and attach the corrected rejection below. */
+      }
+    }
+    const calls = callsOf(bundle);
+    const split = calls.length > 1;
     try {
-      const result = await deps.generate({
-        instructions,
-        prompt: bundle.user_prompt,
-        schema: bundle.schema,
-        maxOutputTokens: STAGE_TOKEN_LIMITS[request.stage],
-        onPartial: (partial) => {
-          const items = partialItems(partial);
-          if (items === seen) return;
-          seen = items;
-          emit({ type: "progress", label, items });
-        },
-      });
-      if (!result || typeof result !== "object") throw new Error("The model reply could not be read.");
-      return await deps.store(result);
+      if (!split) {
+        const call = calls[0];
+        const instructions = noted(call.system_prompt, note);
+        emit({ type: "prompt", label: attempt ? `${label} (retry)` : label, instructions, prompt: call.user_prompt });
+        let seen = 0;
+        const result = await deps.generate({
+          instructions,
+          prompt: call.user_prompt,
+          schema: call.schema,
+          maxOutputTokens: STAGE_TOKEN_LIMITS[request.stage],
+          onPartial: (partial) => {
+            const items = partialItems(partial);
+            if (items === seen) return;
+            seen = items;
+            emit({ type: "progress", label, items });
+          },
+        });
+        if (!result || typeof result !== "object") throw new Error("The model reply could not be read.");
+        return await deps.store(result);
+      }
+      const parts: unknown[] = [];
+      for (const call of calls) {
+        const callLabel = call.label || label;
+        const instructions = noted(call.system_prompt, note);
+        emit({
+          type: "prompt",
+          label: attempt ? `${callLabel} (retry)` : callLabel,
+          instructions,
+          prompt: call.user_prompt,
+        });
+        let seen = 0;
+        const result = await deps.generate({
+          instructions,
+          prompt: call.user_prompt,
+          schema: call.schema,
+          maxOutputTokens: STAGE_TOKEN_LIMITS.unit,
+          onPartial: (partial) => {
+            const items = partialItems(partial);
+            if (items === seen) return;
+            seen = items;
+            emit({ type: "progress", label: callLabel, items });
+          },
+        });
+        if (!result || typeof result !== "object") throw new Error("The model reply could not be read.");
+        parts.push(result);
+      }
+      const combined = bundle.combine === "review" ? combineReview(parts) : combineBlueprint(parts);
+      return await deps.store(combined);
     } catch (error) {
       last = messageOf(error, last);
       if (attempt + 1 < STAGE_ATTEMPTS) {

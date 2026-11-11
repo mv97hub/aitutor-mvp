@@ -32,6 +32,7 @@ from app.kc_pipeline import (
     component_range,
     components_of,
     interpret_chat,
+    is_matched_curriculum,
     missing_intake,
     pipeline_state,
     review_bundle,
@@ -198,15 +199,20 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
             intake = clean_intake(goal.intake)
             if _statement_course(intake, read_statements(goal.standards)) and not drafting.get("standards_confirmed"):
                 raise _fail(409, "Check the standard statements before the blueprint.")
+            statements = read_statements(goal.standards)
             bounds = component_range(
                 kind=goal.kind,
                 minutes=goal.minutes,
                 intake=intake,
-                statements=read_statements(goal.standards),
+                statements=statements,
             )
-            statements = read_statements(goal.standards)
             goal.blueprint = assemble_blueprint(
-                result, bounds=bounds, taken=taken, make_code=slug_code, statements=statements
+                result,
+                bounds=bounds,
+                taken=taken,
+                make_code=slug_code,
+                statements=statements,
+                matched=is_matched_curriculum(intake, statements),
             )
             goal.drafting = {
                 "questions": [],
@@ -229,13 +235,15 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
         else:
             if int(drafting.get("units_done") or 0) < len(blueprint.get("units") or []):
                 raise _fail(409, "Write every unit before the review.")
+            statements = read_statements(goal.standards)
             fixed, notes, review = apply_review(
                 result,
                 blueprint=blueprint,
                 descriptions=dict(drafting.get("units") or {}),
                 taken=taken,
                 make_code=slug_code,
-                statements=read_statements(goal.standards),
+                statements=statements,
+                matched=is_matched_curriculum(clean_intake(goal.intake), statements),
             )
             goal.blueprint = fixed
             drafting["units"] = notes
@@ -257,8 +265,13 @@ def save_blueprint(db: Session, goal: KcGoal, raw: object, approve: bool) -> dic
         raise _fail(409, "Check the standard statements before the blueprint.")
     previous = {row["code"] for row in components_of(_blueprint(goal))}
     try:
+        statements = read_statements(goal.standards)
         edited = clean_blueprint_edit(
-            raw, taken=set(_nodes_by_code(db)), make_code=slug_code, statements=read_statements(goal.standards)
+            raw,
+            taken=set(_nodes_by_code(db)),
+            make_code=slug_code,
+            statements=statements,
+            matched=is_matched_curriculum(intake, statements),
         )
     except ValueError as exc:
         raise _fail(422, str(exc)) from exc
@@ -454,13 +467,15 @@ def preview_chat(db: Session, goal: KcGoal, result: object) -> dict:
     """Describe a chat proposal without writing it."""
     drafting = _drafting(goal)
     try:
+        statements = read_statements(goal.standards)
         proposal = interpret_chat(
             result,
             blueprint=_blueprint(goal),
             descriptions=dict(drafting.get("units") or {}),
-            statements=read_statements(goal.standards),
+            statements=statements,
             taken=set(_nodes_by_code(db)),
             make_code=slug_code,
+            matched=is_matched_curriculum(clean_intake(goal.intake), statements),
         )
     except ValueError as exc:
         raise _fail(422, str(exc)) from exc
@@ -476,13 +491,15 @@ def apply_chat(db: Session, goal: KcGoal, result: object) -> dict:
     """Store a chat proposal. Components the proposal did not change keep their descriptions."""
     drafting = _drafting(goal)
     try:
+        statements = read_statements(goal.standards)
         proposal = interpret_chat(
             result,
             blueprint=_blueprint(goal),
             descriptions=dict(drafting.get("units") or {}),
-            statements=read_statements(goal.standards),
+            statements=statements,
             taken=set(_nodes_by_code(db)),
             make_code=slug_code,
+            matched=is_matched_curriculum(clean_intake(goal.intake), statements),
         )
     except ValueError as exc:
         raise _fail(422, str(exc)) from exc

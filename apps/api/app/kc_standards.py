@@ -127,6 +127,30 @@ def parse_syllabus(text: str) -> dict[str, Any]:
     return {"units": units, "statements": statements}
 
 
+def paste_count(text: str, *, syllabus: bool = False) -> int:
+    """Units or statements in pasted text. A long list is counted, not rejected.
+
+    syllabus=True counts source text only when it has unit headers, so a prose
+    source does not set the course size. The count is the larger of the unit
+    headers and the topic lines: one component per pasted unit or statement.
+    """
+    units = 0
+    statements = 0
+    for raw in str(text or "").splitlines():
+        line = _BULLET.sub("", raw.strip())
+        if not line:
+            continue
+        if _UNIT_HEADER.match(line):
+            units += 1
+            continue
+        statements += 1
+    if syllabus and units == 0:
+        return 0
+    if units:
+        return max(units, statements)
+    return statements
+
+
 def clean_statements(raw: object) -> list[dict[str, str]]:
     """The statement list from the model or the editor."""
     if not isinstance(raw, list):

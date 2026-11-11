@@ -144,6 +144,8 @@ export type KcIntake = {
   interests: string;
   misconceptions_seen: string;
   source_text: string;
+  source_text_cut?: boolean;
+  standard_text_cut?: boolean;
 };
 
 export type KcStatement = {

@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 
 import { markKcReady, saveKcCourse } from "@/lib/kc-actions";
 import { AUDIENCES, COURSE_USES, DEPTHS, KINDS, READING_LEVELS, type KcCourse } from "@/lib/kc";
+import { PASTE_OVERRIDE_NOTE, intakeCutNotes } from "@/lib/kc-curriculum";
 import { CURRICULA, curriculumOf, STANDARD_EXAMPLE } from "@/lib/kc-standards";
 
 /** The course intake. Required answers come first. A standard is optional and can be pasted. */
@@ -13,6 +14,7 @@ export function KcCourseSettings({ course, drafted }: { course: KcCourse; drafte
   const help = useRef<HTMLDialogElement>(null);
   const intake = course.intake;
   const chosen = curriculumOf(standard);
+  const cutNotes = intakeCutNotes(intake);
 
   return (
     <form className="studio-prefs" action={saveKcCourse}>
@@ -70,6 +72,7 @@ export function KcCourseSettings({ course, drafted }: { course: KcCourse; drafte
               </option>
             ))}
           </select>
+          <span className="ds-quiet">{PASTE_OVERRIDE_NOTE}</span>
         </label>
         <label className="studio-span">
           By the end the child can
@@ -158,6 +161,7 @@ export function KcCourseSettings({ course, drafted }: { course: KcCourse; drafte
                 rows={6}
                 placeholder="One statement per line, with its code in front if it has one"
               />
+              {intake.standard_text_cut ? <span className="ds-quiet">{cutNotes.find((note) => note.startsWith("Standard"))}</span> : null}
             </label>
             <div className="studio-span kc-standard-note">
               <p>
@@ -254,7 +258,10 @@ export function KcCourseSettings({ course, drafted }: { course: KcCourse; drafte
         <label className="studio-span">
           Source text, optional
           <textarea aria-label="Source text" name="source_text" defaultValue={intake.source_text} rows={4} />
+          {intake.source_text_cut ? <span className="ds-quiet">{cutNotes.find((note) => note.startsWith("Source"))}</span> : null}
         </label>
+        <input type="hidden" name="source_text_cut" value={intake.source_text_cut ? "yes" : ""} />
+        <input type="hidden" name="standard_text_cut" value={intake.standard_text_cut ? "yes" : ""} />
         <label className="studio-span kc-check">
           <input
             type="checkbox"

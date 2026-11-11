@@ -4,7 +4,7 @@ import test from "node:test";
 
 import type { KcPipeline } from "./kc.ts";
 import { PipelineStageError, runPipeline, type RunStage } from "./kc-pipeline.ts";
-import { partialItems, runStage, stageLabel, STAGE_TOKEN_LIMITS, type StageRequest } from "./kc-stage.ts";
+import { combineBlueprint, combineReview, partialItems, runStage, stageLabel, STAGE_TOKEN_LIMITS, type StageRequest } from "./kc-stage.ts";
 
 function pipeline(next: KcPipeline["next"], extra: Partial<KcPipeline> = {}): KcPipeline {
   return {
@@ -127,11 +127,125 @@ test("streaming progress counts the rows written so far", () => {
   assert.equal(partialItems({ units: [{ components: [{}, {}] }, { components: [{}] }] }), 5);
 });
 
+test("a blueprint retry fetches the corrected bounds", async () => {
+  const generated: string[] = [];
+  let fetches = 0;
+  await runStage(
+    { stage: "blueprint", unit: null },
+    {
+      bundle: async () => {
+        fetches += 1;
+        return {
+          model: "gpt-4.1",
+          system_prompt: "Return exactly 42 components.",
+          user_prompt: "Plan the course blueprint.",
+          schema: {},
+        };
+      },
+      generate: async (input) => {
+        generated.push(input.instructions);
+        assert.equal(input.maxOutputTokens, STAGE_TOKEN_LIMITS.blueprint);
+        if (generated.length === 1) throw new Error("You returned 13. Return exactly 42 components.");
+        return { outcomes: ["Name it.", "Use it."], units: [] };
+      },
+      store: async () => pipeline(null),
+    },
+    () => {},
+  );
+  assert.equal(fetches, 2);
+  assert.match(generated[1] ?? "", /exactly 42/);
+  assert.doesNotMatch(generated[1] ?? "", /8 and 12/);
+});
+
+test("a long matched blueprint is one call per unit inside the unit token ceiling", async () => {
+  const tokens: number[] = [];
+  let stored: { outcomes?: string[]; units?: { title?: string }[] } | null = null;
+  await runStage(
+    { stage: "blueprint", unit: null },
+    {
+      bundle: async () => ({
+        model: "gpt-4.1",
+        system_prompt: "Return exactly 42 components.",
+        user_prompt: "Plan the course blueprint.",
+        schema: {},
+        combine: "blueprint",
+        calls: [1, 2].map((number) => ({
+          label: `Blueprint unit ${number} of 2`,
+          system_prompt: `Plan unit ${number}. Return exactly 1 component.`,
+          user_prompt: `Plan unit ${number}.`,
+          schema: {},
+        })),
+      }),
+      generate: async (input) => {
+        tokens.push(input.maxOutputTokens);
+        const number = input.prompt.includes("1") ? "One" : "Two";
+        return {
+          outcomes: ["Name it.", "Use it."],
+          unit: { title: number, summary: "A unit.", components: [{ ref: "c1", title: number, summary: "Teaches it.", prerequisites: [] }] },
+        };
+      },
+      store: async (result) => {
+        stored = result as { outcomes: string[]; units: { title: string }[] };
+        return pipeline(null, { stage: "edit_blueprint" });
+      },
+    },
+    () => {},
+  );
+  assert.deepEqual(tokens, [STAGE_TOKEN_LIMITS.unit, STAGE_TOKEN_LIMITS.unit]);
+  assert.deepEqual(stored?.units?.map((unit) => unit.title), ["One", "Two"]);
+  assert.deepEqual(stored?.outcomes, ["Name it.", "Use it."]);
+});
+
+test("unit reviews combine into one check", () => {
+  const combined = combineReview([
+    {
+      checks: [
+        { name: "gaps", result: "ok", note: "" },
+        { name: "overlap", result: "fixed", note: "Merged a repeat." },
+        { name: "jumps", result: "ok", note: "" },
+        { name: "capstone", result: "ok", note: "" },
+        { name: "outcomes", result: "ok", note: "" },
+        { name: "reading_level", result: "ok", note: "" },
+      ],
+      outcomes: ["Name it.", "Use it."],
+      revisions: [{ code: "a" }],
+      additions: [],
+    },
+    {
+      checks: [
+        { name: "gaps", result: "issue", note: "A step is missing." },
+        { name: "overlap", result: "ok", note: "" },
+        { name: "jumps", result: "ok", note: "" },
+        { name: "capstone", result: "fixed", note: "Added a close." },
+        { name: "outcomes", result: "ok", note: "" },
+        { name: "reading_level", result: "issue", note: "Too hard." },
+      ],
+      outcomes: null,
+      revisions: [],
+      additions: [{ title: "Close" }],
+    },
+  ]);
+  const byName = Object.fromEntries(combined.checks.map((check) => [check.name, check]));
+  assert.equal(byName.gaps?.result, "issue");
+  assert.equal(byName.overlap?.result, "fixed");
+  assert.match(byName.overlap?.note ?? "", /Merged a repeat/);
+  assert.equal(byName.capstone?.result, "fixed");
+  assert.equal(combined.revisions.length, 1);
+  assert.equal(combined.additions.length, 1);
+  assert.deepEqual(combined.outcomes, ["Name it.", "Use it."]);
+  const blueprint = combineBlueprint([
+    { outcomes: ["Name it.", "Use it."], unit: { title: "One" } },
+    { unit: { title: "Two" } },
+  ]);
+  assert.deepEqual(blueprint.units, [{ title: "One" }, { title: "Two" }]);
+});
+
 test("the course draft route streams with a token limit and a long duration", () => {
   const route = readFileSync(new URL("../app/api/kc/course-draft/route.ts", import.meta.url), "utf8");
   const model = readFileSync(new URL("./kc-stage-model.ts", import.meta.url), "utf8");
   assert.match(route, /maxDuration = 300/);
   assert.match(route, /application\/x-ndjson/);
+  assert.match(route, /STAGE_TOKEN_LIMITS\.unit/);
   assert.match(model, /maxOutputTokens: input.maxOutputTokens/);
   assert.match(model, /partialOutputStream/);
 });

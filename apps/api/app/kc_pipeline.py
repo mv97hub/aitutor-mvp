@@ -16,6 +16,8 @@ from app.kc_standards import (
     STANDARDS,
     component_standards,
     coverage_matrix,
+    parse_syllabus,
+    paste_count,
     standard_brief_lines,
     standard_label,
     statement_lines,
@@ -28,6 +30,9 @@ MAX_FOLLOW_UPS = 2
 MINUTES_PER_COMPONENT = 12
 MAX_OUTCOMES = 8
 MAX_PREREQUISITES = 4
+PREREQUISITE_CEILING = 12
+# One blueprint or review call under this size. A longer matched curriculum is one call per unit.
+ONE_CALL_LIMIT = 12
 
 DEPTHS: dict[str, tuple[str, int, int]] = {
     "intro": ("Quick intro", 4, 6),
@@ -48,7 +53,7 @@ USES: dict[str, str] = {
 }
 
 _SHORT = 600
-_LONG = 20000
+_LONG = 100_000
 INTAKE_TEXT_FIELDS: dict[str, int] = {
     "starting_point": _SHORT,
     "must_cover": _SHORT,
@@ -229,12 +234,12 @@ BLUEPRINT_RULES = (
 
 UNIT_RULES = (
     "You write the description of each component in one unit of a children's course. "
-    "Each description is plain text of 3 to 4 sentences: what the child will be able to do, "
+    "Each description is plain text of 2 to 6 sentences: what the child will be able to do, "
     "the one core idea, and one common confusion. "
     "When the component has prerequisites, say what it builds on. Say what it leads to where that is natural. "
     "Write for the age band and reading level. "
     "Do not write a block list, an outline, topics, goals, headings, bullets, or line breaks. "
-    "Do not repeat or contradict the descriptions already written. "
+    "Do not repeat another component's description. "
     "Describe only the components listed for this unit, with the codes given."
 )
 
@@ -254,7 +259,7 @@ REVIEW_RULES = (
     "Return an empty revisions list and an empty additions list when nothing needs a fix. "
     "Return outcomes only when you rewrite them, otherwise null. "
     "Prerequisites name codes of components that come earlier in the course. "
-    "A description is plain text of 3 to 4 sentences. "
+    "A description is plain text of 2 to 6 sentences. "
     "Do not write block lists, outlines, topics, headings, bullets, or line breaks."
 )
 
@@ -297,7 +302,22 @@ def clean_intake(raw: object) -> dict:
         "align_syllabus": align,
     }
     for key, cap in INTAKE_TEXT_FIELDS.items():
-        cleaned[key] = str(data.get(key) or "").strip()[:cap]
+        raw = str(data.get(key) or "").strip()
+        if key in {"source_text", "standard_text"}:
+            cleaned[key] = raw[:cap]
+            flag = data.get(f"{key}_cut")
+            if isinstance(flag, str):
+                already_cut = flag.strip().lower() in {"1", "true", "yes", "on"}
+            else:
+                already_cut = bool(flag)
+            if len(raw) > cap:
+                cleaned[f"{key}_cut"] = True
+            elif len(raw) < cap:
+                cleaned[f"{key}_cut"] = False
+            else:
+                cleaned[f"{key}_cut"] = already_cut
+        else:
+            cleaned[key] = raw[:cap]
     return cleaned
 
 
@@ -322,9 +342,43 @@ def missing_intake(*, title: str, description: str, audience: str, intake: dict)
 
 
 def _pasted_count(intake: dict, statements: list[dict] | None) -> int:
-    if statements is not None:
-        return len(statements)
-    return len(statements_from_intake(intake))
+    """The larger of the stored statements and the intake paste.
+
+    An empty stored list counts as nothing only when the intake has no paste.
+    standard_text is statements. source_text counts when it is a syllabus.
+    """
+    stored = len(statements) if statements else 0
+    standard = paste_count(str(intake.get("standard_text") or ""))
+    source = paste_count(str(intake.get("source_text") or ""), syllabus=True)
+    return max(stored, standard, source)
+
+
+def paste_overrides_depth(intake: dict, statements: list[dict] | None = None) -> bool:
+    """True when a paste is longer than the depth band and sets the component count."""
+    if intake.get("component_count"):
+        return False
+    _label, _low, high = DEPTHS[intake.get("depth") or "standard"]
+    return _pasted_count(intake, statements) > high
+
+
+def is_matched_curriculum(intake: dict, statements: list[dict] | None = None) -> bool:
+    """One component per pasted unit or statement, including a paste that overrides the depth."""
+    if intake.get("component_count"):
+        return False
+    if intake.get("depth") == "curriculum" or intake.get("align_syllabus"):
+        return _pasted_count(intake, statements) > 0 or intake.get("depth") == "curriculum"
+    return paste_overrides_depth(intake, statements)
+
+
+def outcome_limit(*, matched: bool, units: int) -> int:
+    """Matched courses may have one outcome per unit. Fewer units keep the usual cap of 8."""
+    if not matched:
+        return MAX_OUTCOMES
+    return max(MAX_OUTCOMES, units)
+
+
+def prerequisite_limit(*, matched: bool) -> int:
+    return PREREQUISITE_CEILING if matched else MAX_PREREQUISITES
 
 
 def component_range(
@@ -521,6 +575,11 @@ def blueprint_bundle(*, course: dict, brief: str, model: str) -> dict:
         BLUEPRINT_RULES,
         INSTRUCTION_RULES,
         _count_text(low, high),
+        (
+            "A longer paste overrides the depth. Plan one component per pasted unit or statement."
+            if paste_overrides_depth(course["intake"], statements)
+            else ""
+        ),
         f"Course topic: {course['title']}",
         f"By the end the child can: {course['description']}",
         f"Age band: {course['audience']}",
@@ -564,12 +623,168 @@ def blueprint_bundle(*, course: dict, brief: str, model: str) -> dict:
             lines.append(f"{label}: {intake[key]}")
     if intake.get("source_text"):
         lines.extend(["Source text from the author:", intake["source_text"]])
-    return {
+    bundle = {
         "model": model,
-        "system_prompt": "\n".join(lines),
+        "system_prompt": "\n".join(line for line in lines if line),
         "user_prompt": "Plan the course blueprint.",
         "schema": _blueprint_schema(statements),
     }
+    calls = _blueprint_unit_calls(
+        course=course, brief=brief, low=low, high=high, statements=statements, model=model
+    )
+    if len(calls) > 1:
+        bundle["calls"] = calls
+        bundle["combine"] = "blueprint"
+    return bundle
+
+
+def _safe_syllabus(text: str) -> dict:
+    try:
+        return parse_syllabus(text)
+    except ValueError:
+        return {"units": [], "statements": []}
+
+
+def _curriculum_groups(intake: dict, statements: list[dict]) -> list[dict]:
+    """Units to plan. Stored statement codes win when the paste has the same length."""
+    source = str(intake.get("source_text") or "")
+    standard = str(intake.get("standard_text") or "")
+    parsed = {"units": [], "statements": []}
+    if paste_count(source, syllabus=True):
+        parsed = _safe_syllabus(source)
+    if not parsed["units"] and not parsed["statements"] and standard.strip():
+        parsed = _safe_syllabus(standard)
+    units = list(parsed["units"])
+    if units and statements:
+        flat = [item for unit in units for item in unit.get("statements") or []]
+        if len(flat) == len(statements):
+            aligned = []
+            index = 0
+            for unit in units:
+                count = len(unit.get("statements") or [])
+                aligned.append({"title": unit["title"], "statements": statements[index : index + count]})
+                index += count
+            return [group for group in aligned if group["statements"]]
+    if units and not statements:
+        return [group for group in units if group.get("statements")]
+    rows = list(statements) or list(parsed["statements"])
+    return [
+        {"title": str(item.get("text") or f"Topic {index}")[:80], "statements": [item]}
+        for index, item in enumerate(rows, start=1)
+    ]
+
+
+def _unit_plan_schema(topics: list[dict], *, outcomes: bool) -> dict:
+    component = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": dict(_BLUEPRINT_COMPONENT["properties"]),
+        "required": list(_BLUEPRINT_COMPONENT["required"]),
+    }
+    codes = [str(item.get("code") or "") for item in topics if item.get("code")]
+    if codes:
+        component["properties"] = {
+            **component["properties"],
+            "standards": {"type": "array", "items": {"type": "string", "enum": codes}},
+        }
+        component["required"] = [*component["required"], "standards"]
+    unit = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "components": {"type": "array", "items": component},
+        },
+        "required": ["title", "summary", "components"],
+    }
+    properties: dict[str, Any] = {"unit": unit}
+    required = ["unit"]
+    if outcomes:
+        properties = {"outcomes": {"type": "array", "items": {"type": "string"}}, **properties}
+        required = ["outcomes", *required]
+    return {"type": "object", "additionalProperties": False, "properties": properties, "required": required}
+
+
+def _blueprint_unit_calls(
+    *,
+    course: dict,
+    brief: str,
+    low: int,
+    high: int,
+    statements: list[dict],
+    model: str,
+) -> list[dict]:
+    """One model call per unit when a matched curriculum is too large for one blueprint call."""
+    del model
+    if low != high or high <= ONE_CALL_LIMIT or not is_matched_curriculum(course["intake"], statements):
+        return []
+    groups = _curriculum_groups(course["intake"], statements)
+    planned = sum(len(group["statements"]) or 1 for group in groups)
+    if planned != low:
+        rows = [item for group in groups for item in group["statements"]]
+        while len(rows) < low:
+            rows.append({"code": "", "text": f"Topic {len(rows) + 1}"})
+        groups = [
+            {"title": str(rows[index].get("text") or f"Topic {index + 1}")[:80], "statements": [rows[index]]}
+            for index in range(low)
+        ]
+    if len(groups) <= 1:
+        return []
+    known = bool(statements)
+    calls: list[dict] = []
+    ref = 1
+    total = len(groups)
+    for index, group in enumerate(groups, start=1):
+        topics = list(group["statements"])
+        count = len(topics) or 1
+        refs = [f"c{ref + offset}" for offset in range(count)]
+        earlier = [f"c{number}" for number in range(1, ref)]
+        ref += count
+        lines = [
+            "You plan one unit of a children's course. The other units are planned in their own calls.",
+            INSTRUCTION_RULES,
+            f"Return exactly {count} {'component' if count == 1 else 'components'} in this unit.",
+            f"Course topic: {course['title']}",
+            f"By the end the child can: {course['description']}",
+            f"Age band: {course['audience']}",
+            f"Reading level: {READING_LEVELS[course['intake']['reading_level']]}",
+            "Course brief:",
+            brief,
+            f"This is unit {index} of {total}: {group['title']}.",
+            "Component refs for this unit, in order: " + ", ".join(refs) + ".",
+            (
+                "Earlier refs a prerequisite may name: " + ", ".join(earlier) + "."
+                if earlier
+                else "This is the first unit. Its first component has no prerequisites."
+            ),
+        ]
+        if index == 1:
+            lines.append(
+                f"Also return the course outcomes: at least two, and at most {max(MAX_OUTCOMES, total)}. "
+                "Each outcome begins with an observable verb."
+            )
+        lines.append("Topics in this unit:")
+        for topic, name in zip(topics, refs):
+            code = str(topic.get("code") or "")
+            text = topic.get("text") or group["title"]
+            lines.append(f"- {name} covers {code + ': ' if code and known else ''}{text}")
+        if known:
+            lines.append(
+                "Each component's standards list is the code of the statement it covers. "
+                "Do not merge two statements into one component."
+            )
+        else:
+            lines.append("Do not invent curriculum codes.")
+        calls.append(
+            {
+                "label": f"Blueprint unit {index} of {total}",
+                "system_prompt": "\n".join(lines),
+                "user_prompt": f"Plan unit {index} of {total}: {group['title']}.",
+                "schema": _unit_plan_schema(topics if known else [], outcomes=index == 1),
+            }
+        )
+    return calls
 
 
 def _standard_mark(item: dict) -> str:
@@ -585,13 +800,13 @@ def _clean_text(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
-def _clean_outcomes(value: object) -> list[str]:
+def _clean_outcomes(value: object, *, limit: int = MAX_OUTCOMES) -> list[str]:
     outcomes = [_clean_text(item) for item in value] if isinstance(value, list) else []
     outcomes = [item for item in outcomes if item]
     if len(outcomes) < 2:
         raise ValueError("Write at least two course outcomes.")
-    if len(outcomes) > MAX_OUTCOMES:
-        raise ValueError(f"Write at most {MAX_OUTCOMES} course outcomes.")
+    if len(outcomes) > limit:
+        raise ValueError(f"Write at most {limit} course outcomes.")
     return outcomes
 
 
@@ -627,12 +842,15 @@ def assemble_blueprint(
     taken: set[str],
     make_code: Callable[[str, set[str]], str],
     statements: list[dict] | None = None,
+    matched: bool = False,
 ) -> dict:
     """Turn the model blueprint (refs) into the stored blueprint (codes)."""
     if not isinstance(result, dict):
         raise ValueError("The model reply could not be read.")
-    outcomes = _clean_outcomes(result.get("outcomes"))
     raw_units = result.get("units")
+    unit_count = len(raw_units) if isinstance(raw_units, list) else 0
+    outcomes = _clean_outcomes(result.get("outcomes"), limit=outcome_limit(matched=matched, units=max(unit_count, 1)))
+    prereq_cap = prerequisite_limit(matched=matched)
     if not isinstance(raw_units, list) or not raw_units:
         raise ValueError("Return at least one unit.")
     codes: dict[str, str] = {}
@@ -666,8 +884,8 @@ def assemble_blueprint(
                     )
                 if codes[key] not in prerequisites:
                     prerequisites.append(codes[key])
-            if len(prerequisites) > MAX_PREREQUISITES:
-                raise ValueError(f"{name} has more than {MAX_PREREQUISITES} prerequisites.")
+            if len(prerequisites) > prereq_cap:
+                raise ValueError(f"{name} has more than {prereq_cap} prerequisites.")
             code = make_code(name, taken_now)
             taken_now.add(code)
             codes[ref] = code
@@ -698,12 +916,16 @@ def clean_blueprint_edit(
     taken: set[str],
     make_code: Callable[[str, set[str]], str],
     statements: list[dict] | None = None,
+    matched: bool = False,
 ) -> dict:
     """The blueprint as the author edited it. New rows have no code yet."""
     if not isinstance(raw, dict):
         raise ValueError("The blueprint could not be read.")
-    outcomes = _clean_outcomes(raw.get("outcomes"))
     raw_units = raw.get("units")
+    present = 0
+    if isinstance(raw_units, list):
+        present = sum(1 for unit in raw_units if isinstance(unit, dict) and unit.get("components"))
+    outcomes = _clean_outcomes(raw.get("outcomes"), limit=outcome_limit(matched=matched, units=max(present, 1)))
     if not isinstance(raw_units, list) or not raw_units:
         raise ValueError("Add at least one unit.")
     given = {
@@ -777,18 +999,15 @@ def unit_bundle(
     unit_index: int,
     model: str,
 ) -> dict:
+    del descriptions  # Earlier descriptions are not repeated. The prompt carries titles only.
     units = blueprint["units"]
     unit = units[unit_index]
-    written = [
-        f"- {item['code']}: {descriptions[item['code']]}"
-        for item in components_of(blueprint)
-        if item["code"] in descriptions
-    ]
     now = [
         f"- {item['code']}: {item['title']} (needs: {', '.join(item['prerequisites']) or 'none'}) - {item['summary']}"
         + _standard_mark(item)
         for item in unit["components"]
     ]
+    titles = "\n".join(f"{index}. {item['title']}" for index, item in enumerate(units, start=1))
     lines = [
         UNIT_RULES,
         INSTRUCTION_RULES,
@@ -799,10 +1018,8 @@ def unit_bundle(
         brief,
         "Course outcomes:",
         _outcome_lines(blueprint),
-        "Blueprint:",
-        _blueprint_outline(blueprint),
-        "Descriptions already written:",
-        "\n".join(written) if written else "- None yet.",
+        "Unit titles:",
+        titles,
         f"Write now: unit {unit_index + 1} of {len(units)}, {unit['title']}.",
         "Components to describe:",
         "\n".join(now),
@@ -816,15 +1033,23 @@ def unit_bundle(
 
 
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])[\"')\]]*\s+(?=[\"'(\[]?[A-Z0-9])")
+_DECIMAL_GAP = re.compile(r"(?<=\d)\s*\.\s*(?=\d)")
+_INITIAL = re.compile(r"\b([A-Z])\.(?=\s+[A-Z])")
 _LIST_START = re.compile(r"^\s*(?:[-*•#]|\d+[.)])\s")
 
 
 def sentence_count(text: str) -> int:
-    return len([part for part in _SENTENCE_BREAK.split(text.strip()) if part.strip()])
+    """Sentences in plain text. A decimal (3.2 percent) or an initial (J. K. Rowling) is not a break."""
+    protected = _DECIMAL_GAP.sub(".", text)
+    previous = None
+    while previous != protected:
+        previous = protected
+        protected = _INITIAL.sub(r"\1", protected)
+    return len([part for part in _SENTENCE_BREAK.split(protected.strip()) if part.strip()])
 
 
 def clean_description(value: object, label: str = "A description") -> str:
-    """Plain text, 3 to 4 sentences (5 is tolerated), no block line, no list."""
+    """Plain text, 2 to 6 sentences, no block line, no list."""
     raw = str(value or "")
     if re.search(r"(?m)^\s*(?:[-*•]|\d+[.)])\s", raw):
         raise ValueError(f"{label} is plain sentences, not a list.")
@@ -836,10 +1061,10 @@ def clean_description(value: object, label: str = "A description") -> str:
     if _LIST_START.match(text):
         raise ValueError(f"{label} is plain sentences, not a list.")
     count = sentence_count(text)
-    if count < 3 or count > 5:
-        raise ValueError(f"{label} is 3 to 4 sentences. This one has {count}.")
+    if count < 2 or count > 6:
+        raise ValueError(f"{label} is 2 to 6 sentences. This one has {count}.")
     if len(text) > 1200:
-        raise ValueError(f"{label} is too long. Keep it to 3 to 4 sentences.")
+        raise ValueError(f"{label} is too long. Keep it to 2 to 6 sentences.")
     return text
 
 
@@ -931,12 +1156,81 @@ def review_bundle(*, course: dict, brief: str, blueprint: dict, descriptions: di
                 statement_lines(statements),
             ]
         )
-    return {
+    bundle = {
         "model": model,
         "system_prompt": "\n".join(lines),
         "user_prompt": "Review the drafted course and fix what you find.",
         "schema": _review_schema(statements),
     }
+    calls = _review_unit_calls(
+        course=course, brief=brief, blueprint=blueprint, descriptions=descriptions, statements=statements
+    )
+    if len(calls) > 1:
+        bundle["calls"] = calls
+        bundle["combine"] = "review"
+    return bundle
+
+
+def _review_unit_calls(
+    *,
+    course: dict,
+    brief: str,
+    blueprint: dict,
+    descriptions: dict[str, str],
+    statements: list[dict],
+) -> list[dict]:
+    """One review call per unit when the course is too large for one response."""
+    rows = components_of(blueprint)
+    units = list(blueprint.get("units") or [])
+    if len(rows) <= ONE_CALL_LIMIT or len(units) <= 1:
+        return []
+    titles = "\n".join(f"{index}. {unit['title']}" for index, unit in enumerate(units, start=1))
+    calls: list[dict] = []
+    total = len(units)
+    for index, unit in enumerate(units):
+        drafted = [
+            f"- {item['code']}: {item['title']} (needs: {', '.join(item.get('prerequisites') or []) or 'none'})"
+            f" - {descriptions.get(item['code'], '')}"
+            for item in unit.get("components") or []
+        ]
+        codes = [item["code"] for item in unit.get("components") or []]
+        lines = [
+            REVIEW_RULES,
+            "Review this unit only. The other units are reviewed separately and stored as one combined check.",
+            INSTRUCTION_RULES,
+            f"Course topic: {course['title']}",
+            f"Age band: {course['audience']}",
+            f"Reading level: {READING_LEVELS[course['intake']['reading_level']]}",
+            "Course brief:",
+            brief,
+            "Course outcomes:",
+            _outcome_lines(blueprint),
+            "Unit titles:",
+            titles,
+            f"Review now: unit {index + 1} of {total}, {unit['title']}.",
+            "Components in this unit:",
+            "\n".join(drafted),
+            "Revise or add components only in this unit. "
+            f"Codes in this unit: {', '.join(codes)}.",
+        ]
+        if statements:
+            lines.extend(
+                [
+                    "Close a missing statement by adding its code to a component in this unit, or by adding a component here. "
+                    "Do not invent codes. Set a revision's standards to null when the codes do not change.",
+                    "Standard statements:",
+                    statement_lines(statements),
+                ]
+            )
+        calls.append(
+            {
+                "label": f"Review unit {index + 1} of {total}",
+                "system_prompt": "\n".join(lines),
+                "user_prompt": f"Review unit {index + 1}: {unit['title']}.",
+                "schema": _review_schema(statements),
+            }
+        )
+    return calls
 
 
 def apply_review(
@@ -947,6 +1241,7 @@ def apply_review(
     taken: set[str],
     make_code: Callable[[str, set[str]], str],
     statements: list[dict] | None = None,
+    matched: bool = False,
 ) -> tuple[dict, dict[str, str], dict]:
     """Apply the review fixes. Returns the new blueprint, descriptions, and the review record."""
     if not isinstance(result, dict):
@@ -975,7 +1270,8 @@ def apply_review(
     outcomes = list(blueprint["outcomes"])
     outcomes_changed = False
     if result.get("outcomes") is not None:
-        outcomes = _clean_outcomes(result.get("outcomes"))
+        limit = outcome_limit(matched=matched, units=max(len(blueprint.get("units") or []), 1))
+        outcomes = _clean_outcomes(result.get("outcomes"), limit=limit)
         outcomes_changed = outcomes != list(blueprint["outcomes"])
 
     revised: list[str] = []
@@ -1126,10 +1422,12 @@ def _chat_schema(statements: list[dict]) -> dict:
 CHAT_RULES = (
     "You edit the course the author already has. "
     "The reply is one or two plain sentences that say what changed. "
-    "Return the whole blueprint after that change. "
+    "Return only the units you changed. Do not return the whole blueprint. "
+    "Include every component of a unit you change. Leave out units you did not change. "
+    "To remove a unit, return that unit with an empty components list. "
     "Keep the code of every component you keep. An added component has an empty code. "
     "Set description to null on every component you did not change. "
-    "Write a new description, 3 to 4 plain sentences, only for a component you add or change. "
+    "Write a new description, 2 to 6 plain sentences, only for a component you add or change. "
     "Put the code of each changed component in changed_codes. Leave a new component out of that list. "
     "Do not rewrite, reorder, or drop anything the author did not ask about. "
     "Prerequisites name codes of components that come earlier. "
@@ -1211,6 +1509,69 @@ def _raw_components(result: dict) -> list[dict]:
     return rows
 
 
+def merge_chat_patch(blueprint: dict, result: dict) -> dict:
+    """Fold a chat patch onto the stored blueprint.
+
+    Units the reply leaves out stay as they are. A returned unit replaces the
+    stored unit that shares a component code or the same title. An empty
+    components list removes that unit.
+    """
+    stored_units = [
+        {**unit, "components": [dict(item) for item in (unit.get("components") or []) if isinstance(item, dict)]}
+        for unit in (blueprint.get("units") or [])
+        if isinstance(unit, dict)
+    ]
+    patch_units = result.get("units") if isinstance(result.get("units"), list) else []
+    if not patch_units:
+        outcomes = result.get("outcomes") if isinstance(result.get("outcomes"), list) and result.get("outcomes") else blueprint.get("outcomes")
+        return {"outcomes": list(outcomes or []), "units": stored_units}
+    index_by_code: dict[str, int] = {}
+    for index, unit in enumerate(stored_units):
+        for item in unit["components"]:
+            code = _clean_text(item.get("code"))
+            if code:
+                index_by_code[code] = index
+    replaced: dict[int, dict] = {}
+    removed: set[int] = set()
+    appended: list[dict] = []
+    for raw in patch_units:
+        if not isinstance(raw, dict):
+            continue
+        components = raw.get("components")
+        title = _clean_text(raw.get("title"))
+        if isinstance(components, list) and not components:
+            for index, unit in enumerate(stored_units):
+                if title and _clean_text(unit.get("title")) == title:
+                    removed.add(index)
+            continue
+        found: int | None = None
+        if isinstance(components, list):
+            for item in components:
+                if not isinstance(item, dict):
+                    continue
+                code = _clean_text(item.get("code"))
+                if code and code in index_by_code:
+                    found = index_by_code[code]
+                    break
+        if found is None and title:
+            for index, unit in enumerate(stored_units):
+                if index not in replaced and _clean_text(unit.get("title")) == title:
+                    found = index
+                    break
+        if found is None:
+            appended.append(raw)
+        else:
+            replaced[found] = raw
+    units: list[dict] = []
+    for index, unit in enumerate(stored_units):
+        if index in removed:
+            continue
+        units.append(replaced.get(index, unit))
+    units.extend(appended)
+    outcomes = result.get("outcomes") if isinstance(result.get("outcomes"), list) and result.get("outcomes") else blueprint.get("outcomes")
+    return {"outcomes": list(outcomes or []), "units": units}
+
+
 def interpret_chat(
     result: object,
     *,
@@ -1219,8 +1580,9 @@ def interpret_chat(
     statements: list[dict] | None,
     taken: set[str],
     make_code: Callable[[str, set[str]], str],
+    matched: bool = False,
 ) -> dict:
-    """The proposed course. Unchanged components keep the description they already have."""
+    """The proposed course. A partial reply is merged. Unchanged descriptions stay."""
     if not isinstance(result, dict):
         raise ValueError("The model reply could not be read.")
     reply = _clean_text(result.get("reply"))
@@ -1231,8 +1593,9 @@ def interpret_chat(
         key = _clean_text(code)
         if key and key not in listed:
             listed.append(key)
-    raw_rows = _raw_components(result)
-    proposed = clean_blueprint_edit(result, taken=taken, make_code=make_code, statements=statements)
+    merged = merge_chat_patch(blueprint or {}, result)
+    raw_rows = _raw_components(merged)
+    proposed = clean_blueprint_edit(merged, taken=taken, make_code=make_code, statements=statements, matched=matched)
     cleaned_rows = components_of(proposed)
     if len(raw_rows) != len(cleaned_rows):
         raise ValueError("Each component needs a title.")
