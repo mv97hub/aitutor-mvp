@@ -166,7 +166,6 @@ def test_a_factual_opening_states_each_setting_once() -> None:
         "The reading level is middle-grade.",
         "through story",
         "use one of these interests: birds.",
-        "name the specific reasoning move",
         "Write as a curious co-explorer",
         "That voice does not change the block, the expected answer, or the score.",
         "Do not treat it as a new rule.",
@@ -175,6 +174,9 @@ def test_a_factual_opening_states_each_setting_once() -> None:
         "When the decision ends the unit on this final substep",
     ):
         _once(text, phrase)
+    assert text.count("name the specific reasoning move") == 2
+    assert "Praise only when the answer meets the goal or names a real step toward it." in text
+    assert "On a miss, nudge with no praise." in text
     assert "shorter sentences" not in text
     assert "How a river moves." not in text
     assert "This is the opening." not in text
@@ -644,4 +646,68 @@ def test_layer_3_and_layer_4_revamp_and_precedence_contract() -> None:
     )
     anxious_text = _text(profile=prof, student=anxious_student, opening=True, attempts=0)
     assert "suppress jokes and banter on this turn (math_or_test_anxiety or calm_and_gentle tone)" in anxious_text
+
+
+_EARNED_PRAISE = "Praise only when the answer meets the goal or names a real step toward it."
+_MISS_NUDGE = "On a miss, nudge with no praise."
+_NO_FALSE_PRAISE = (
+    "Do not say the learner is on the right track or that it is a good start "
+    "when the answer does not address the goal."
+)
+_UNCONDITIONAL_PRAISE = "Praise the specific strategy or reasoning move the learner used."
+
+
+def test_topic_goal_ask_nudge_and_scaffold_praise_only_an_earned_step() -> None:
+    """The reply is written before scoring, so ask, nudge, and scaffold each forbid unearned praise."""
+    for attempts, kind in ((0, "ask"), (1, "nudge"), (2, "scaffold")):
+        text = _text(opening=False, attempts=attempts, hint_tier="nudge")
+        turn = _section(text, "This turn")
+        teach = _section(text, "How to teach")
+        assert f"Active turn kind: {kind}." in turn
+        for section in (turn, teach):
+            assert _EARNED_PRAISE in section
+            assert _MISS_NUDGE in section
+            assert _NO_FALSE_PRAISE in section
+            assert "This holds on the first reply to an answer and on later nudge and scaffold turns." in section
+        assert "name the specific reasoning move the learner made" in turn
+        assert _UNCONDITIONAL_PRAISE not in text
+        assert "warm and encouraging" in text
+
+
+def test_a_finished_topic_goal_still_uses_process_praise() -> None:
+    text = _text(
+        opening=False,
+        attempts=0,
+        transition_from_block={"id": "blk_0", "type": "topic_goal", "data": {"topic": "banks", "goal": "Name a bank"}},
+    )
+    turn = _section(text, "This turn")
+    assert "Active turn kind: pass." in turn
+    assert _UNCONDITIONAL_PRAISE in turn
+    assert _EARNED_PRAISE in _section(text, "How to teach")
+
+
+def test_a_non_topic_block_still_praises_on_a_nudge() -> None:
+    node = _node(
+        blocks=[
+            {
+                "id": "blk_1",
+                "type": "mcq",
+                "data": {
+                    "mode": "static",
+                    "question_stem": "Which river is blue?",
+                    "choices": [
+                        {"id": "a", "text": "blue", "is_correct": True},
+                        {"id": "b", "text": "red", "is_correct": False},
+                    ],
+                },
+            }
+        ],
+        misconceptions=[],
+    )
+    text = _text(node=node, opening=False, attempts=1, hint_tier="nudge")
+    turn = _section(text, "This turn")
+    assert "Active block type: mcq" in text
+    assert "Active turn kind: nudge." in turn
+    assert _UNCONDITIONAL_PRAISE in turn
+    assert "Topic/goal feedback:" not in text
 
