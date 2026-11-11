@@ -84,6 +84,17 @@ class ParentWeekCounts(BaseModel):
     sessions: int = 0
     topics_finished: int = 0
     stars: int = 0
+    blocks_passed: int = 0
+    blocks_revealed: int = 0
+    days_active: int = 0
+
+
+class ParentAttentionItem(BaseModel):
+    """One line to revisit. Title and detail only: never a chat message."""
+
+    course_id: uuid.UUID
+    title: str
+    detail: str = ""
 
 
 class ParentDashboardChild(BaseModel):
@@ -93,10 +104,13 @@ class ParentDashboardChild(BaseModel):
     courses_finished: int = 0
     stars: int = 0
     finished_topics: int = 0
+    topics_mastered: int = 0
+    topics_fragile: int = 0
     current_course_id: uuid.UUID | None = None
     current_course_title: str = ""
     current_topic_title: str = ""
     last_active_at: datetime | None = None
+    attention: list[ParentAttentionItem] = Field(default_factory=list)
     week: ParentWeekCounts = Field(default_factory=ParentWeekCounts)
 
 
@@ -281,21 +295,57 @@ def session_star_unit(status: str, block_results: list, reveals: int) -> dict:
     }
 
 
+def _empty_week() -> dict:
+    return {
+        "sessions": 0,
+        "topics_finished": 0,
+        "stars": 0,
+        "blocks_passed": 0,
+        "blocks_revealed": 0,
+        "days_active": 0,
+    }
+
+
+def _outcome_counts(block_results: object) -> tuple[int, int]:
+    """Passed and revealed blocks stored on one session. Other outcomes are skipped."""
+    rows = block_results if isinstance(block_results, list) else []
+    passed = 0
+    revealed = 0
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        outcome = item.get("outcome")
+        if outcome == "passed":
+            passed += 1
+        elif outcome == "revealed":
+            revealed += 1
+    return passed, revealed
+
+
 def _week_counts(rows: list[KcSession]) -> dict[uuid.UUID, dict]:
     """Sessions touched this week, plus stars for topics completed this week.
 
     A topic counts once. When several completed sessions share it, the newest
     session's star total is the one that counts. In-progress chats count as
-    sessions and do not add stars.
+    sessions and do not add stars. Passed blocks, revealed blocks, and the
+    New York days with a chat are counted from every row already loaded.
     """
     counts: dict[uuid.UUID, dict] = {}
     seen: set[tuple[uuid.UUID, uuid.UUID]] = set()
+    active_days: dict[uuid.UUID, set] = {}
     ordered = sorted(rows, key=lambda row: (_aware(row.updated_at), row.id), reverse=True)
     for row in ordered:
-        bucket = counts.setdefault(
-            row.student_id, {"sessions": 0, "topics_finished": 0, "stars": 0}
-        )
+        bucket = counts.get(row.student_id)
+        if bucket is None:
+            bucket = _empty_week()
+            counts[row.student_id] = bucket
         bucket["sessions"] += 1
+        passed, revealed = _outcome_counts(row.block_results)
+        bucket["blocks_passed"] += passed
+        bucket["blocks_revealed"] += revealed
+        active_days.setdefault(row.student_id, set()).add(
+            _aware(row.updated_at).astimezone(PARENT_WEEK_ZONE).date()
+        )
         if row.status != "completed":
             continue
         key = (row.student_id, row.kc_id)
@@ -306,6 +356,8 @@ def _week_counts(rows: list[KcSession]) -> dict[uuid.UUID, dict]:
         results = row.block_results if isinstance(row.block_results, list) else []
         unit = session_star_unit(row.status, results, int(row.reveals or 0))
         bucket["stars"] += int(stars_from_units([unit])["stars"])
+    for student_id, bucket in counts.items():
+        bucket["days_active"] = len(active_days.get(student_id, ()))
     return counts
 
 
@@ -331,6 +383,44 @@ def _as_datetime(value: object) -> datetime | None:
     return None
 
 
+def _attention_items(cards: list[dict]) -> list[dict]:
+    """At most three revisit lines: a fragile course, then that card's opportunities.
+
+    Later cards are dropped once three lines are filled. The text is the course
+    or component title and a short detail, never a chat message.
+    """
+    items: list[dict] = []
+
+    def add(course_id: object, title: object, detail: object) -> None:
+        if len(items) >= 3:
+            return
+        parsed = _as_uuid(course_id)
+        if parsed is None:
+            return
+        items.append(
+            {
+                "course_id": parsed,
+                "title": str(title or "").strip() or "Course",
+                "detail": str(detail or "").strip(),
+            }
+        )
+
+    for card in cards:
+        fragile = int(card.get("fragile_count") or 0)
+        if fragile > 0:
+            noun = "topic" if fragile == 1 else "topics"
+            add(card.get("id"), card.get("title"), f"{fragile} {noun} completed but still fragile")
+        for opp in card.get("opportunities_preview") or []:
+            if len(items) >= 3:
+                return items
+            if not isinstance(opp, dict):
+                continue
+            add(card.get("id"), opp.get("component_title") or card.get("title"), opp.get("summary") or "")
+        if len(items) >= 3:
+            return items
+    return items
+
+
 def _child_progress(cards: list[dict]) -> dict:
     started = [card for card in cards if card.get("started")]
     finished = [card for card in cards if card.get("course_complete")]
@@ -346,10 +436,13 @@ def _child_progress(cards: list[dict]) -> dict:
         "courses_finished": len(finished),
         "stars": sum(int(card.get("stars") or 0) for card in cards),
         "finished_topics": sum(int(card.get("finished_topic_count") or 0) for card in cards),
+        "topics_mastered": sum(int(card.get("known_count") or 0) for card in cards),
+        "topics_fragile": sum(int(card.get("fragile_count") or 0) for card in cards),
         "current_course_id": _as_uuid(current.get("id")) if current else None,
         "current_course_title": str(current.get("title") or "") if current else "",
         "current_topic_title": topic_title,
         "last_active_at": _as_datetime(current.get("last_active_at")) if current else None,
+        "attention": _attention_items(cards),
     }
 
 
@@ -358,6 +451,8 @@ def parent_dashboard(db: Session, parent_id: uuid.UUID, *, now: datetime | None 
 
     Stars in `week` are the star total of topics completed since Monday, using
     the same point values as the child view. They are not a lifetime total.
+    Passed blocks, revealed blocks, and days with a chat come from those week
+    rows. Attention is at most three lines and carries no chat text.
     """
     parent_or_404(db, parent_id)
     students = linked_students(db, parent_id)
@@ -384,7 +479,7 @@ def parent_dashboard(db: Session, parent_id: uuid.UUID, *, now: datetime | None 
     children: list[ParentDashboardChild] = []
     for student in students:
         progress = _child_progress(cards.get(student.id, []))
-        week = weeks.get(student.id, {"sessions": 0, "topics_finished": 0, "stars": 0})
+        week = weeks.get(student.id, _empty_week())
         children.append(
             ParentDashboardChild(
                 student_id=student.id,

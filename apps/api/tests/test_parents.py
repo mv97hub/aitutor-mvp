@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
@@ -10,7 +11,7 @@ from app.database import SessionLocal
 from app.learn_stars import stars_from_units
 from app.main import app
 from app.models import KcSession, KcState, Parent, Student
-from app.parents import PARENT_WEEK_ZONE, parent_week_start, session_star_unit
+from app.parents import PARENT_WEEK_ZONE, _child_progress, _week_counts, parent_week_start, session_star_unit
 from app.seed import seed
 from app.studio import DELETE_PASSWORD
 
@@ -258,6 +259,99 @@ def test_parent_week_starts_on_monday_and_a_finished_topic_uses_child_stars() ->
     still_open = session_star_unit("in_progress", [{"outcome": "passed", "attempts": 1}], 0)
     assert stars_from_units([still_open])["stars"] == 15
 
+    student = uuid.uuid4()
+    topic = uuid.uuid4()
+    counts = _week_counts(
+        [
+            SimpleNamespace(
+                id=uuid.uuid4(),
+                student_id=student,
+                kc_id=topic,
+                status="completed",
+                updated_at=datetime(2026, 11, 9, 15, 0, tzinfo=timezone.utc),
+                block_results=[
+                    {"outcome": "passed", "attempts": 1},
+                    {"outcome": "revealed", "attempts": 3},
+                ],
+                reveals=1,
+            ),
+            SimpleNamespace(
+                id=uuid.uuid4(),
+                student_id=student,
+                kc_id=uuid.uuid4(),
+                status="in_progress",
+                updated_at=datetime(2026, 11, 10, 15, 0, tzinfo=timezone.utc),
+                block_results=[{"outcome": "passed", "attempts": 2}],
+                reveals=0,
+            ),
+        ]
+    )[student]
+    assert counts["blocks_passed"] == 2
+    assert counts["blocks_revealed"] == 1
+    assert counts["days_active"] == 2
+    assert counts["sessions"] == 2
+    assert counts["topics_finished"] == 1
+
+    fractions = uuid.uuid4()
+    decimals = uuid.uuid4()
+    percents = uuid.uuid4()
+    progress = _child_progress(
+        [
+            {
+                "id": str(fractions),
+                "title": "Fractions",
+                "started": True,
+                "course_complete": False,
+                "stars": 40,
+                "finished_topic_count": 3,
+                "known_count": 2,
+                "fragile_count": 1,
+                "last_active_at": None,
+                "current_topic": {"title": "Halves"},
+                "opportunities_preview": [
+                    {"component_title": "Thirds", "summary": "Revisit thirds."},
+                    {"component_title": "Quarters", "summary": "Revisit quarters."},
+                ],
+            },
+            {
+                "id": str(decimals),
+                "title": "Decimals",
+                "started": True,
+                "course_complete": True,
+                "stars": 15,
+                "finished_topic_count": 1,
+                "known_count": 0,
+                "fragile_count": 1,
+                "last_active_at": None,
+                "current_topic": None,
+                "opportunities_preview": [
+                    {"component_title": "Tenths", "summary": "Tenths are fragile."},
+                ],
+            },
+            {
+                "id": str(percents),
+                "title": "Percents",
+                "started": False,
+                "course_complete": False,
+                "stars": 0,
+                "finished_topic_count": 0,
+                "known_count": 1,
+                "fragile_count": 0,
+                "last_active_at": None,
+                "opportunities_preview": [
+                    {"component_title": "Rates", "summary": "This one must be cut."},
+                ],
+            },
+        ]
+    )
+    assert progress["topics_mastered"] == 3
+    assert progress["topics_fragile"] == 2
+    assert [item["title"] for item in progress["attention"]] == ["Fractions", "Thirds", "Quarters"]
+    assert len(progress["attention"]) == 3
+    assert "fragile" in progress["attention"][0]["detail"]
+    assert all(item["course_id"] != percents for item in progress["attention"])
+    assert all("content" not in item and "message" not in item for item in progress["attention"])
+
 
 def _student(name: str) -> str:
     created = client.post("/students", json={"display_name": name, "age": 10})
@@ -302,6 +396,13 @@ def test_parent_dashboard_is_the_last_ten_chats_progress_and_this_week() -> None
             opened.block_results = [{"outcome": "passed", "attempts": 1}]
             opened.reveals = 0
             opened.updated_at = datetime.now(timezone.utc)
+            state = db.scalar(
+                select(KcState).where(KcState.student_id == opened.student_id, KcState.kc_id == opened.kc_id)
+            )
+            if state is None:
+                db.add(KcState(student_id=opened.student_id, kc_id=opened.kc_id, status="fragile"))
+            else:
+                state.status = "fragile"
             old = KcSession(
                 student_id=opened.student_id,
                 goal_id=opened.goal_id,
@@ -320,6 +421,7 @@ def test_parent_dashboard_is_the_last_ten_chats_progress_and_this_week() -> None
                         goal_id=opened.goal_id,
                         kc_id=opened.kc_id,
                         status="in_progress",
+                        block_results=[{"outcome": "revealed", "attempts": 2}] if minute == 0 else [],
                         updated_at=datetime.now(timezone.utc) - timedelta(minutes=minute + 1),
                     )
                 )
@@ -350,16 +452,43 @@ def test_parent_dashboard_is_the_last_ten_chats_progress_and_this_week() -> None
         by_child = {item["student_id"]: item for item in payload["children"]}
         assert set(by_child) == {linked_id, quiet_id}
         active = by_child[linked_id]
-        assert active["week"] == {"sessions": 10, "topics_finished": 1, "stars": 55}
+        assert active["week"] == {
+            "sessions": 10,
+            "topics_finished": 1,
+            "stars": 55,
+            "blocks_passed": 1,
+            "blocks_revealed": 1,
+            "days_active": 1,
+        }
+        assert active["topics_mastered"] == 0
+        assert active["topics_fragile"] == 1
         assert active["courses_started"] >= 1
+        assert 1 <= len(active["attention"]) <= 3
+        assert active["attention"][0]["title"] == "ZZ parent course"
+        assert "fragile" in active["attention"][0]["detail"]
         if active["current_course_id"]:
             assert active["current_course_id"] == course_id
             assert active["current_course_title"] == "ZZ parent course"
         else:
             assert active["courses_finished"] >= 1
-        assert by_child[quiet_id]["week"] == {"sessions": 0, "topics_finished": 0, "stars": 0}
+        assert by_child[quiet_id]["week"] == {
+            "sessions": 0,
+            "topics_finished": 0,
+            "stars": 0,
+            "blocks_passed": 0,
+            "blocks_revealed": 0,
+            "days_active": 0,
+        }
+        assert by_child[quiet_id]["topics_mastered"] == 0
+        assert by_child[quiet_id]["topics_fragile"] == 0
+        assert by_child[quiet_id]["attention"] == []
         assert by_child[quiet_id]["courses_started"] == 0
         assert payload["week_starts_at"]
+        for child in payload["children"]:
+            assert "message" not in child
+            for item in child["attention"]:
+                assert set(item) == {"course_id", "title", "detail"}
+                assert "What color is the river?" not in item["detail"]
 
         outsider_body = client.get(f"/parents/{outsider['id']}/dashboard").json()
         assert [item["student_id"] for item in outsider_body["children"]] == [other_id]

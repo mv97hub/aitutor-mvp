@@ -5,6 +5,8 @@ import Link from "next/link";
 
 import { BrandMark } from "@/components/BrandMark";
 import { NETWORK_WIDTH, NetworkMap, networkHeight } from "@/components/KcNetwork";
+import { ProgressRecommend } from "@/components/progress/ProgressRecommend";
+import { ProgressTotals } from "@/components/progress/ProgressTotals";
 import type { KcNetwork, KcProgress, KcTutorCourse } from "@/lib/kc";
 import { friendlyStrength, learnCoursePath } from "@/lib/learn";
 import {
@@ -252,45 +254,26 @@ export function KcCourseProgress({
             {score.percent}% · {score.finished} of {score.total}
             {lastActivity ? ` · Last activity ${lastActivity}` : " · No activity yet"}
           </p>
-          <dl className="progress-totals" aria-label="Course totals">
-            <div>
-              <dt>Components mastered</dt>
-              <dd>{totals.mastered}</dd>
-            </div>
-            <div>
-              <dt>Components completed</dt>
-              <dd>{totals.completed}</dd>
-            </div>
-            <div>
-              <dt>Components in progress</dt>
-              <dd>{totals.inProgress}</dd>
-            </div>
-            <div>
-              <dt>Components not started</dt>
-              <dd>{totals.notStarted}</dd>
-            </div>
-            <div>
-              <dt>Blocks passed</dt>
-              <dd>{totals.blocksPassed}</dd>
-            </div>
-            <div>
-              <dt>Blocks revealed</dt>
-              <dd>{totals.blocksRevealed}</dd>
-            </div>
-            <div>
-              <dt>Blocks not yet</dt>
-              <dd>{totals.blocksNotYet}</dd>
-            </div>
-          </dl>
+          <ProgressTotals
+            label="Course totals"
+            items={[
+              { label: "Components mastered", value: totals.mastered },
+              { label: "Components completed", value: totals.completed },
+              { label: "Components in progress", value: totals.inProgress },
+              { label: "Components not started", value: totals.notStarted },
+              { label: "Blocks passed", value: totals.blocksPassed },
+              { label: "Blocks revealed", value: totals.blocksRevealed },
+              { label: "Blocks not yet", value: totals.blocksNotYet },
+            ]}
+          />
           {revisit.length > 0 ? (
-            <section className="progress-recommend" aria-label="Recommendations">
-              <h2>Revisit</h2>
+            <ProgressRecommend heading="Revisit" label="Recommendations">
               <ul>
                 {revisit.map((item) => (
                   <li key={item.code}>{item.title}</li>
                 ))}
               </ul>
-            </section>
+            </ProgressRecommend>
           ) : null}
           <div className="progress-split">
             <div className="progress-map">
@@ -378,8 +361,7 @@ export function KcCourseProgress({
               {selectedRecommendations.workOn ||
               selectedRecommendations.misconceptions.length > 0 ||
               selectedRecommendations.opportunities.length > 0 ? (
-                <section className="progress-recommend" aria-label="Recommendations">
-                  <h3>Recommendations</h3>
+                <ProgressRecommend heading="Recommendations" level="h3" label="Recommendations">
                   {selectedRecommendations.workOn ? <p>{selectedRecommendations.workOn}</p> : null}
                   {selectedRecommendations.misconceptions.length > 0 ? (
                     <ul aria-label="Misconceptions">
@@ -395,7 +377,7 @@ export function KcCourseProgress({
                       ))}
                     </ul>
                   ) : null}
-                </section>
+                </ProgressRecommend>
               ) : null}
               {area ? null : (
                 <Link

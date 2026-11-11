@@ -114,8 +114,8 @@ test("dashboard, settings, chats, and parent progress share one parent frame", (
   assert.doesNotMatch(dashboard, /BrandMark/);
   assert.match(dashboard, /Recent activity/);
   assert.match(dashboard, /This week/);
-  assert.match(dashboard, /Pick up where they left off/);
-  assert.match(dashboard, /aria-label="Progress"/);
+  assert.match(dashboard, /Needs attention/);
+  assert.match(dashboard, /Next step/);
   const settings = source("../components/parent/ParentSettings.tsx");
   assert.doesNotMatch(settings, /BrandMark/);
   const home = source("../app/parent/[parentId]/page.tsx");
@@ -125,6 +125,35 @@ test("dashboard, settings, chats, and parent progress share one parent frame", (
   assert.doesNotMatch(admin, /ParentFrame/);
   const child = source("../app/kc-progress/page.tsx");
   assert.doesNotMatch(child, /ParentFrame/);
+});
+
+test("the dashboard uses the progress panels and the child menu matches the bar", () => {
+  const dashboard = source("../components/parent/ParentDashboard.tsx");
+  assert.match(dashboard, /parent-work-head/);
+  assert.match(dashboard, /ProgressTotals/);
+  assert.doesNotMatch(dashboard, /parent-board-card/);
+  assert.doesNotMatch(dashboard, /learn-child-grid/);
+  const frame = source("../components/parent/ParentFrame.tsx");
+  assert.match(frame, /aria-label="Child"/);
+  assert.match(frame, /parentChildHref/);
+  const css = source("../app/globals.css");
+  const marker = ".parent-frame .ds-admin-bar .parent-child-menu select";
+  const selectAt = css.indexOf(`${marker} {`);
+  assert.ok(selectAt >= 0);
+  const selectRule = css.slice(selectAt, css.indexOf("}", selectAt));
+  for (const bit of [
+    "appearance: none",
+    "min-height: 36px",
+    "padding: 7px 32px 7px 14px",
+    "border-radius: 9px",
+    "color: #f8fafc",
+  ]) {
+    assert.ok(selectRule.includes(bit), bit);
+  }
+  const optionAt = css.indexOf(`${marker} option`);
+  assert.ok(optionAt >= 0);
+  const optionRule = css.slice(optionAt, css.indexOf("}", optionAt));
+  assert.ok(optionRule.includes("color: #0f172a"));
 });
 
 test("the parent portal is on the documentation list", () => {
