@@ -31,7 +31,7 @@ export default function ParentPortalDocsPage() {
             can have more than one parent, and a parent can follow more than one child.
           </li>
           <li>
-            <strong>Dashboard.</strong> This week&apos;s counts, what to revisit, and recent chats.
+            <strong>Dashboard.</strong> Choose a child, then open that child&apos;s chats or progress.
           </li>
           <li>
             <strong>Chats.</strong> The same transcript as <Link href="/admin/kc-chats">KC View Chats</Link>, without the

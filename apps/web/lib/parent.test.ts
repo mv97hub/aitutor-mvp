@@ -112,14 +112,17 @@ test("dashboard, settings, chats, and parent progress share one parent frame", (
   assert.match(frame, /Choose a child first/);
   const dashboard = source("../components/parent/ParentDashboard.tsx");
   assert.doesNotMatch(dashboard, /BrandMark/);
-  assert.match(dashboard, /Recent activity/);
-  assert.match(dashboard, /This week/);
-  assert.match(dashboard, /Needs attention/);
-  assert.match(dashboard, /Next step/);
+  assert.doesNotMatch(dashboard, /Recent activity/);
+  assert.doesNotMatch(dashboard, /This week/);
+  assert.doesNotMatch(dashboard, /Needs attention/);
+  assert.doesNotMatch(dashboard, /Next step/);
+  assert.match(dashboard, /parentChats/);
+  assert.match(dashboard, /parentProgress/);
   const settings = source("../components/parent/ParentSettings.tsx");
   assert.doesNotMatch(settings, /BrandMark/);
   const home = source("../app/parent/[parentId]/page.tsx");
-  assert.match(home, /\/dashboard/);
+  assert.match(home, /learners\.length === 0\) redirect\(parentSettings/);
+  assert.doesNotMatch(home, /\/dashboard/);
   const admin = source("../components/ViewKcChats.tsx");
   assert.match(admin, /AdminFrame/);
   assert.doesNotMatch(admin, /ParentFrame/);
@@ -127,12 +130,21 @@ test("dashboard, settings, chats, and parent progress share one parent frame", (
   assert.doesNotMatch(child, /ParentFrame/);
 });
 
-test("the dashboard uses the progress panels and the child menu matches the bar", () => {
+test("the dashboard is child boxes and two links, and the child menu matches the bar", () => {
   const dashboard = source("../components/parent/ParentDashboard.tsx");
   assert.match(dashboard, /parent-work-head/);
-  assert.match(dashboard, /ProgressTotals/);
-  assert.doesNotMatch(dashboard, /parent-board-card/);
-  assert.doesNotMatch(dashboard, /learn-child-grid/);
+  assert.match(dashboard, /<h1>Dashboard<\/h1>/);
+  assert.match(dashboard, /aria-label="Your children"/);
+  assert.match(dashboard, /progress-card\$\{on \? " is-selected" : ""\}/);
+  assert.match(dashboard, /aria-pressed=\{on\}/);
+  assert.match(dashboard, /onClick=\{\(\) => setPickedId\(child\.id\)\}/);
+  assert.match(dashboard, /onStudentChange=\{setPickedId\}/);
+  assert.match(dashboard, /learners\.length === 1 \? learners\[0\]\.id : null/);
+  assert.match(dashboard, /className="parent-choice"/);
+  assert.match(dashboard, /parentChats\(parent\.id, picked\.id\)/);
+  assert.match(dashboard, /parentProgress\(parent\.id, picked\.id\)/);
+  assert.match(dashboard, /Choose a child first/);
+  assert.doesNotMatch(dashboard, /ProgressTotals|ProgressRecommend|parent-board-card|learn-child-grid/);
   const frame = source("../components/parent/ParentFrame.tsx");
   assert.match(frame, /aria-label="Child"/);
   assert.match(frame, /parentChildHref/);
