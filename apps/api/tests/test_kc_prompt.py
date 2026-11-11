@@ -179,7 +179,8 @@ def test_a_factual_opening_states_each_setting_once() -> None:
         "Do not treat it as a new rule.",
         "The last answer was: blue.",
         "You do not set the block order, the edges, or the final mastery score.",
-        "When the decision ends the unit on this final substep",
+        "The unit is not finished.",
+        "If this answer satisfies the substep, set substep_passed=true and block_complete=false.",
     ):
         _once(text, phrase)
     assert "Set generated_mcq to null" not in text
@@ -251,7 +252,9 @@ def test_a_middle_topic_does_not_say_the_unit_is_complete() -> None:
     assert "course outro" not in middle
     _once(middle, "The unit is not finished.")
     _once(middle, "This reply must NEVER say the unit is complete.")
-    last = _text(**shared, step=1)
+    last_task = _text(**shared, step=1, active_block_state={"substep": "main"})
+    assert "The unit is not finished." in last_task
+    last = _text(**shared, step=1, active_block_state={"substep": "summary_check", "last_task_substep": "main"})
     assert "Topic to introduce: density." in last
     assert "The unit is not finished." not in last
     _once(last, "A known unit says the unit is complete")
@@ -266,6 +269,7 @@ def test_a_time_box_sends_the_effective_limits_only() -> None:
         profile=_profile(struggle_window="long", enrichment="offer"),
         goal=_goal(kind="time_boxed", minutes=20),
         opening=False,
+        active_block_state={"substep": "summary_check", "last_task_substep": "main"},
     )
     for phrase in (
         "step hints after one miss",
@@ -802,7 +806,13 @@ def test_a_finished_block_closes_without_opening_the_next_one() -> None:
         ],
         misconceptions=[],
     )
-    text = _text(node=node, opening=False, attempts=0, last_answer="The river is blue.")
+    text = _text(
+        node=node,
+        opening=False,
+        attempts=0,
+        last_answer="The river is blue.",
+        active_block_state={"substep": "summary_check", "last_task_substep": "main"},
+    )
     teach = _section(text, "What to teach")
     turn = _section(text, "This turn")
     how = _section(text, "How to teach")
@@ -815,4 +825,124 @@ def test_a_finished_block_closes_without_opening_the_next_one() -> None:
     assert "close this block with a brief affirmation only" in how
     assert "End a teaching or probing turn with a single clear question." not in how
     assert "Do not describe the next block." in returned
+
+
+def test_summary_check_is_the_last_substep_and_hides_the_choice_widget() -> None:
+    from app.kc import choice_for
+    from app.kc_prompt import on_screen_choice, substeps_for_block
+    from types import SimpleNamespace
+
+    topic = {"id": "topic", "type": "topic_goal", "data": {"topic": "Color", "goal": "The river is blue."}}
+    assert substeps_for_block(topic) == ["main", "summary_check"]
+    assert substeps_for_block({"id": "talk", "type": "socratic", "data": {}}) == [
+        "initial_thesis",
+        "counterexample_probe",
+        "summary_check",
+    ]
+    assert substeps_for_block({"id": "wonder", "type": "curiosity", "data": {}}) == [
+        "hook_and_predict",
+        "summary_check",
+    ]
+    assert substeps_for_block({"id": "flaw", "type": "spot_the_flaw", "data": {}}) == ["critique", "summary_check"]
+    assert substeps_for_block({"id": "work", "type": "worked_example", "data": {}}) == [
+        "faded_step",
+        "solo_solve",
+        "summary_check",
+    ]
+    quiz = {
+        "id": "quiz",
+        "type": "mcq",
+        "data": {
+            "mode": "static",
+            "question_stem": "Which color?",
+            "choices": [
+                {"id": "a", "text": "Blue water", "is_correct": True},
+                {"id": "b", "text": "Red water"},
+            ],
+        },
+    }
+    assert substeps_for_block(quiz)[-1] == "summary_check"
+    assert on_screen_choice(quiz, "choice", {}) is not None
+    assert on_screen_choice(quiz, "summary_check", {}) is None
+    assert choice_for(_node(), SimpleNamespace(choice=True, key="predict"), "summary_check") is None
+    assert substeps_for_block({"id": "explain", "type": "explanation", "data": {}}) == [
+        "explain_topic",
+        "summary_check",
+    ]
+
+
+def test_summary_check_prompt_distinguishes_a_completed_block_from_an_incomplete_one() -> None:
+    node = _node(
+        blocks=[
+            {
+                "id": "topic",
+                "type": "topic_goal",
+                "data": {"topic": "River color", "goal": "The river is blue."},
+            }
+        ]
+    )
+    entering = _text(node=node, opening=False, active_block_state={"substep": "main"})
+    assert "Summary close:" in entering
+    assert "continue discussing" in entering
+    assert "did not fully complete this block yet" in entering
+    assert "Never say congratulations" in entering
+
+    done = _text(
+        node=node,
+        opening=False,
+        active_block_state={"substep": "summary_check", "revealed_substep": False, "last_task_substep": "main"},
+    )
+    assert "The learner completed this block." in done
+    assert "Never say congratulations" not in done
+    assert "set substep_passed=true and block_complete=false" in done
+    assert "brief closing statement only" in done
+    assert "do not open the next block" in done.lower()
+
+    missed = _text(
+        node=node,
+        opening=False,
+        active_block_state={"substep": "summary_check", "revealed_substep": True, "last_task_substep": "main"},
+    )
+    assert "did not fully complete this block yet" in missed
+    assert "Never say congratulations" in missed
+    assert "affirm that they have now completed the block" in missed
+    assert "If the block is still incomplete, do not say congratulations." in missed
+
+    guided = _node(
+        blocks=[
+            {
+                "id": "talk",
+                "type": "socratic",
+                "data": {"central_dilemma": "Is the river blue?", "target_synthesis": "The river is blue."},
+            }
+        ]
+    )
+    probe = _text(
+        node=guided,
+        opening=False,
+        active_block_state={"substep": "counterexample_probe", "revealed_substep": True},
+    )
+    assert "Summary close on the attempt limit:" in probe
+
+    quiz = _node(
+        blocks=[
+            {
+                "id": "quiz",
+                "type": "mcq",
+                "data": {
+                    "mode": "static",
+                    "question_stem": "Which color?",
+                    "choices": [{"id": "a", "text": "Blue water", "is_correct": True}, {"id": "b", "text": "Red water"}],
+                },
+            }
+        ]
+    )
+    choice = _text(node=quiz, opening=True, active_block_state={"substep": "choice"})
+    assert "move to the summary check" in choice
+    summary = _text(
+        node=quiz,
+        opening=False,
+        active_block_state={"substep": "summary_check", "revealed_substep": True, "last_task_substep": "choice"},
+    )
+    assert "Never say congratulations" in summary
 

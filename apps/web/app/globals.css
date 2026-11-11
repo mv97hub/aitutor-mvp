@@ -6304,3 +6304,107 @@ body:has(.learn-mobile-chat) {
 @media (max-width: 860px) {
   .parent-summary { margin: 14px 16px 0; }
 }
+
+.kc-flow {
+  margin: 12px 0 20px;
+  padding: 14px 16px;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 14px;
+  background: rgb(249, 250, 251);
+}
+
+.kc-flow figcaption {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.kc-flow figcaption strong {
+  font-size: 14px;
+}
+
+.kc-flow figcaption span,
+.kc-flow-close span {
+  color: rgb(68, 73, 80);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.kc-flow-track {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 0 0 8px;
+}
+
+.kc-flow-name {
+  min-width: 9em;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.kc-flow-track ol,
+.kc-flow-close {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kc-flow-track li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kc-flow-node {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 0.5px solid rgba(0, 0, 0, 0.16);
+  border-radius: 999px;
+  background: white;
+  font-size: 12px;
+}
+
+.kc-flow-node.is-summary {
+  border-color: rgb(65, 118, 230);
+  background: rgb(236, 243, 255);
+}
+
+.kc-flow-arrow {
+  width: 18px;
+  height: 1px;
+  background: rgb(120, 126, 134);
+  position: relative;
+}
+
+.kc-flow-arrow::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: -3px;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid rgb(120, 126, 134);
+}
+
+.kc-flow-close {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.kc-flow-close li {
+  display: grid;
+  grid-template-columns: 8.5em 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .kc-flow-close li { grid-template-columns: 1fr; }
+}

@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { BLOCK_CLOSE_FLOWS, BlockCloseFlow } from "@/components/docs/BlockCloseFlow";
 import { BLOCK_CONFIG_TITLES } from "@/lib/kc-tutor-config";
 
 export const metadata = { title: "KC Tutor · Documentation · AI Tutor" };
@@ -116,10 +117,17 @@ export default function KcTutorDocsPage() {
           ))}
         </ul>
         <p>
-          When the learner finishes a block, the same reply can affirm that block and open the next one. The unit close
-          is reserved for the last block. The course outro follows when every target component is known or fragile.
-          Fragile is not rewritten to known.
+          The last part of every block is a summary check. A completed block gets a short summary and a question about
+          whether to keep discussing or close and move on. A block that hits its attempt limit says so, does not say
+          congratulations, and still lets the learner finish it by talking further. Closing records passed, or revealed
+          when the block is still incomplete. That closing reply does not open the next block. The next block&apos;s
+          opening is its own speech. The unit close is reserved for the last block. The course outro follows when every
+          target component is known or fragile. Fragile is not rewritten to known.
         </p>
+        <h2>Block close flows</h2>
+        {BLOCK_CLOSE_FLOWS.map((flow) => (
+          <BlockCloseFlow key={flow.title} {...flow} />
+        ))}
         <p>
           Debug, on the right, opens a panel beside the lesson. Variables keeps the seven headings. A row is shown only
           when this turn reads it, and an empty value stays. The first heading shows the active block only: its index,

@@ -164,7 +164,13 @@ _PROCEED_EXACT = {
     "got it",
     "ready",
     "move on",
+    "move on anyway",
     "lets continue",
+    "continue to next",
+    "close",
+    "close and move on",
+    "done",
+    "skip",
     "no final questions",
     "no final questions lets continue",
     "got it ready for the next topic",
@@ -204,7 +210,10 @@ def learner_ready_to_proceed(answer: str, flagged: bool) -> bool:
         "no final questions",
         "next topic",
         "move on",
+        "move on anyway",
         "lets continue",
+        "continue to next",
+        "close and move on",
         "got it ready for the next topic",
     ):
         if phrase in text:
@@ -599,7 +608,6 @@ def resolve_block_turn(
             passed=False,
         )
 
-    ev_id = block_evidence_id(block, index, substep)
     strong_text = (strong or "").strip()
     work_text = (work_on or "").strip()
     addressed = answer_addresses_substep(block, substep, answer, state, cfg)
@@ -634,6 +642,10 @@ def resolve_block_turn(
         title = _block_title(block, index)
         noted_strong = strong_text or (title if outcome == "passed" else "")
         noted_work = work_text or ("" if outcome == "passed" else f"Look again at {title}.")
+        evidence_substep = substep
+        if evidence_substep == "summary_check":
+            evidence_substep = str(state.get("last_task_substep") or substep)
+        evidence_id = block_evidence_id(block, index, evidence_substep)
         results.append(
             {
                 "id": bid,
@@ -647,8 +659,8 @@ def resolve_block_turn(
                 "summary": f"{outcome} {btype} after {attempts} tries",
             }
         )
-        if ev_id not in met:
-            met.append(ev_id)
+        if evidence_id not in met:
+            met.append(evidence_id)
         return _advance_or_close_component(
             blocks=blocks,
             index=index,
@@ -667,6 +679,47 @@ def resolve_block_turn(
         state["fragment_prompted"] = True
         return stay(move_attempts, tier)
 
+    task_steps = substeps[:-1] if substeps and substeps[-1] == "summary_check" else list(substeps)
+    on_last_task = bool(task_steps) and bool(substeps) and substeps[-1] == "summary_check" and (
+        substep == task_steps[-1] or (btype == "mcq" and substep == "awaiting_why")
+    )
+
+    def _summary_outcome() -> str:
+        if state.get("revealed_substep"):
+            return "revealed"
+        if btype == "curiosity" and not _counts_toward_mastery(block, cfg):
+            return "engaged"
+        return "passed"
+
+    def _enter_summary(*, revealed: bool) -> BlockResolution:
+        state["last_task_substep"] = substep
+        state["substep"] = "summary_check"
+        if revealed:
+            state["revealed_substep"] = True
+            return stay(0, "reveal", reveals_now=reveals + 1)
+        return stay(0, "nudge")
+
+    def _resolve_summary_check() -> BlockResolution:
+        stored_task = str(state.get("last_task_substep") or "").strip()
+        task_substep = stored_task or (substeps[-2] if len(substeps) >= 2 else substep)
+        demonstrated = bool(substep_passed) and answer_addresses_substep(
+            block, task_substep, answer, state, cfg
+        )
+        move_phrase = learner_ready_to_proceed(answer, False)
+        if state.get("revealed_substep") and demonstrated and not move_phrase:
+            state["revealed_substep"] = False
+            note_try()
+            if block_complete:
+                return finish(_summary_outcome(), int(state.get("block_attempts") or 1), reveals)
+            return stay(0, "nudge")
+        if demonstrated and state.get("revealed_substep"):
+            state["revealed_substep"] = False
+        ready = learner_ready_to_proceed(answer, bool(substep_passed) or bool(block_complete))
+        if not ready:
+            return stay(move_attempts + 1, "nudge")
+        tries = int(state.get("block_attempts") or 0) or 1
+        return finish(_summary_outcome(), tries, reveals)
+
     if btype == "mcq" and substep == "choice":
         choices, correct_idx = mcq_payload(block, state)
         if not choices:
@@ -676,27 +729,29 @@ def resolve_block_turn(
         mcq_state["choices"] = choices
         mcq_state["correct_index"] = correct_idx
         if picked is not None and picked == correct_idx:
-            tries = note_try()
+            note_try()
             confirm_mode = str(bcfg.get("confirm_why_on_correct") or "on_retry_only")
             need_why = confirm_mode == "always" or (confirm_mode == "on_retry_only" and move_attempts > 0)
             state["mcq"] = mcq_state
             if need_why:
                 state["substep"] = "awaiting_why"
                 return stay(0, "nudge")
-            outcome = "revealed" if state.get("revealed_substep") else "passed"
-            return finish(outcome, tries, reveals)
+            return _enter_summary(revealed=False)
         eliminated = list(mcq_state.get("eliminated_indices") or [])
         if picked is not None and picked not in eliminated:
             eliminated.append(picked)
         mcq_state["eliminated_indices"] = eliminated
         state["mcq"] = mcq_state
-        tries = note_try()
+        note_try()
         if move_attempts + 1 >= max_retries:
-            return finish("revealed", tries, reveals + 1)
+            return _enter_summary(revealed=True)
         bumped = _next_tier(tier)
         if bumped == "reveal":
             bumped = "scaffold"
         return stay(move_attempts + 1, bumped)
+
+    if substep == "summary_check":
+        return _resolve_summary_check()
 
     if btype == "socratic" and substep == "counterexample_probe" and addressed:
         depth = max(1, int(bcfg.get("dialogue_depth_turns", 2) or 2))
@@ -706,16 +761,23 @@ def resolve_block_turn(
             note_try()
             return stay(move_attempts, "nudge")
 
+    satisfied = addressed and bool(substep_passed) and not (decision == "stay" and not substep_passed)
+    if on_last_task and satisfied:
+        note_try()
+        return _enter_summary(revealed=False)
+
     if addressed:
         note_try()
-        if substep in substeps:
-            position = substeps.index(substep)
-            if position < len(substeps) - 1:
-                state["substep"] = substeps[position + 1]
+        if substep in task_steps:
+            position = task_steps.index(substep)
+            if position < len(task_steps) - 1:
+                state["substep"] = task_steps[position + 1]
                 state["probe_turns"] = 0
                 return stay(0, "nudge")
-        # Word overlap would finish the block. A reply written to stay on this
-        # block must not be forced forward until the attempt budget is used up.
+        if on_last_task:
+            if move_attempts + 1 >= max_retries:
+                return _enter_summary(revealed=True)
+            return stay(move_attempts + 1, tier)
         if decision == "stay" and not block_complete and move_attempts + 1 < max_retries:
             return stay(move_attempts + 1, tier)
         outcome = "revealed" if state.get("revealed_substep") else "passed"
@@ -727,6 +789,8 @@ def resolve_block_turn(
             state["substep"] = "solo_solve"
             state["revealed_substep"] = True
             return stay(0, "reveal", reveals_now=reveals + 1)
+        if on_last_task:
+            return _enter_summary(revealed=True)
         return finish("revealed", tries, reveals + 1)
     bumped = _next_tier(tier)
     if bumped == "reveal":
