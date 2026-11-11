@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { BLOCK_CLOSE_FLOWS, BlockCloseFlow } from "@/components/docs/BlockCloseFlow";
 import { BLOCK_TYPES } from "@/lib/kc-blocks";
 import {
   CHALLENGE_APPETITE_OPTIONS,
@@ -284,6 +285,17 @@ export default function KcPromptLayersPage() {
           </section>
         ))}
 
+        <h2>Block close flows</h2>
+        <p>
+          Every non-explanation block ends on summary_check. The prompt for that step asks for a short summary and a
+          choice to keep talking or close. If the attempt limit was reached, the prompt says the block is not complete
+          and forbids congratulations. A later reply that shows the goal can still complete the block. The closing
+          reply does not open the next block.
+        </p>
+        {BLOCK_CLOSE_FLOWS.map((flow) => (
+          <BlockCloseFlow key={flow.title} {...flow} />
+        ))}
+
         <h2>Layer 1, the active block</h2>
         <p>
           A component stores an ordered list of blocks. Each block is an id, a type, and that type&apos;s fields. Every
@@ -343,9 +355,10 @@ export default function KcPromptLayersPage() {
 
         <h2>How the prompt is written</h2>
         <p>
-          When a block&apos;s last substep passes, the app records that block, advances to the next one, and builds one
-          reply that affirms the finished block and opens the next. If the next block is a dynamic multiple choice, the
-          decision includes the generated item. Only the last block&apos;s final substep adds the unit close.
+          summary_check is the last substep. When the learner closes it, the app records the block and advances. The
+          closing reply affirms or, if the block is still incomplete, closes without congratulations. It does not open
+          the next block. The next block&apos;s opening is a separate speech. If that next block is a dynamic multiple
+          choice, the opening includes the generated item. Only the last block&apos;s summary check adds the unit close.
         </p>
         <section>
           <h3>This turn</h3>

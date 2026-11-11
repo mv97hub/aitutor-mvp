@@ -344,18 +344,24 @@ def default_substep_for_block(block: dict, cfg: dict | None = None) -> str:
     return "main"
 
 
+def _with_summary_check(steps: list[str]) -> list[str]:
+    if steps and steps[-1] == "summary_check":
+        return steps
+    return [*steps, "summary_check"]
+
+
 def substeps_for_block(block: dict, cfg: dict | None = None) -> list[str]:
     """Ordered substeps for a block under the active tutor configuration."""
     btype = str(block.get("type") or "topic_goal").strip()
     data = block.get("data") if isinstance(block.get("data"), dict) else {}
     bcfg = ((cfg or {}).get("blocks") or {}).get(btype) or {}
     if btype == "topic_goal":
-        return ["main"]
+        return _with_summary_check(["main"])
     if btype == "mcq":
         confirm = str(bcfg.get("confirm_why_on_correct") or "on_retry_only")
         if confirm == "always":
-            return ["choice", "awaiting_why"]
-        return ["choice"]
+            return _with_summary_check(["choice", "awaiting_why"])
+        return _with_summary_check(["choice"])
     if btype == "case_study":
         pres = str(bcfg.get("case_presentation") or "sequential_predict_then_contrast")
         has_transfer = bool(str(data.get("transfer_prompt") or "").strip()) and bool(
@@ -364,27 +370,27 @@ def substeps_for_block(block: dict, cfg: dict | None = None) -> list[str]:
         steps = ["contrast_and_rule"] if pres == "side_by_side_single_turn" else ["predict", "contrast_and_rule"]
         if has_transfer:
             steps.append("transfer")
-        return steps
+        return _with_summary_check(steps)
     if btype == "socratic":
-        return ["initial_thesis", "counterexample_probe"]
+        return _with_summary_check(["initial_thesis", "counterexample_probe"])
     if btype == "curiosity":
-        return ["hook_and_predict"]
+        return _with_summary_check(["hook_and_predict"])
     if btype == "worked_example":
-        return ["faded_step", "solo_solve"]
+        return _with_summary_check(["faded_step", "solo_solve"])
     if btype == "spot_the_flaw":
-        return ["critique"]
+        return _with_summary_check(["critique"])
     if btype == "teach_back":
         follow_ups = int(bcfg.get("follow_up_questions_count", 1) or 0)
         if follow_ups > 0:
-            return ["initial_explanation", "peer_follow_up"]
-        return ["initial_explanation"]
+            return _with_summary_check(["initial_explanation", "peer_follow_up"])
+        return _with_summary_check(["initial_explanation"])
     if btype == "retrieval_check":
         if bool(bcfg.get("require_elaborative_why", True)):
-            return ["recall", "elaborate_why"]
-        return ["recall"]
+            return _with_summary_check(["recall", "elaborate_why"])
+        return _with_summary_check(["recall"])
     if btype == "explanation":
         return ["explain_topic", "summary_check"]
-    return ["main"]
+    return _with_summary_check(["main"])
 
 
 def format_active_substep_label(
@@ -503,6 +509,8 @@ def block_uses_choice_widget(
     active_block_state: dict | None = None,
 ) -> bool:
     """True when this substep has choices the learner can pick on screen."""
+    if str(substep or "") == "summary_check":
+        return False
     btype = str(block.get("type") or "").strip()
     data = block.get("data") if isinstance(block.get("data"), dict) else {}
     if btype == "mcq" and substep in {"", "choice"}:
@@ -1065,6 +1073,63 @@ def _outro_sentence(others_known: bool, course_title: str, *, required: bool) ->
     return "Another target is not known or fragile yet. Do not write a course outro. The close may point at the next card."
 
 
+def _summary_close_lines(*, phase: str, revealed: bool, opening: bool) -> list[str]:
+    """How to speak on the summary check, and how to answer a learner who is already there."""
+    if phase == "task":
+        return [
+            (
+                "Summary close: If this answer satisfies the substep, set substep_passed=true and block_complete=false. "
+                "Give a short summary of what this block covered and ask whether the learner wants to continue discussing "
+                "or ask any questions, or close and move on. Do not open the next block."
+            ),
+            (
+                "Summary close on the attempt limit: If this is the last allowed try and the answer still misses the goal, "
+                "set substep_passed=false and block_complete=false. Highlight that the learner reached the attempt limit "
+                "and did not fully complete this block yet. Never say congratulations and do not praise them as if they passed. "
+                "Briefly summarize the key takeaway they missed. Ask whether they want to keep trying or discussing the goal, "
+                "which can still complete the block, or move on to the next block anyway."
+            ),
+        ]
+    if phase != "check":
+        return []
+    if revealed:
+        lines = [
+            (
+                "Summary close: The learner reached the attempt limit and did not fully complete this block yet. "
+                "Highlight that. Never say congratulations and do not praise them as if they passed. "
+                "Briefly summarize the key takeaway they missed. Ask whether they want to keep trying or discussing the goal, "
+                "which can still complete the block, or move on to the next block anyway."
+            )
+        ]
+    else:
+        lines = [
+            (
+                "Summary close: The learner completed this block. Give a short summary of what this block covered "
+                "and ask whether the learner wants to continue discussing or ask any questions, or close and move on."
+            )
+        ]
+    if opening:
+        return lines
+    lines.append(
+        "Summary reply: If the learner had not completed the block and this reply now demonstrates the goal, "
+        "set substep_passed=true and block_complete=false, affirm that they have now completed the block, "
+        "and ask if they are ready to move on."
+    )
+    lines.append(
+        "Summary reply: If they ask a question or want more discussion without completing it yet, "
+        "set substep_passed=false and block_complete=false, answer helpfully, and ask again whether they want "
+        "to keep discussing or trying, or move on."
+    )
+    closing = (
+        "Summary reply: If they choose to close and move on, set block_complete=true and reply with a brief "
+        "closing statement only. Do not ask a new question and do not open the next block."
+    )
+    if revealed:
+        closing += " If the block is still incomplete, do not say congratulations."
+    lines.append(closing)
+    return lines
+
+
 def _ending(
     *,
     close_depth: str,
@@ -1074,7 +1139,20 @@ def _ending(
     others_known: bool,
     course_title: str,
     is_final_block_and_substep: bool,
+    summary_stay: bool = False,
 ) -> str:
+    if summary_stay and not unit_complete and not course_complete:
+        length = _close_summary_sentence(close_depth, kind)
+        outro = _outro_sentence(others_known, course_title, required=False)
+        return " ".join(
+            (
+                "Close Contract: If block_complete=true on this summary, include the unit close and ask no new question. "
+                "If block_complete=false, ask whether the learner wants to keep discussing or move on.",
+                length,
+                _close_body(),
+                outro,
+            )
+        )
     if not is_final_block_and_substep and not unit_complete and not course_complete:
         return (
             "Mid-Unit Contract: Advance substep or next block when satisfied. "
@@ -1157,6 +1235,8 @@ def _this_turn(
     communication_tone: str = "warm_and_encouraging",
     active_block_state: dict | None = None,
     close_block_only: bool = False,
+    summary_phase: str = "",
+    summary_stay: bool = False,
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -1285,6 +1365,7 @@ def _this_turn(
             others_known=others_known,
             course_title=course_title,
             is_final_block_and_substep=is_final_block_and_substep,
+            summary_stay=summary_stay,
         )
     )
     if close_block_only:
@@ -1312,6 +1393,14 @@ def _this_turn(
                 "If they are ready, follow the move-on instruction in What to teach and explain the next topic, or summarize when this was the last topic. "
                 "Do not quiz."
             )
+    if str(block.get("type") or "") != "explanation":
+        lines.extend(
+            _summary_close_lines(
+                phase=summary_phase,
+                revealed=bool((active_block_state or {}).get("revealed_substep")),
+                opening=opening,
+            )
+        )
     del misconception_policy
     del prerequisite_support_policy
     del learning_support
@@ -1718,13 +1807,13 @@ def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> l
         else:
             lines.append("Leave a wrong choice on the screen. The learner may pick it again.")
         whys = {
-            "never": "A correct pick ends this block. Do not ask why that option is right.",
-            "always": "A correct pick must include why that option is right before this block ends.",
+            "never": "A correct pick moves to the summary check. Do not ask why that option is right.",
+            "always": "A correct pick must include why that option is right before the summary check.",
         }
         lines.append(
             whys.get(
                 confirm_why,
-                "If the first pick is correct, end this block. If the learner needed another try, ask why that option is right before the block ends.",
+                "If the first pick is correct, move to the summary check. If the learner needed another try, ask why that option is right before the summary check.",
             )
         )
         if pass_depth == "brief_confirm":
@@ -2508,8 +2597,6 @@ def build_kc_prompt(
     substeps = substeps_for_block(active_block, cfg)
     is_last_block = index >= len(blocks) - 1
     is_last_substep = substep == substeps[-1] if substeps else True
-    if substep == "awaiting_why":
-        is_last_substep = True
     confirm_why = str(((cfg.get("blocks") or {}).get("mcq") or {}).get("confirm_why_on_correct") or "on_retry_only")
     pending_why = (
         btype == "mcq"
@@ -2519,6 +2606,15 @@ def build_kc_prompt(
     )
     if pending_why:
         is_last_substep = False
+    summary_phase = ""
+    if btype != "explanation" and substeps and substeps[-1] == "summary_check":
+        if substep == "summary_check":
+            summary_phase = "check"
+            is_last_substep = False
+        elif len(substeps) >= 2 and (
+            substep == substeps[-2] or (btype == "mcq" and substep == "awaiting_why")
+        ):
+            summary_phase = "task"
     is_final_block_and_substep = is_last_block and is_last_substep
 
     data = active_block.get("data") if isinstance(active_block.get("data"), dict) else {}
@@ -2529,8 +2625,12 @@ def build_kc_prompt(
     )
     needs_dynamic_mcq = presenting_dynamic_mcq
     close_block_only = (not opening) and is_last_substep and index + 1 < len(blocks)
+    if summary_phase == "check" and not opening and index + 1 < len(blocks):
+        close_block_only = True
     widget_on = choice_on_screen or block_uses_choice_widget(active_block, substep, state_dict)
-    include_close = is_final_block_and_substep or unit_complete or course_complete
+    include_close = is_final_block_and_substep or unit_complete or course_complete or (
+        summary_phase == "check" and is_last_block
+    )
     frag_self_exp = bool(((cfg.get("blocks") or {}).get("topic_goal") or {}).get("fragment_self_explanation", True))
     interests = ", ".join(str(item) for item in (student.interests or []) if str(item).strip()) or "none named"
     cp = effective_child_profile(student)
@@ -2587,6 +2687,8 @@ def build_kc_prompt(
                     communication_tone=str(cp.get("communication_tone") or "warm_and_encouraging"),
                     active_block_state=state_dict,
                     close_block_only=close_block_only,
+                    summary_phase=summary_phase,
+                    summary_stay=summary_phase == "check" and is_last_block,
                 ),
             ),
             (

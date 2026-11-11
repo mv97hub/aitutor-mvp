@@ -729,11 +729,24 @@ def test_pass_bumps_an_encompassed_component() -> None:
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
             json={"answer": "I can explain the later fact."},
         )
+        summary = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/decision",
+            json={
+                "reply": "Summary check.",
+                "decision": "stay",
+                "substep_passed": True,
+                "rubric_met": ["fact"],
+            },
+        )
+        assert summary.status_code == 200, summary.text
+        assert summary.json()["active_substep"] == "summary_check"
+        assert summary.json()["unit_complete"] is False
         done = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
             json={
                 "reply": "Yes. The river in this course is blue. This unit is complete.",
                 "decision": "complete",
+                "block_complete": True,
                 "rubric_met": ["fact"],
                 "affect": "engaged",
                 "confidence": "ok",
@@ -844,9 +857,26 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
         for answer, decision, rubric in steps:
             posted = client.post(f"/kc/tutor/sessions/{session_id}/turn", json={"answer": answer})
             assert posted.status_code == 200, posted.text
+            if decision == "complete":
+                summary = client.post(
+                    f"/kc/tutor/sessions/{session_id}/decision",
+                    json={
+                        "reply": "Summary check.",
+                        "decision": "stay",
+                        "substep_passed": True,
+                        "rubric_met": rubric,
+                    },
+                )
+                assert summary.status_code == 200, summary.text
+                assert summary.json()["active_substep"] == "summary_check"
             step = client.post(
                 f"/kc/tutor/sessions/{session_id}/decision",
-                json={"reply": "That holds.", "decision": decision, "rubric_met": rubric},
+                json={
+                    "reply": "That holds.",
+                    "decision": decision,
+                    "block_complete": decision == "complete",
+                    "rubric_met": rubric,
+                },
             )
             assert step.status_code == 200, step.text
         assert step is not None
@@ -957,11 +987,23 @@ def test_time_box_synthesis_and_factual_recipe() -> None:
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
             json={"answer": "Explain the triangle angle sum."},
         )
+        summary = client.post(
+            f"/kc/tutor/sessions/{opened.json()['id']}/decision",
+            json={
+                "reply": "Summary check.",
+                "decision": "stay",
+                "substep_passed": True,
+                "rubric_met": ["fact"],
+            },
+        )
+        assert summary.status_code == 200, summary.text
+        assert summary.json()["active_substep"] == "summary_check"
         answered = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
             json={
                 "reply": "Yes. The interior angles add up to 180 degrees. This unit is complete.",
                 "decision": "complete",
+                "block_complete": True,
                 "rubric_met": ["fact"],
             },
         )
@@ -1711,7 +1753,7 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         assert "Retry attempts" not in live
         assert live["Support band"] == "hold"
         assert live["Redirect pending"] == "no"
-        assert live["Close component"] == "yes"
+        assert live["Close component"] == "no"
         assert live["Close course"] == "no"
         assert live["Finished blocks"] == ""
         assert "weather" in live["Interests"]
@@ -1730,11 +1772,23 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
             f"/kc/tutor/sessions/{session_id}/turn",
             json={"answer": "Explain the river fact."},
         )
+        summary = client.post(
+            f"/kc/tutor/sessions/{session_id}/decision",
+            json={
+                "reply": "Summary check.",
+                "decision": "stay",
+                "substep_passed": True,
+                "rubric_met": ["fact"],
+            },
+        )
+        assert summary.status_code == 200, summary.text
+        assert summary.json()["active_substep"] == "summary_check"
         done = client.post(
             f"/kc/tutor/sessions/{session_id}/decision",
             json={
                 "reply": "Yes. Truth for River fact. This unit is complete.",
                 "decision": "complete",
+                "block_complete": True,
                 "rubric_met": ["fact"],
             },
         )
@@ -1859,11 +1913,10 @@ def test_tutor_variables_follow_the_active_block() -> None:
         assert "Retry attempts" not in topic
         assert topic["Close component"] == "no"
 
-        moved = _decide(
+        moved = _finish_block(
             session_id,
             "The sky sends blue light.",
             reply="Next is the choice.",
-            block_complete=True,
         )
         assert moved["step"] == 1
         quiz = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
@@ -1878,7 +1931,7 @@ def test_tutor_variables_follow_the_active_block() -> None:
         assert "Explanation depth" not in quiz
         assert quiz["Retry attempts"] == "2"
         assert quiz["Disable eliminated choices"] == "yes"
-        assert quiz["Close component"] == "yes"
+        assert quiz["Close component"] == "no"
         assert "passed after" in quiz["Finished blocks"]
     finally:
         client.patch(
@@ -1963,11 +2016,23 @@ def test_decision_overrides_and_course_outro() -> None:
             f"/kc/tutor/sessions/{opened['id']}/turn",
             json={"answer": "Truth for First fact is the whole line."},
         )
+        summary = client.post(
+            f"/kc/tutor/sessions/{opened['id']}/decision",
+            json={
+                "reply": "Summary check.",
+                "decision": "stay",
+                "substep_passed": True,
+                "rubric_met": ["restatement"],
+            },
+        )
+        assert summary.status_code == 200, summary.text
+        assert summary.json()["active_substep"] == "summary_check"
         finished = client.post(
             f"/kc/tutor/sessions/{opened['id']}/decision",
             json={
                 "reply": "This unit is complete. You can state the fact.",
                 "decision": "complete",
+                "block_complete": True,
                 "rubric_met": ["restatement"],
             },
         )
@@ -1994,11 +2059,23 @@ def test_decision_overrides_and_course_outro() -> None:
             f"/kc/tutor/sessions/{other['id']}/turn",
             json={"answer": "Explain the second fact. The rule is the contrast."},
         )
+        summary = client.post(
+            f"/kc/tutor/sessions/{other['id']}/decision",
+            json={
+                "reply": "Summary check.",
+                "decision": "stay",
+                "substep_passed": True,
+                "rubric_met": ["transfer"],
+            },
+        )
+        assert summary.status_code == 200, summary.text
+        assert summary.json()["active_substep"] == "summary_check"
         outro = client.post(
             f"/kc/tutor/sessions/{other['id']}/decision",
             json={
                 "reply": "This unit is complete. The course is complete.",
                 "decision": "complete",
+                "block_complete": True,
                 "rubric_met": ["transfer"],
             },
         )
@@ -2204,11 +2281,23 @@ def test_closing_a_component_saves_the_result_on_that_child() -> None:
             f"/kc/tutor/sessions/{session_id}/turn",
             json={"answer": "I can explain floating."},
         )
+        summary = client.post(
+            f"/kc/tutor/sessions/{session_id}/decision",
+            json={
+                "reply": "Summary check.",
+                "decision": "stay",
+                "substep_passed": True,
+                "rubric_met": ["goal-1", "goal-2"],
+            },
+        )
+        assert summary.status_code == 200, summary.text
+        assert summary.json()["active_substep"] == "summary_check"
         finished = client.post(
             f"/kc/tutor/sessions/{session_id}/decision",
             json={
                 "reply": "You can explain why floating works. Practice the next shape.",
                 "decision": "complete",
+                "block_complete": True,
                 "rubric_met": ["goal-1", "goal-2"],
                 "score_justification": "Say why shape matters.",
                 "what_was_strong": "Named the floating idea.",
@@ -2245,6 +2334,16 @@ def _decide(session_id: str, answer: str, decision: str = "stay", reply: str = "
     decided = client.post(f"/kc/tutor/sessions/{session_id}/decision", json=body)
     assert decided.status_code == 200, decided.text
     return decided.json()
+
+
+def _finish_block(session_id: str, answer: str, reply: str = "Noted.", **extra: object) -> dict:
+    """Pass the last task substep, then close the summary check."""
+    landed = _decide(session_id, answer, reply="Summary check.", substep_passed=True, **extra)
+    assert landed["active_substep"] == "summary_check", landed
+    assert landed["unit_complete"] is False
+    closing = {key: value for key, value in extra.items() if key != "substep_passed"}
+    closing["block_complete"] = True
+    return _decide(session_id, "move on", reply=reply, **closing)
 
 
 def _assessments(session_id: str) -> list[dict]:
@@ -2404,12 +2503,11 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         assert ignored["status"] == "in_progress"
         assert _assessments(session_id) == []
 
-        advanced = _decide(
+        advanced = _finish_block(
             session_id,
             "The river is blue.",
             decision="stay",
             reply="The river color is in place.",
-            block_complete=True,
         )
         assert advanced["passed"] is False
         assert advanced["step"] == 1
@@ -2443,11 +2541,10 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         mcq_prompt = client.get(f"/kc/tutor/sessions/{session_id}/prompt").json()["system_prompt"]
         assert "Which color is the river?" in mcq_prompt
         assert "Blue water" in mcq_prompt
-        assert "If the first pick is correct, end this block." in mcq_prompt
+        assert "If the first pick is correct, move to the summary check." in mcq_prompt
         assert "River color: passed after" in mcq_prompt
-        assert "Summarize what the learner can now do." in mcq_prompt
-        assert "Do not ask a new question." in mcq_prompt
-        assert "The unit is not finished." not in mcq_prompt
+        assert "Summary close:" in mcq_prompt
+        assert "The unit is not finished." in mcq_prompt
 
         wrong = _decide(
             session_id,
@@ -2476,11 +2573,10 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         assert retried["step"] == 1
         assert "Explain Why" in retried["step_label"]
         assert len(_assessments(session_id)) == 1
-        finished = _decide(
+        finished = _finish_block(
             session_id,
             "Blue water reflects the sky.",
             decision="stay",
-            block_complete=True,
             reply="You can name the river color and pick it out. Practice the next river.",
             score_justification="Named the color and picked blue water.",
             what_was_strong="Named the color.",
@@ -2514,9 +2610,9 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             "/kc/tutor/sessions",
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": why_node["id"]},
         ).json()
-        _decide(why["id"], "The sky sends blue light.", reply="On to the choice.", block_complete=True)
+        _finish_block(why["id"], "The sky sends blue light.", reply="On to the choice.")
         why_prompt = client.get(f"/kc/tutor/sessions/{why['id']}/prompt").json()["system_prompt"]
-        assert "A correct pick must include why that option is right before this block ends." in why_prompt
+        assert "A correct pick must include why that option is right before the summary check." in why_prompt
         assert "The unit is not finished." in why_prompt
         held = _decide(why["id"], "The sky", decision="complete", reply="Why does that option work?", block_complete=True)
         assert held["passed"] is False
@@ -2524,13 +2620,12 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         assert held["step"] == 1
         assert "Explain Why" in held["step_label"]
         why_next = client.get(f"/kc/tutor/sessions/{why['id']}/prompt").json()["system_prompt"]
-        assert "Do not ask a new question." in why_next
-        assert "Summarize what the learner can now do." in why_next
-        closed = _decide(
+        assert "Summary close:" in why_next
+        assert "The unit is not finished." in why_next
+        closed = _finish_block(
             why["id"],
             "The sky sends blue light.",
             reply="You can explain the sky light and why that choice holds.",
-            block_complete=True,
         )
         assert closed["passed"] is True
         assert closed["status"] == "completed"
@@ -2542,11 +2637,10 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             "/kc/tutor/sessions",
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": open_node["id"]},
         ).json()
-        moved = _decide(
+        moved = _finish_block(
             partial["id"],
             "Explain the first idea.",
             reply="The first idea holds.",
-            block_complete=True,
         )
         assert moved["step"] == 1
         assert [item["status"] for item in moved["block_progress"]] == ["completed", "active"]
@@ -2601,11 +2695,10 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         picked = _decide(dynamic["id"], "Blue", decision="complete", reply="Say why that color fits.", block_complete=True)
         assert picked["passed"] is False
         assert "Explain Why" in picked["step_label"]
-        known = _decide(
+        known = _finish_block(
             dynamic["id"],
             "Blue is the color of this river.",
             reply="You can name the river color now.",
-            block_complete=True,
         )
         assert known["passed"] is True
         assert known["status"] == "completed"
@@ -2616,11 +2709,10 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             "/kc/tutor/sessions",
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": wonder_node["id"]},
         ).json()
-        counted_off = _decide(
+        counted_off = _finish_block(
             wonder["id"],
             "I wonder why.",
             reply="Here is the wonder, and you can ask it again later.",
-            block_complete=True,
         )
         assert counted_off["passed"] is True
         assert _state(storm.id, "zz-loop-wonder").status == "known"
@@ -2646,6 +2738,10 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": wonder_node["id"]},
         ).json()
         revealed = _decide(again["id"], "Nope", reply="The wonder stays open for another look.")
+        assert revealed["passed"] is False
+        assert revealed["unit_complete"] is False
+        assert revealed["active_substep"] == "summary_check"
+        revealed = _decide(again["id"], "move on anyway", reply="Moving on.", block_complete=True)
         assert revealed["passed"] is False
         assert revealed["unit_complete"] is True
         assert _state(storm.id, "zz-loop-wonder").status == "fragile"
@@ -2812,6 +2908,8 @@ def _miss_until_revealed(session_id: str, **extra: object) -> dict:
         )
         if revealed.get("unit_complete"):
             return revealed
+        if revealed.get("active_substep") == "summary_check":
+            return _decide(session_id, "move on", reply="Moving on.", block_complete=True, **extra)
     raise AssertionError(revealed)
 
 
@@ -3373,7 +3471,7 @@ def test_kc_progress_analytics_and_accomplishments_opportunities() -> None:
             "/kc/tutor/sessions",
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": known_node["id"]},
         ).json()
-        _decide(
+        _finish_block(
             s_known["id"],
             "Explains known concept clearly.",
             reply="Great explanation.",
@@ -3828,17 +3926,25 @@ def test_word_overlap_does_not_finish_a_block_the_model_kept_open() -> None:
         },
     ]
 
-    def turn(*, move_attempts: int, block_complete: bool = False, decision: str = "stay"):
+    def turn(
+        *,
+        move_attempts: int,
+        block_complete: bool = False,
+        substep_passed: bool = False,
+        decision: str = "stay",
+        answer: str = "The river is blue.",
+        state: dict | None = None,
+    ):
         return resolve_block_turn(
             decision=decision,
-            substep_passed=False,
+            substep_passed=substep_passed,
             block_complete=block_complete,
             rubric_met=[],
             stored_rubric=[],
             matched_wrong="",
             blocks=blocks,
             step=0,
-            active_block_state={"substep": "main"},
+            active_block_state=state or {"substep": "main"},
             block_results=[],
             move_attempts=move_attempts,
             hint_tier="nudge",
@@ -3847,20 +3953,260 @@ def test_word_overlap_does_not_finish_a_block_the_model_kept_open() -> None:
             cfg=default_kc_tutor_config(),
             goal=None,
             last_misconception="",
-            answer="The river is blue.",
+            answer=answer,
         )
 
     held = turn(move_attempts=0)
     assert held.next_step == 0
     assert held.advance_block is False
+    assert held.next_block_state["substep"] == "main"
     still = turn(move_attempts=1)
     assert still.next_step == 0
-    agreed = turn(move_attempts=0, block_complete=True)
-    assert agreed.next_step == 1
-    assert agreed.advance_block is True
+    assert still.next_block_state["substep"] == "main"
+    agreed = turn(move_attempts=0, block_complete=True, substep_passed=True)
+    assert agreed.next_step == 0
+    assert agreed.advance_block is False
+    assert agreed.next_block_state["substep"] == "summary_check"
+    assert not agreed.next_block_state.get("revealed_substep")
     exhausted = turn(move_attempts=2)
-    assert exhausted.next_step == 1
-    assert exhausted.advance_block is True
+    assert exhausted.next_step == 0
+    assert exhausted.advance_block is False
+    assert exhausted.next_block_state["substep"] == "summary_check"
+    assert exhausted.next_block_state["revealed_substep"] is True
+
+
+def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
+    from copy import deepcopy
+
+    from app.kc_loop import learner_ready_to_proceed, resolve_block_turn
+    from app.models import default_kc_tutor_config
+
+    cfg = default_kc_tutor_config()
+    for phrase in ("close", "close and move on", "move on", "continue to next", "done", "skip", "move on anyway"):
+        assert learner_ready_to_proceed(phrase, False), phrase
+    assert not learner_ready_to_proceed("Can you explain the blue?", False)
+
+    def run(
+        block: dict,
+        substep: str,
+        answer: str,
+        *,
+        state: dict | None = None,
+        substep_passed: bool = False,
+        block_complete: bool = False,
+        move_attempts: int = 0,
+        tutor_cfg: dict | None = None,
+    ):
+        active = {"substep": substep, "dialogue_turns": 0}
+        if state:
+            active.update(state)
+        return resolve_block_turn(
+            decision="stay",
+            substep_passed=substep_passed,
+            block_complete=block_complete,
+            rubric_met=[],
+            stored_rubric=[],
+            matched_wrong="",
+            blocks=[block, {"id": "next", "type": "topic_goal", "data": {"topic": "Next", "goal": "Explain next."}}],
+            step=0,
+            active_block_state=active,
+            block_results=[],
+            move_attempts=move_attempts,
+            hint_tier="nudge",
+            reveals=0,
+            enrichment_turns=0,
+            cfg=tutor_cfg or cfg,
+            goal=None,
+            last_misconception="",
+            answer=answer,
+        )
+
+    topic = {
+        "id": "topic",
+        "type": "topic_goal",
+        "data": {"topic": "River color", "goal": "The river is blue.", "acceptance_criteria": "The river is blue."},
+    }
+    passed = run(topic, "main", "The river is blue.", substep_passed=True)
+    assert passed.advance_block is False
+    assert passed.next_block_state["substep"] == "summary_check"
+    assert passed.next_block_state["last_task_substep"] == "main"
+    assert not passed.next_block_state.get("revealed_substep")
+    closed = run(
+        topic,
+        "summary_check",
+        "move on",
+        state=passed.next_block_state,
+        block_complete=True,
+    )
+    assert closed.advance_block is True
+    assert closed.block_results[-1]["outcome"] == "passed"
+
+    missed = run(topic, "main", "I am not sure yet.", move_attempts=2)
+    assert missed.next_block_state["substep"] == "summary_check"
+    assert missed.next_block_state["revealed_substep"] is True
+    assert missed.hint_tier == "reveal"
+    still_open = run(
+        topic,
+        "summary_check",
+        "Can you explain the blue?",
+        state=missed.next_block_state,
+    )
+    assert still_open.advance_block is False
+    assert still_open.next_block_state["revealed_substep"] is True
+    assert still_open.next_block_state["substep"] == "summary_check"
+    redeemed = run(
+        topic,
+        "summary_check",
+        "The river is blue.",
+        state=missed.next_block_state,
+        substep_passed=True,
+    )
+    assert redeemed.advance_block is False
+    assert redeemed.next_block_state["revealed_substep"] is False
+    assert redeemed.next_block_state["substep"] == "summary_check"
+    redeemed_close = run(
+        topic,
+        "summary_check",
+        "close and move on",
+        state=redeemed.next_block_state,
+        block_complete=True,
+    )
+    assert redeemed_close.block_results[-1]["outcome"] == "passed"
+    revealed_close = run(
+        topic,
+        "summary_check",
+        "move on anyway",
+        state=missed.next_block_state,
+        block_complete=True,
+    )
+    assert revealed_close.block_results[-1]["outcome"] == "revealed"
+
+    socratic_cfg = deepcopy(cfg)
+    socratic_cfg["blocks"]["socratic"]["dialogue_depth_turns"] = 1
+    socratic = {
+        "id": "talk",
+        "type": "socratic",
+        "data": {"central_dilemma": "Is the river blue?", "target_synthesis": "The river is blue."},
+    }
+    talked = run(
+        socratic,
+        "counterexample_probe",
+        "The river is blue.",
+        substep_passed=True,
+        tutor_cfg=socratic_cfg,
+    )
+    assert talked.next_block_state["substep"] == "summary_check"
+
+    case = {
+        "id": "cases",
+        "type": "case_study",
+        "data": {"invariant_principle": "Blue water reflects the sky.", "case_a": "Morning", "case_b": "Evening"},
+    }
+    contrasted = run(case, "contrast_and_rule", "Blue water reflects the sky.", substep_passed=True)
+    assert contrasted.next_block_state["substep"] == "summary_check"
+
+    teach = {
+        "id": "peer",
+        "type": "teach_back",
+        "data": {"peer_persona_prompt": "A friend", "required_concepts": ["blue water"]},
+    }
+    taught = run(teach, "peer_follow_up", "I told them about blue water.", substep_passed=True)
+    assert taught.next_block_state["substep"] == "summary_check"
+
+    curiosity = {
+        "id": "wonder",
+        "type": "curiosity",
+        "data": {"phenomenon_hook": "Why is the river blue?", "prediction_question": "Guess."},
+    }
+    wondered = run(curiosity, "hook_and_predict", "I wonder why.", substep_passed=True)
+    assert wondered.next_block_state["substep"] == "summary_check"
+    wonder_done = resolve_block_turn(
+        decision="stay",
+        substep_passed=False,
+        block_complete=True,
+        rubric_met=[],
+        stored_rubric=[],
+        matched_wrong="",
+        blocks=[curiosity],
+        step=0,
+        active_block_state=wondered.next_block_state,
+        block_results=[],
+        move_attempts=0,
+        hint_tier="nudge",
+        reveals=0,
+        enrichment_turns=0,
+        cfg=cfg,
+        goal=None,
+        last_misconception="",
+        answer="done",
+    )
+    assert wonder_done.block_results[-1]["outcome"] == "engaged"
+    assert wonder_done.mark_known is True
+
+    quiz = {
+        "id": "quiz",
+        "type": "mcq",
+        "data": {
+            "mode": "static",
+            "question_stem": "Which color?",
+            "choices": [
+                {"id": "a", "text": "Blue water", "is_correct": True},
+                {"id": "b", "text": "Red water", "is_correct": False},
+            ],
+            "correct_explanation": "Blue water reflects the sky.",
+        },
+    }
+    picked = run(quiz, "choice", "Blue water", substep_passed=True)
+    assert picked.next_block_state["substep"] == "summary_check"
+    assert picked.advance_block is False
+    why = run(quiz, "choice", "Blue water", move_attempts=1, substep_passed=True)
+    assert why.next_block_state["substep"] == "awaiting_why"
+    explained = run(quiz, "awaiting_why", "Blue water reflects the sky.", substep_passed=True)
+    assert explained.next_block_state["substep"] == "summary_check"
+    missed_quiz = run(quiz, "choice", "Red water", move_attempts=1)
+    assert missed_quiz.next_block_state["substep"] == "summary_check"
+    assert missed_quiz.next_block_state["revealed_substep"] is True
+
+    worked = {
+        "id": "work",
+        "type": "worked_example",
+        "data": {
+            "problem_statement": "Name the color.",
+            "steps": [{"step_text": "Look at the water."}],
+            "solo_expected_answer": "The river is blue.",
+        },
+    }
+    faded = run(worked, "faded_step", "no idea", move_attempts=1)
+    assert faded.next_block_state["substep"] == "solo_solve"
+    assert faded.next_block_state["revealed_substep"] is True
+    solved = run(worked, "solo_solve", "The river is blue.", substep_passed=True)
+    assert solved.next_block_state["substep"] == "summary_check"
+
+    flaw = {
+        "id": "flaw",
+        "type": "spot_the_flaw",
+        "data": {"flaw_description": "The river is red.", "corrected_version": "The river is blue."},
+    }
+    critiqued = run(
+        flaw,
+        "critique",
+        "The flaw is the river is red. The river is blue.",
+        substep_passed=True,
+    )
+    assert critiqued.next_block_state["substep"] == "summary_check"
+    missed_flaw = run(flaw, "critique", "Looks fine to me.", move_attempts=1)
+    assert missed_flaw.next_block_state["revealed_substep"] is True
+
+    recall = {
+        "id": "recall",
+        "type": "retrieval_check",
+        "data": {"recall_prompt": "What color?", "expected_fact": "The river is blue.", "expected_why_rationale": "It reflects the sky."},
+    }
+    elaborated = run(recall, "elaborate_why", "It reflects the sky.", substep_passed=True)
+    assert elaborated.next_block_state["substep"] == "summary_check"
+    missed_recall = run(recall, "elaborate_why", "I forget.", move_attempts=1)
+    assert missed_recall.next_block_state["substep"] == "summary_check"
+    assert missed_recall.next_block_state["revealed_substep"] is True
 
 
 def test_session_block_progress_short_title() -> None:

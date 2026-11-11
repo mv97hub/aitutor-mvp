@@ -2856,8 +2856,10 @@ def _pass_reply(node: KcNode) -> str:
     return OTHER_PASS.format(body=node.core_truth)
 
 
-def choice_for(node: KcNode, move) -> dict | None:
+def choice_for(node: KcNode, move, substep: str = "") -> dict | None:
     """The two closed picks. Every other move is typed."""
+    if str(substep or "") == "summary_check":
+        return None
     if not getattr(move, "choice", False):
         return None
     fields = node.type_fields or {}
@@ -3424,8 +3426,6 @@ def _close_flags(
     btype = str(block.get("type") or "").strip()
     is_last_block = index >= len(blocks) - 1
     is_last_substep = substep == substeps[-1] if substeps else True
-    if substep == "awaiting_why":
-        is_last_substep = True
     confirm_why = str(((cfg.get("blocks") or {}).get("mcq") or {}).get("confirm_why_on_correct") or "on_retry_only")
     if btype == "mcq" and substep == "choice" and confirm_why == "on_retry_only" and attempts > 0:
         is_last_substep = False
