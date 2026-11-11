@@ -504,7 +504,7 @@ export type KcTutorSession = {
   avatar_preset?: string;
   avatar_url?: string | null;
   redirect: { id: string; code: string; title: string } | null;
-  messages: { id: string; role: "user" | "assistant"; content: string; seq: number }[];
+  messages: { id: string; role: "user" | "assistant"; content: string; seq: number; step?: number }[];
 };
 
 export const AUDIENCES = ["6-8", "9-11", "12-14", "15-17"] as const;

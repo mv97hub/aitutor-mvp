@@ -2644,9 +2644,22 @@ def restart_course(db: Session, goal: KcGoal, student: Student) -> dict:
     return progress(db, goal, student)
 
 
-def _add_message(db: Session, session: KcSession, role: str, content: str) -> KcMessage:
+def _add_message(
+    db: Session,
+    session: KcSession,
+    role: str,
+    content: str,
+    *,
+    step: int | None = None,
+) -> KcMessage:
     current = db.scalar(select(func.max(KcMessage.seq)).where(KcMessage.session_id == session.id)) or 0
-    message = KcMessage(session_id=session.id, role=role, content=content, seq=int(current) + 1)
+    message = KcMessage(
+        session_id=session.id,
+        role=role,
+        content=content,
+        seq=int(current) + 1,
+        step=int(session.step if step is None else step),
+    )
     db.add(message)
     db.flush()
     return message
@@ -2815,11 +2828,16 @@ def _session_messages(db: Session, session: KcSession) -> list[KcMessage]:
     )
 
 
+def _assistant_on_step(messages: list[KcMessage], step: int) -> bool:
+    target = int(step or 0)
+    return any(message.role == "assistant" and int(message.step or 0) == target for message in messages)
+
+
 def _needs_speech(session: KcSession, messages: list[KcMessage]) -> bool:
-    """The opening intro has not been stored yet."""
+    """The active block has not been spoken yet."""
     if session.status != "in_progress":
         return False
-    return not any(message.role == "assistant" for message in messages)
+    return not _assistant_on_step(messages, int(session.step or 0))
 
 
 def _block_context(db: Session, session: KcSession, node: KcNode | None):
@@ -2948,7 +2966,13 @@ def session_out(db: Session, session: KcSession) -> dict:
         if redirect is None
         else {"id": str(redirect.id), "code": redirect.code, "title": redirect.title},
         "messages": [
-            {"id": str(message.id), "role": message.role, "content": message.content, "seq": message.seq}
+            {
+                "id": str(message.id),
+                "role": message.role,
+                "content": message.content,
+                "seq": message.seq,
+                "step": int(message.step or 0),
+            }
             for message in messages
         ],
         **_tutor_meta_dict(profile),
@@ -3491,7 +3515,7 @@ def tutor_variables(
         f"{vocab_reg} terminology + Layer 2 reading_level={read_lvl_val}, response_length={resp_len_val}"
         + (f", learning_support={support_val}" if support_val != "none" else "")
     )
-    opening_turn = session is None or not any(message.role == "assistant" for message in messages)
+    opening_turn = session is None or not _assistant_on_step(messages, index)
     turn_kind_val = (
         compute_turn_kind(
             opening=opening_turn,
@@ -3653,14 +3677,14 @@ def prompt_for(db: Session, session: KcSession) -> dict:
     profile, _goal, messages, fragment, _cfg, blocks, index, block, block_state = _block_context(db, session, node)
     substep = str(block_state.get("substep") or "")
     state = _state_row(db, student, node)
-    opening = not any(message.role == "assistant" for message in messages)
+    opening = not _assistant_on_step(messages, index)
     others = _others_known(db, student, goal, node)
     settled = state is not None and state.status in {"known", "fragile"}
     unit_complete = session.status == "completed"
     course_complete = unit_complete and settled and others
     prereq = _prerequisite_status(db, student, node)
     transition = None
-    if block is not None and index > 0:
+    if opening and block is not None and index > 0:
         previous = blocks[index - 1]
         previous_id = str(previous.get("id") or "")
         finished = {
@@ -3866,7 +3890,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         raise HTTPException(status_code=422, detail="Write an answer first.")
     answer = next(message.content for message in reversed(messages) if message.role == "user")
     if safety_flag != "none":
-        stored = _add_message(db, session, "assistant", reply)
+        stored = _add_message(db, session, "assistant", reply, step=index)
         record_safety_event(
             db,
             student_id=session.student_id,
@@ -3938,7 +3962,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     session.step = resolution.next_step
     next_state = dict(resolution.next_block_state or {})
     generated = body.get("generated_mcq")
-    if isinstance(generated, dict) and generated.get("choices"):
+    if isinstance(generated, dict) and generated.get("choices") and resolution.next_step == index:
         next_state["generated_mcq"] = generated
     session.active_block_state = next_state
     session.block_results = list(resolution.block_results)
@@ -3948,7 +3972,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     elif _last_block_finished(node, session):
         _close_finished_walk(db, session, node, reply, body)
     session.updated_at = _now()
-    _add_message(db, session, "assistant", reply)
+    _add_message(db, session, "assistant", reply, step=index)
     student = _student_or_404(db, session.student_id)
     state = _state_row(db, student, node)
     settled = state is not None and state.status in {"known", "fragile"}

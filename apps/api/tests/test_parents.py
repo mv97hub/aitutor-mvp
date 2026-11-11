@@ -121,7 +121,7 @@ def test_upgrade_head_includes_the_parent_tables() -> None:
 
     ini = Path(__file__).resolve().parents[1] / "alembic.ini"
     script = ScriptDirectory.from_config(Config(str(ini)))
-    assert script.get_heads() == ["032_merge_parent_portal"]
+    assert script.get_heads() == ["033_kc_message_step"]
     revisions = {rev.revision for rev in script.walk_revisions()}
     assert {"030_parent_portal", "031_course_standards"} <= revisions
 

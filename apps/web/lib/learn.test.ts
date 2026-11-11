@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   CHILD_STATUSES,
+  blockStepDivider,
   childWriteBody,
   displayChildStatus,
   explorerFor,
@@ -81,6 +82,19 @@ test("topic stars and a passed block use the child star rules", () => {
   assert.equal(again.award, 0);
   assert.equal(friendlyStrength("A required block was revealed."), "You finished this topic.");
   assert.equal(learnCoursePath("stu", "course", { kc: "topic" }).includes("/kc-tutor"), false);
+});
+
+test("a step divider names the finished step and the one that is opening", () => {
+  const blocks = [
+    { index: 0, type_label: "Topic + Goal" },
+    { index: 1, type_label: "Worked example" },
+  ];
+  assert.equal(blockStepDivider(undefined, 0, blocks, 4), null);
+  assert.equal(blockStepDivider(0, 0, blocks, 4), null);
+  assert.equal(
+    blockStepDivider(0, 1, blocks, 4),
+    "Step 1 complete · Up next: Step 2 of 4 — Worked example",
+  );
 });
 
 test("initials fall back when a child has not picked an icon", () => {

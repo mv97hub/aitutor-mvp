@@ -301,3 +301,16 @@ export function friendlyStrength(text: string | undefined): string {
 
 export const STAR_TOOLTIP =
   "10 stars for each finished block, 5 extra for a first-try pass, 25 for a finished topic, and 15 more when a topic is mastered with no reveals.";
+
+export function blockStepDivider(
+  previousStep: number | undefined,
+  step: number | undefined,
+  blocks?: { index: number; type_label?: string }[],
+  totalBlocks?: number,
+): string | null {
+  if (previousStep === undefined || step === undefined || step <= previousStep) return null;
+  const counted = totalBlocks && totalBlocks > 0 ? totalBlocks : Math.max(step + 1, blocks?.length ?? 0);
+  const label = (blocks?.find((block) => block.index === step)?.type_label || "").trim();
+  const upcoming = label ? `Step ${step + 1} of ${counted} — ${label}` : `Step ${step + 1} of ${counted}`;
+  return `Step ${previousStep + 1} complete · Up next: ${upcoming}`;
+}
