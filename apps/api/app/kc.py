@@ -70,7 +70,7 @@ from app.tutor_profile import (
     normalize_avatar_preset,
     resolve_active_profile,
 )
-from app.kc_pipeline import clean_intake
+from app.kc_pipeline import clean_intake, note_missing_paste
 from app.kc_standards import component_standards, read_statements, statements_from_intake
 from app.block_catalog import BLOCK_BANNER_LABELS, BLOCK_FIELDS, BLOCK_LABELS, block_summary_label
 from app.models import (
@@ -765,7 +765,8 @@ def update_course(db: Session, goal: KcGoal, body: dict) -> KcGoal:
         incoming = body["intake"] if isinstance(body["intake"], dict) else {}
         current = goal.intake if isinstance(goal.intake, dict) else {}
         # A partial intake must not drop a saved paste the caller did not send.
-        goal.intake = _clean_course_intake({**current, **incoming})
+        # A paste the caller clears is remembered, so the blueprint does not plan Standard.
+        goal.intake = note_missing_paste(clean_intake(current), _clean_course_intake({**current, **incoming}))
     if _brief_signature(goal) != before and (goal.brief or goal.blueprint or goal.drafting or goal.standards):
         goal.brief = ""
         goal.blueprint = {}

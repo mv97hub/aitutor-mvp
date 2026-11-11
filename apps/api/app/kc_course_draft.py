@@ -131,7 +131,10 @@ def stage_prompt(db: Session, goal: KcGoal, stage: str, model: str, unit: int | 
     if stage == "blueprint":
         if _statement_course(course["intake"], course["statements"]) and not drafting.get("standards_confirmed"):
             raise _fail(409, "Check the standard statements before the blueprint.")
-        return blueprint_bundle(course=course, brief=brief, model=chosen)
+        try:
+            return blueprint_bundle(course=course, brief=brief, model=chosen)
+        except ValueError as exc:
+            raise _fail(422, str(exc)) from exc
     units = blueprint.get("units") or []
     if not units or not drafting.get("approved"):
         raise _fail(409, "Approve the blueprint first.")
