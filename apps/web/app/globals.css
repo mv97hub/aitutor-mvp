@@ -4815,6 +4815,17 @@ a.ds-row { text-decoration: none; }
   box-shadow: none;
 }
 
+/* One pill in the admin and parent bars. The older switch rule must not stretch these. */
+.ds-admin-bar .ds-switch .ds-top-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.ds-top-btn.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .kc-banner {
   flex-wrap: wrap;
   gap: 12px 16px;
@@ -5677,7 +5688,8 @@ a.ds-row { text-decoration: none; }
   color: var(--ink-soft);
   font-size: 0.86rem;
   font-weight: 700;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: right;
 }
 
 .progress-list button.is-selected {
@@ -5734,9 +5746,80 @@ a.ds-row { text-decoration: none; }
 .progress-detail p { margin: 0 0 8px; }
 .progress-detail .learn-text-link { display: inline-block; margin-top: 6px; }
 
+.progress-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 22px;
+  margin: 14px 0 0;
+}
+
+.progress-totals div { display: grid; min-width: 7.5rem; }
+
+.progress-totals dt {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.progress-totals dd {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.progress-recommend { margin-top: 18px; }
+
+.progress-recommend h2,
+.progress-recommend h3 {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+}
+
+.progress-recommend ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+.progress-recommend p { margin: 0 0 8px; }
+
+.progress-blocks {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0;
+}
+
+.progress-blocks li {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(6rem, 0.8fr) auto auto auto;
+  gap: 8px 14px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.progress-block-name { font-weight: 650; }
+
+.progress-block-type,
+.progress-block-attempts {
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+}
+
+.progress-block-state { font-weight: 700; white-space: nowrap; }
+.progress-block-state.is-passed { color: var(--good); }
+.progress-block-state.is-revealed { color: var(--miss); }
+.progress-block-state.is-not-yet { color: var(--ink-soft); }
+.progress-block-first { color: var(--teal-deep); font-size: 0.86rem; font-weight: 700; white-space: nowrap; }
+
 @media (max-width: 860px) {
   .progress-split { grid-template-columns: 1fr; }
   .progress-list { max-height: none; }
+  .progress-blocks li { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 860px) {
@@ -6210,7 +6293,27 @@ body:has(.learn-mobile-chat) {
 
 
 
-/* Parent portal. Landing, settings, and dashboard reuse the learn-shell look. */
+/* Parent portal. Landing stays on the learn shell. The signed-in pages share one bar. */
+.parent-work { padding: 24px 28px 48px; }
+
+.parent-frame .parent-work-head { margin: 0 0 8px; }
+
+.parent-frame .parent-work-head h1 {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: clamp(1.8rem, 3vw, 2.4rem);
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.parent-frame .parent-work-head p {
+  margin: 6px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+}
+
+.parent-frame .parent-links { margin: 0 0 8px; }
 .parent-card.is-picked {
   border-color: var(--teal);
   box-shadow: 0 0 0 2px var(--teal);

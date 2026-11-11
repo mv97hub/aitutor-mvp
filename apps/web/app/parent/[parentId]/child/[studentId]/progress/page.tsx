@@ -1,4 +1,5 @@
 import { KcCourseProgress } from "@/components/KcCourseProgress";
+import { ParentFrame } from "@/components/parent/ParentFrame";
 import { ParentMissing } from "@/components/parent/ParentMissing";
 import { api } from "@/lib/api";
 import type { KcNetwork, KcProgress, KcTutorCourse } from "@/lib/kc";
@@ -72,19 +73,21 @@ export default async function ParentProgressPage({
   }
 
   return (
-    <KcCourseProgress
-      studentId={learner.id}
-      studentName={learner.display_name}
-      courses={courses}
-      courseId={courseId}
-      progress={progress}
-      network={network}
-      error={error}
-      area={{
-        backHref: parentHome(parent.id),
-        backLabel: "Back to dashboard",
-        progressPath: parentProgress(parent.id, learner.id),
-      }}
-    />
+    <ParentFrame parentId={parent.id} parentName={parent.name} studentId={learner.id} current="progress">
+      <KcCourseProgress
+        studentId={learner.id}
+        studentName={learner.display_name}
+        courses={courses}
+        courseId={courseId}
+        progress={progress}
+        network={network}
+        error={error}
+        area={{
+          backHref: parentHome(parent.id),
+          backLabel: "Back to dashboard",
+          progressPath: parentProgress(parent.id, learner.id),
+        }}
+      />
+    </ParentFrame>
   );
 }

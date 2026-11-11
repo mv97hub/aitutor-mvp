@@ -63,7 +63,7 @@ test("the shared transcript only reads prompts when debug is on", () => {
   assert.match(admin, /\bdebug\b/);
   assert.match(admin, /downloadKcChat\(session\)/);
   const parent = source("../components/parent/ParentChats.tsx");
-  assert.match(parent, /<SessionView session=\{session\} \/>/);
+  assert.match(parent, /<SessionView session=\{session\} heading="work" \/>/);
   assert.doesNotMatch(parent, /debug|PromptDialog|AdminFrame|downloadKcChat|Download/);
 });
 
@@ -82,6 +82,29 @@ test("progress takes an area so parent links never leave /parent", () => {
   const page = source("../app/parent/[parentId]/child/[studentId]/progress/page.tsx");
   assert.match(page, /area=\{\{/);
   assert.doesNotMatch(page, /["`]\/(learn|kc-progress)/);
+});
+
+test("dashboard, settings, chats, and parent progress share one parent frame", () => {
+  for (const path of [
+    "../components/parent/ParentDashboard.tsx",
+    "../components/parent/ParentSettings.tsx",
+    "../components/parent/ParentChats.tsx",
+    "../app/parent/[parentId]/child/[studentId]/progress/page.tsx",
+  ]) {
+    assert.match(source(path), /ParentFrame/);
+  }
+  const frame = source("../components/parent/ParentFrame.tsx");
+  assert.match(frame, /Parent portal · \{parentName\}/);
+  assert.match(frame, /ds-top-btn/);
+  for (const label of ["Dashboard", "Chats", "Progress", "Settings"]) {
+    assert.match(frame, new RegExp(label));
+  }
+  assert.match(frame, /Choose a child first/);
+  const admin = source("../components/ViewKcChats.tsx");
+  assert.match(admin, /AdminFrame/);
+  assert.doesNotMatch(admin, /ParentFrame/);
+  const child = source("../app/kc-progress/page.tsx");
+  assert.doesNotMatch(child, /ParentFrame/);
 });
 
 test("the parent portal is on the documentation list", () => {

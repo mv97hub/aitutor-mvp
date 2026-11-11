@@ -51,6 +51,7 @@ test("top navigation uses one quiet slate and no orange glow", () => {
   assert.match(block, /\.ds-top-btn\.is-active[\s\S]*background: #c5d3e3/);
   assert.match(block, /\.ds-top-btn\.is-on-banner\.is-active/);
   assert.doesNotMatch(block, /#f59e0b|#2563eb|#1e3a8a|box-shadow: 0/);
+  assert.match(css, /\.ds-admin-bar \.ds-switch \.ds-top-btn \{[\s\S]*flex: 0 0 auto;[\s\S]*white-space: nowrap;/);
   assert.match(css, /\.button \{ background: var\(--teal\)/);
   assert.match(css, /button\.kc-primary \{ background: #0f6e6b/);
 });

@@ -8,16 +8,20 @@ import { NETWORK_WIDTH, NetworkMap, networkHeight } from "@/components/KcNetwork
 import type { KcNetwork, KcProgress, KcTutorCourse } from "@/lib/kc";
 import { friendlyStrength, learnCoursePath } from "@/lib/learn";
 import {
-  blockScore,
-  childComponentLabel,
+  blockRows,
   childNoteByCode,
+  componentLine,
+  componentRecommendations,
+  courseRecommendations,
   courseScore,
+  courseTotals,
   finishedComponents,
   finishedSentence,
   passedCourseRubric,
   portfolioCount,
   portfolioCourseStatus,
   statusByCode,
+  type BlockRow,
   type KcProgressUnit,
   type KcUnitStatus,
 } from "@/lib/kc-progress";
@@ -50,12 +54,10 @@ function showedText(unit: KcProgressUnit): string {
   return cleaned;
 }
 
-function componentScore(unit: KcProgressUnit): string {
-  const label = childComponentLabel(unit);
-  const done = unit.finished_blocks ?? unit.completed_blocks ?? 0;
-  const total = unit.total_blocks ?? 0;
-  const count = total > 0 ? `${done} of ${total}` : "";
-  return [label, count].filter(Boolean).join(" · ");
+function stateClass(state: BlockRow["state"]): string {
+  if (state === "Passed") return "is-passed";
+  if (state === "Revealed") return "is-revealed";
+  return "is-not-yet";
 }
 
 function NetworkFrame({
@@ -182,23 +184,35 @@ export function KcCourseProgress({
   const units = progress?.units ?? [];
   const selected = units.find((unit) => unit.code === selectedCode) ?? null;
   const score = progress ? courseScore(units, progress.known ?? progress.known_count ?? 0) : null;
+  const totals = courseTotals(units);
+  const revisit = courseRecommendations(units);
   const lastActivity = formatTimestamp(progress?.last_active_at);
   const showed = selected ? showedText(selected) : "";
   const finished = finishedComponents(units);
   const rubric = progress ? passedCourseRubric(progress) : { completed: "", struggled: "" };
+  const selectedRows = selected ? blockRows(selected) : [];
+  const selectedRecommendations = selected ? componentRecommendations(selected, progress?.opportunities) : null;
+  const heading = area ? (
+    <header className="parent-work-head">
+      <h1>Detailed Progress</h1>
+      {studentName ? <p>{studentName}</p> : null}
+    </header>
+  ) : (
+    <header className="progress-bar">
+      <BrandMark />
+      <div className="progress-title">
+        <h1>Detailed Progress</h1>
+        {studentName ? <p>{studentName}</p> : null}
+      </div>
+      <Link className="learn-text-link" href={`/learn/${studentId}`}>
+        Back to home
+      </Link>
+    </header>
+  );
 
-  return (
-    <main className="learn-shell progress-page">
-      <header className="progress-bar">
-        <BrandMark />
-        <div className="progress-title">
-          <h1>Detailed Progress</h1>
-          {studentName ? <p>{studentName}</p> : null}
-        </div>
-        <Link className="learn-text-link" href={area ? area.backHref : `/learn/${studentId}`}>
-          {area ? area.backLabel : "Back to home"}
-        </Link>
-      </header>
+  const body = (
+    <>
+      {heading}
 
       <section className="learn-section progress-portfolio-section" aria-label="Course Portfolio">
         <h2>Course Portfolio</h2>
@@ -238,6 +252,46 @@ export function KcCourseProgress({
             {score.percent}% · {score.finished} of {score.total}
             {lastActivity ? ` · Last activity ${lastActivity}` : " · No activity yet"}
           </p>
+          <dl className="progress-totals" aria-label="Course totals">
+            <div>
+              <dt>Components mastered</dt>
+              <dd>{totals.mastered}</dd>
+            </div>
+            <div>
+              <dt>Components completed</dt>
+              <dd>{totals.completed}</dd>
+            </div>
+            <div>
+              <dt>Components in progress</dt>
+              <dd>{totals.inProgress}</dd>
+            </div>
+            <div>
+              <dt>Components not started</dt>
+              <dd>{totals.notStarted}</dd>
+            </div>
+            <div>
+              <dt>Blocks passed</dt>
+              <dd>{totals.blocksPassed}</dd>
+            </div>
+            <div>
+              <dt>Blocks revealed</dt>
+              <dd>{totals.blocksRevealed}</dd>
+            </div>
+            <div>
+              <dt>Blocks not yet</dt>
+              <dd>{totals.blocksNotYet}</dd>
+            </div>
+          </dl>
+          {revisit.length > 0 ? (
+            <section className="progress-recommend" aria-label="Recommendations">
+              <h2>Revisit</h2>
+              <ul>
+                {revisit.map((item) => (
+                  <li key={item.code}>{item.title}</li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           <div className="progress-split">
             <div className="progress-map">
               {network && network.nodes.length > 0 ? (
@@ -255,7 +309,7 @@ export function KcCourseProgress({
             </div>
             <ul className="progress-list" aria-label="Course components">
               {units.map((unit) => {
-                const label = childComponentLabel(unit);
+                const line = componentLine(unit);
                 const pressed = unit.code === selectedCode;
                 return (
                   <li key={unit.id}>
@@ -266,7 +320,7 @@ export function KcCourseProgress({
                       onClick={() => setSelectedCode(unit.code)}
                     >
                       <span>{unit.title}</span>
-                      {label ? <span className="progress-row-status">{label}</span> : null}
+                      {line ? <span className="progress-row-status">{line}</span> : null}
                     </button>
                   </li>
                 );
@@ -276,7 +330,6 @@ export function KcCourseProgress({
           {finished.length > 0 ? (
             <ul className="progress-finished" aria-label="Finished components">
               {finished.map((unit) => {
-                const label = childComponentLabel(unit);
                 const updated = formatTimestamp(unit.updated_at || unit.completed_at);
                 const sentence = finishedSentence(unit, progress.accomplishments);
                 const pressed = unit.code === selectedCode;
@@ -288,7 +341,7 @@ export function KcCourseProgress({
                       aria-pressed={pressed}
                       onClick={() => setSelectedCode(unit.code)}
                     >
-                      <span>{[unit.title, label, blockScore(unit), updated].filter(Boolean).join(" · ")}</span>
+                      <span>{[unit.title, componentLine(unit), updated].filter(Boolean).join(" · ")}</span>
                       {sentence ? <span className="progress-finished-sentence">{sentence}</span> : null}
                     </button>
                   </li>
@@ -302,11 +355,48 @@ export function KcCourseProgress({
               {rubric.struggled ? <p>{rubric.struggled}</p> : null}
             </div>
           ) : null}
-          {selected ? (
+          {selected && selectedRecommendations ? (
             <article className="progress-detail" ref={detailRef}>
               <h2>{selected.title}</h2>
-              <p>{componentScore(selected)}</p>
+              <p>{componentLine(selected)}</p>
               {showed ? <p>{showed}</p> : null}
+              {selectedRows.length > 0 ? (
+                <ul className="progress-blocks" aria-label="Blocks">
+                  {selectedRows.map((row) => (
+                    <li key={row.id}>
+                      <span className="progress-block-name">{row.name}</span>
+                      <span className="progress-block-type">{row.type}</span>
+                      <span className={`progress-block-state ${stateClass(row.state)}`}>{row.state}</span>
+                      <span className="progress-block-attempts">
+                        {row.attempts} {row.attempts === 1 ? "attempt" : "attempts"}
+                      </span>
+                      {row.firstTry ? <span className="progress-block-first">First try</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {selectedRecommendations.workOn ||
+              selectedRecommendations.misconceptions.length > 0 ||
+              selectedRecommendations.opportunities.length > 0 ? (
+                <section className="progress-recommend" aria-label="Recommendations">
+                  <h3>Recommendations</h3>
+                  {selectedRecommendations.workOn ? <p>{selectedRecommendations.workOn}</p> : null}
+                  {selectedRecommendations.misconceptions.length > 0 ? (
+                    <ul aria-label="Misconceptions">
+                      {selectedRecommendations.misconceptions.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {selectedRecommendations.opportunities.length > 0 ? (
+                    <ul aria-label="Opportunities">
+                      {selectedRecommendations.opportunities.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </section>
+              ) : null}
               {area ? null : (
                 <Link
                   className="learn-text-link"
@@ -319,6 +409,9 @@ export function KcCourseProgress({
           ) : null}
         </section>
       ) : null}
-    </main>
+    </>
   );
+
+  if (area) return <div className="parent-work progress-page">{body}</div>;
+  return <main className="learn-shell progress-page">{body}</main>;
 }

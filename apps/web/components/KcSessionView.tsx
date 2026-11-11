@@ -143,12 +143,15 @@ export function SessionView({
   session,
   debug = false,
   actions = null,
+  heading = "desk",
 }: {
   session: ChatViewData;
   /** Admin only. A parent view passes false and never receives prompts. */
   debug?: boolean;
   /** Optional control for the admin chat. The parent view leaves this unset. */
   actions?: ReactNode;
+  /** Parent chats use the shared work-area heading. Admin keeps the desk title. */
+  heading?: "desk" | "work";
 }) {
   const [prompt, setPrompt] = useState<KcPrompt | null>(null);
   const [scoresOpen, setScoresOpen] = useState(false);
@@ -172,26 +175,35 @@ export function SessionView({
     setScoresOpen(false);
   }, [session.id]);
   const now = session.status === "completed" ? "component finished" : `now on ${session.step_label}`;
-  const heading = (
+  const deskTitle = (
     <>
       <p className="eyebrow">{session.student.display_name}</p>
       <h2>{session.component.title}</h2>
     </>
   );
+  const workTitle = (
+    <header className="parent-work-head">
+      <h1>{session.student.display_name}</h1>
+      <p>
+        {session.component.title} · {session.course.title} · {session.status.replaceAll("_", " ")}
+      </p>
+    </header>
+  );
+  const title = heading === "work" ? workTitle : deskTitle;
   return (
     <article className="transcript-view">
       {actions ? (
         <div className="transcript-actions">
-          <div>{heading}</div>
+          <div>{title}</div>
           {actions}
         </div>
       ) : (
-        heading
+        title
       )}
       <p className="meta">
-        {session.component.code} · {session.course.title} · {session.status.replaceAll("_", " ")} · opened{" "}
-        {when(session.created_at)}
-        {` · ${now}`}
+        {heading === "work"
+          ? `${session.component.code} · opened ${when(session.created_at)} · ${now}`
+          : `${session.component.code} · ${session.course.title} · ${session.status.replaceAll("_", " ")} · opened ${when(session.created_at)} · ${now}`}
       </p>
       <div className="score-fold">
         <h3>

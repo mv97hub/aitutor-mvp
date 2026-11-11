@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { BrandMark } from "@/components/BrandMark";
 import { ChildMark } from "@/components/learn/ChildFields";
+import { ParentFrame } from "@/components/parent/ParentFrame";
 import { api } from "@/lib/api";
 import { gradePill } from "@/lib/learn";
 import { parentHome, toggledIds, type Parent } from "@/lib/parent";
@@ -52,26 +53,21 @@ export function ParentSettings({
     }
   }
 
+  const onlyChild = linkedIds.length === 1 ? linkedIds[0] : null;
+
   return (
-    <main className="learn-shell parent-shell">
-      <BrandMark />
-      <header className="learn-home-bar">
-        <div>
-          <p className="eyebrow">Parent portal · {parent.name}</p>
+    <ParentFrame parentId={parent.id} parentName={parent.name} studentId={onlyChild} current="settings">
+      <div className="parent-work">
+        <BrandMark />
+        <header className="parent-work-head">
           <h1>Your children</h1>
-          <p className="lede">Tick the children you want to follow. You can change this any time.</p>
-        </div>
-        <div className="parent-links">
-          {linkedIds.length > 0 ? (
-            <Link className="learn-text-link" href={parentHome(parent.id)}>
-              Back to dashboard
-            </Link>
-          ) : null}
+          <p>Tick the children you want to follow. You can change this any time.</p>
+        </header>
+        <p className="parent-links">
           <Link className="learn-text-link" href="/parent">
             Switch parent
           </Link>
-        </div>
-      </header>
+        </p>
       {problem ? (
         <div className="banner" role="alert">
           <p>{problem}</p>
@@ -117,6 +113,7 @@ export function ParentSettings({
           </span>
         </div>
       </form>
-    </main>
+      </div>
+    </ParentFrame>
   );
 }
