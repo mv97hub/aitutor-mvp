@@ -12,29 +12,40 @@ const DEPTH_HIGH: Record<string, number> = {
   curriculum: 100,
 };
 
-const UNIT_HEADER = /^(?:unit|chapter|module)\s+\d+\s*[:.\-–—]\s*/i;
+const UNIT_HEADER =
+  /^(?:(?:unit|chapter|module|week|part|section|topic|lesson)\s+\d+\b(?:\s*[:–—-]\s*(.+)|\s*\.\s+(?!\d)(.+)|\s+(?!\d)(.+))|#+\s*(.+))$/i;
 const BULLET = /^(?:[-*•]|\d+[.)])\s+/;
+const LIST_ITEM = /^(?:[-*•]\s+|\d+(?:\.\d+)*[.)]?\s+)\S/;
 
-function countPaste(text: string, syllabusOnly: boolean): number {
+function countPaste(text: string, syllabusOnly: boolean, flat = false): number {
   let units = 0;
   let statements = 0;
+  let listed = 0;
   for (const raw of String(text || "").split(/\r?\n/)) {
-    const line = raw.trim().replace(BULLET, "");
+    const line = raw.trim();
     if (!line) continue;
     if (UNIT_HEADER.test(line)) {
       units += 1;
       continue;
     }
+    const body = line.replace(BULLET, "");
+    if (!body) continue;
     statements += 1;
+    if (LIST_ITEM.test(line)) listed += 1;
   }
-  if (syllabusOnly && units === 0) return 0;
+  if (syllabusOnly && units === 0) return flat ? listed : 0;
   if (units) return Math.max(units, statements);
   return statements;
 }
 
 /** The larger of standard statements and a syllabus in the source text. */
-export function pastedCurriculumCount(standardText: string, sourceText: string): number {
-  return Math.max(countPaste(standardText, false), countPaste(sourceText, true));
+export function pastedCurriculumCount(
+  standardText: string,
+  sourceText: string,
+  options: { depth?: string; alignSyllabus?: boolean } = {},
+): number {
+  const flat = Boolean(options.alignSyllabus) || options.depth === "curriculum";
+  return Math.max(countPaste(standardText, false), countPaste(sourceText, true, flat));
 }
 
 export function pasteOverridesDepth(depth: string, count: number): boolean {

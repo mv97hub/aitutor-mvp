@@ -213,6 +213,7 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
                 make_code=slug_code,
                 statements=statements,
                 matched=is_matched_curriculum(intake, statements),
+                intake=intake,
             )
             goal.drafting = {
                 "questions": [],

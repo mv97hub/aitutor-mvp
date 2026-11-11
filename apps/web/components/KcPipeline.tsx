@@ -10,7 +10,7 @@ import type { KcBlueprint, KcPipeline } from "@/lib/kc";
 import { KC_MODELS, kcModel } from "@/lib/kc-models";
 import { pipelineAction, requestOf, runPipeline, stageRunner, workingText } from "@/lib/kc-pipeline";
 import { promptTurnId } from "@/lib/kc-prompt-log";
-import type { StageEvent } from "@/lib/kc-stage";
+import { progressLine, type StageEvent } from "@/lib/kc-stage";
 
 const CHECK_LABELS: Record<string, string> = {
   gaps: "Gaps",
@@ -67,7 +67,7 @@ export function KcPipelinePanel({
         prompts: [{ label: event.label, instructions: event.instructions, prompt: event.prompt }],
       });
     }
-    if (event.type === "progress") setProgress(`${event.label}: ${event.items} so far`);
+    if (event.type === "progress") setProgress(progressLine(event.label, event.items));
     if (event.type === "retry") setProgress(`Retrying ${event.label}. ${event.message}`);
   }
 

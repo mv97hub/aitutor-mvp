@@ -4,7 +4,7 @@ import test from "node:test";
 
 import type { KcPipeline } from "./kc.ts";
 import { PipelineStageError, runPipeline, type RunStage } from "./kc-pipeline.ts";
-import { combineBlueprint, combineReview, partialItems, runStage, stageLabel, STAGE_TOKEN_LIMITS, type StageRequest } from "./kc-stage.ts";
+import { combineBlueprint, combineReview, partialItems, progressLine, runStage, stageLabel, STAGE_TOKEN_LIMITS, type StageEvent, type StageRequest } from "./kc-stage.ts";
 
 function pipeline(next: KcPipeline["next"], extra: Partial<KcPipeline> = {}): KcPipeline {
   return {
@@ -122,9 +122,43 @@ test("a stage that keeps failing does not store a result", async () => {
   );
 });
 
-test("streaming progress counts the rows written so far", () => {
+test("streaming progress counts components, not outcomes or units", () => {
   assert.equal(partialItems(null), 0);
-  assert.equal(partialItems({ units: [{ components: [{}, {}] }, { components: [{}] }] }), 5);
+  assert.equal(partialItems({ outcomes: ["Name it.", "Use it."], units: [{ components: [{}, {}] }, { components: [{}] }] }), 3);
+  assert.equal(partialItems({ outcomes: ["Name it."], unit: { components: [{}] } }), 1);
+  assert.equal(partialItems({ components: [{}, {}, {}] }), 3);
+  assert.equal(progressLine("Blueprint", 3), "Blueprint: 3 components so far");
+  assert.equal(progressLine("Blueprint (retry)", 1), "Blueprint (retry): 1 component so far");
+  assert.equal(progressLine("Unit 2 of 2", 2), "Unit 2 of 2: 2 so far");
+});
+
+test("a blueprint retry labels the counter instead of resetting it", async () => {
+  const events: StageEvent[] = [];
+  let calls = 0;
+  await runStage(
+    { stage: "blueprint", unit: null },
+    {
+      bundle: async () => ({ model: "gpt-4.1", system_prompt: "Plan.", user_prompt: "Go.", schema: {} }),
+      generate: async (input) => {
+        calls += 1;
+        input.onPartial({
+          outcomes: ["Name it.", "Use it.", "Apply it."],
+          units: [{ components: [{}, {}] }, { components: [{}] }],
+        });
+        if (calls === 1) throw new Error("You returned 13. Return between 8 and 12 components.");
+        return { outcomes: ["Name it.", "Use it."], units: [] };
+      },
+      store: async () => pipeline(null),
+    },
+    (event) => events.push(event),
+  );
+  const progress = events.filter((event) => event.type === "progress");
+  assert.equal(progress[0]?.label, "Blueprint");
+  assert.equal(progress[0]?.items, 3);
+  assert.equal(progressLine(progress[0]?.label ?? "", progress[0]?.items ?? 0), "Blueprint: 3 components so far");
+  assert.equal(progress[1]?.label, "Blueprint (retry)");
+  assert.equal(progress[1]?.items, 3);
+  assert.equal(progressLine("Blueprint (retry)", 3), "Blueprint (retry): 3 components so far");
 });
 
 test("a blueprint retry fetches the corrected bounds", async () => {

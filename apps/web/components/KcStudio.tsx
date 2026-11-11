@@ -44,7 +44,14 @@ export function KcStudio({
   const componentCount = initialStructure?.groups.reduce((sum, group) => sum + group.components.length, 0) ?? 0;
   const syllabus = [course?.intake.standard_text, course?.intake.source_text].filter(Boolean).join("\n");
   const pasteNote =
-    course && pasteOverridesDepth(course.intake.depth, pastedCurriculumCount(course.intake.standard_text, course.intake.source_text))
+    course &&
+    pasteOverridesDepth(
+      course.intake.depth,
+      pastedCurriculumCount(course.intake.standard_text, course.intake.source_text, {
+        depth: course.intake.depth,
+        alignSyllabus: Boolean(course.intake.align_syllabus),
+      }),
+    )
       ? PASTE_OVERRIDE_NOTE
       : "";
   const cutNotes = course ? intakeCutNotes(course.intake) : [];
