@@ -41,7 +41,7 @@ test("menu sections keep every destination under the six headers", () => {
     menuSections.map((section) => [section.title, section.links.map((link) => [link.label, link.href])]),
   );
   assert.deepEqual(byTitle["Kids Portal"], [
-    ["Child chooser", "/learn"],
+    ["Child Portal", "/learn"],
     ["Mobile child", "/learn-mobile"],
   ]);
   assert.deepEqual(byTitle["Parent Portal"], [["Parent portal", "/parent"]]);
@@ -52,7 +52,6 @@ test("menu sections keep every destination under the six headers", () => {
   assert.deepEqual(byTitle["Administration"], [
     ["Admin", "/admin"],
     ["KC View Chats", "/admin/kc-chats"],
-    ["View KC chats", "/viewkcchats"],
     ["AI Tutor Configurations", "/admin/agent-customizations"],
     ["AI Safety", "/admin/ai-safety"],
     ["Token usage", "/admin/token-usage"],
@@ -78,6 +77,7 @@ test("menu sections keep every destination under the six headers", () => {
     ["Create course", "/create-course"],
     ["Manage courses", "/manage-courses"],
     ["View chats", "/viewchats"],
+    ["View KC chats", "/viewkcchats"],
   ]);
   assert.equal(
     menuSections.find((section) => section.title === "Deprecated Pages")?.links.some((link) => link.href === "/kc-progress"),
@@ -99,14 +99,14 @@ test("child home is linked only when a student id is already known", () => {
   assert.deepEqual(
     menuSectionsFor("sam")[0].links.map((link) => [link.label, link.href]),
     [
-      ["Child chooser", "/learn"],
+      ["Child Portal", "/learn"],
       ["Mobile child", "/learn-mobile"],
     ],
   );
   assert.deepEqual(
     menuSectionsFor(id)[0].links.map((link) => [link.label, link.href]),
     [
-      ["Child chooser", "/learn"],
+      ["Child Portal", "/learn"],
       ["Mobile child", "/learn-mobile"],
       ["Child home", `/learn/${id}`],
     ],

@@ -3616,7 +3616,73 @@ a.ds-row { text-decoration: none; }
 }
 
 .ds-shell.kc-prompt-tester {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.kc-prompt-workspace {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.kc-prompt-workspace > .kc-prompt-note,
+.kc-prompt-workspace > .banner {
+  flex: none;
+  margin-right: 16px;
+  margin-left: 16px;
+}
+
+.kc-prompt-tabs {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 16px 10px;
+}
+
+.kc-prompt-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 7px 14px;
+  border-radius: 9px;
+  border: 1px solid #d2dce6;
+  background: #e8eef5;
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 18px;
+  box-shadow: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.kc-prompt-tab:hover {
+  background: #d5e0ec;
+  border-color: #c5d1de;
+  color: #1e293b;
+  box-shadow: none;
+}
+
+.kc-prompt-tab.is-active {
+  background: #c5d3e3;
+  border-color: #b9c7d6;
+  color: #0f172a;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.kc-prompt-columns {
+  display: grid;
   grid-template-columns: minmax(280px, 440px) minmax(0, 1fr);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
 .kc-prompt-form,
@@ -3697,10 +3763,28 @@ a.ds-row { text-decoration: none; }
   font-size: 13px;
 }
 
-.kc-prompt-form .button { margin-top: 8px; }
+.kc-prompt-form .button,
+.kc-prompt-pin .button { margin-top: 0; }
 
-.kc-prompt-result { padding: 16px 20px 32px; }
+.kc-prompt-result {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 32px;
+  overflow: hidden;
+}
 
+.kc-prompt-pin {
+  flex: none;
+  padding-bottom: 12px;
+  background: #fff;
+}
+
+.kc-prompt-output {
+  min-height: 0;
+  overflow: auto;
+}
+
+.kc-prompt-form pre,
 .kc-prompt-result pre {
   margin: 0;
   white-space: pre-wrap;
@@ -3711,14 +3795,19 @@ a.ds-row { text-decoration: none; }
 }
 
 @media (max-width: 860px) {
-  .ds-shell.kc-prompt-tester {
+  .kc-prompt-columns {
     grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr) minmax(10rem, 38vh);
+    grid-template-rows: auto minmax(10rem, 38vh);
+    overflow: auto;
   }
 
   .kc-prompt-form {
     border-right: 0;
     border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
+  }
+
+  .kc-prompt-result {
+    overflow: auto;
   }
 }
 

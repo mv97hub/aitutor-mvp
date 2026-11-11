@@ -41,6 +41,21 @@ import {
 } from "@/lib/kc-tutor-config";
 import type { Student, TutorProfile } from "@/lib/types";
 
+const TAB_LABEL: Record<(typeof LAYER_HEADINGS)[number], string> = {
+  Safety: "Safety",
+  "Layer 1, Component": "Component",
+  "Layer 2, Child": "Child",
+  "Layer 3, Voice": "Voice",
+  "Layer 4, Guidance": "Guidance",
+  "Layer 5, Encouragement": "Encouragement",
+  "Layer 6, Metacognition": "Metacognition",
+  "Layer 7, Feedback loop": "Feedback",
+};
+
+function layerTabId(heading: string): string {
+  return `kc-prompt-tab-${heading.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+}
+
 export function KcPromptTester({
   courses,
   students,
@@ -67,16 +82,26 @@ export function KcPromptTester({
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState<string | null>(loadError);
   const [submitting, setSubmitting] = useState(false);
+  const [blockIndex, setBlockIndex] = useState(0);
+  const [layer, setLayer] = useState<(typeof LAYER_HEADINGS)[number]>("Layer 1, Component");
 
   const course = courses.find((item) => item.id === courseId) ?? null;
   const units = course ? unitsFor(course) : [];
-  const moveIndex = Number(values["Move index"] || "1");
-  const activeIndex = blocks.length ? Math.min(Math.max(Number.isFinite(moveIndex) ? moveIndex : 1, 1), blocks.length) - 1 : 0;
+  const activeIndex = blocks.length ? Math.min(Math.max(blockIndex, 0), blocks.length - 1) : 0;
   const activeBlock = blocks[activeIndex];
   const activeBlockType = activeBlockTypeFor(values, blocks);
 
   function setField(name: string, value: string) {
     setValues((current) => ({ ...current, [name]: value }));
+    if (name === "Move index") {
+      const next = Number(value);
+      if (Number.isFinite(next)) setBlockIndex(Math.max(0, Math.trunc(next) - 1));
+    }
+  }
+
+  function onBlock(nextIndex: number) {
+    setBlockIndex(nextIndex);
+    setValues((current) => ({ ...current, "Move index": String(nextIndex + 1) }));
   }
 
   function setActiveBlockConfig(key: string, value: string | number | boolean) {
@@ -95,6 +120,7 @@ export function KcPromptTester({
   function onCourse(nextId: string) {
     setCourseId(nextId);
     setUnitId("");
+    setBlockIndex(0);
     setTypeFields({});
     setBlocks([]);
     const next = courses.find((item) => item.id === nextId);
@@ -104,12 +130,13 @@ export function KcPromptTester({
 
   function onUnit(nextId: string) {
     setUnitId(nextId);
+    setBlockIndex(0);
     if (!course) return;
     const unit = units.find((item) => item.id === nextId);
     if (!unit) return;
     setTypeFields({ ...(unit.component.type_fields ?? {}) });
     setBlocks(blocksForUnit(unit.component));
-    setValues((current) => applyUnit(current, course, unit.component));
+    setValues((current) => applyUnit({ ...current, "Move index": "1" }, course, unit.component));
   }
 
   function onChild(nextId: string) {
@@ -165,16 +192,38 @@ export function KcPromptTester({
   return (
     <main className="ds-shell kc-screen kc-prompt-tester">
       <KcBanner name="KC Prompt Tester" />
-      <form className="kc-prompt-form" onSubmit={(event) => void onSubmit(event)} autoComplete="off">
+      <div className="kc-prompt-workspace">
         <p className="kc-prompt-note">Change the settings and show the prompt. Nothing is saved.</p>
         {error ? (
           <div className="banner" role="alert">
             <p>{error}</p>
           </div>
         ) : null}
-        {LAYER_HEADINGS.map((heading) => (
-          <section key={heading}>
-            <h2>{heading}</h2>
+        <div className="kc-prompt-tabs" role="tablist" aria-label="Prompt layers">
+          {LAYER_HEADINGS.map((heading) => {
+            const selected = layer === heading;
+            return (
+              <button
+                key={heading}
+                type="button"
+                role="tab"
+                id={layerTabId(heading)}
+                className={`kc-prompt-tab${selected ? " is-active" : ""}`}
+                aria-selected={selected}
+                aria-controls="kc-prompt-layer"
+                tabIndex={selected ? 0 : -1}
+                onClick={() => setLayer(heading)}
+              >
+                {TAB_LABEL[heading]}
+              </button>
+            );
+          })}
+        </div>
+        <div className="kc-prompt-columns">
+      <form id="kc-prompt-form" className="kc-prompt-form" onSubmit={(event) => void onSubmit(event)} autoComplete="off">
+        {LAYER_HEADINGS.map((heading) =>
+          heading === layer ? (
+          <div key={heading} role="tabpanel" id="kc-prompt-layer" aria-labelledby={layerTabId(heading)}>
             {heading === "Safety" ? (
               <div>
                 <p className="kc-prompt-note">
@@ -215,11 +264,24 @@ export function KcPromptTester({
                     ))}
                   </select>
                 </label>
+                {blocks.length > 0 ? (
+                  <label>
+                    Block
+                    <select
+                      aria-label="Block"
+                      value={String(activeIndex)}
+                      onChange={(event) => onBlock(Number(event.target.value))}
+                    >
+                      {blocks.map((block, index) => (
+                        <option key={block.id || index} value={String(index)}>
+                          {`Block ${index + 1} of ${blocks.length}: ${BLOCK_LABELS[block.type]}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
                 {activeBlock ? (
                   <div className="kc-block-body">
-                    <p>
-                      Block {activeIndex + 1} of {blocks.length}: {BLOCK_LABELS[activeBlock.type]}
-                    </p>
                     <label>
                       Block type
                       <select
@@ -311,22 +373,23 @@ export function KcPromptTester({
                 ))}
               </div>
             ) : null}
-          </section>
-        ))}
-        <button className="button" type="submit" disabled={submitting}>
-          {submitting ? "Building the prompt" : "Show prompt"}
-        </button>
+          </div>
+          ) : null,
+        )}
       </form>
       <section className="kc-prompt-result" aria-live="polite">
-        <h2>Safety</h2>
-        {prompt ? (
-          <pre aria-label="Safety text">{safetyExcerpt(prompt)}</pre>
-        ) : (
-          <p className="kc-prompt-note">Submit the form to see the Safety section.</p>
-        )}
-        <h2>System prompt</h2>
-        {prompt ? <pre>{prompt}</pre> : <p className="kc-prompt-note">Submit the form to see the prompt.</p>}
+        <div className="kc-prompt-pin">
+          <button className="button" type="submit" form="kc-prompt-form" disabled={submitting}>
+            {submitting ? "Building the prompt" : "Show prompt"}
+          </button>
+        </div>
+        <div className="kc-prompt-output">
+          <h2>System prompt</h2>
+          {prompt ? <pre>{prompt}</pre> : <p className="kc-prompt-note">Show the prompt to see it here.</p>}
+        </div>
       </section>
+        </div>
+      </div>
     </main>
   );
 }
