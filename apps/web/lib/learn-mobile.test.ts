@@ -132,6 +132,23 @@ test("the phone routes redirect to a session and desktop /learn stays on KcTutor
   assert.match(source("lib/menu-pages.ts"), /href: "\/learn-mobile"/);
 });
 
+test("explanation chips stay centered and keep the same actions under shorter labels", () => {
+  const lesson = source("components/learn/KcLesson.tsx");
+  const start = lesson.indexOf('className="kc-explain-chips"');
+  const chips = lesson.slice(start, lesson.indexOf("showComposer", start));
+  assert.match(
+    chips,
+    /sendAnswer\("Can you elaborate with an example\?"\)\}>\s*Tell me more\s*<\/button>[\s\S]*sendAnswer\("Got it — ready for the next topic!"\)\}>\s*Got it - move on\s*<\/button>/,
+  );
+  assert.equal(/>\s*Can you elaborate with an example\?\s*</.test(chips), false);
+  assert.equal(/>\s*Got it — ready for the next topic!\s*</.test(chips), false);
+  const css = source("app/globals.css");
+  const rule = css.match(/\.kc-explain-chips \{[^}]+\}/)?.[0] ?? "";
+  assert.match(rule, /display:\s*flex/);
+  assert.match(rule, /justify-content:\s*center/);
+  assert.match(rule, /gap:\s*8px/);
+});
+
 test("phone choice targets are at least 48px and the thread uses the dynamic viewport", () => {
   assert.equal(MOBILE_CHOICE_MIN_PX, 48);
   const css = source("app/globals.css");
