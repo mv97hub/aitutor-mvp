@@ -76,6 +76,15 @@ export type ParentWeekCounts = {
   sessions: number;
   topics_finished: number;
   stars: number;
+  blocks_passed: number;
+  blocks_revealed: number;
+  days_active: number;
+};
+
+export type ParentAttention = {
+  course_id: string;
+  title: string;
+  detail: string;
 };
 
 export type ParentDashboardChild = {
@@ -85,10 +94,13 @@ export type ParentDashboardChild = {
   courses_finished: number;
   stars: number;
   finished_topics: number;
+  topics_mastered: number;
+  topics_fragile: number;
   current_course_id: string | null;
   current_course_title: string;
   current_topic_title: string;
   last_active_at: string | null;
+  attention: ParentAttention[];
   week: ParentWeekCounts;
 };
 
