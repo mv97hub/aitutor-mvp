@@ -1043,6 +1043,33 @@ def _ending(
     return " ".join(part for part in (lead, length, close, outro) if part)
 
 
+def _topic_goal_earned_praise(encouragement_style: str) -> str:
+    """Topic/goal replies are written before scoring, so the model has to withhold unearned praise itself."""
+    if encouragement_style == "minimal":
+        earned = (
+            "When the answer meets the goal or names a real step toward it, "
+            "keep any acknowledgment to a few words. Do not add praise."
+        )
+    elif encouragement_style == "matter_of_fact_confirm":
+        earned = (
+            "When the answer meets the goal or names a real step toward it, "
+            "confirm clearly and warmly without extra fanfare."
+        )
+    else:
+        earned = (
+            "When the answer meets the goal or names a real step toward it, "
+            "name the specific reasoning move the learner made. Do not use generic praise."
+        )
+    return (
+        "Topic/goal feedback: Praise only when the answer meets the goal or names a real step toward it. "
+        + earned
+        + " On a miss, nudge with no praise. "
+        "Do not say the learner is on the right track or that it is a good start "
+        "when the answer does not address the goal. "
+        "This holds on the first reply to an answer and on later nudge and scaffold turns."
+    )
+
+
 def _this_turn(
     *,
     node: KcNode,
@@ -1140,7 +1167,9 @@ def _this_turn(
         lines.append(
             "Turn Humor Guardrail: Suppress jokes and banter for this learner's anxiety or calm_and_gentle profile."
         )
-    if turn_kind in {"pass", "nudge", "scaffold"}:
+    if str(block.get("type") or "") == "topic_goal" and turn_kind in {"ask", "nudge", "scaffold"}:
+        lines.append(_topic_goal_earned_praise(encouragement_style))
+    elif turn_kind in {"pass", "nudge", "scaffold"}:
         if encouragement_style == "matter_of_fact_confirm":
             lines.append(
                 "Turn Feedback (matter_of_fact_confirm): Confirm clearly and warmly without extra fanfare."
@@ -1999,6 +2028,9 @@ def _how_to_teach(
             "Keep any acknowledgment to a few words. Do not add praise."
             + reassurance_note
         )
+
+    if str(block.get("type") or "") == "topic_goal":
+        lines.append(_topic_goal_earned_praise(praise_style))
 
     if str(block.get("type") or "") == "explanation":
         lines.append(
