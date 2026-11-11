@@ -12,6 +12,13 @@ export const maxDuration = 60;
 const SPEAK_PROMPT =
   "Say the opening now. Return the decision object. The reply is the only text the child sees. Follow the system instructions. Do not set the type, the edges, or the score.";
 
+const SPEAK_DYNAMIC_PROMPT =
+  "Say the opening now. Return the decision object. reply is a short lead-in only. Put the stem and the choices only in generated_mcq. Do not list options or ask the child to type a letter. Follow the system instructions. Do not set the type, the edges, or the score.";
+
+function speakPrompt(systemPrompt: string) {
+  return systemPrompt.includes("short lead-in only") ? SPEAK_DYNAMIC_PROMPT : SPEAK_PROMPT;
+}
+
 type PromptBundle = {
   system_prompt: string;
   response_schema: Record<string, unknown>;
@@ -94,7 +101,7 @@ export async function POST(req: Request) {
     const result = await generateText({
       model: wrapLanguageModel({ model: languageModel(modelName), middleware: captureRequest }),
       instructions: bundle.system_prompt,
-      prompt: SPEAK_PROMPT,
+      prompt: speakPrompt(bundle.system_prompt),
       temperature: bundle.temperature,
       output: Output.object({ schema: jsonSchema(bundle.response_schema) }),
     });
@@ -129,7 +136,7 @@ export async function POST(req: Request) {
   const messageId = added && added.role === "assistant" ? added.id : null;
   const stored = captured ?? {
     system_prompt: bundle.system_prompt,
-    messages: [{ role: "user", content: SPEAK_PROMPT }],
+    messages: [{ role: "user", content: speakPrompt(bundle.system_prompt) }],
     model: modelName,
   };
   try {
