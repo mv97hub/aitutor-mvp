@@ -19,12 +19,14 @@ const previousDestinations = [
   ["/create-course", "Create course"],
   ["/manage-courses", "Manage courses"],
   ["/viewchats", "View chats"],
+  ["/learn-mobile", "Mobile child"],
+  ["/parent", "Parent portal"],
 ] as const;
 
-test("menu sections keep every destination under the five headers", () => {
+test("menu sections keep every destination under the six headers", () => {
   assert.deepEqual(
     menuSections.map((section) => section.title),
-    ["Kids Portal", "Administration", "KC course creation", "Testing pages", "Deprecated Pages"],
+    ["Kids Portal", "Parent Portal", "Administration", "KC course creation", "Testing pages", "Deprecated Pages"],
   );
 
   const links = menuSections.flatMap((section) => section.links.map((link) => [link.href, link.label]));
@@ -38,7 +40,15 @@ test("menu sections keep every destination under the five headers", () => {
   const byTitle = Object.fromEntries(
     menuSections.map((section) => [section.title, section.links.map((link) => [link.label, link.href])]),
   );
-  assert.deepEqual(byTitle["Kids Portal"], [["Child chooser", "/learn"]]);
+  assert.deepEqual(byTitle["Kids Portal"], [
+    ["Child chooser", "/learn"],
+    ["Mobile child", "/learn-mobile"],
+  ]);
+  assert.deepEqual(byTitle["Parent Portal"], [["Parent portal", "/parent"]]);
+  assert.equal(
+    menuSections.findIndex((section) => section.title === "Parent Portal"),
+    menuSections.findIndex((section) => section.title === "Kids Portal") + 1,
+  );
   assert.deepEqual(byTitle["Administration"], [
     ["Admin", "/admin"],
     ["KC View Chats", "/admin/kc-chats"],
@@ -83,16 +93,20 @@ test("child home is linked only when a student id is already known", () => {
 
   assert.deepEqual(
     menuSectionsFor(null)[0].links.map((link) => link.href),
-    ["/learn"],
+    ["/learn", "/learn-mobile"],
   );
   assert.deepEqual(
     menuSectionsFor("sam")[0].links.map((link) => [link.label, link.href]),
-    [["Child chooser", "/learn"]],
+    [
+      ["Child chooser", "/learn"],
+      ["Mobile child", "/learn-mobile"],
+    ],
   );
   assert.deepEqual(
     menuSectionsFor(id)[0].links.map((link) => [link.label, link.href]),
     [
       ["Child chooser", "/learn"],
+      ["Mobile child", "/learn-mobile"],
       ["Child home", `/learn/${id}`],
     ],
   );

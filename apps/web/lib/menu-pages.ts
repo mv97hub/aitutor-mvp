@@ -18,7 +18,15 @@ export const menuSections: readonly MenuSection[] = [
   {
     id: "kids",
     title: "Kids Portal",
-    links: [{ href: "/learn", label: "Child chooser" }],
+    links: [
+      { href: "/learn", label: "Child chooser" },
+      { href: "/learn-mobile", label: "Mobile child" },
+    ],
+  },
+  {
+    id: "parent",
+    title: "Parent Portal",
+    links: [{ href: "/parent", label: "Parent portal" }],
   },
   {
     id: "administration",

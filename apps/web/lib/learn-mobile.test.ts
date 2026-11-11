@@ -127,7 +127,7 @@ test("the phone routes redirect to a session and desktop /learn stays on KcTutor
   assert.match(desktop, /<KcTutor/);
   assert.equal(desktop.includes("LearnMobileTutor"), false);
   assert.equal(desktop.includes("learn-mobile"), false);
-  assert.equal(source("lib/menu-pages.ts").includes("learn-mobile"), false);
+  assert.match(source("lib/menu-pages.ts"), /href: "\/learn-mobile"/);
 });
 
 test("phone choice targets are at least 48px and the thread uses the dynamic viewport", () => {
