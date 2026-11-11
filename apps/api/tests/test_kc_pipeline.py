@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import block_catalog, kc, kc_model
+from app.kc_standards import coverage_matrix, parse_standard_text, statements_from_intake
 from app.kc_pipeline import (
     CHECKS,
     INSTRUCTION_RULES,
@@ -99,7 +100,9 @@ def test_intake_defaults_caps_and_required_fields() -> None:
     assert intake["reading_level"] == "age"
     assert intake["depth"] == "standard"
     assert intake["component_count"] is None
-    assert "standard" not in intake
+    assert intake["standard"] == ""
+    assert intake["standard_grade"] == ""
+    assert intake["standard_text"] == ""
     assert len(clean_intake({"source_text": "x" * 30000})["source_text"]) == 20000
     with pytest.raises(ValueError, match="Depth"):
         clean_intake({"depth": "huge"})
@@ -109,6 +112,14 @@ def test_intake_defaults_caps_and_required_fields() -> None:
         'what the child can do by the end ("by the end the child can...")'
     ]
     assert missing_intake(title="Fractions", description=OUTCOME, audience="9-11", intake=intake) == []
+    named = clean_intake({"standard": "ngss", "standard_grade": ""})
+    assert "the grade or year" in missing_intake(title="Fractions", description=OUTCOME, audience="9-11", intake=named)
+    other = clean_intake({"standard": "other", "standard_grade": "4", "standard_name": ""})
+    assert "the name of the standard" in missing_intake(
+        title="Fractions", description=OUTCOME, audience="9-11", intake=other
+    )
+    with pytest.raises(ValueError, match="Standard"):
+        clean_intake({"standard": "nope"})
 
 
 def test_depth_kind_and_an_explicit_count_set_the_component_range() -> None:
@@ -580,6 +591,253 @@ def test_changing_the_outcome_clears_the_brief() -> None:
         assert changed.status_code == 200, changed.text
         assert changed.json()["brief"] == ""
         assert client.get(f"/kc/courses/{course_id}/pipeline").json()["stage"] == "brief"
+    finally:
+        _wipe_zz()
+
+
+FIVE = [
+    ("3.NF.A.1", "Understand a fraction 1/b as the quantity formed by 1 part when a whole is partitioned into b equal parts."),
+    ("3.NF.A.2", "Understand a fraction as a number on the number line."),
+    ("3.NF.A.3", "Explain equivalence of fractions and compare fractions by reasoning about their size."),
+    ("3.NF.A.4", "Understand a fraction a/b as a multiple of 1/b."),
+    ("3.NF.A.5", "Express whole numbers as fractions, and recognize fractions that are equivalent to whole numbers."),
+]
+
+
+def _five_text() -> str:
+    return "\n".join(f"{code} {text}" for code, text in FIVE)
+
+
+def _five_plan() -> dict:
+    plan = _model_blueprint(5)
+    codes = [code for code, _text in FIVE]
+    rows = [item for unit in plan["units"] for item in unit["components"]]
+    rows[0]["standards"] = [codes[0], codes[1]]
+    rows[1]["standards"] = [codes[2]]
+    rows[2]["standards"] = [codes[3]]
+    rows[3]["standards"] = [codes[3]]
+    rows[4]["standards"] = []
+    return plan
+
+
+def test_a_pasted_standard_is_the_authority_and_a_gap_is_marked() -> None:
+    sample = (
+        "3.NF.A.1 Understand a fraction 1/b as the quantity formed by 1 part when a whole is partitioned into b equal parts.\n"
+        "3.NF.A.2 Understand a fraction as a number on the number line.\n"
+        "3.NF.A.3 Explain equivalence of fractions and compare fractions by reasoning about their size."
+    )
+    parsed = parse_standard_text(sample)
+    assert [item["code"] for item in parsed] == ["3.NF.A.1", "3.NF.A.2", "3.NF.A.3"]
+    with pytest.raises(ValueError, match="5 to 20"):
+        parse_standard_text("\n".join(f"s{index} Statement {index}." for index in range(41)))
+
+    intake = clean_intake({"standard": "common_core_math", "standard_grade": "3", "standard_text": _five_text()})
+    statements = statements_from_intake(intake)
+    assert [item["code"] for item in statements] == [code for code, _text in FIVE]
+    course = _course(intake=intake, statements=statements)
+    brief = brief_bundle(course=course, answers=[], model="gpt-4.1")
+    assert "Do not add, drop, or rewrite" in brief["system_prompt"]
+    assert "3.NF.A.1" in brief["system_prompt"]
+    assert brief["schema"]["required"] == ["brief", "questions"]
+    recalled = brief_bundle(
+        course=_course(intake=clean_intake({"standard": "ngss", "standard_grade": "5"})),
+        answers=[],
+        model="gpt-4.1",
+    )
+    assert "recall the statements" in recalled["system_prompt"]
+    assert "should be checked" in recalled["system_prompt"]
+    assert recalled["schema"]["required"] == ["brief", "questions", "statements"]
+    plain = brief_bundle(course=_course(), answers=[], model="gpt-4.1")
+    assert "Do not invent a curriculum standard." in plain["system_prompt"]
+
+    planned = blueprint_bundle(course=course, brief="B" * 50, model="gpt-4.1")
+    assert "3.NF.A.5" in planned["system_prompt"]
+    required = planned["schema"]["properties"]["units"]["items"]["properties"]["components"]["items"]["required"]
+    assert required == ["ref", "title", "summary", "prerequisites", "standards"]
+    built = assemble_blueprint(_five_plan(), bounds=(4, 6), taken=set(), make_code=_slug, statements=statements)
+    matrix = coverage_matrix(statements, built)
+    assert matrix["gaps"] == ["3.NF.A.5"]
+    assert matrix["extensions"]
+    assert any(row["once_without_review"] for row in matrix["rows"])
+    extension = next(
+        item["code"] for unit in built["units"] for item in unit["components"] if item["extension"]
+    )
+    assert extension in matrix["extensions"]
+    review = review_bundle(
+        course=course,
+        brief="B" * 50,
+        blueprint=built,
+        descriptions={item["code"]: _sentences(item["title"]) for unit in built["units"] for item in unit["components"]},
+        model="gpt-4.1",
+    )
+    assert "touched lightly" in review["system_prompt"]
+    assert "standards" in review["schema"]["properties"]["additions"]["items"]["required"]
+
+
+def test_a_pasted_standard_pauses_for_a_check_and_a_gapped_draft_can_be_pushed() -> None:
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-std",
+            "title": "Fractions",
+            "description": OUTCOME,
+            "audience": "9-11",
+            "kind": "mastery",
+            "intake": {
+                "depth": "intro",
+                "standard": "common_core_math",
+                "standard_grade": "3",
+                "standard_text": _five_text(),
+            },
+        },
+    )
+    assert created.status_code == 200, created.text
+    course_id = created.json()["id"]
+    try:
+        assert [item["code"] for item in created.json()["standards"]] == [code for code, _text in FIVE]
+        stored = _stage(
+            course_id,
+            "brief",
+            {"brief": "A grade three course on fractions as numbers on the line. " * 2, "questions": []},
+        )
+        assert stored.status_code == 200, stored.text
+        assert stored.json()["stage"] == "standards"
+        assert stored.json()["next"] is None
+        assert "Common Core (math), 3." in stored.json()["brief"]
+        assert _stage(course_id, "blueprint").status_code == 409
+
+        edited = client.put(
+            f"/kc/courses/{course_id}/pipeline/standards",
+            json={
+                "confirm": True,
+                "statements": [
+                    {"code": code, "text": text if code != "3.NF.A.2" else "Understand a fraction as a number on the number line, in grade three."}
+                    for code, text in FIVE
+                ],
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        assert edited.json()["stage"] == "blueprint"
+        assert "grade three" in edited.json()["standards"][1]["text"]
+        prompt = _stage(course_id, "blueprint")
+        assert prompt.status_code == 200, prompt.text
+        assert "3.NF.A.5" in prompt.json()["system_prompt"]
+
+        planned = _stage(course_id, "blueprint", _five_plan())
+        assert planned.status_code == 200, planned.text
+        body = planned.json()
+        assert "3.NF.A.5" in body["coverage"]["gaps"]
+        assert body["coverage"]["extensions"]
+        approved = client.put(
+            f"/kc/courses/{course_id}/pipeline/blueprint",
+            json={"blueprint": body["blueprint"], "approve": True},
+        )
+        assert approved.status_code == 200, approved.text
+        for index, unit in enumerate(approved.json()["blueprint"]["units"]):
+            unit_codes = [item["code"] for item in unit["components"]]
+            written = _stage(
+                course_id,
+                "unit",
+                {"components": [{"code": code, "description": _sentences(code)} for code in unit_codes]},
+                unit=index,
+            )
+            assert written.status_code == 200, written.text
+        reviewed = _stage(course_id, "review", {"checks": _ok_checks(), "outcomes": None, "revisions": [], "additions": []})
+        assert reviewed.status_code == 200, reviewed.text
+        final = reviewed.json()
+        assert final["stage"] == "draft"
+        assert "3.NF.A.5" in final["coverage"]["gaps"]
+        draft = final["draft"]["components"]
+        extension = next(item for item in draft if item["extension"])
+        assert extension["standards"] == []
+        pushed = client.post(f"/kc/courses/{course_id}/push", json={"components": draft})
+        assert pushed.status_code == 200, pushed.text
+        nodes = pushed.json()["components"]
+        by_code = {item["code"]: item for item in nodes}
+        assert by_code[extension["code"]]["standards"] == []
+        covered = next(item for item in draft if "3.NF.A.1" in item["standards"])
+        assert by_code[covered["code"]]["standards"] == covered["standards"]
+        creator = client.post(
+            f"/kc/nodes/{by_code[extension['code']]['id']}/creator-prompt",
+            json={"message": "Create Draft", "model": "gpt-4.1"},
+        )
+        assert "This component is an extension." in creator.json()["system_prompt"]
+        covering = client.post(
+            f"/kc/nodes/{by_code[covered['code']]['id']}/creator-prompt",
+            json={"message": "Create Draft", "model": "gpt-4.1"},
+        )
+        assert "Standard codes this component covers: 3.NF.A.1, 3.NF.A.2." in covering.json()["system_prompt"]
+
+        intake = created.json()["intake"]
+        intake["standard_text"] = "3.NF.A.1 Understand a fraction 1/b as one part of a whole."
+        changed = client.patch(f"/kc/courses/{course_id}", json={"intake": intake})
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["brief"] == ""
+        assert [item["code"] for item in changed.json()["standards"]] == ["3.NF.A.1"]
+    finally:
+        _wipe_zz()
+
+
+def test_a_named_standard_with_no_paste_is_recalled_and_then_checked() -> None:
+    _wipe_zz()
+    created = client.post(
+        "/kc/courses",
+        json={
+            "code": "zz-recall",
+            "title": "Forces",
+            "description": OUTCOME,
+            "audience": "9-11",
+            "kind": "mastery",
+            "intake": {"depth": "intro", "standard": "ngss", "standard_grade": "5"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    course_id = created.json()["id"]
+    try:
+        assert created.json()["standards"] == []
+        prompt = _stage(course_id, "brief")
+        assert prompt.status_code == 200, prompt.text
+        assert "recall the statements" in prompt.json()["system_prompt"]
+        assert prompt.json()["schema"]["required"] == ["brief", "questions", "statements"]
+        missing = _stage(
+            course_id,
+            "brief",
+            {"brief": "A grade five course on forces and motion for nine to eleven year olds. " * 2, "questions": []},
+        )
+        assert missing.status_code == 422
+        assert "Recall the statements" in missing.json()["detail"]
+        stored = _stage(
+            course_id,
+            "brief",
+            {
+                "brief": "A grade five course on forces and motion for nine to eleven year olds. " * 2,
+                "questions": [],
+                "statements": [
+                    {"code": "5-PS2-1", "text": "Support an argument that the gravitational force exerted by Earth on objects is directed down."},
+                    {"code": "3-PS2-1", "text": "Plan and conduct an investigation to compare the effects of different strengths of pushes and pulls."},
+                ],
+            },
+        )
+        assert stored.status_code == 200, stored.text
+        body = stored.json()
+        assert body["stage"] == "standards"
+        assert body["standards_source"] == "recalled"
+        assert "recalled and should be checked" in body["brief"]
+        assert [item["code"] for item in body["standards"]] == ["5-PS2-1", "3-PS2-1"]
+        confirmed = client.put(
+            f"/kc/courses/{course_id}/pipeline/standards",
+            json={
+                "confirm": True,
+                "statements": [
+                    "5-PS2-1 Support an argument that the gravitational force exerted by Earth on objects is directed down.",
+                    "3-PS2-1 Plan and conduct an investigation to compare the effects of different strengths of pushes and pulls.",
+                ],
+            },
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        assert confirmed.json()["stage"] == "blueprint"
+        assert confirmed.json()["standards"][0]["code"] == "5-PS2-1"
     finally:
         _wipe_zz()
 

@@ -1,14 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { markKcReady, saveKcCourse } from "@/lib/kc-actions";
 import { AUDIENCES, COURSE_USES, DEPTHS, KINDS, READING_LEVELS, type KcCourse } from "@/lib/kc";
+import { CURRICULA, curriculumOf, STANDARD_EXAMPLE } from "@/lib/kc-standards";
 
-/** The course intake. Required answers come first. A standard to align to arrives in a later change. */
+/** The course intake. Required answers come first. A standard is optional and can be pasted. */
 export function KcCourseSettings({ course, drafted }: { course: KcCourse; drafted: boolean }) {
   const [kind, setKind] = useState(course.kind);
+  const [standard, setStandard] = useState(course.intake.standard || "");
+  const help = useRef<HTMLDialogElement>(null);
   const intake = course.intake;
+  const chosen = curriculumOf(standard);
 
   return (
     <form className="studio-prefs" action={saveKcCourse}>
@@ -109,6 +113,104 @@ export function KcCourseSettings({ course, drafted }: { course: KcCourse; drafte
           </label>
         ) : (
           <input type="hidden" name="minutes" value="" />
+        )}
+        <label>
+          Standard, optional
+          <select
+            aria-label="Standard"
+            name="standard"
+            value={standard}
+            onChange={(event) => setStandard(event.target.value)}
+          >
+            {CURRICULA.map((item) => (
+              <option key={item.id || "none"} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {standard ? (
+          <>
+            <label>
+              Grade or year
+              <input
+                aria-label="Grade or year"
+                name="standard_grade"
+                defaultValue={intake.standard_grade}
+                required
+                placeholder="For example, 3 or Year 4"
+              />
+            </label>
+            {standard === "other" ? (
+              <label className="studio-span">
+                Name of the standard
+                <input aria-label="Name of the standard" name="standard_name" defaultValue={intake.standard_name} required />
+              </label>
+            ) : (
+              <input type="hidden" name="standard_name" value="" />
+            )}
+            <label className="studio-span">
+              Standard statements, optional
+              <textarea
+                aria-label="Standard statements"
+                name="standard_text"
+                defaultValue={intake.standard_text}
+                rows={6}
+                placeholder="One statement per line, with its code in front if it has one"
+              />
+            </label>
+            <div className="studio-span kc-standard-note">
+              <p>
+                Pasted text is preferred and is used as written. If you leave this blank, the model recalls the
+                statements for this grade and topic. Recalled standards should be checked before the blueprint.
+              </p>
+              <button className="ghost" type="button" onClick={() => help.current?.showModal()}>
+                How to get this
+              </button>
+              <dialog ref={help} className="kc-standard-help">
+                <h2>How to get this</h2>
+                {chosen.host ? (
+                  <p>
+                    Go to the official standards site for {chosen.label}:{" "}
+                    <a href={chosen.site} target="_blank" rel="noreferrer">
+                      {chosen.host}
+                    </a>
+                    .
+                  </p>
+                ) : (
+                  <p>Use the official site for the curriculum you named. This option has no single site to link.</p>
+                )}
+                <ol>
+                  <li>Copy the statements for one grade and one topic, not the whole subject.</li>
+                  <li>Paste them as a list: one statement per line, with its code in front if it has one.</li>
+                </ol>
+                <p>Sample, not a real course:</p>
+                <pre>{STANDARD_EXAMPLE}</pre>
+                <div className="kc-pipeline-actions">
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={() => {
+                      const write = navigator.clipboard?.writeText(STANDARD_EXAMPLE);
+                      if (write) void write.catch(() => undefined);
+                    }}
+                  >
+                    Copy the sample
+                  </button>
+                  <button className="button" type="button" onClick={() => help.current?.close()}>
+                    Close
+                  </button>
+                </div>
+                <p>Keep it to the statements the course should cover, usually 5 to 20 lines. A whole-subject paste makes the course too broad.</p>
+              </dialog>
+            </div>
+          </>
+        ) : (
+          <>
+            <input type="hidden" name="standard_grade" value="" />
+            <input type="hidden" name="standard_name" value="" />
+            <input type="hidden" name="standard_text" value="" />
+          </>
         )}
         <label>
           How it will be used, optional

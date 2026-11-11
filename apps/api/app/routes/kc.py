@@ -58,6 +58,7 @@ from app.kc_course_draft import (
     pipeline_out,
     reset_pipeline,
     save_blueprint,
+    save_statements,
     store_stage,
     stage_prompt,
 )
@@ -107,6 +108,11 @@ class StageResultIn(BaseModel):
 class BlueprintIn(BaseModel):
     blueprint: dict
     approve: bool = False
+
+
+class StatementsIn(BaseModel):
+    statements: list[dict | str] = Field(default_factory=list)
+    confirm: bool = False
 
 
 class AnswersIn(BaseModel):
@@ -273,6 +279,11 @@ def post_pipeline_answers(course_id: uuid.UUID, body: AnswersIn, db: Session = D
 @router.put("/kc/courses/{course_id}/pipeline/blueprint")
 def put_pipeline_blueprint(course_id: uuid.UUID, body: BlueprintIn, db: Session = Depends(get_db)) -> dict:
     return save_blueprint(db, _course_or_404(db, course_id), body.blueprint, body.approve)
+
+
+@router.put("/kc/courses/{course_id}/pipeline/standards")
+def put_pipeline_standards(course_id: uuid.UUID, body: StatementsIn, db: Session = Depends(get_db)) -> dict:
+    return save_statements(db, _course_or_404(db, course_id), body.statements, body.confirm)
 
 
 @router.post("/kc/courses/{course_id}/pipeline/{stage}/prompt")

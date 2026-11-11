@@ -19,6 +19,8 @@ type Body = {
   skip?: boolean;
   blueprint?: unknown;
   approve?: boolean;
+  statements?: unknown;
+  confirm?: boolean;
 };
 
 function failure(message: string, status: number) {
@@ -95,6 +97,13 @@ export async function POST(request: Request) {
       const pipeline = await api<KcPipeline>(`${base}/answers`, {
         method: "POST",
         body: JSON.stringify({ answers: body.answers ?? [], skip: Boolean(body.skip) }),
+      });
+      return Response.json({ pipeline });
+    }
+    if (body.action === "standards") {
+      const pipeline = await api<KcPipeline>(`${base}/standards`, {
+        method: "PUT",
+        body: JSON.stringify({ statements: body.statements ?? [], confirm: Boolean(body.confirm) }),
       });
       return Response.json({ pipeline });
     }

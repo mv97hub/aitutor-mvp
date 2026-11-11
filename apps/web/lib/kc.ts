@@ -114,6 +114,8 @@ export type KcCourseDraft = {
     title: string;
     description: string;
     prerequisite_codes: string[];
+    standards?: string[];
+    extension?: boolean;
     unit?: string;
     position?: number;
   }[];
@@ -128,6 +130,10 @@ export type KcIntake = {
   depth: KcDepth;
   component_count: number | null;
   use: KcUse;
+  standard: string;
+  standard_grade: string;
+  standard_name: string;
+  standard_text: string;
   starting_point: string;
   must_cover: string;
   must_avoid: string;
@@ -136,11 +142,34 @@ export type KcIntake = {
   source_text: string;
 };
 
+export type KcStatement = {
+  code: string;
+  text: string;
+};
+
+export type KcCoverageStatus = "missing" | "light" | "covered";
+
+export type KcCoverage = {
+  rows: {
+    code: string;
+    text: string;
+    components: string[];
+    status: KcCoverageStatus;
+    once_without_review: boolean;
+  }[];
+  gaps: string[];
+  light: string[];
+  once_without_review: string[];
+  extensions: string[];
+};
+
 export type KcBlueprintComponent = {
   code: string;
   title: string;
   summary: string;
   prerequisites: string[];
+  standards?: string[];
+  extension?: boolean;
 };
 
 export type KcBlueprintUnit = {
@@ -161,11 +190,14 @@ export type KcPipelineNext = { stage: KcPipelineStage; unit: number | null } | n
 export type KcReviewCheck = { name: string; result: "ok" | "fixed" | "issue"; note: string };
 
 export type KcPipeline = {
-  stage: "brief" | "questions" | "blueprint" | "edit_blueprint" | "units" | "review" | "draft";
+  stage: "brief" | "questions" | "standards" | "blueprint" | "edit_blueprint" | "units" | "review" | "draft";
   next: KcPipelineNext;
   brief: string;
   questions: string[];
   answers: { question: string; answer: string }[];
+  standards: KcStatement[];
+  standards_source: string;
+  coverage: KcCoverage | null;
   blueprint: KcBlueprint | null;
   approved: boolean;
   units_total: number;

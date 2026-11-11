@@ -12,6 +12,15 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from app.kc_standards import (
+    STANDARDS,
+    component_standards,
+    coverage_matrix,
+    standard_brief_lines,
+    standard_label,
+    statement_lines,
+)
+
 MAX_COMPONENTS = 250
 MAX_FOLLOW_UPS = 2
 MINUTES_PER_COMPONENT = 12
@@ -44,6 +53,9 @@ INTAKE_TEXT_FIELDS: dict[str, int] = {
     "interests": _SHORT,
     "misconceptions_seen": _SHORT,
     "source_text": _LONG,
+    "standard_grade": 80,
+    "standard_name": 120,
+    "standard_text": _LONG,
 }
 
 CHECKS: tuple[str, ...] = ("gaps", "overlap", "jumps", "capstone", "outcomes", "reading_level")
@@ -192,7 +204,7 @@ BRIEF_RULES = (
     "State the topic, who the learner is (age band, reading level, starting point), "
     "what the child can do by the end, how deep the course goes, what must be covered and avoided, "
     "the interests to draw on, and how the course will be used. "
-    "Use only what the author gave. Do not invent facts, sources, or standards. "
+    "Use only what the author gave. Do not invent facts or sources. "
     f"If something important is too vague to plan from, ask at most {MAX_FOLLOW_UPS} short follow-up questions. "
     "When nothing is vague, return no questions."
 )
@@ -264,11 +276,15 @@ def clean_intake(raw: object) -> dict:
             raise ValueError("Component count is a whole number or blank.") from exc
         if count < 2 or count > MAX_COMPONENTS:
             raise ValueError(f"Component count is between 2 and {MAX_COMPONENTS}.")
+    standard = str(data.get("standard") or "").strip()
+    if standard not in STANDARDS:
+        raise ValueError("Standard is none, a listed curriculum, or other.")
     cleaned: dict[str, Any] = {
         "reading_level": reading,
         "depth": depth,
         "component_count": count,
         "use": use,
+        "standard": standard,
     }
     for key, cap in INTAKE_TEXT_FIELDS.items():
         cleaned[key] = str(data.get(key) or "").strip()[:cap]
@@ -287,6 +303,11 @@ def missing_intake(*, title: str, description: str, audience: str, intake: dict)
         missing.append('what the child can do by the end ("by the end the child can...")')
     if not (intake.get("depth") or "").strip():
         missing.append("the depth")
+    if intake.get("standard"):
+        if not (intake.get("standard_grade") or "").strip():
+            missing.append("the grade or year")
+        if intake.get("standard") == "other" and not (intake.get("standard_name") or "").strip():
+            missing.append("the name of the standard")
     return missing
 
 
@@ -340,7 +361,24 @@ def _course_lines(course: dict) -> list[str]:
         lines.append(f"How it will be used: {USES[intake['use']]}")
     if intake.get("source_text"):
         lines.extend(["Source text from the author:", intake["source_text"]])
+    lines.extend(standard_brief_lines(intake, list(course.get("statements") or [])))
     return lines
+
+
+def brief_schema(*, recall: bool) -> dict:
+    if not recall:
+        return BRIEF_SCHEMA
+    statement = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"code": {"type": "string"}, "text": {"type": "string"}},
+        "required": ["code", "text"],
+    }
+    return {
+        **BRIEF_SCHEMA,
+        "properties": {**BRIEF_SCHEMA["properties"], "statements": {"type": "array", "items": statement}},
+        "required": ["brief", "questions", "statements"],
+    }
 
 
 def brief_bundle(*, course: dict, answers: list[dict], model: str) -> dict:
@@ -350,11 +388,12 @@ def brief_bundle(*, course: dict, answers: list[dict], model: str) -> dict:
         lines.append("Follow-up answers:")
         lines.extend(f"- {item['question']} {item['answer']}" for item in answers)
         lines.append("The follow-ups are answered. Return no questions.")
+    recall = bool(course["intake"].get("standard")) and not course.get("statements")
     return {
         "model": model,
         "system_prompt": "\n".join(lines),
         "user_prompt": "Write the course brief.",
-        "schema": BRIEF_SCHEMA,
+        "schema": brief_schema(recall=recall),
     }
 
 
@@ -398,7 +437,7 @@ def _blueprint_outline(blueprint: dict) -> str:
         for item in unit["components"]:
             needs = ", ".join(item.get("prerequisites") or []) or "none"
             line = f"- {item['code']}: {item['title']} (needs: {needs}) - {item.get('summary') or ''}"
-            lines.append(line.rstrip(" -"))
+            lines.append(line.rstrip(" -") + _standard_mark(item))
     return "\n".join(lines)
 
 
@@ -406,8 +445,31 @@ def _outcome_lines(blueprint: dict) -> str:
     return "\n".join(f"- {item}" for item in blueprint.get("outcomes") or [])
 
 
+def _blueprint_schema(statements: list[dict]) -> dict:
+    if not statements:
+        return BLUEPRINT_SCHEMA
+    codes = [item["code"] for item in statements]
+    component = {
+        **_BLUEPRINT_COMPONENT,
+        "properties": {
+            **_BLUEPRINT_COMPONENT["properties"],
+            "standards": {"type": "array", "items": {"type": "string", "enum": codes}},
+        },
+        "required": [*_BLUEPRINT_COMPONENT["required"], "standards"],
+    }
+    unit = BLUEPRINT_SCHEMA["properties"]["units"]["items"]
+    return {
+        **BLUEPRINT_SCHEMA,
+        "properties": {
+            **BLUEPRINT_SCHEMA["properties"],
+            "units": {**BLUEPRINT_SCHEMA["properties"]["units"], "items": {**unit, "properties": {**unit["properties"], "components": {"type": "array", "items": component}}}},
+        },
+    }
+
+
 def blueprint_bundle(*, course: dict, brief: str, model: str) -> dict:
     low, high = component_range(kind=course["kind"], minutes=course["minutes"], intake=course["intake"])
+    statements = list(course.get("statements") or [])
     lines = [
         BLUEPRINT_RULES,
         INSTRUCTION_RULES,
@@ -420,6 +482,18 @@ def blueprint_bundle(*, course: dict, brief: str, model: str) -> dict:
         "Course brief:",
         brief,
     ]
+    if statements:
+        label = standard_label(course["intake"].get("standard") or "", course["intake"].get("standard_name") or "")
+        lines.extend(
+            [
+                f"Map every {label} statement onto one or more components. "
+                "Put the statement codes in that component's standards list. "
+                "A component that covers none is an extension, and its standards list is empty. "
+                "Do not invent codes. Do not leave a statement with no component.",
+                "Standard statements:",
+                statement_lines(statements),
+            ]
+        )
     intake = course["intake"]
     for key, label in (("must_cover", "Must cover"), ("must_avoid", "Must avoid"), ("starting_point", "Starting point")):
         if intake.get(key):
@@ -430,8 +504,17 @@ def blueprint_bundle(*, course: dict, brief: str, model: str) -> dict:
         "model": model,
         "system_prompt": "\n".join(lines),
         "user_prompt": "Plan the course blueprint.",
-        "schema": BLUEPRINT_SCHEMA,
+        "schema": _blueprint_schema(statements),
     }
+
+
+def _standard_mark(item: dict) -> str:
+    if item.get("extension"):
+        return " [extension]"
+    codes = [str(code) for code in (item.get("standards") or []) if str(code).strip()]
+    if codes:
+        return " [covers " + ", ".join(codes) + "]"
+    return ""
 
 
 def _clean_text(value: object) -> str:
@@ -479,6 +562,7 @@ def assemble_blueprint(
     bounds: tuple[int, int],
     taken: set[str],
     make_code: Callable[[str, set[str]], str],
+    statements: list[dict] | None = None,
 ) -> dict:
     """Turn the model blueprint (refs) into the stored blueprint (codes)."""
     if not isinstance(result, dict):
@@ -523,8 +607,16 @@ def assemble_blueprint(
             code = make_code(name, taken_now)
             taken_now.add(code)
             codes[ref] = code
+            covered, extension = component_standards(raw.get("standards"), statements, name)
             components.append(
-                {"code": code, "title": name, "summary": summary, "prerequisites": prerequisites}
+                {
+                    "code": code,
+                    "title": name,
+                    "summary": summary,
+                    "prerequisites": prerequisites,
+                    "standards": covered,
+                    "extension": extension,
+                }
             )
         units.append({"title": title, "summary": _clean_text(raw_unit.get("summary")), "components": components})
     blueprint = {"outcomes": outcomes, "units": units}
@@ -541,6 +633,7 @@ def clean_blueprint_edit(
     *,
     taken: set[str],
     make_code: Callable[[str, set[str]], str],
+    statements: list[dict] | None = None,
 ) -> dict:
     """The blueprint as the author edited it. New rows have no code yet."""
     if not isinstance(raw, dict):
@@ -588,12 +681,15 @@ def clean_blueprint_edit(
                 key = _clean_text(needed)
                 if key and key not in cleaned:
                     cleaned.append(key)
+            covered, extension = component_standards(raw_item.get("standards"), statements, name)
             components.append(
                 {
                     "code": code,
                     "title": name,
                     "summary": _clean_text(raw_item.get("summary")),
                     "prerequisites": cleaned,
+                    "standards": covered,
+                    "extension": extension,
                 }
             )
         units.append({"title": title, "summary": _clean_text(raw_unit.get("summary")), "components": components})
@@ -620,6 +716,7 @@ def unit_bundle(
     ]
     now = [
         f"- {item['code']}: {item['title']} (needs: {', '.join(item['prerequisites']) or 'none'}) - {item['summary']}"
+        + _standard_mark(item)
         for item in unit["components"]
     ]
     lines = [
@@ -698,6 +795,37 @@ def clean_unit(result: object, codes: list[str]) -> dict[str, str]:
     return found
 
 
+def _review_schema(statements: list[dict]) -> dict:
+    if not statements:
+        return REVIEW_SCHEMA
+    codes = [item["code"] for item in statements]
+    standards = {"type": "array", "items": {"type": "string", "enum": codes}}
+    revision = REVIEW_SCHEMA["properties"]["revisions"]["items"]
+    addition = REVIEW_SCHEMA["properties"]["additions"]["items"]
+    return {
+        **REVIEW_SCHEMA,
+        "properties": {
+            **REVIEW_SCHEMA["properties"],
+            "revisions": {
+                **REVIEW_SCHEMA["properties"]["revisions"],
+                "items": {
+                    **revision,
+                    "properties": {**revision["properties"], "standards": _nullable(standards)},
+                    "required": [*revision["required"], "standards"],
+                },
+            },
+            "additions": {
+                **REVIEW_SCHEMA["properties"]["additions"],
+                "items": {
+                    **addition,
+                    "properties": {**addition["properties"], "standards": standards},
+                    "required": [*addition["required"], "standards"],
+                },
+            },
+        },
+    }
+
+
 def review_bundle(*, course: dict, brief: str, blueprint: dict, descriptions: dict[str, str], model: str) -> dict:
     drafted = [
         f"- {item['code']}: {item['title']} (unit {item['unit_index'] + 1}, needs: "
@@ -719,11 +847,25 @@ def review_bundle(*, course: dict, brief: str, blueprint: dict, descriptions: di
         "Drafted components:",
         "\n".join(drafted),
     ]
+    statements = list(course.get("statements") or [])
+    if statements:
+        lines.extend(
+            [
+                "Coverage of the standard statements:",
+                "Every statement is on at least one component. A statement on only one component is touched lightly "
+                "and has no later review; add its code to a later component when that component honestly revisits it. "
+                "Close a missing statement by adding its code to a component's standards list, or by adding a component. "
+                "An empty standards list marks an extension. Do not invent codes. "
+                "Set a revision's standards to null when the codes do not change.",
+                "Standard statements:",
+                statement_lines(statements),
+            ]
+        )
     return {
         "model": model,
         "system_prompt": "\n".join(lines),
         "user_prompt": "Review the drafted course and fix what you find.",
-        "schema": REVIEW_SCHEMA,
+        "schema": _review_schema(statements),
     }
 
 
@@ -734,6 +876,7 @@ def apply_review(
     descriptions: dict[str, str],
     taken: set[str],
     make_code: Callable[[str, set[str]], str],
+    statements: list[dict] | None = None,
 ) -> tuple[dict, dict[str, str], dict]:
     """Apply the review fixes. Returns the new blueprint, descriptions, and the review record."""
     if not isinstance(result, dict):
@@ -796,6 +939,12 @@ def apply_review(
             if needed != target["prerequisites"]:
                 target["prerequisites"] = needed
                 changed = True
+        if item.get("standards") is not None:
+            covered, extension = component_standards(item.get("standards"), statements, target["title"])
+            if covered != list(target.get("standards") or []):
+                target["standards"] = covered
+                target["extension"] = extension
+                changed = True
         if changed and code not in revised:
             revised.append(code)
 
@@ -814,11 +963,14 @@ def apply_review(
         code = make_code(title, taken_now)
         taken_now.add(code)
         notes[code] = clean_description(item.get("description"), f"The description for the new component {title}")
+        covered, extension = component_standards(item.get("standards"), statements, title)
         entry = {
             "code": code,
             "title": title,
             "summary": summary,
             "prerequisites": [_clean_text(needed) for needed in item.get("prerequisites") or [] if _clean_text(needed)],
+            "standards": covered,
+            "extension": extension,
         }
         for unit in units:
             codes = [row["code"] for row in unit["components"]]
@@ -838,6 +990,7 @@ def apply_review(
         "revised": revised,
         "added": added,
         "outcomes_changed": outcomes_changed,
+        "coverage": coverage_matrix(statements or [], fixed),
     }
     return fixed, notes, review
 
@@ -849,6 +1002,8 @@ def final_components(blueprint: dict, descriptions: dict[str, str]) -> list[dict
             "title": row["title"],
             "description": descriptions.get(row["code"], ""),
             "prerequisite_codes": list(row["prerequisites"]),
+            "standards": list(row.get("standards") or []),
+            "extension": bool(row.get("extension")),
             "unit": row["unit"],
             "position": row["position"],
         }
@@ -868,18 +1023,32 @@ def position_text(blueprint: dict, code: str) -> str:
     return ""
 
 
-def pipeline_state(*, brief: str, blueprint: dict, drafting: dict) -> dict:
+def pipeline_state(
+    *,
+    brief: str,
+    blueprint: dict,
+    drafting: dict,
+    standards: list[dict] | None = None,
+    standard_chosen: bool = False,
+) -> dict:
     """Where the course draft stands and which stage runs next. The stored data decides."""
     units = (blueprint or {}).get("units") or []
     descriptions = dict(drafting.get("units") or {})
     done = int(drafting.get("units_done") or 0)
     questions = list(drafting.get("questions") or [])
+    answers = list(drafting.get("answers") or [])
     approved = bool(drafting.get("approved"))
     review = drafting.get("review")
+    statements = list(standards or [])
+    confirmed = bool(drafting.get("standards_confirmed")) or not standard_chosen
     if not brief:
         stage, nxt = "brief", {"stage": "brief", "unit": None}
-    elif questions:
+    elif questions and not answers:
         stage, nxt = "questions", None
+    elif questions:
+        stage, nxt = "questions", {"stage": "brief", "unit": None}
+    elif not confirmed:
+        stage, nxt = "standards", None
     elif not units:
         stage, nxt = "blueprint", {"stage": "blueprint", "unit": None}
     elif not approved:
@@ -902,6 +1071,9 @@ def pipeline_state(*, brief: str, blueprint: dict, drafting: dict) -> dict:
         "units_done": done,
         "descriptions": descriptions,
         "review": review,
+        "standards": statements,
+        "standards_source": str(drafting.get("standards_source") or ""),
+        "coverage": coverage_matrix(statements, blueprint) if statements and units else None,
         "pushed": bool(drafting.get("pushed")),
         "draft": (
             {"kind": "course", "components": final_components(blueprint, descriptions)}

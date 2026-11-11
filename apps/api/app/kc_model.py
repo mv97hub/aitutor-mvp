@@ -349,6 +349,7 @@ def creator_bundle(
     position: str = "",
     builds_on: list[dict] | None = None,
     leads_to: list[dict] | None = None,
+    standard_codes: list[str] | None = None,
     previous: dict | None,
     message: str,
     model: str,
@@ -411,6 +412,14 @@ def creator_bundle(
             _link_line("Leads to", leads_to or []),
             "Description:",
             description,
+        ]
+    )
+    if standard_codes:
+        lines.append("Standard codes this component covers: " + ", ".join(standard_codes) + ".")
+    elif standard_codes is not None:
+        lines.append("This component is an extension. It covers no standard statement.")
+    lines.extend(
+        [
             f"Outline: {(node_outline or '').strip() or 'None yet.'}",
         ]
     )

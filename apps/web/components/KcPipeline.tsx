@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useCreatorDebug } from "@/components/CreatorDebug";
 import { KcBlueprintEditor } from "@/components/KcBlueprintEditor";
+import { KcCoverageMatrix } from "@/components/KcCoverageMatrix";
 import { pushKcDraft } from "@/lib/kc-actions";
 import type { KcBlueprint, KcPipeline } from "@/lib/kc";
 import { KC_MODELS, kcModel } from "@/lib/kc-models";
@@ -108,6 +109,21 @@ export function KcPipelinePanel({
     }
   }
 
+  async function confirmStandards(text: string) {
+    setError(null);
+    try {
+      const statements = text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const next = await pipelineAction(courseId, "standards", { statements, confirm: true });
+      setState(next);
+      if (next.next) await go(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Those statements did not save.");
+    }
+  }
+
   async function saveBlueprint(blueprint: KcBlueprint, approve: boolean) {
     setError(null);
     try {
@@ -188,9 +204,45 @@ export function KcPipelinePanel({
         </form>
       ) : null}
 
+      {state.stage === "standards" ? (
+        <form
+          className="kc-questions"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void confirmStandards(String(new FormData(event.currentTarget).get("statements") || ""));
+          }}
+        >
+          <h2>Check the statements</h2>
+          {state.standards_source === "recalled" ? (
+            <p>
+              These statements were recalled. Recalled standards should be checked. A pasted list from the official
+              site is more reliable. Edit the list, then use it for the blueprint.
+            </p>
+          ) : (
+            <p>These are the pasted statements. Edit a line if it needs a fix, then use this list for the blueprint.</p>
+          )}
+          <label>
+            One statement per line, code first
+            <textarea
+              aria-label="Standard statements"
+              name="statements"
+              rows={Math.max(6, state.standards.length)}
+              required
+              defaultValue={state.standards.map((item) => `${item.code} ${item.text}`).join("\n")}
+            />
+          </label>
+          <div className="kc-pipeline-actions">
+            <button className="button" type="submit" disabled={Boolean(working)}>
+              Use this list
+            </button>
+          </div>
+        </form>
+      ) : null}
+
       {state.blueprint && state.stage === "edit_blueprint" ? (
         <KcBlueprintEditor
           blueprint={state.blueprint}
+          statements={state.standards}
           busy={Boolean(working)}
           onSave={(blueprint) => void saveBlueprint(blueprint, false)}
           onApprove={(blueprint) => void saveBlueprint(blueprint, true)}
@@ -216,6 +268,14 @@ export function KcPipelinePanel({
 
       {state.draft ? (
         <>
+          {state.blueprint && state.standards.length ? (
+            <KcCoverageMatrix statements={state.standards} blueprint={state.blueprint} />
+          ) : null}
+          {state.coverage?.gaps.length ? (
+            <p>
+              Gaps: {state.coverage.gaps.join(", ")}. This draft can still be pushed. The gaps stay listed.
+            </p>
+          ) : null}
           <ol className="kc-draft-list" aria-label="Draft component list">
             {state.draft.components.map((item) => (
               <li key={item.code}>
@@ -224,6 +284,8 @@ export function KcPipelinePanel({
                 <p className="ds-quiet">
                   {item.position ? `Component ${item.position}` : "Component"}
                   {item.unit ? `, ${item.unit}` : ""}. Prerequisites: {item.prerequisite_codes.join(", ") || "none"}
+                  {item.extension ? " Extension." : ""}
+                  {item.standards?.length ? ` Standards: ${item.standards.join(", ")}.` : ""}
                 </p>
               </li>
             ))}
