@@ -13,6 +13,8 @@ import {
   moveComponent,
   parseCodes,
   removeComponent,
+  removeUnit,
+  addUnit,
 } from "@/lib/kc-blueprint-edit";
 
 /** The blueprint, editable before any descriptions are written. */
@@ -62,7 +64,21 @@ export function KcBlueprintEditor({
       </label>
       {draft.units.map((unit, unitIndex) => (
         <section key={`${signature}-${unitIndex}`} className="kc-blueprint-unit">
-          <h3>Unit {unitIndex + 1}</h3>
+          <div className="kc-blueprint-row">
+            <h3>Unit {unitIndex + 1}</h3>
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy || draft.units.length < 2}
+              onClick={() => {
+                if (window.confirm(`Delete unit ${unitIndex + 1} and its components?`)) {
+                  setDraft(removeUnit(draft, unitIndex));
+                }
+              }}
+            >
+              Delete unit
+            </button>
+          </div>
           <label>
             Unit title
             <input
@@ -174,6 +190,9 @@ export function KcBlueprintEditor({
           </button>
         </section>
       ))}
+      <button type="button" className="ghost" disabled={busy} onClick={() => setDraft(addUnit(draft))}>
+        Add a unit
+      </button>
         </div>
         {statements.length ? <KcCoverageMatrix statements={statements} blueprint={draft} /> : null}
       </div>

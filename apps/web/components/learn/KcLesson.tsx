@@ -8,7 +8,7 @@ import type { TutorMood } from "@/components/learn/LearnQuestPanel";
 import { TutorAvatar } from "@/components/TutorAvatar";
 import type { KcTutorSession } from "@/lib/kc";
 import { choiceShowing, lessonComposerVisible, quizFor } from "@/lib/learn-mobile";
-import { starBurst } from "@/lib/learn";
+import { blockStepDivider, starBurst } from "@/lib/learn";
 import { getTutorAvatarPreset } from "@/lib/tutor-avatars";
 import type { TutorProfile } from "@/lib/types";
 
@@ -244,8 +244,16 @@ export function KcLesson({
               </div>
             </article>
           ) : null}
-          {session.messages.map((message) => (
-            <div key={message.id}>
+          {session.messages.map((message, index) => {
+            const previous = index > 0 ? session.messages[index - 1] : undefined;
+            const divider = blockStepDivider(previous?.step, message.step, session.block_progress, session.total_blocks);
+            return (
+              <div key={message.id}>
+              {divider ? (
+                <div className="kc-step-divider">
+                  <span>{divider}</span>
+                </div>
+              ) : null}
               <div
                 className={`bubble ${message.role === "user" ? "user" : "assistant"}${learnMode && message.role === "assistant" ? " learn-tutor-bubble" : ""}`}
                 style={learnMode && message.role === "assistant" ? { borderColor: tutorFace.fg } : undefined}
@@ -282,8 +290,9 @@ export function KcLesson({
                   />
                 </article>
               ) : null}
-            </div>
-          ))}
+              </div>
+            );
+          })}
           {showPendingLine && pendingLine ? (
             <div className="bubble user">
               <p>{pendingLine.text}</p>

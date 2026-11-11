@@ -1036,27 +1036,85 @@ def _first_sentence(text: str) -> str:
 
 
 
+def _structure_row(node: KcNode, codes: set[str], position: int) -> dict:
+    blocks = _public_blocks(node)
+    return {
+        "id": str(node.id),
+        "code": node.code,
+        "title": node.title,
+        "description": node.description or "",
+        "standards": [str(code) for code in (node.standards or []) if str(code).strip()],
+        "blocks": blocks,
+        "summary": _block_summary(blocks),
+        "position": position,
+        "missing": gaps_for(node, codes),
+        "marked_complete": bool(node.marked_complete),
+    }
+
+
 def structure(db: Session, goal: KcGoal) -> dict:
+    """Pushed components grouped by the blueprint unit that owns them."""
     targets = load_targets(db, goal)
     codes = set(_nodes_by_code(db))
-    rows = []
-    for position, node in enumerate(targets, start=1):
-        blocks = _public_blocks(node)
-        rows.append(
-            {
-                "id": str(node.id),
-                "code": node.code,
-                "title": node.title,
-                "description": node.description or "",
-                "standards": [str(code) for code in (node.standards or []) if str(code).strip()],
-                "blocks": blocks,
-                "summary": _block_summary(blocks),
-                "position": position,
-                "missing": gaps_for(node, codes),
-                "marked_complete": bool(node.marked_complete),
-            }
-        )
-    return {"course_id": str(goal.id), "groups": [{"components": rows}] if rows else []}
+    by_code = {node.code: node for node in targets}
+    blueprint = goal.blueprint if isinstance(goal.blueprint, dict) else {}
+    groups: list[dict] = []
+    used: set[str] = set()
+    position = 0
+    for index, unit in enumerate(blueprint.get("units") or []):
+        if not isinstance(unit, dict):
+            continue
+        rows = []
+        for item in unit.get("components") or []:
+            if not isinstance(item, dict):
+                continue
+            node = by_code.get(str(item.get("code") or ""))
+            if node is None or str(node.id) in used:
+                continue
+            position += 1
+            used.add(str(node.id))
+            rows.append(_structure_row(node, codes, position))
+        if rows:
+            groups.append(
+                {
+                    "title": str(unit.get("title") or f"Unit {index + 1}"),
+                    "unit_index": index,
+                    "components": rows,
+                }
+            )
+    extras = []
+    for node in targets:
+        if str(node.id) in used:
+            continue
+        position += 1
+        extras.append(_structure_row(node, codes, position))
+    if extras:
+        groups.append({"title": "Components", "unit_index": None, "components": extras})
+    return {"course_id": str(goal.id), "groups": groups}
+
+
+def clear_course_components(db: Session, goal: KcGoal, codes: set[str] | None = None) -> None:
+    """Drop this course's components. Unshared nodes are deleted. Shared nodes stay on their other course.
+
+    codes limits the drop to those component codes. None clears every target on the course.
+    """
+    targets = load_targets(db, goal)
+    chosen = [node for node in targets if codes is None or node.code in codes]
+    extras = load_patches(db, targets) if codes is None else []
+    keep = _ids_on_other_courses(db, goal.id)
+    chosen_ids = {str(node.id) for node in chosen}
+    if codes is None:
+        goal.target_kc_ids = []
+    else:
+        goal.target_kc_ids = [item for item in _target_ids(goal) if item not in chosen_ids]
+    for node in [*chosen, *extras]:
+        if node.id in keep:
+            continue
+        delete_node(db, node)
+    if codes is None:
+        goal.target_kc_ids = []
+    goal.ready = False
+    goal.updated_at = _now()
 
 
 def network(db: Session, goal: KcGoal) -> dict:
@@ -2645,9 +2703,22 @@ def restart_course(db: Session, goal: KcGoal, student: Student) -> dict:
     return progress(db, goal, student)
 
 
-def _add_message(db: Session, session: KcSession, role: str, content: str) -> KcMessage:
+def _add_message(
+    db: Session,
+    session: KcSession,
+    role: str,
+    content: str,
+    *,
+    step: int | None = None,
+) -> KcMessage:
     current = db.scalar(select(func.max(KcMessage.seq)).where(KcMessage.session_id == session.id)) or 0
-    message = KcMessage(session_id=session.id, role=role, content=content, seq=int(current) + 1)
+    message = KcMessage(
+        session_id=session.id,
+        role=role,
+        content=content,
+        seq=int(current) + 1,
+        step=int(session.step if step is None else step),
+    )
     db.add(message)
     db.flush()
     return message
@@ -2816,11 +2887,16 @@ def _session_messages(db: Session, session: KcSession) -> list[KcMessage]:
     )
 
 
+def _assistant_on_step(messages: list[KcMessage], step: int) -> bool:
+    target = int(step or 0)
+    return any(message.role == "assistant" and int(message.step or 0) == target for message in messages)
+
+
 def _needs_speech(session: KcSession, messages: list[KcMessage]) -> bool:
-    """The opening intro has not been stored yet."""
+    """The active block has not been spoken yet."""
     if session.status != "in_progress":
         return False
-    return not any(message.role == "assistant" for message in messages)
+    return not _assistant_on_step(messages, int(session.step or 0))
 
 
 def _block_context(db: Session, session: KcSession, node: KcNode | None):
@@ -2949,7 +3025,13 @@ def session_out(db: Session, session: KcSession) -> dict:
         if redirect is None
         else {"id": str(redirect.id), "code": redirect.code, "title": redirect.title},
         "messages": [
-            {"id": str(message.id), "role": message.role, "content": message.content, "seq": message.seq}
+            {
+                "id": str(message.id),
+                "role": message.role,
+                "content": message.content,
+                "seq": message.seq,
+                "step": int(message.step or 0),
+            }
             for message in messages
         ],
         **_tutor_meta_dict(profile),
@@ -3492,7 +3574,7 @@ def tutor_variables(
         f"{vocab_reg} terminology + Layer 2 reading_level={read_lvl_val}, response_length={resp_len_val}"
         + (f", learning_support={support_val}" if support_val != "none" else "")
     )
-    opening_turn = session is None or not any(message.role == "assistant" for message in messages)
+    opening_turn = session is None or not _assistant_on_step(messages, index)
     turn_kind_val = (
         compute_turn_kind(
             opening=opening_turn,
@@ -3654,14 +3736,14 @@ def prompt_for(db: Session, session: KcSession) -> dict:
     profile, _goal, messages, fragment, _cfg, blocks, index, block, block_state = _block_context(db, session, node)
     substep = str(block_state.get("substep") or "")
     state = _state_row(db, student, node)
-    opening = not any(message.role == "assistant" for message in messages)
+    opening = not _assistant_on_step(messages, index)
     others = _others_known(db, student, goal, node)
     settled = state is not None and state.status in {"known", "fragile"}
     unit_complete = session.status == "completed"
     course_complete = unit_complete and settled and others
     prereq = _prerequisite_status(db, student, node)
     transition = None
-    if block is not None and index > 0:
+    if opening and block is not None and index > 0:
         previous = blocks[index - 1]
         previous_id = str(previous.get("id") or "")
         finished = {
@@ -3867,7 +3949,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         raise HTTPException(status_code=422, detail="Write an answer first.")
     answer = next(message.content for message in reversed(messages) if message.role == "user")
     if safety_flag != "none":
-        stored = _add_message(db, session, "assistant", reply)
+        stored = _add_message(db, session, "assistant", reply, step=index)
         record_safety_event(
             db,
             student_id=session.student_id,
@@ -3939,7 +4021,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     session.step = resolution.next_step
     next_state = dict(resolution.next_block_state or {})
     generated = body.get("generated_mcq")
-    if isinstance(generated, dict) and generated.get("choices"):
+    if isinstance(generated, dict) and generated.get("choices") and resolution.next_step == index:
         next_state["generated_mcq"] = generated
     session.active_block_state = next_state
     session.block_results = list(resolution.block_results)
@@ -3949,7 +4031,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     elif _last_block_finished(node, session):
         _close_finished_walk(db, session, node, reply, body)
     session.updated_at = _now()
-    _add_message(db, session, "assistant", reply)
+    _add_message(db, session, "assistant", reply, step=index)
     student = _student_or_404(db, session.student_id)
     state = _state_row(db, student, node)
     settled = state is not None and state.status in {"known", "fragile"}

@@ -10,18 +10,28 @@ from __future__ import annotations
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.kc import _nodes_by_code, slug_code
+from app.kc import (
+    _nodes_by_code,
+    _now,
+    _sync_edges,
+    clear_course_components,
+    load_targets,
+    slug_code,
+)
 from app.kc_model import checked_model
 from app.kc_pipeline import (
     apply_review,
     assemble_blueprint,
     blueprint_bundle,
     brief_bundle,
+    chat_bundle,
     clean_blueprint_edit,
     clean_brief,
     clean_intake,
     clean_unit,
     component_range,
+    components_of,
+    interpret_chat,
     missing_intake,
     pipeline_state,
     review_bundle,
@@ -32,7 +42,9 @@ from app.kc_standards import (
     read_statements,
     standard_label,
     statements_from_intake,
+    syllabus_requested,
 )
+from app.models import KcNode
 from app.models import KcGoal
 
 STAGES = ("brief", "blueprint", "unit", "review")
@@ -62,14 +74,20 @@ def _fail(status: int, message: str) -> HTTPException:
     return HTTPException(status_code=status, detail=message)
 
 
+def _statement_course(intake: dict, statements: list) -> bool:
+    pasted = bool(statements) or bool(syllabus_requested(intake) and (intake.get("standard_text") or intake.get("source_text")))
+    return bool(intake.get("standard") or pasted)
+
+
 def pipeline_out(goal: KcGoal) -> dict:
     intake = clean_intake(goal.intake)
+    statements = read_statements(goal.standards)
     state = pipeline_state(
         brief=goal.brief or "",
         blueprint=_blueprint(goal),
         drafting=_drafting(goal),
-        standards=read_statements(goal.standards),
-        standard_chosen=bool(intake["standard"]),
+        standards=statements,
+        standard_chosen=_statement_course(intake, statements),
     )
     state["missing"] = missing_intake(
         title=goal.title,
@@ -110,7 +128,7 @@ def stage_prompt(db: Session, goal: KcGoal, stage: str, model: str, unit: int | 
     if not brief or state["questions"]:
         raise _fail(409, "Write the brief and answer its follow-ups first.")
     if stage == "blueprint":
-        if course["intake"].get("standard") and not drafting.get("standards_confirmed"):
+        if _statement_course(course["intake"], course["statements"]) and not drafting.get("standards_confirmed"):
             raise _fail(409, "Check the standard statements before the blueprint.")
         return blueprint_bundle(course=course, brief=brief, model=chosen)
     units = blueprint.get("units") or []
@@ -146,15 +164,16 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
             answers = list(drafting.get("answers") or [])
             intake = clean_intake(goal.intake)
             brief, questions = clean_brief(result, answered=bool(answers))
-            recall = bool(intake["standard"]) and not intake["standard_text"]
+            pasted = statements_from_intake(intake)
+            recall = bool(intake["standard"]) and not pasted
             if recall:
                 raw_statements = result.get("statements") if isinstance(result, dict) else None
                 if not raw_statements:
                     raise ValueError("Recall the statements for this standard and grade. Return at least one.")
                 statements = clean_statements(raw_statements)
                 source = "recalled"
-            elif intake["standard"]:
-                statements = statements_from_intake(intake)
+            elif pasted:
+                statements = pasted
                 source = "pasted"
             else:
                 statements = []
@@ -172,14 +191,19 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
             goal.drafting = {
                 "questions": questions,
                 "answers": answers,
-                "standards_confirmed": not bool(intake["standard"]),
+                "standards_confirmed": not _statement_course(intake, statements),
                 "standards_source": source,
             }
         elif stage == "blueprint":
             intake = clean_intake(goal.intake)
-            if intake["standard"] and not drafting.get("standards_confirmed"):
+            if _statement_course(intake, read_statements(goal.standards)) and not drafting.get("standards_confirmed"):
                 raise _fail(409, "Check the standard statements before the blueprint.")
-            bounds = component_range(kind=goal.kind, minutes=goal.minutes, intake=intake)
+            bounds = component_range(
+                kind=goal.kind,
+                minutes=goal.minutes,
+                intake=intake,
+                statements=read_statements(goal.standards),
+            )
             statements = read_statements(goal.standards)
             goal.blueprint = assemble_blueprint(
                 result, bounds=bounds, taken=taken, make_code=slug_code, statements=statements
@@ -229,8 +253,9 @@ def save_blueprint(db: Session, goal: KcGoal, raw: object, approve: bool) -> dic
         raise _fail(409, "Write the brief first.")
     drafting = _drafting(goal)
     intake = clean_intake(goal.intake)
-    if intake["standard"] and not drafting.get("standards_confirmed"):
+    if _statement_course(intake, read_statements(goal.standards)) and not drafting.get("standards_confirmed"):
         raise _fail(409, "Check the standard statements before the blueprint.")
+    previous = {row["code"] for row in components_of(_blueprint(goal))}
     try:
         edited = clean_blueprint_edit(
             raw, taken=set(_nodes_by_code(db)), make_code=slug_code, statements=read_statements(goal.standards)
@@ -239,6 +264,9 @@ def save_blueprint(db: Session, goal: KcGoal, raw: object, approve: bool) -> dic
         raise _fail(422, str(exc)) from exc
     drafting = _drafting(goal)
     goal.blueprint = edited
+    removed = previous - {row["code"] for row in components_of(edited)}
+    if removed:
+        clear_course_components(db, goal, removed)
     goal.drafting = {
         "questions": [],
         "answers": list(drafting.get("answers") or []),
@@ -293,10 +321,195 @@ def save_statements(db: Session, goal: KcGoal, raw: object, confirm: bool) -> di
     return pipeline_out(goal)
 
 
-def reset_pipeline(db: Session, goal: KcGoal) -> dict:
+def reset_pipeline(db: Session, goal: KcGoal, *, clear_components: bool = False) -> dict:
     goal.brief = ""
     goal.blueprint = {}
     goal.drafting = {}
     goal.standards = statements_from_intake(clean_intake(goal.intake))
+    if clear_components:
+        clear_course_components(db, goal)
     db.flush()
     return pipeline_out(goal)
+
+
+def delete_unit(db: Session, goal: KcGoal, unit_index: int) -> dict:
+    """Remove one blueprint unit and the pushed components that belong to it."""
+    blueprint = _blueprint(goal)
+    units = [dict(unit) for unit in (blueprint.get("units") or [])]
+    if unit_index < 0 or unit_index >= len(units):
+        raise _fail(404, "That unit is not on the course.")
+    if len(units) < 2:
+        raise _fail(422, "A course keeps at least one unit. Start over to clear the course.")
+    removed = units.pop(unit_index)
+    dropped = {str(item.get("code") or "") for item in (removed.get("components") or []) if item.get("code")}
+    for unit in units:
+        components = []
+        for item in unit.get("components") or []:
+            row = dict(item)
+            row["prerequisites"] = [code for code in (row.get("prerequisites") or []) if code not in dropped]
+            components.append(row)
+        unit["components"] = components
+    goal.blueprint = {**blueprint, "units": units}
+    drafting = _drafting(goal)
+    notes = dict(drafting.get("units") or {})
+    for code in dropped:
+        notes.pop(code, None)
+    done = 0
+    for unit in units:
+        codes = [item.get("code") for item in unit.get("components") or []]
+        if codes and all(notes.get(code) for code in codes):
+            done += 1
+            continue
+        break
+    drafting["units"] = notes
+    drafting["units_done"] = done
+    if done < len(units):
+        drafting.pop("review", None)
+    goal.drafting = drafting
+    if dropped:
+        clear_course_components(db, goal, dropped)
+    db.flush()
+    return pipeline_out(goal)
+
+
+def _chat_brief(goal: KcGoal, blueprint: dict) -> str:
+    count = len(components_of(blueprint))
+    ending = goal.description or "use the ideas in the blueprint"
+    return (
+        f"This course is {goal.title} for ages {goal.audience}. "
+        f"By the end the child can {ending}. "
+        f"The blueprint has {count} components. "
+        "The author is editing the course in chat."
+    )
+
+
+def _sync_chat_components(db: Session, goal: KcGoal, blueprint: dict, descriptions: dict[str, str], changed: set[str]) -> None:
+    """Create nodes for new components and update only the components the chat changed."""
+    by_code = {node.code: node for node in load_targets(db, goal)}
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for row in components_of(blueprint):
+        code = row["code"]
+        node = by_code.get(code)
+        if node is None:
+            node = KcNode(
+                code=code,
+                title=row["title"],
+                description=descriptions.get(code, ""),
+                standards=list(row.get("standards") or []),
+                prerequisite_codes=list(row.get("prerequisites") or []),
+            )
+            db.add(node)
+            db.flush()
+            by_code[code] = node
+            _sync_edges(db, node)
+        elif code in changed:
+            node.title = row["title"]
+            if descriptions.get(code):
+                node.description = descriptions[code]
+            node.standards = list(row.get("standards") or [])
+            node.prerequisite_codes = list(row.get("prerequisites") or [])
+            node.updated_at = _now()
+            _sync_edges(db, node)
+        seen.add(code)
+        if str(node.id) not in ordered:
+            ordered.append(str(node.id))
+    removed = {code for code in by_code if code not in seen}
+    if removed:
+        clear_course_components(db, goal, removed)
+    extras = [item for item in (goal.target_kc_ids or []) if item not in ordered]
+    goal.target_kc_ids = [*ordered, *extras]
+    goal.updated_at = _now()
+
+
+def course_chat_prompt(db: Session, goal: KcGoal, model: str, messages: list[dict]) -> dict:
+    """The prompt for one chat turn. The course is not changed."""
+    chosen = _model(model)
+    course = _course(goal)
+    drafting = _drafting(goal)
+    cleaned: list[dict] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        role = "user" if item.get("role") == "user" else "assistant"
+        cleaned.append({"role": role, "content": content[:4000]})
+    if not any(item["role"] == "user" for item in cleaned):
+        raise _fail(422, "Say what you want to change.")
+    return chat_bundle(
+        course=course,
+        brief=goal.brief or "",
+        blueprint=_blueprint(goal),
+        descriptions=dict(drafting.get("units") or {}),
+        statements=read_statements(goal.standards),
+        components=[{"code": node.code, "title": node.title} for node in load_targets(db, goal)],
+        messages=cleaned,
+        model=chosen,
+    )
+
+
+def preview_chat(db: Session, goal: KcGoal, result: object) -> dict:
+    """Describe a chat proposal without writing it."""
+    drafting = _drafting(goal)
+    try:
+        proposal = interpret_chat(
+            result,
+            blueprint=_blueprint(goal),
+            descriptions=dict(drafting.get("units") or {}),
+            statements=read_statements(goal.standards),
+            taken=set(_nodes_by_code(db)),
+            make_code=slug_code,
+        )
+    except ValueError as exc:
+        raise _fail(422, str(exc)) from exc
+    return {
+        "reply": proposal["reply"],
+        "changes": proposal["changes"],
+        "changed_codes": proposal["changed_codes"],
+        "blueprint": proposal["blueprint"],
+    }
+
+
+def apply_chat(db: Session, goal: KcGoal, result: object) -> dict:
+    """Store a chat proposal. Components the proposal did not change keep their descriptions."""
+    drafting = _drafting(goal)
+    try:
+        proposal = interpret_chat(
+            result,
+            blueprint=_blueprint(goal),
+            descriptions=dict(drafting.get("units") or {}),
+            statements=read_statements(goal.standards),
+            taken=set(_nodes_by_code(db)),
+            make_code=slug_code,
+        )
+    except ValueError as exc:
+        raise _fail(422, str(exc)) from exc
+    goal.blueprint = proposal["blueprint"]
+    if not (goal.brief or "").strip():
+        goal.brief = _chat_brief(goal, proposal["blueprint"])
+    notes = dict(proposal["descriptions"])
+    units = proposal["blueprint"]["units"]
+    done = 0
+    for unit in units:
+        codes = [item["code"] for item in unit["components"]]
+        if codes and all(notes.get(code) for code in codes):
+            done += 1
+            continue
+        break
+    review = drafting.get("review") if done == len(units) else None
+    goal.drafting = {
+        "questions": [],
+        "answers": list(drafting.get("answers") or []),
+        "approved": True,
+        "standards_confirmed": True,
+        "standards_source": drafting.get("standards_source") or "",
+        "units": notes,
+        "units_done": done,
+        "review": review,
+        "pushed": True,
+    }
+    _sync_chat_components(db, goal, proposal["blueprint"], notes, set(proposal["changed_codes"]))
+    db.flush()
+    return {"pipeline": pipeline_out(goal), "reply": proposal["reply"], "changes": proposal["changes"]}

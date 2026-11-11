@@ -1,7 +1,7 @@
 """Store one token-usage row per tutor model call.
 
-Revision ID: 033_tutor_token_usage
-Revises: 032_merge_parent_portal
+Revision ID: 034_tutor_token_usage
+Revises: 033_kc_message_step
 Create Date: 2026-11-11
 """
 
@@ -10,8 +10,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "033_tutor_token_usage"
-down_revision: Union[str, None] = "032_merge_parent_portal"
+revision: str = "034_tutor_token_usage"
+down_revision: Union[str, None] = "033_kc_message_step"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

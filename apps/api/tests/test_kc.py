@@ -1859,7 +1859,12 @@ def test_tutor_variables_follow_the_active_block() -> None:
         assert "Retry attempts" not in topic
         assert topic["Close component"] == "no"
 
-        moved = _decide(session_id, "The sky sends blue light.", reply="Next is the choice.")
+        moved = _decide(
+            session_id,
+            "The sky sends blue light.",
+            reply="Next is the choice.",
+            block_complete=True,
+        )
         assert moved["step"] == 1
         quiz = _variable_map(client.get("/kc/tutor/variables", params={"session_id": session_id}))
         assert quiz["Block index"] == "2 of 2"
@@ -2403,13 +2408,28 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             session_id,
             "The river is blue.",
             decision="stay",
-            reply="The river color is in place. Which color is the river?",
+            reply="The river color is in place.",
+            block_complete=True,
         )
         assert advanced["passed"] is False
         assert advanced["step"] == 1
         assert advanced["status"] == "in_progress"
-        assert advanced["choice"]["prompt"] == "Which color is the river?"
-        assert [item["text"] for item in advanced["choice"]["choices"]] == [
+        assert advanced["needs_speech"] is True
+        assert advanced["choice"] is None
+        assert "?" not in advanced["reply"]
+        assert advanced["messages"][-1]["role"] == "assistant"
+        assert advanced["messages"][-1]["step"] == 0
+        spoken_next = client.post(
+            f"/kc/tutor/sessions/{session_id}/speech",
+            json={"content": "Next we pick the river color."},
+        )
+        assert spoken_next.status_code == 200, spoken_next.text
+        opened_next = spoken_next.json()
+        assert opened_next["needs_speech"] is False
+        assert opened_next["messages"][-1]["step"] == 1
+        assert opened_next["messages"][-1]["content"] == "Next we pick the river color."
+        assert opened_next["choice"]["prompt"] == "Which color is the river?"
+        assert [item["text"] for item in opened_next["choice"]["choices"]] == [
             "Blue water",
             "Red water",
             "Green water",
@@ -2460,6 +2480,7 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             session_id,
             "Blue water reflects the sky.",
             decision="stay",
+            block_complete=True,
             reply="You can name the river color and pick it out. Practice the next river.",
             score_justification="Named the color and picked blue water.",
             what_was_strong="Named the color.",
@@ -2493,7 +2514,7 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             "/kc/tutor/sessions",
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": why_node["id"]},
         ).json()
-        _decide(why["id"], "The sky sends blue light.", reply="On to the choice.")
+        _decide(why["id"], "The sky sends blue light.", reply="On to the choice.", block_complete=True)
         why_prompt = client.get(f"/kc/tutor/sessions/{why['id']}/prompt").json()["system_prompt"]
         assert "A correct pick must include why that option is right before this block ends." in why_prompt
         assert "The unit is not finished." in why_prompt
@@ -2509,6 +2530,7 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             why["id"],
             "The sky sends blue light.",
             reply="You can explain the sky light and why that choice holds.",
+            block_complete=True,
         )
         assert closed["passed"] is True
         assert closed["status"] == "completed"
@@ -2520,7 +2542,12 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             "/kc/tutor/sessions",
             json={"student_id": str(storm.id), "course_id": course["id"], "kc_id": open_node["id"]},
         ).json()
-        moved = _decide(partial["id"], "Explain the first idea.", reply="The first idea holds.")
+        moved = _decide(
+            partial["id"],
+            "Explain the first idea.",
+            reply="The first idea holds.",
+            block_complete=True,
+        )
         assert moved["step"] == 1
         assert [item["status"] for item in moved["block_progress"]] == ["completed", "active"]
         db = SessionLocal()
@@ -2578,6 +2605,7 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             dynamic["id"],
             "Blue is the color of this river.",
             reply="You can name the river color now.",
+            block_complete=True,
         )
         assert known["passed"] is True
         assert known["status"] == "completed"
@@ -2592,6 +2620,7 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             wonder["id"],
             "I wonder why.",
             reply="Here is the wonder, and you can ask it again later.",
+            block_complete=True,
         )
         assert counted_off["passed"] is True
         assert _state(storm.id, "zz-loop-wonder").status == "known"
@@ -3348,6 +3377,7 @@ def test_kc_progress_analytics_and_accomplishments_opportunities() -> None:
             s_known["id"],
             "Explains known concept clearly.",
             reply="Great explanation.",
+            block_complete=True,
             what_was_strong="Explained the core mechanism on the first try.",
             what_to_work_on="Keep applying this rule.",
             score_justification="Passed every counting block on the first try.",
@@ -3775,5 +3805,61 @@ def test_child_avatar_stars_and_per_course_tutor() -> None:
             client.delete(f"/tutor-profiles/{pid}")
         _clear_progress(storm.id)
         _wipe_zz()
+
+
+def test_word_overlap_does_not_finish_a_block_the_model_kept_open() -> None:
+    from app.kc_loop import resolve_block_turn
+    from app.models import default_kc_tutor_config
+
+    blocks = [
+        {
+            "id": "topic",
+            "type": "topic_goal",
+            "data": {
+                "topic": "River color",
+                "goal": "The river is blue.",
+                "acceptance_criteria": "The river is blue.",
+            },
+        },
+        {
+            "id": "quiz",
+            "type": "mcq",
+            "data": {"mode": "static", "question_stem": "Which color?", "choices": []},
+        },
+    ]
+
+    def turn(*, move_attempts: int, block_complete: bool = False, decision: str = "stay"):
+        return resolve_block_turn(
+            decision=decision,
+            substep_passed=False,
+            block_complete=block_complete,
+            rubric_met=[],
+            stored_rubric=[],
+            matched_wrong="",
+            blocks=blocks,
+            step=0,
+            active_block_state={"substep": "main"},
+            block_results=[],
+            move_attempts=move_attempts,
+            hint_tier="nudge",
+            reveals=0,
+            enrichment_turns=0,
+            cfg=default_kc_tutor_config(),
+            goal=None,
+            last_misconception="",
+            answer="The river is blue.",
+        )
+
+    held = turn(move_attempts=0)
+    assert held.next_step == 0
+    assert held.advance_block is False
+    still = turn(move_attempts=1)
+    assert still.next_step == 0
+    agreed = turn(move_attempts=0, block_complete=True)
+    assert agreed.next_step == 1
+    assert agreed.advance_block is True
+    exhausted = turn(move_attempts=2)
+    assert exhausted.next_step == 1
+    assert exhausted.advance_block is True
 
 

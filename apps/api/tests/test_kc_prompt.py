@@ -756,31 +756,63 @@ def test_a_dynamic_mcq_reply_is_a_short_lead_in() -> None:
     assert "generated_mcq" in description
     assert "The only text the child sees" not in description
 
-    before = _text(
-        node=_node(
-            blocks=[
-                {
-                    "id": "blk_1",
-                    "type": "topic_goal",
-                    "data": {"topic": "River color", "goal": "Explain the river color."},
+    ahead = _node(
+        blocks=[
+            {
+                "id": "blk_1",
+                "type": "topic_goal",
+                "data": {"topic": "River color", "goal": "Explain the river color."},
+            },
+            {
+                "id": "blk_2",
+                "type": "mcq",
+                "data": {
+                    "mode": "dynamic",
+                    "target_skill": "Name the river color",
+                    "distractor_guidance": "A color the river is not",
                 },
-                {
-                    "id": "blk_2",
-                    "type": "mcq",
-                    "data": {
-                        "mode": "dynamic",
-                        "target_skill": "Name the river color",
-                        "distractor_guidance": "A color the river is not",
-                    },
-                },
-            ],
-            misconceptions=[],
-        ),
-        opening=True,
-        attempts=0,
+            },
+        ],
+        misconceptions=[],
     )
+    before = _text(node=ahead, opening=True, attempts=0)
     assert "The child will type." in before
-    assert "If this reply opens the dynamic multiple choice, reply is a short lead-in only." in before
-    assert "do not ask the child to type a letter" in before
-    assert "question_stem" in before
+    assert "If this reply opens the dynamic multiple choice" not in before
+    assert "Name the river color" not in before
+    assert "open Block 2" not in before
+
+
+def test_a_finished_block_closes_without_opening_the_next_one() -> None:
+    node = _node(
+        blocks=[
+            {
+                "id": "blk_1",
+                "type": "topic_goal",
+                "data": {"topic": "River color", "goal": "Explain the river color."},
+            },
+            {
+                "id": "blk_2",
+                "type": "mcq",
+                "data": {
+                    "mode": "dynamic",
+                    "target_skill": "Name the river color",
+                    "distractor_guidance": "A color the river is not",
+                },
+            },
+        ],
+        misconceptions=[],
+    )
+    text = _text(node=node, opening=False, attempts=0, last_answer="The river is blue.")
+    teach = _section(text, "What to teach")
+    turn = _section(text, "This turn")
+    how = _section(text, "How to teach")
+    returned = _section(text, "What to return")
+    assert "close Block 1 with a brief affirmation" in teach
+    assert "Do not mention the next block and do not open it." in teach
+    assert "open Block 2" not in teach
+    assert "Name the river color" not in text
+    assert "Ask no question. Do not open the next block." in turn
+    assert "close this block with a brief affirmation only" in how
+    assert "End a teaching or probing turn with a single clear question." not in how
+    assert "Do not describe the next block." in returned
 

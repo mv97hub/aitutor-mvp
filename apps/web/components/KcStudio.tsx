@@ -8,10 +8,11 @@ import { KcCourseList } from "@/components/KcCourseList";
 import { KcCourseSettings } from "@/components/KcIntakeForm";
 import { NetworkMap } from "@/components/KcNetwork";
 import { KcNewCourse } from "@/components/KcNewCourse";
+import { KcCourseChat } from "@/components/KcCourseChat";
+import { KcCourseTransfer } from "@/components/KcCourseTransfer";
 import { KcPipelinePanel } from "@/components/KcPipeline";
-import { addKcComponent, moveKcComponent, removeKcComponent } from "@/lib/kc-actions";
-import { blockSummary } from "@/lib/kc-blocks";
-import type { KcComponent, KcCourse, KcNetwork, KcPipeline, KcStructure } from "@/lib/kc";
+import { KcStructureList } from "@/components/KcStructureList";
+import type { KcCourse, KcNetwork, KcPipeline, KcStructure } from "@/lib/kc";
 import type { PromptTurn } from "@/lib/kc-prompt-log";
 
 export function KcStudio({
@@ -24,6 +25,7 @@ export function KcStudio({
   initialError,
   promptScope,
   promptTurn,
+  mode = "wizard",
 }: {
   initialCourses: KcCourse[];
   initialCourse: KcCourse | null;
@@ -34,9 +36,12 @@ export function KcStudio({
   initialError: string | null;
   promptScope: string;
   promptTurn: PromptTurn | null;
+  mode?: "wizard" | "chat";
 }) {
   const course = initialCourse;
   const order = course?.components.map((item) => item.id) ?? [];
+  const componentCount = initialStructure?.groups.reduce((sum, group) => sum + group.components.length, 0) ?? 0;
+  const syllabus = [course?.intake.standard_text, course?.intake.source_text].filter(Boolean).join("\n");
 
   return (
     <CreatorDebugShell className="ds-shell studio-shell kc-screen" scope={promptScope} turn={promptTurn}>
@@ -75,19 +80,39 @@ export function KcStudio({
         {course && initialPipeline ? (
           <>
             <KcCourseSettings course={course} drafted={Boolean(initialPipeline.brief || initialPipeline.blueprint)} />
+            <div className="kc-modes" aria-label="Course creator">
+              <a href={`/kc-studio?course=${course.id}`} aria-current={mode === "chat" ? undefined : "page"}>
+                Wizard
+              </a>
+              <a href={`/kc-studio?course=${course.id}&mode=chat`} aria-current={mode === "chat" ? "page" : undefined}>
+                Chat
+              </a>
+              <KcCourseTransfer courseId={course.id} title={course.title} audience={course.audience} curriculum={syllabus} />
+            </div>
             <div className="studio-columns">
               <div className="studio-tree" aria-label="Course structure">
-                <StructureView courseId={course.id} structure={initialStructure} patches={course.patches} order={order} />
+                <KcStructureList
+                  courseId={course.id}
+                  structure={initialStructure}
+                  patches={course.patches}
+                  order={order}
+                  mode={mode}
+                />
               </div>
               <div className="studio-chat">
                 <div className="ds-scroll">
                   <div className="ds-column">
-                    <KcPipelinePanel
-                      key={course.id}
-                      courseId={course.id}
-                      model={initialModel}
-                      pipeline={initialPipeline}
-                    />
+                    {mode === "chat" ? (
+                      <KcCourseChat key={course.id} courseId={course.id} model={initialModel} pipeline={initialPipeline} />
+                    ) : (
+                      <KcPipelinePanel
+                        key={course.id}
+                        courseId={course.id}
+                        model={initialModel}
+                        pipeline={initialPipeline}
+                        componentCount={componentCount}
+                      />
+                    )}
                   </div>
                 </div>
               </div>
@@ -100,100 +125,6 @@ export function KcStudio({
         <NetworkModal title={course.title} network={initialNetwork} closeHref={`/kc-studio?course=${course.id}`} />
       ) : null}
     </CreatorDebugShell>
-  );
-}
-
-function rowStatus(row: { missing: string[]; marked_complete: boolean }) {
-  if (row.missing.length) return row.missing.join(", ");
-  if (row.marked_complete) return "Marked complete";
-  return "Complete";
-}
-
-function StructureView({
-  courseId,
-  structure,
-  patches,
-  order,
-}: {
-  courseId: string;
-  structure: KcStructure | null;
-  patches: KcComponent[];
-  order: string[];
-}) {
-  return (
-    <div className="kc-structure">
-      <h2>Course structure</h2>
-      <ul>
-        {structure?.groups.flatMap((group) => group.components).map((row) => (
-          <li key={row.id}>
-            <a href={`/kc-creator?course=${courseId}&kc=${row.id}`}>
-              <strong>{row.title}</strong>
-              {row.description ? <p className="kc-brief">{row.description}</p> : null}
-              <span>{row.blocks?.length ? blockSummary(row.blocks) : "No blocks yet"}</span>
-              <em>{rowStatus(row)}</em>
-            </a>
-            <span className="kc-row-actions">
-              <form action={moveKcComponent}>
-                <input type="hidden" name="course_id" value={courseId} />
-                <input type="hidden" name="id" value={row.id} />
-                <input type="hidden" name="direction" value="-1" />
-                {order.map((id) => (
-                  <input key={id} type="hidden" name="order" value={id} />
-                ))}
-                <button className="ghost" type="submit" aria-label={`Move ${row.title} up`}>
-                  Up
-                </button>
-              </form>
-              <form action={moveKcComponent}>
-                <input type="hidden" name="course_id" value={courseId} />
-                <input type="hidden" name="id" value={row.id} />
-                <input type="hidden" name="direction" value="1" />
-                {order.map((id) => (
-                  <input key={id} type="hidden" name="order" value={id} />
-                ))}
-                <button className="ghost" type="submit" aria-label={`Move ${row.title} down`}>
-                  Down
-                </button>
-              </form>
-              <form action={removeKcComponent}>
-                <input type="hidden" name="course_id" value={courseId} />
-                <input type="hidden" name="id" value={row.id} />
-                <button className="ghost" type="submit" aria-label={`Remove ${row.title}`}>
-                  Remove
-                </button>
-              </form>
-            </span>
-          </li>
-        ))}
-      </ul>
-      {patches.length ? (
-        <section>
-          <h3>Patches</h3>
-          <ul>
-            {patches.map((patch) => (
-              <li key={patch.id}>
-                <a href={`/kc-creator?course=${courseId}&kc=${patch.id}`}>
-                  <strong>{patch.title}</strong>
-                  {patch.description ? <p className="kc-brief">{patch.description}</p> : null}
-                  <span>{patch.blocks?.length ? blockSummary(patch.blocks) : "No blocks yet"}</span>
-                  <em>Not a target</em>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      <form className="kc-add" action={addKcComponent}>
-        <input type="hidden" name="course_id" value={courseId} />
-        <label>
-          Add a component by title
-          <input aria-label="New component title" name="title" required />
-        </label>
-        <button className="button" type="submit">
-          Add
-        </button>
-      </form>
-    </div>
   );
 }
 

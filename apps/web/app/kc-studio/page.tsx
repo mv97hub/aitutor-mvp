@@ -11,7 +11,7 @@ export const metadata = { title: "KC Course Creator · AI Tutor" };
 export default async function KcStudioPage({
   searchParams,
 }: {
-  searchParams: Promise<{ course?: string; network?: string; model?: string; error?: string }>;
+  searchParams: Promise<{ course?: string; network?: string; model?: string; error?: string; mode?: string }>;
 }) {
   const params = await searchParams;
   const model = kcModel(params.model);
@@ -46,6 +46,7 @@ export default async function KcStudioPage({
       initialError={error}
       promptScope={selected ? `course:${selected.id}` : ""}
       promptTurn={promptTurn}
+      mode={params.mode === "chat" ? "chat" : "wizard"}
     />
   );
 }
