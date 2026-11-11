@@ -50,6 +50,7 @@ from app.kc_prompt import (
 from app.learn_stars import child_status_label, empty_stars, explorer_progress, stars_from_units
 from app.tutor_profile import (
     BLOCK_CONFIG_SPECS,
+    PROFILE_ID,
     effective_kc_tutor_config,
     effective_voice_settings,
     get_profile_by_id_or_slug,
@@ -70,6 +71,7 @@ from app.models import (
     KcSession,
     KcState,
     Student,
+    TutorProfile,
     effective_child_profile,
 )
 from app.present import student_out
@@ -1460,85 +1462,491 @@ def _synthesize_course_insights(
     return accomplishments, opportunities
 
 
-def tutor_courses(db: Session, *, student_id: uuid.UUID | None = None) -> list[dict]:
+def _course_shell(goal: KcGoal) -> dict:
+    return {
+        "id": str(goal.id),
+        "code": goal.code,
+        "title": goal.title,
+        "description": goal.description or "",
+        "audience": goal.audience,
+        "kind": goal.kind,
+        "minutes": goal.minutes if goal.kind == "time_boxed" else None,
+    }
+
+
+def _empty_course_card(goal: KcGoal, targets: list[KcNode]) -> dict:
+    total_blocks = sum(len(stored_blocks(node)) for node in targets)
+    card = _course_shell(goal)
+    card.update(
+        {
+            "component_count": len(targets),
+            "completed_count": 0,
+            "known_count": 0,
+            "fragile_count": 0,
+            "in_progress_count": 0,
+            "not_started_count": len(targets),
+            "percent": 0,
+            "known_percent": 0,
+            "prerequisite_codes": [],
+            "unlocked": True,
+            "total_blocks_count": total_blocks,
+            "completed_blocks_count": 0,
+            "first_try_pass_count": 0,
+            "last_active_at": None,
+            "accomplishments_preview": [],
+            "opportunities_preview": [],
+            **empty_stars(),
+            "course_complete": False,
+            "started": False,
+            "current_topic": None,
+            "tutor": None,
+        }
+    )
+    return card
+
+
+@dataclass
+class _CourseCardLoad:
+    goals: list[KcGoal]
+    targets: dict[uuid.UUID, list[KcNode]]
+    patches: dict[uuid.UUID, list[KcNode]]
+    nodes_by_code: dict[str, KcNode]
+    states: dict[uuid.UUID, dict[uuid.UUID, KcState]]
+    sessions_by_node: dict[tuple[uuid.UUID, uuid.UUID], dict[uuid.UUID, list[KcSession]]]
+    sessions_by_goal: dict[tuple[uuid.UUID, uuid.UUID], list[KcSession]]
+    profiles_by_id: dict[str, TutorProfile]
+    profiles_by_slug: dict[str, TutorProfile]
+    default_profile: TutorProfile
+
+
+def _nodes_by_ids(db: Session, ids: list[uuid.UUID]) -> dict[uuid.UUID, KcNode]:
+    unique = list(dict.fromkeys(ids))
+    if not unique:
+        return {}
+    return {node.id: node for node in db.scalars(select(KcNode).where(KcNode.id.in_(unique)))}
+
+
+def _nulls_first_desc(moment: datetime | None) -> datetime:
+    """Match PostgreSQL ORDER BY column DESC, which sorts nulls first."""
+    if moment is None:
+        return datetime.max.replace(tzinfo=timezone.utc)
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment
+
+
+def _session_sort_key(row: KcSession) -> tuple[datetime, datetime]:
+    return (_nulls_first_desc(row.updated_at), _nulls_first_desc(row.created_at))
+
+
+def _cached_profile(load: _CourseCardLoad, profile_id: object) -> TutorProfile | None:
+    if profile_id is None:
+        return None
+    key = str(profile_id).strip()
+    if not key:
+        return None
+    found = load.profiles_by_id.get(key) or load.profiles_by_slug.get(key)
+    if found is not None:
+        return found
+    if key == "1":
+        for row in load.profiles_by_id.values():
+            if row.is_default:
+                return row
+        return load.profiles_by_id.get(PROFILE_ID)
+    return None
+
+
+def _resolve_cached_profile(
+    load: _CourseCardLoad,
+    student: Student,
+    profile_id: object = None,
+) -> TutorProfile:
+    if profile_id is not None and str(profile_id).strip():
+        found = _cached_profile(load, profile_id)
+        if found is not None:
+            return found
+    preferred = getattr(student, "preferred_tutor_profile_id", None)
+    if preferred:
+        found = _cached_profile(load, preferred)
+        if found is not None:
+            return found
+    return load.default_profile
+
+
+def _card_tutor(load: _CourseCardLoad, student: Student, goal_id: uuid.UUID) -> dict:
+    rows = [row for row in load.sessions_by_goal.get((student.id, goal_id), []) if row.tutor_profile_id]
+    rows.sort(key=_session_sort_key, reverse=True)
+    bound = str(rows[0].tutor_profile_id) if rows else ""
+    if bound:
+        profile = _resolve_cached_profile(load, student, bound)
+        source = "course"
+    else:
+        profile = _resolve_cached_profile(load, student)
+        source = "preferred" if getattr(student, "preferred_tutor_profile_id", None) else "default"
+    return {**_tutor_public(profile), "source": source}
+
+
+def _load_course_cards(db: Session, students: list[Student]) -> _CourseCardLoad:
+    """Ready courses, their topics, and this roster's state, in a few queries."""
     goals = list(db.scalars(select(KcGoal).where(KcGoal.ready.is_(True)).order_by(KcGoal.title)))
+    profiles = list(db.scalars(select(TutorProfile)))
+    profiles_by_id = {row.id: row for row in profiles}
+    profiles_by_slug = {row.slug: row for row in profiles if row.slug}
+    default_profile = profiles_by_id.get(PROFILE_ID) or load_profile(db)
+    empty = _CourseCardLoad(
+        goals=[],
+        targets={},
+        patches={},
+        nodes_by_code={},
+        states={},
+        sessions_by_node={},
+        sessions_by_goal={},
+        profiles_by_id=profiles_by_id,
+        profiles_by_slug=profiles_by_slug,
+        default_profile=default_profile,
+    )
+    if not goals:
+        return empty
+    target_ids: list[uuid.UUID] = []
+    targets: dict[uuid.UUID, list[KcNode]] = {}
+    nodes_by_id = _nodes_by_ids(
+        db,
+        [_uuid(item) for goal in goals for item in _target_ids(goal)],
+    )
+    for goal in goals:
+        ordered: list[KcNode] = []
+        for item in _target_ids(goal):
+            node = nodes_by_id.get(_uuid(item))
+            if node is not None:
+                ordered.append(node)
+                target_ids.append(node.id)
+        targets[goal.id] = ordered
+    codes: list[str] = []
+    seen_codes: set[str] = set()
+    for ordered in targets.values():
+        for code in _referenced_codes(ordered):
+            if code not in seen_codes:
+                seen_codes.add(code)
+                codes.append(code)
+    if codes:
+        for node in db.scalars(select(KcNode).where(KcNode.code.in_(codes))):
+            nodes_by_id.setdefault(node.id, node)
+    unique_targets = list(dict.fromkeys(target_ids))
+    edges: list[KcEdge] = []
+    if unique_targets:
+        edges = list(
+            db.scalars(
+                select(KcEdge).where(
+                    or_(KcEdge.from_kc.in_(unique_targets), KcEdge.to_kc.in_(unique_targets))
+                )
+            )
+        )
+        missing = [
+            node_id
+            for edge in edges
+            for node_id in (edge.from_kc, edge.to_kc)
+            if node_id not in nodes_by_id
+        ]
+        nodes_by_id.update(_nodes_by_ids(db, missing))
+    nodes_by_code = {node.code: node for node in nodes_by_id.values()}
+    patches: dict[uuid.UUID, list[KcNode]] = {}
+    for goal in goals:
+        goal_targets = targets.get(goal.id, [])
+        target_set = {node.id for node in goal_targets}
+        found: list[KcNode] = []
+        seen: set[uuid.UUID] = set()
+        for code in _referenced_codes(goal_targets):
+            node = nodes_by_code.get(code)
+            if node is None or node.id in target_set or node.id in seen:
+                continue
+            seen.add(node.id)
+            found.append(node)
+        edge_ids: list[uuid.UUID] = []
+        seen_edge: set[uuid.UUID] = set()
+        for edge in edges:
+            if edge.from_kc not in target_set and edge.to_kc not in target_set:
+                continue
+            for node_id in (edge.from_kc, edge.to_kc):
+                if node_id not in seen_edge:
+                    seen_edge.add(node_id)
+                    edge_ids.append(node_id)
+        for node_id in edge_ids:
+            if node_id in target_set or node_id in seen:
+                continue
+            node = nodes_by_id.get(node_id)
+            if node is None:
+                continue
+            seen.add(node.id)
+            found.append(node)
+        patches[goal.id] = found
+    student_ids = list(dict.fromkeys(student.id for student in students))
+    node_ids = list(nodes_by_id)
+    states: dict[uuid.UUID, dict[uuid.UUID, KcState]] = {}
+    if student_ids and node_ids:
+        for row in db.scalars(
+            select(KcState).where(KcState.student_id.in_(student_ids), KcState.kc_id.in_(node_ids))
+        ):
+            states.setdefault(row.student_id, {})[row.kc_id] = row
+    sessions_by_node: dict[tuple[uuid.UUID, uuid.UUID], dict[uuid.UUID, list[KcSession]]] = {}
+    sessions_by_goal: dict[tuple[uuid.UUID, uuid.UUID], list[KcSession]] = {}
+    goal_ids = [goal.id for goal in goals]
+    if student_ids and goal_ids:
+        for row in db.scalars(
+            select(KcSession).where(KcSession.student_id.in_(student_ids), KcSession.goal_id.in_(goal_ids))
+        ):
+            key = (row.student_id, row.goal_id)
+            sessions_by_goal.setdefault(key, []).append(row)
+            sessions_by_node.setdefault(key, {}).setdefault(row.kc_id, []).append(row)
+    empty.goals = goals
+    empty.targets = targets
+    empty.patches = patches
+    empty.nodes_by_code = nodes_by_code
+    empty.states = states
+    empty.sessions_by_node = sessions_by_node
+    empty.sessions_by_goal = sessions_by_goal
+    return empty
+
+
+def _prerequisites_ready(
+    node: KcNode,
+    course_by_code: dict[str, KcNode],
+    nodes_by_code: dict[str, KcNode],
+    states: dict[uuid.UUID, KcState],
+) -> bool:
+    for code in _clean_codes(node.prerequisite_codes):
+        other = course_by_code.get(code) or nodes_by_code.get(code)
+        if other is None or not _is_settled(states, other):
+            return False
+    return True
+
+
+def _filled_justification(
+    stored: str,
+    *,
+    mastery: str,
+    status: str,
+    passed_b: int,
+    revealed_b: int,
+    done: int,
+    total: int,
+) -> str:
+    if stored:
+        return stored
+    if mastery == "known":
+        if passed_b > 0:
+            return f"Known — all {passed_b} counting block(s) passed without requiring a reveal."
+        return "Known — every counting block in this component passed."
+    if mastery == "fragile":
+        if revealed_b > 0:
+            return f"Fragile — {revealed_b} block(s) required a reveal after max retries."
+        return "Fragile — a counting block was revealed during practice."
+    if status == "in_progress":
+        return f"In progress — {done} of {total} block(s) completed so far."
+    return f"Not started — {total} block(s) queued in this component."
+
+
+def _summary_unit(
+    node: KcNode,
+    *,
+    patch: bool,
+    goal: KcGoal,
+    state: KcState | None,
+    sessions: list[KcSession],
+    cfg: dict,
+    course_by_code: dict[str, KcNode],
+    nodes_by_code: dict[str, KcNode],
+    states: dict[uuid.UUID, KcState],
+    everyone_codes: set[str],
+) -> dict:
+    status = _unit_status(state, node, sessions)
+    mastery = _mastery_label(state, node, sessions, cfg)
+    chosen = _count_session(node, sessions)
+    touched = _iso(
+        (chosen.updated_at if chosen is not None else None)
+        or (state.last_practiced if state is not None else None)
+    )
+    if patch:
+        return {
+            "id": str(node.id),
+            "code": node.code,
+            "title": node.title,
+            "patch": True,
+            "status": status,
+            "mastery": mastery,
+            "core_truth": node.core_truth or "",
+            "updated_at": touched,
+        }
+    done, total = _block_counts(node, chosen)
+    details = _build_block_details(node, chosen, cfg, goal, unit_status=status)
+    passed_b = sum(1 for block in details if block.get("outcome") == "passed")
+    revealed_b = sum(1 for block in details if block.get("outcome") == "revealed")
+    first_try_b = sum(1 for block in details if block.get("passed_on_first_try"))
+    result = state.result if state is not None and isinstance(state.result, dict) else {}
+    stored_just = str(result.get("justification") or "").strip()
+    locked = status == "not_started" and not _prerequisites_ready(node, course_by_code, nodes_by_code, states)
+    return {
+        "id": str(node.id),
+        "code": node.code,
+        "title": node.title,
+        "description": node.description or "",
+        "outline": node.outline or "",
+        "core_truth": node.core_truth or "",
+        "patch": False,
+        "status": status,
+        "mastery": mastery,
+        "child_status": child_status_label(status, mastery, locked=locked),
+        "completed_blocks": done,
+        "total_blocks": total,
+        "first_try_blocks_count": first_try_b,
+        "revealed_blocks_count": revealed_b,
+        "what_was_strong": str(result.get("strong") or "").strip(),
+        "what_to_work_on": str(result.get("work_on") or "").strip(),
+        "score_justification": _filled_justification(
+            stored_just,
+            mastery=mastery,
+            status=status,
+            passed_b=passed_b,
+            revealed_b=revealed_b,
+            done=done,
+            total=total,
+        ),
+        "student_misconceptions": _student_misconceptions_for(state, sessions),
+        "prerequisite_codes": [code for code in _clean_codes(node.prerequisite_codes) if code in everyone_codes],
+        "block_details": details,
+        "updated_at": touched,
+    }
+
+
+def _course_card(
+    load: _CourseCardLoad,
+    student: Student,
+    goal: KcGoal,
+    states: dict[uuid.UUID, KcState],
+    cfg: dict,
+) -> dict:
+    targets = load.targets.get(goal.id, [])
+    patches = load.patches.get(goal.id, [])
+    everyone = targets + patches
+    course_by_code = {node.code: node for node in everyone}
+    everyone_codes = set(course_by_code)
+    node_sessions = load.sessions_by_node.get((student.id, goal.id), {})
+    shared = {
+        "goal": goal,
+        "cfg": cfg,
+        "course_by_code": course_by_code,
+        "nodes_by_code": load.nodes_by_code,
+        "states": states,
+        "everyone_codes": everyone_codes,
+    }
+    units = [
+        _summary_unit(
+            node,
+            patch=False,
+            state=states.get(node.id),
+            sessions=node_sessions.get(node.id, []),
+            **shared,
+        )
+        for node in targets
+    ]
+    target_ids = {node.id for node in targets}
+    units.extend(
+        _summary_unit(
+            node,
+            patch=True,
+            state=states.get(node.id),
+            sessions=node_sessions.get(node.id, []),
+            **shared,
+        )
+        for node in patches
+        if node.id not in target_ids
+    )
+    target_units = [unit for unit in units if not unit.get("patch")]
+    known = sum(1 for node in targets if _is_known(states, node))
+    conceptual_known = sum(1 for node in targets if node.kc_type == "conceptual" and _is_known(states, node))
+    fastest = next(
+        (
+            node
+            for node in targets
+            if not _is_settled(states, node)
+            and _prerequisites_ready(node, course_by_code, load.nodes_by_code, states)
+            and not (node.kc_type == "synthesis" and conceptual_known < SYNTHESIS_CONCEPTUAL_MIN)
+        ),
+        None,
+    )
+    cards = [{"role": "fastest", "id": str(fastest.id)}] if fastest is not None else []
+    completed = sum(1 for unit in target_units if unit.get("status") == "completed")
+    in_progress = sum(1 for unit in target_units if unit.get("status") == "in_progress")
+    accomplishments, opportunities = _synthesize_course_insights(units)
+    star_roll = stars_from_units(units)
+    external: list[str] = []
+    for node in targets:
+        for code in _clean_codes(node.prerequisite_codes):
+            if code not in everyone_codes and code not in external:
+                external.append(code)
+    timestamps = [
+        unit["updated_at"]
+        for unit in units
+        if isinstance(unit.get("updated_at"), str) and unit["updated_at"]
+    ]
+    card = _course_shell(goal)
+    card.update(
+        {
+            "component_count": len(target_units),
+            "completed_count": completed,
+            "known_count": sum(
+                1 for unit in target_units if unit.get("status") == "completed" and unit.get("mastery") == "known"
+            ),
+            "fragile_count": sum(
+                1 for unit in target_units if unit.get("status") == "completed" and unit.get("mastery") == "fragile"
+            ),
+            "in_progress_count": in_progress,
+            "not_started_count": sum(1 for unit in target_units if unit.get("status") == "not_started"),
+            "percent": _percent(completed, len(target_units)),
+            "known_percent": _percent(known, len(targets)),
+            "prerequisite_codes": external,
+            "unlocked": True,
+            "total_blocks_count": sum(int(unit.get("total_blocks") or 0) for unit in target_units),
+            "completed_blocks_count": sum(int(unit.get("completed_blocks") or 0) for unit in target_units),
+            "first_try_pass_count": sum(int(unit.get("first_try_blocks_count") or 0) for unit in target_units),
+            "last_active_at": max(timestamps) if timestamps else None,
+            "accomplishments_preview": accomplishments[:3],
+            "opportunities_preview": opportunities[:3],
+            **star_roll,
+            "course_complete": bool(targets) and all(_is_settled(states, node) for node in targets),
+            "started": completed + in_progress > 0,
+            "current_topic": _current_topic({"units": units, "cards": cards}),
+            "tutor": _card_tutor(load, student, goal.id),
+        }
+    )
+    return card
+
+
+def _ready_course_cards(db: Session, students: list[Student]) -> dict[uuid.UUID, list[dict]]:
+    """Started, complete, and stars for every ready course, plus the child-home card fields."""
+    if not students:
+        return {}
+    load = _load_course_cards(db, students)
+    configs: dict[uuid.UUID, dict] = {}
+    cards: dict[uuid.UUID, list[dict]] = {}
+    for student in students:
+        cfg = configs.get(student.id)
+        if cfg is None:
+            cfg = effective_kc_tutor_config(_resolve_cached_profile(load, student))
+            configs[student.id] = cfg
+        states = load.states.get(student.id, {})
+        cards[student.id] = [_course_card(load, student, goal, states, cfg) for goal in load.goals]
+    return cards
+
+
+def tutor_courses(db: Session, *, student_id: uuid.UUID | None = None) -> list[dict]:
+    """Ready-course cards. The same counts and stars as progress(), without that payload."""
     student = db.get(Student, student_id) if student_id is not None else None
     if student is None:
         student = db.scalar(select(Student).order_by(Student.created_at))
-    out: list[dict] = []
-    for goal in goals:
-        base = {
-            "id": str(goal.id),
-            "code": goal.code,
-            "title": goal.title,
-            "description": goal.description or "",
-            "audience": goal.audience,
-            "kind": goal.kind,
-            "minutes": goal.minutes if goal.kind == "time_boxed" else None,
-        }
-        if student is not None:
-            prog = progress(db, goal, student)
-            base.update(
-                {
-                    "component_count": prog["total_count"],
-                    "completed_count": prog["completed_count"],
-                    "known_count": prog["known_count"],
-                    "fragile_count": prog["fragile_count"],
-                    "in_progress_count": prog["in_progress_count"],
-                    "not_started_count": prog["not_started_count"],
-                    "percent": prog["completion_percent"],
-                    "known_percent": prog["percent"],
-                    "prerequisite_codes": prog["prerequisite_codes"],
-                    "unlocked": prog["unlocked"],
-                    "total_blocks_count": prog["total_blocks_count"],
-                    "completed_blocks_count": prog["completed_blocks_count"],
-                    "first_try_pass_count": prog["first_try_pass_count"],
-                    "last_active_at": prog["last_active_at"],
-                    "accomplishments_preview": (prog.get("accomplishments") or [])[:3],
-                    "opportunities_preview": (prog.get("opportunities") or [])[:3],
-                    "stars": prog["stars"],
-                    "star_block": prog["star_block"],
-                    "star_first_try": prog["star_first_try"],
-                    "star_topic": prog["star_topic"],
-                    "star_crown": prog["star_crown"],
-                    "finished_topic_count": prog["finished_topic_count"],
-                    "crown_topic_count": prog["crown_topic_count"],
-                    "course_complete": prog["course_complete"],
-                    "started": int(prog["completed_count"]) + int(prog["in_progress_count"]) > 0,
-                    "current_topic": _current_topic(prog),
-                    "tutor": course_tutor_choice(db, student, goal.id),
-                }
-            )
-        else:
-            targets = load_targets(db, goal)
-            total_blocks = sum(len(stored_blocks(node)) for node in targets)
-            base.update(
-                {
-                    "component_count": len(targets),
-                    "completed_count": 0,
-                    "known_count": 0,
-                    "fragile_count": 0,
-                    "in_progress_count": 0,
-                    "not_started_count": len(targets),
-                    "percent": 0,
-                    "known_percent": 0,
-                    "prerequisite_codes": [],
-                    "unlocked": True,
-                    "total_blocks_count": total_blocks,
-                    "completed_blocks_count": 0,
-                    "first_try_pass_count": 0,
-                    "last_active_at": None,
-                    "accomplishments_preview": [],
-                    "opportunities_preview": [],
-                    **empty_stars(),
-                    "course_complete": False,
-                    "started": False,
-                    "current_topic": None,
-                    "tutor": None,
-                }
-            )
-        out.append(base)
-    return out
+    if student is not None:
+        return _ready_course_cards(db, [student]).get(student.id, [])
+    goals = list(db.scalars(select(KcGoal).where(KcGoal.ready.is_(True)).order_by(KcGoal.title)))
+    return [_empty_course_card(goal, load_targets(db, goal)) for goal in goals]
 
 
 def _tutor_public(profile) -> dict:
@@ -1697,9 +2105,10 @@ def learner_roster(db: Session) -> list[dict]:
     """Chooser cards: each child, courses in progress, and stars across ready courses."""
     students = list(db.scalars(select(Student)))
     students.sort(key=lambda student: (student.display_name or "").lower())
+    cards = _ready_course_cards(db, students)
     roster: list[dict] = []
     for student in students:
-        courses = tutor_courses(db, student_id=student.id)
+        courses = cards.get(student.id, [])
         in_progress = sum(1 for course in courses if course.get("started") and not course.get("course_complete"))
         stars = sum(int(course.get("stars") or 0) for course in courses)
         roster.append(
