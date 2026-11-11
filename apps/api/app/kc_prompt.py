@@ -1141,6 +1141,7 @@ def _this_turn(
     learning_support: str = "none",
     communication_tone: str = "warm_and_encouraging",
     active_block_state: dict | None = None,
+    close_block_only: bool = False,
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -1177,7 +1178,7 @@ def _this_turn(
         prev_type = BLOCK_LABELS.get(str(transition_from_block.get("type") or ""), "previous block")
         lines.append(
             f"Block Transition: The learner just completed Block {step_index} ({prev_type}). "
-            f"Briefly affirm their work on that block and immediately introduce {label} in this same reply."
+            f"This reply opens {label} only. Do not ask a question about the finished block."
         )
     if presenting and turn_kind in {"orient", "ask"}:
         lines.append(
@@ -1273,6 +1274,12 @@ def _this_turn(
             is_final_block_and_substep=is_final_block_and_substep,
         )
     )
+    if close_block_only:
+        lines.append(
+            "If block_complete=true, this reply only affirms and closes the active block. "
+            "Ask no question. Do not open the next block. "
+            "If block_complete=false, ask one question that stays on the active block."
+        )
     if str(block.get("type") or "") == "explanation":
         if opening:
             lines.append(
@@ -1281,8 +1288,9 @@ def _this_turn(
             )
         elif substep == "summary_check":
             lines.append(
-                "The learner is on the block summary. If they ask a final question, answer it and ask whether they have any other final questions. "
-                "If they have no final questions or are ready to continue, complete the block. That completing reply asks no new question. "
+                "The learner is on the block summary. If they ask a final question, answer it and ask whether they have any other final questions about this block. "
+                "If they have no final questions or are ready to continue, complete the block. "
+                "That completing reply is a brief affirmation only. Do not ask whether they have any final questions, and do not open the next block. "
                 "Do not quiz."
             )
         else:
@@ -1327,11 +1335,22 @@ def _explanation_teach_lines(block: dict, substep: str, state: dict, *, opening:
             lines.append(f"Summary takeaway to anchor the recap: {_finish(takeaway)}")
         else:
             lines.append("No stored summary takeaway. Synthesize across the topic titles and explanations.")
-        lines.append(
-            "Give a cohesive summary of every topic discussed in this block, then ask if the learner has any final questions. "
-            "If they ask a final question, set substep_passed=false, answer it, and ask again. "
-            "If they have no final questions or are ready to continue, set substep_passed=true and block_complete=true."
-        )
+        if opening:
+            lines.append(
+                "Give a cohesive summary of every topic discussed in this block, then ask if the learner has any final questions. "
+                "If they ask a final question, set substep_passed=false, answer it, and ask again. "
+                "If they have no final questions or are ready to continue, set substep_passed=true and block_complete=true. "
+                "That completing reply is a brief affirmation only. Do not ask whether they have any final questions, and do not open the next block."
+            )
+        else:
+            lines.append(
+                "The learner has responded on the summary. "
+                "If they ask a final question, set substep_passed=false and block_complete=false, answer it, "
+                "and you may ask whether they have any other questions about this block. "
+                "If they have no final questions or are ready to continue, set substep_passed=true and block_complete=true. "
+                "That completing reply is a brief affirmation and the takeaway only. "
+                "Do not ask whether they have any final questions. Do not ask any question. Do not open or mention the next block."
+            )
         return lines
     topic = topics[index] if topics else {
         "title": "",
@@ -1588,22 +1607,14 @@ def _what_to_teach(
 
     lines.append(f"Evidence id for this active step: {ev_id}. Include '{ev_id}' in rubric_met when satisfied.")
     if next_block is not None and isinstance(next_block, dict):
-        nb_type = str(next_block.get("type") or "topic_goal").strip()
-        nb_data = next_block.get("data") if isinstance(next_block.get("data"), dict) else {}
         lines.append(
             f"If the learner's response completes Block {step_index + 1} (block_complete=true), "
-            f"affirm Block {step_index + 1} and open Block {step_index + 2} ({BLOCK_LABELS.get(nb_type, nb_type)}): "
-            f"{block_material_summary(next_block)}."
+            f"close Block {step_index + 1} with a brief affirmation and the takeaway only. "
+            "Ask no question. Do not mention the next block and do not open it. "
+            "The next block arrives in its own message. "
+            "If the response does not complete the block (block_complete=false), "
+            "ask one question that stays on this block."
         )
-        if nb_type == "mcq" and str(nb_data.get("mode") or "static") == "dynamic":
-            lines.append(
-                f"For Block {step_index + 2} (dynamic MCQ), populate generated_mcq for target_skill="
-                f"{_finish(str(nb_data.get('target_skill') or ''))} and distractor_guidance="
-                f"{_finish(str(nb_data.get('distractor_guidance') or ''))}. "
-                "If this reply opens that question, reply is a short lead-in only. "
-                "Put the question stem and the choices only in generated_mcq. "
-                "Do not list the options in reply, and do not ask the child to type a letter."
-            )
     wrongs = _wrong_moves(node)
     if wrongs:
         lines.append("Component misconceptions to listen for: " + " | ".join(_finish(w) for w in wrongs))
@@ -1912,22 +1923,25 @@ def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> l
         )
         summaries = {
             "connected_narrative_synthesis": (
-                "On the summary step, summarize every topic as one connected narrative that shows how they fit together, "
-                "then ask if there are any final questions."
+                "On the summary step, summarize every topic as one connected narrative that shows how they fit together."
             ),
             "concise_takeaway_only": (
-                "On the summary step, give one concise takeaway that covers every topic, then ask if there are any final questions."
+                "On the summary step, give one concise takeaway that covers every topic."
             ),
         }
         lines.append(
             summaries.get(
                 summary_style,
-                "On the summary step, recap every topic in short bullets, add one takeaway sentence, "
-                "and ask if there are any final questions.",
+                "On the summary step, recap every topic in short bullets and add one takeaway sentence.",
             )
         )
         if substep == "summary_check":
-            lines.append("You are on the summary step now. Summarize every topic before you ask about final questions.")
+            lines.append(
+                "You are on the summary step. "
+                "Ask whether they have any final questions only when you are staying on this block. "
+                "If block_complete=true, the reply is a brief affirmation and the takeaway only. "
+                "Do not ask if there are any final questions, do not ask any question, and do not open the next block."
+            )
         if counts:
             lines.append(
                 "Completing this walkthrough counts toward whether the component is known. "
@@ -1967,6 +1981,7 @@ def _how_to_teach(
     include_close: bool,
     student: Student | None = None,
     presenting_dynamic_mcq: bool = False,
+    close_block_only: bool = False,
 ) -> list[str]:
     over = cfg.get("overarching") or {}
     orient_mode = str(over.get("orient_framing") or "elaborate_outline")
@@ -2105,7 +2120,14 @@ def _how_to_teach(
     if str(block.get("type") or "") == "explanation":
         lines.append(
             "Explanatory block override: do not quiz, score, or reveal an answer. "
-            "The only questions you ask are whether the learner has questions, wants elaboration, or is ready to continue."
+            "While the block is still open, the only questions you ask are whether the learner has questions, wants elaboration, or is ready to continue. "
+            "When block_complete=true, ask no question, including no check-in about final questions, and do not open the next block."
+        )
+    elif close_block_only and not choice_on_screen and not presenting_dynamic_mcq:
+        lines.append(
+            "If block_complete=true, close this block with a brief affirmation only. "
+            "Ask no question, and do not open the next block. "
+            "If block_complete=false, end with one question that stays on this block."
         )
     elif not choice_on_screen and not presenting_dynamic_mcq:
         q_line = "End a teaching or probing turn with a single clear question."
@@ -2194,6 +2216,7 @@ def _what_to_return(
     presenting_dynamic_mcq: bool = False,
     block_type: str = "",
     safety: dict | None = None,
+    close_block_only: bool = False,
 ) -> list[str]:
     if presenting_dynamic_mcq:
         reply_line = (
@@ -2222,7 +2245,13 @@ def _what_to_return(
         lines.append(
             "On an explanation block, set substep_passed=false when the learner asks a question or wants elaboration, "
             "and substep_passed=true when they are ready to proceed. "
-            "Set block_complete=true only on the summary check when they have no final questions. Never quiz."
+            "Set block_complete=true only on the summary check when they have no final questions. "
+            "When block_complete=true, reply is a brief affirmation only, with no question. Never quiz."
+        )
+    if close_block_only:
+        lines.append(
+            "When block_complete=true, reply affirms this block only and asks no question. "
+            "Do not describe the next block. Set generated_mcq to null."
         )
     if presenting_dynamic_mcq:
         lines.append(
@@ -2336,13 +2365,7 @@ def build_kc_prompt(
         and _cached_generated_mcq(state_dict) is None
     )
     needs_dynamic_mcq = presenting_dynamic_mcq
-    if (
-        not needs_dynamic_mcq
-        and index + 1 < len(blocks)
-        and str(blocks[index + 1].get("type") or "") == "mcq"
-        and str((blocks[index + 1].get("data") or {}).get("mode") or "static") == "dynamic"
-    ):
-        needs_dynamic_mcq = True
+    close_block_only = (not opening) and is_last_substep and index + 1 < len(blocks)
     widget_on = choice_on_screen or block_uses_choice_widget(active_block, substep, state_dict)
     include_close = is_final_block_and_substep or unit_complete or course_complete
     frag_self_exp = bool(((cfg.get("blocks") or {}).get("topic_goal") or {}).get("fragment_self_explanation", True))
@@ -2400,6 +2423,7 @@ def build_kc_prompt(
                     learning_support=str(cp.get("learning_support") or "none"),
                     communication_tone=str(cp.get("communication_tone") or "warm_and_encouraging"),
                     active_block_state=state_dict,
+                    close_block_only=close_block_only,
                 ),
             ),
             (
@@ -2410,7 +2434,7 @@ def build_kc_prompt(
                 step_index=index,
                 substep=substep,
                 active_block_state=state_dict,
-                next_block=blocks[index + 1] if (is_last_substep and index + 1 < len(blocks)) else None,
+                next_block=blocks[index + 1] if close_block_only else None,
                 opening=opening,
             ),
             ),
@@ -2434,6 +2458,7 @@ def build_kc_prompt(
                     include_close=include_close,
                     student=student,
                     presenting_dynamic_mcq=presenting_dynamic_mcq,
+                    close_block_only=close_block_only,
                 ),
             ),
             ("How to sound", _how_to_sound(profile=profile, student=student, turn_kind=turn_kind)),
@@ -2464,6 +2489,7 @@ def build_kc_prompt(
                     presenting_dynamic_mcq=presenting_dynamic_mcq,
                     block_type=btype,
                     safety=safety_cfg,
+                    close_block_only=close_block_only,
                 ),
             ),
         ]

@@ -714,6 +714,10 @@ def resolve_block_turn(
                 state["substep"] = substeps[position + 1]
                 state["probe_turns"] = 0
                 return stay(0, "nudge")
+        # Word overlap would finish the block. A reply written to stay on this
+        # block must not be forced forward until the attempt budget is used up.
+        if decision == "stay" and not block_complete and move_attempts + 1 < max_retries:
+            return stay(move_attempts + 1, tier)
         outcome = "revealed" if state.get("revealed_substep") else "passed"
         return finish(outcome, int(state.get("block_attempts") or 1), reveals)
 

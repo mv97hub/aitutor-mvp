@@ -5498,6 +5498,18 @@ a.ds-row { text-decoration: none; }
 .learn-topic-head span { display: block; }
 .learn-topic-banner { grid-template-columns: auto 1fr; align-items: center; margin-bottom: 8px; }
 .learn-tutor-bubble { border-width: 2px; border-style: solid; }
+.kc-step-divider { display: flex; justify-content: center; margin: 10px 0 2px; }
+.kc-step-divider span {
+  max-width: 100%;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: #efe4d2;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: center;
+}
 .learn-star-burst {
   margin: 0;
   padding: 8px 16px;

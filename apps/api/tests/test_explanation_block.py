@@ -121,6 +121,11 @@ def test_summary_lists_every_topic() -> None:
     assert "Numerator" in teaching
     assert "summary_check" in teaching
     assert "final questions" in teaching.lower()
+    assert "do not ask whether they have any final questions" in teaching.lower()
+    assert "do not open or mention the next block" in teaching.lower()
+    how = text.split("How to teach", 1)[-1].split("How to sound", 1)[0]
+    assert "then ask if there are any final questions" not in how.lower()
+    assert "do not ask if there are any final questions" in how.lower()
 
 
 def _turn(answer: str, state: dict, *, substep_passed: bool = False, block_complete: bool = False):
