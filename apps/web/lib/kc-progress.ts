@@ -114,3 +114,72 @@ export function networkStatusClass(
   if (status === "not_started") return "is-not-started";
   return "";
 }
+
+export type ChildProgressLabel = "Mastered" | "Completed" | "In Progress";
+
+/** Child-facing label. A finished component that is still fragile counts as Completed. */
+export function childComponentLabel(unit: {
+  status?: string;
+  mastery?: string;
+}): ChildProgressLabel | "" {
+  if (unit.status === "completed" && unit.mastery === "known") return "Mastered";
+  if (unit.status === "completed" || unit.mastery === "fragile" || unit.status === "fragile") {
+    return "Completed";
+  }
+  if (unit.status === "in_progress") return "In Progress";
+  return "";
+}
+
+export function childNoteByCode(units: KcProgressUnit[]): Record<string, string> {
+  return Object.fromEntries(
+    units
+      .map((unit) => [unit.code, childComponentLabel(unit)] as const)
+      .filter((entry) => entry[1] !== ""),
+  );
+}
+
+type PortfolioCourse = {
+  started?: boolean;
+  course_complete?: boolean;
+  component_count?: number;
+  completed_count?: number;
+  known_count?: number;
+  fragile_count?: number;
+  in_progress_count?: number;
+  last_active_at?: string | null;
+};
+
+function courseHasStarted(course: PortfolioCourse): boolean {
+  const done = course.completed_count ?? (course.known_count ?? 0) + (course.fragile_count ?? 0);
+  return Boolean(course.started) || done > 0 || (course.in_progress_count ?? 0) > 0;
+}
+
+export function portfolioCourseStatus(course: PortfolioCourse): ChildProgressLabel | "" {
+  if (!courseHasStarted(course)) return "";
+  const total = course.component_count ?? 0;
+  const done = course.completed_count ?? (course.known_count ?? 0) + (course.fragile_count ?? 0);
+  const finished = Boolean(course.course_complete) || (total > 0 && done >= total);
+  if (!finished) return "In Progress";
+  if ((course.fragile_count ?? 0) > 0) return "Completed";
+  return "Mastered";
+}
+
+export function portfolioCount(course: PortfolioCourse): string {
+  const total = course.component_count ?? 0;
+  const done = course.completed_count ?? (course.known_count ?? 0) + (course.fragile_count ?? 0);
+  return `${done} of ${total}`;
+}
+
+/** Started courses first. Relative order is kept when activity matches. */
+export function coursesStartedFirst<T extends PortfolioCourse>(courses: T[]): T[] {
+  return courses
+    .map((course, index) => ({ course, index }))
+    .sort((a, b) => {
+      const byStart = Number(courseHasStarted(b.course)) - Number(courseHasStarted(a.course));
+      if (byStart !== 0) return byStart;
+      const byTime = (b.course.last_active_at || "").localeCompare(a.course.last_active_at || "");
+      if (byTime !== 0) return byTime;
+      return a.index - b.index;
+    })
+    .map((item) => item.course);
+}

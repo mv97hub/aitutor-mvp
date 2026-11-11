@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { readFileSync } from "node:fs";
+
 import {
+  childComponentLabel,
   courseScore,
+  coursesStartedFirst,
   masteryByCode,
   networkStatusClass,
+  portfolioCourseStatus,
+  portfolioCount,
   statusByCode,
   unitLine,
   unitsByStatus,
@@ -77,4 +83,68 @@ test("the course percent counts known and fragile, and keeps the known count", (
     ),
     { percent: 67, finished: 2, total: 3, known: 1 },
   );
+});
+
+test("a finished fragile component counts as Completed", () => {
+  assert.equal(childComponentLabel({ status: "completed", mastery: "known" }), "Mastered");
+  assert.equal(childComponentLabel({ status: "completed", mastery: "fragile" }), "Completed");
+  assert.equal(childComponentLabel({ status: "completed" }), "Completed");
+  assert.equal(childComponentLabel({ status: "fragile" }), "Completed");
+  assert.equal(childComponentLabel({ status: "in_progress" }), "In Progress");
+  assert.equal(childComponentLabel({ status: "not_started" }), "");
+  assert.equal(
+    portfolioCourseStatus({
+      started: true,
+      course_complete: true,
+      component_count: 2,
+      completed_count: 2,
+      known_count: 1,
+      fragile_count: 1,
+    }),
+    "Completed",
+  );
+  assert.equal(
+    portfolioCourseStatus({
+      started: true,
+      course_complete: true,
+      component_count: 2,
+      completed_count: 2,
+      known_count: 2,
+      fragile_count: 0,
+    }),
+    "Mastered",
+  );
+  assert.equal(
+    portfolioCourseStatus({
+      started: true,
+      component_count: 3,
+      completed_count: 1,
+      in_progress_count: 1,
+    }),
+    "In Progress",
+  );
+  assert.equal(portfolioCourseStatus({ component_count: 4 }), "");
+  assert.equal(
+    portfolioCount({ component_count: 4, completed_count: 2, fragile_count: 1 }),
+    "2 of 4",
+  );
+  assert.deepEqual(
+    coursesStartedFirst([
+      { id: "later" },
+      { id: "now", started: true, last_active_at: "2026-11-01" },
+      { id: "earlier", started: true, last_active_at: "2026-10-01" },
+      { id: "quiet" },
+    ]).map((course) => course.id),
+    ["now", "earlier", "later", "quiet"],
+  );
+});
+
+test("detailed progress is the child page and a visit with no child goes home", () => {
+  const page = readFileSync(new URL("../app/kc-progress/page.tsx", import.meta.url), "utf8");
+  const view = readFileSync(new URL("../components/KcCourseProgress.tsx", import.meta.url), "utf8");
+  assert.match(page, /if \(!studentId\) redirect\("\/learn"\)/);
+  assert.match(page, /Detailed Progress/);
+  assert.match(view, /Detailed Progress/);
+  assert.match(view, /learnCoursePath/);
+  assert.doesNotMatch(view, /KcBanner|Fragile|Failed|Key Learning/);
 });
