@@ -1073,23 +1073,63 @@ def _outro_sentence(others_known: bool, course_title: str, *, required: bool) ->
     return "Another target is not known or fragile yet. Do not write a course outro. The close may point at the next card."
 
 
-def _summary_close_lines(*, phase: str, revealed: bool, opening: bool) -> list[str]:
+_SUMMARY_NO_PRAISE = (
+    "Asking a question, asking for background, or asking to move on is not noteworthy work. "
+    "Do not say Great question, Nice work, Great job, or any congratulation on those turns. "
+    "A warm tone does not add praise."
+)
+
+
+def _ready_to_move_on(answer: str) -> bool:
+    from app.kc_loop import learner_ready_to_proceed
+
+    return learner_ready_to_proceed(answer, False)
+
+
+def _summary_close_lines(
+    *,
+    phase: str,
+    revealed: bool,
+    opening: bool,
+    block_type: str = "",
+    last_answer: str = "",
+) -> list[str]:
     """How to speak on the summary check, and how to answer a learner who is already there."""
-    if phase == "task":
+    if phase == "task" and block_type == "topic_goal" and _ready_to_move_on(last_answer):
         return [
             (
-                "Summary close: If this answer satisfies the substep, set substep_passed=true and block_complete=false. "
-                "Give a short summary of what this block covered and ask whether the learner wants to continue discussing "
-                "or ask any questions, or close and move on. Do not open the next block."
+                "Summary close: The learner asked to move on or to go to the next part. "
+                "Set block_complete=true and close with a brief statement only. "
+                "Do not ask a new question and do not ask again. Do not open the next block."
             ),
-            (
-                "Summary close on the attempt limit: If this is the last allowed try and the answer still misses the goal, "
-                "set substep_passed=false and block_complete=false. Highlight that the learner reached the attempt limit "
-                "and did not fully complete this block yet. Never say congratulations and do not praise them as if they passed. "
-                "Briefly summarize the key takeaway they missed. Ask whether they want to keep trying or discussing the goal, "
-                "which can still complete the block, or move on to the next block anyway."
-            ),
+            _SUMMARY_NO_PRAISE,
         ]
+    if phase == "task":
+        lines = []
+        if block_type == "topic_goal":
+            lines.append(
+                "Summary close: If the learner asked a question or for background and has not answered the goal, "
+                "answer it and ask the goal again. Set substep_passed=false and block_complete=false. "
+                "Do not summarize the block, do not offer to move on, and do not offer another example."
+            )
+        lines.extend(
+            [
+                (
+                    "Summary close: If this answer satisfies the substep, set substep_passed=true and block_complete=false. "
+                    "Give a short summary of what this block covered and ask whether the learner wants to continue discussing "
+                    "or ask any questions, or close and move on. Do not open the next block."
+                ),
+                (
+                    "Summary close on the attempt limit: If this is the last allowed try and the answer still misses the goal, "
+                    "set substep_passed=false and block_complete=false. Highlight that the learner reached the attempt limit "
+                    "and did not fully complete this block yet. Never say congratulations and do not praise them as if they passed. "
+                    "Briefly summarize the key takeaway they missed. Ask whether they want to keep trying or discussing the goal, "
+                    "which can still complete the block, or move on to the next block anyway."
+                ),
+                _SUMMARY_NO_PRAISE,
+            ]
+        )
+        return lines
     if phase != "check":
         return []
     if revealed:
@@ -1109,6 +1149,7 @@ def _summary_close_lines(*, phase: str, revealed: bool, opening: bool) -> list[s
             )
         ]
     if opening:
+        lines.append(_SUMMARY_NO_PRAISE)
         return lines
     lines.append(
         "Summary reply: If the learner had not completed the block and this reply now demonstrates the goal, "
@@ -1127,6 +1168,7 @@ def _summary_close_lines(*, phase: str, revealed: bool, opening: bool) -> list[s
     if revealed:
         closing += " If the block is still incomplete, do not say congratulations."
     lines.append(closing)
+    lines.append(_SUMMARY_NO_PRAISE)
     return lines
 
 
@@ -1179,24 +1221,21 @@ def _ending(
 def _topic_goal_earned_praise(encouragement_style: str) -> str:
     """Topic/goal replies are written before scoring, so the model has to withhold unearned praise itself."""
     if encouragement_style == "minimal":
-        earned = (
-            "When the answer meets the goal or names a real step toward it, "
-            "keep any acknowledgment to a few words. Do not add praise."
-        )
+        earned = "When the reply meets the goal, keep any acknowledgment to a few words. Do not add praise."
     elif encouragement_style == "matter_of_fact_confirm":
-        earned = (
-            "When the answer meets the goal or names a real step toward it, "
-            "confirm clearly and warmly without extra fanfare."
-        )
+        earned = "When the reply meets the goal, confirm clearly and warmly without extra fanfare."
     else:
         earned = (
-            "When the answer meets the goal or names a real step toward it, "
-            "name the specific reasoning move the learner made. Do not use generic praise."
+            "When the reply meets the goal, name the specific reasoning move the learner made. "
+            "Do not use generic praise."
         )
     return (
-        "Topic/goal feedback: Praise only when the answer meets the goal or names a real step toward it. "
+        "Topic/goal feedback: Praise only a reply that meets the goal. "
         + earned
-        + " On a miss, nudge with no praise. "
+        + " Asking a question, asking for background, or asking to move on is not noteworthy work. "
+        "Do not say Great question, Nice work, Great job, or any congratulation on those turns. "
+        "A warm tone does not add praise. "
+        "On a miss, nudge with no praise. "
         "Do not say the learner is on the right track or that it is a good start "
         "when the answer does not address the goal. "
         "This holds on the first reply to an answer and on later nudge and scaffold turns."
@@ -1237,6 +1276,7 @@ def _this_turn(
     close_block_only: bool = False,
     summary_phase: str = "",
     summary_stay: bool = False,
+    last_answer: str = "",
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -1347,7 +1387,13 @@ def _this_turn(
             "The choice card shows the stem and the choices. "
             "If this reply stays on the current block, keep teaching that block."
         )
-    if fragment and fragment_self_explanation and str(block.get("type")) == "topic_goal" and not (unit_complete or course_complete):
+    if (
+        fragment
+        and fragment_self_explanation
+        and str(block.get("type")) == "topic_goal"
+        and not (unit_complete or course_complete)
+        and not _ready_to_move_on(last_answer)
+    ):
         lines.append(
             "The learner answered with a 1-2 word fragment. Ask one follow-up to state the idea in a complete sentence before completing this block."
         )
@@ -1399,6 +1445,8 @@ def _this_turn(
                 phase=summary_phase,
                 revealed=bool((active_block_state or {}).get("revealed_substep")),
                 opening=opening,
+                block_type=str(block.get("type") or ""),
+                last_answer=last_answer,
             )
         )
     del misconception_policy
@@ -2086,6 +2134,7 @@ def _how_to_teach(
     student: Student | None = None,
     presenting_dynamic_mcq: bool = False,
     close_block_only: bool = False,
+    last_answer: str = "",
 ) -> list[str]:
     over = cfg.get("overarching") or {}
     orient_mode = str(over.get("orient_framing") or "elaborate_outline")
@@ -2101,6 +2150,9 @@ def _how_to_teach(
     challenge_appetite = str(cp.get("challenge_appetite") or "steady")
 
     lines = _block_config_rules(block, substep, cfg, goal)
+    move_on_close = str(block.get("type") or "") == "topic_goal" and substep == "main" and _ready_to_move_on(last_answer)
+    if move_on_close:
+        lines = [line for line in lines if "ask for the idea in a full sentence" not in line]
 
     lines.append(
         f"Representation harmony: when you explain, scaffold, or reveal, use explanation_style ({expl_style})."
@@ -2234,10 +2286,15 @@ def _how_to_teach(
             "If block_complete=false, end with one question that stays on this block."
         )
     elif not choice_on_screen and not presenting_dynamic_mcq:
-        q_line = "End a teaching or probing turn with a single clear question."
-        if include_close:
-            q_line += " A unit close or course outro asks no new question."
-        lines.append(q_line)
+        if move_on_close:
+            lines.append(
+                "The learner already asked to move on. Close this block with a brief statement only. Do not ask a question."
+            )
+        else:
+            q_line = "End a teaching or probing turn with a single clear question."
+            if include_close:
+                q_line += " A unit close or course outro asks no new question."
+            lines.append(q_line)
 
     del orient_mode
     del close_depth
@@ -2689,6 +2746,7 @@ def build_kc_prompt(
                     close_block_only=close_block_only,
                     summary_phase=summary_phase,
                     summary_stay=summary_phase == "check" and is_last_block,
+                    last_answer=last_answer,
                 ),
             ),
             (
@@ -2724,6 +2782,7 @@ def build_kc_prompt(
                     student=student,
                     presenting_dynamic_mcq=presenting_dynamic_mcq,
                     close_block_only=close_block_only,
+                    last_answer=last_answer,
                 ),
             ),
             ("How to sound", _how_to_sound(profile=profile, student=student, turn_kind=turn_kind)),

@@ -214,6 +214,7 @@ def learner_ready_to_proceed(answer: str, flagged: bool) -> bool:
         "lets continue",
         "continue to next",
         "close and move on",
+        "next part",
         "got it ready for the next topic",
     ):
         if phrase in text:
@@ -223,6 +224,23 @@ def learner_ready_to_proceed(answer: str, flagged: bool) -> bool:
     if "got it" in text:
         return True
     return False
+
+
+def learner_asks_question_or_background(answer: str) -> bool:
+    """A question or a request for background, not an attempt at the goal."""
+    raw = answer or ""
+    if not raw.strip() or learner_ready_to_proceed(raw, False):
+        return False
+    lowered = raw.lower()
+    if "?" in raw or "elaborat" in lowered:
+        return True
+    text = _proceed_text(raw)
+    if not text:
+        return False
+    words = text.split()
+    if words[0] in {"what", "why", "how", "when", "where", "who", "can", "could", "would", "explain", "tell"}:
+        return True
+    return "background" in text or "more context" in text or "some context" in text
 
 
 def answer_addresses_substep(
@@ -669,6 +687,30 @@ def resolve_block_turn(
             reveals=reveals_now,
             cfg=cfg,
         )
+
+    if btype == "topic_goal" and substep == "main" and learner_ready_to_proceed(answer, False):
+        tries = note_try()
+        if addressed and not state.get("revealed_substep"):
+            return finish("passed", tries, reveals)
+        return finish("revealed", tries, reveals + 1)
+
+    if btype == "topic_goal" and substep == "main" and learner_asks_question_or_background(answer):
+        opening = _proceed_text(answer).split()[:1]
+        opens_as_question = bool(opening) and opening[0] in {
+            "what",
+            "why",
+            "how",
+            "when",
+            "where",
+            "who",
+            "can",
+            "could",
+            "would",
+            "explain",
+            "tell",
+        }
+        if not addressed or opens_as_question:
+            return stay(move_attempts, tier)
 
     if (
         btype == "topic_goal"

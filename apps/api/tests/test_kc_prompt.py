@@ -186,7 +186,7 @@ def test_a_factual_opening_states_each_setting_once() -> None:
     assert "Set generated_mcq to null" not in text
     assert "Turn Stance (guided_discovery)" not in text
     assert text.count("name the specific reasoning move") == 2
-    assert "Praise only when the answer meets the goal or names a real step toward it." in text
+    assert "Praise only a reply that meets the goal." in text
     assert "On a miss, nudge with no praise." in text
     assert "shorter sentences" not in text
     assert "How a river moves." not in text
@@ -664,7 +664,7 @@ def test_layer_3_and_layer_4_revamp_and_precedence_contract() -> None:
     assert "suppress jokes and banter on this turn (math_or_test_anxiety or calm_and_gentle tone)" in anxious_text
 
 
-_EARNED_PRAISE = "Praise only when the answer meets the goal or names a real step toward it."
+_EARNED_PRAISE = "Praise only a reply that meets the goal."
 _MISS_NUDGE = "On a miss, nudge with no praise."
 _NO_FALSE_PRAISE = (
     "Do not say the learner is on the right track or that it is a good start "
@@ -945,4 +945,83 @@ def test_summary_check_prompt_distinguishes_a_completed_block_from_an_incomplete
         active_block_state={"substep": "summary_check", "revealed_substep": True, "last_task_substep": "choice"},
     )
     assert "Never say congratulations" in summary
+
+
+def _topic_node() -> KcNode:
+    return _node(
+        blocks=[
+            {
+                "id": "topic",
+                "type": "topic_goal",
+                "data": {
+                    "topic": "River color",
+                    "goal": "The river is blue.",
+                    "acceptance_criteria": "The river is blue.",
+                },
+            },
+            {
+                "id": "next",
+                "type": "topic_goal",
+                "data": {"topic": "Next", "goal": "Explain the next idea."},
+            },
+        ],
+        misconceptions=[],
+    )
+
+
+def test_first_move_on_and_next_part_close_without_asking_again() -> None:
+    node = _topic_node()
+    for phrase in ("move on", "next part", "we can move to the next part"):
+        text = _text(
+            node=node,
+            opening=False,
+            last_answer=phrase,
+            active_block_state={"substep": "main"},
+            fragment=phrase in {"move on", "next part"},
+        )
+        turn = _section(text, "This turn")
+        how = _section(text, "How to teach")
+        assert "Set block_complete=true" in turn
+        assert "Do not ask a new question" in turn
+        assert "do not ask again" in turn.lower()
+        assert "ask whether the learner wants to continue discussing" not in text
+        assert "End a teaching or probing turn with a single clear question." not in how
+        assert "ask for the idea in a full sentence" not in how
+        assert "Ask one follow-up to state the idea in a complete sentence" not in turn
+        assert "Do not say Great question" in text
+        assert "asking to move on is not noteworthy work" in text
+
+
+def test_a_question_or_background_request_is_not_praised() -> None:
+    node = _topic_node()
+    for phrase in ("Why is the river blue?", "Can you give me the background?"):
+        text = _text(
+            node=node,
+            opening=False,
+            last_answer=phrase,
+            active_block_state={"substep": "main"},
+        )
+        turn = _section(text, "This turn")
+        assert "ask the goal again" in turn
+        assert "do not offer to move on" in turn.lower()
+        assert "do not offer another example" in turn.lower()
+        assert "Do not say Great question" in text
+        assert "asking for background" in text
+        assert "A warm tone does not add praise." in text
+        assert "names a real step toward it" not in text
+
+
+def test_praise_only_when_the_reply_meets_the_goal() -> None:
+    text = _text(
+        node=_topic_node(),
+        opening=False,
+        last_answer="The river is blue.",
+        active_block_state={"substep": "main"},
+    )
+    teach = _section(text, "How to teach")
+    assert "Praise only a reply that meets the goal." in teach
+    assert "When the reply meets the goal, name the specific reasoning move the learner made." in teach
+    assert "names a real step toward it" not in text
+    assert "Asking a question, asking for background, or asking to move on is not noteworthy work." in teach
+    assert "ask whether the learner wants to continue discussing" in _section(text, "This turn")
 
