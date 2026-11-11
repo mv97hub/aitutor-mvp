@@ -184,6 +184,42 @@ def _proceed_text(answer: str) -> str:
     return " ".join(text.split())
 
 
+_CONTINUE_QUESTION_MARKERS = (
+    "ready for the next challenge",
+    "move on to the next part",
+    "move on to the next block",
+    "move on to the next",
+    "close and move on",
+    "ready to move on",
+    "want to move on",
+    "like to move on",
+    "or move on",
+)
+
+
+def tutor_asked_to_continue(text: str) -> bool:
+    """The previous tutor turn asked the learner to continue or to move on."""
+    if "?" not in (text or ""):
+        return False
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in _CONTINUE_QUESTION_MARKERS)
+
+
+def worked_continue_answer(answer: str) -> bool:
+    """Yes, move on, or next part. A bare yes is only the word yes."""
+    text = _proceed_text(answer)
+    if not text:
+        return False
+    if text == "yes":
+        return True
+    words = text.split()
+    if len(words) > 12:
+        return False
+    if any(token in words for token in ("not", "dont", "wrong", "confused")):
+        return False
+    return text in {"move on", "next part"} or "move on" in text or "next part" in text
+
+
 def learner_ready_to_proceed(answer: str, flagged: bool) -> bool:
     """True when the learner wants the next topic or the block summary to finish."""
     if flagged:
@@ -597,6 +633,7 @@ def resolve_block_turn(
     fragment: bool = False,
     strong: str = "",
     work_on: str = "",
+    prior_tutor: str = "",
 ) -> BlockResolution:
     tier = hint_tier if hint_tier in HINTS else "nudge"
     fresh = _clean_ids(list(rubric_met))
@@ -903,6 +940,20 @@ def resolve_block_turn(
             bumped = "scaffold"
         return stay(move_attempts + 1, bumped)
 
+    # A continue question is already on screen. Yes, move on, and next part close it.
+    # A bare yes does not close an ordinary worked step.
+    if (
+        btype == "worked_example"
+        and tutor_asked_to_continue(prior_tutor)
+        and worked_continue_answer(answer)
+        and not (on_last_task and addressed and bool(substep_passed))
+    ):
+        tries = int(state.get("block_attempts") or 0) or 1
+        if substep == "summary_check" and not state.get("revealed_substep"):
+            return finish("passed", tries, reveals)
+        reveal_count = reveals if state.get("revealed_substep") else reveals + 1
+        return finish("revealed", tries, reveal_count)
+
     if substep == "summary_check":
         return _resolve_summary_check()
 
@@ -917,6 +968,10 @@ def resolve_block_turn(
     satisfied = addressed and bool(substep_passed) and not (decision == "stay" and not substep_passed)
     if on_last_task and satisfied:
         note_try()
+        # The step divider opens the next block. Do not stop for a summary question.
+        if btype == "worked_example":
+            outcome = "revealed" if state.get("revealed_substep") else "passed"
+            return finish(outcome, int(state.get("block_attempts") or 1), reveals)
         return _enter_summary(revealed=False)
 
     if addressed:

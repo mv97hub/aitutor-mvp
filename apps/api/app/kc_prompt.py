@@ -1102,6 +1102,21 @@ _SUMMARY_NO_PRAISE = (
     "Do not say Great question, Nice work, Great job, or any congratulation on those turns. "
     "A warm tone does not add praise."
 )
+_WORKED_AFFIRM = (
+    "Worked close: This solo answer is correct. Reply with a short affirmation of that answer. "
+    "Do not ask Ready for the next challenge. Do not summarize the block and do not ask whether to discuss or move on. "
+    "Set substep_passed=true and block_complete=true. Ask no question. Do not open the next block."
+)
+_WORKED_CONTINUE = (
+    "Worked close: The learner is answering a continue question. "
+    "Reply with one short closing line and no question. Do not restate the summary. Do not ask again. "
+    "Set block_complete=true. Do not open the next block."
+)
+_WORKED_BARE_YES = (
+    "Worked close: A bare yes is not a close on this worked step. "
+    "The previous turn did not ask to continue or move on. "
+    "Do not set block_complete=true for that yes."
+)
 
 
 def _ready_to_move_on(answer: str) -> bool:
@@ -1404,6 +1419,7 @@ def _this_turn(
     summary_stay: bool = False,
     last_answer: str = "",
     cfg: dict | None = None,
+    worked_close: str = "",
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -1578,7 +1594,14 @@ def _this_turn(
                 "If they are ready, follow the move-on instruction in What to teach and explain the next topic, or summarize when this was the last topic. "
                 "Do not quiz."
             )
-    if str(block.get("type") or "") != "explanation":
+    if worked_close == "affirm":
+        lines.append(_WORKED_AFFIRM)
+    elif worked_close == "continue":
+        lines.append(_WORKED_CONTINUE)
+        lines.append(_SUMMARY_NO_PRAISE)
+    elif str(block.get("type") or "") != "explanation":
+        if worked_close == "bare_yes":
+            lines.append(_WORKED_BARE_YES)
         lines.extend(
             _summary_close_lines(
                 phase=summary_phase,
@@ -1716,6 +1739,7 @@ def _what_to_teach(
     next_block: dict | None = None,
     opening: bool = False,
     last_answer: str = "",
+    worked_close: str = "",
 ) -> list[str]:
     """Strict block isolation: injects ONLY the currently active block and its active substep."""
     btype = str(block.get("type") or "topic_goal").strip()
@@ -1843,7 +1867,12 @@ def _what_to_teach(
         solo_prob = str(data.get("solo_problem") or "").strip()
         solo_ans = str(data.get("solo_expected_answer") or "").strip()
         lines.append(f"Worked example problem: {_finish(prob)}")
-        if substep == "faded_step":
+        if worked_close == "continue":
+            lines.append(
+                "The learner is answering a continue question. "
+                "One short closing line. Do not restate the summary. Do not ask a question."
+            )
+        elif substep == "faded_step":
             shown: list[str] = []
             target_step = ""
             for idx, st in enumerate(steps):
@@ -1863,6 +1892,12 @@ def _what_to_teach(
                 lines.append(
                     f"When the faded step is solved (substep_passed=true) or revealed, present the solo problem in your reply: {_finish(solo_prob)}"
                 )
+        elif worked_close == "affirm":
+            lines.append(
+                "The learner just gave the correct solo answer. "
+                "Affirm that answer. Do not ask them to solve it again."
+            )
+            lines.append(f"Solo answer they gave: {_finish(solo_ans)}")
         else:
             lines.append(f"Active substep (solo_solve): Ask the learner to solve solo problem: {_finish(solo_prob)}")
             lines.append(f"Expected solo answer (withhold until pass or reveal): {_finish(solo_ans)}")
@@ -1919,14 +1954,25 @@ def _what_to_teach(
 
     lines.append(f"Evidence id for this active step: {ev_id}. Include '{ev_id}' in rubric_met when satisfied.")
     if next_block is not None and isinstance(next_block, dict):
-        lines.append(
-            f"If the learner's response completes Block {step_index + 1} (block_complete=true), "
-            f"close Block {step_index + 1} with a brief affirmation and the takeaway only. "
-            "Ask no question. Do not mention the next block and do not open it. "
-            "The next block arrives in its own message. "
-            "If the response does not complete the block (block_complete=false), "
-            "ask one question that stays on this block."
-        )
+        if worked_close == "continue":
+            lines.append(
+                "This reply is one short closing line and no question. "
+                "Do not restate the summary. Do not mention the next block and do not open it."
+            )
+        elif worked_close == "affirm":
+            lines.append(
+                "This reply is a short affirmation of the correct answer and no question. "
+                "Do not summarize the block. Do not mention the next block and do not open it."
+            )
+        else:
+            lines.append(
+                f"If the learner's response completes Block {step_index + 1} (block_complete=true), "
+                f"close Block {step_index + 1} with a brief affirmation and the takeaway only. "
+                "Ask no question. Do not mention the next block and do not open it. "
+                "The next block arrives in its own message. "
+                "If the response does not complete the block (block_complete=false), "
+                "ask one question that stays on this block."
+            )
     wrongs = _wrong_moves(node)
     if wrongs:
         lines.append("Component misconceptions to listen for: " + " | ".join(_finish(w) for w in wrongs))
@@ -2355,6 +2401,7 @@ def _how_to_teach(
     close_block_only: bool = False,
     last_answer: str = "",
     opening: bool = False,
+    worked_close: str = "",
 ) -> list[str]:
     over = cfg.get("overarching") or {}
     orient_mode = str(over.get("orient_framing") or "elaborate_outline")
@@ -2379,7 +2426,9 @@ def _how_to_teach(
         f"Representation harmony: when you explain, scaffold, or reveal, use explanation_style ({expl_style})."
     )
 
-    if stance == "direct_instruction_first":
+    if worked_close in {"affirm", "continue"}:
+        lines.append("On this worked-example close the stance does not ask. Do not add a guiding question.")
+    elif stance == "direct_instruction_first":
         lines.append(
             "Instructional stance (direct_instruction_first): model the key rule briefly, then ask."
         )
@@ -2502,6 +2551,8 @@ def _how_to_teach(
             "While the block is still open, the only questions you ask are whether the learner has questions, wants elaboration, or is ready to continue. "
             "When block_complete=true, ask no question, including no check-in about final questions, and do not open the next block."
         )
+    elif worked_close in {"affirm", "continue"}:
+        lines.append("This worked-example turn closes the block. Ask no question.")
     elif close_block_only and not choice_on_screen and not presenting_dynamic_mcq:
         lines.append(
             "If block_complete=true, close this block with a brief affirmation only. "
@@ -2529,6 +2580,47 @@ def _how_to_teach(
     del orient_mode
     del close_depth
     return lines
+
+
+def _previous_tutor_text(last_messages: str, last_answer: str) -> str:
+    """The tutor line before the learner's latest answer."""
+    recent = _recent_without_last_answer(last_messages, last_answer)
+    parts = [part.strip() for part in recent.split("|") if part.strip()]
+    for part in reversed(parts):
+        if part.lower().startswith("assistant:"):
+            return part.split(":", 1)[1].strip()
+    return ""
+
+
+def _worked_close_kind(
+    block: dict,
+    substep: str,
+    last_answer: str,
+    last_messages: str,
+    active_block_state: dict | None,
+    cfg: dict | None,
+) -> str:
+    """affirm, continue, or bare_yes. Empty on every other turn."""
+    if str(block.get("type") or "") != "worked_example":
+        return ""
+    from app.kc_loop import answer_addresses_substep, tutor_asked_to_continue, worked_continue_answer
+
+    prior = _previous_tutor_text(last_messages, last_answer)
+    if tutor_asked_to_continue(prior) and worked_continue_answer(last_answer):
+        return "continue"
+    if substep == "solo_solve" and answer_addresses_substep(
+        block, substep, last_answer, active_block_state, cfg
+    ):
+        return "affirm"
+    if worked_continue_answer(last_answer) and _proceed_text_is_yes(last_answer):
+        return "bare_yes"
+    return ""
+
+
+def _proceed_text_is_yes(answer: str) -> bool:
+    from app.kc_loop import _proceed_text
+
+    return _proceed_text(answer) == "yes"
 
 
 def _recent_without_last_answer(last_messages: str, last_answer: str) -> str:
@@ -2935,6 +3027,19 @@ def build_kc_prompt(
     passage_reprint = bool(
         passage_reprint_kind(active_block, cfg, opening=opening, last_answer=last_answer or "")
     )
+    worked_close = _worked_close_kind(
+        active_block,
+        substep,
+        last_answer or "",
+        last_messages or "",
+        state_dict,
+        cfg,
+    )
+    if worked_close in {"affirm", "continue"} and index + 1 < len(blocks):
+        close_block_only = True
+    if worked_close in {"affirm", "continue"} and is_last_block:
+        is_final_block_and_substep = True
+        include_close = True
 
     prompt = _blocks_text(
         [
@@ -2983,6 +3088,7 @@ def build_kc_prompt(
                     summary_stay=summary_phase == "check" and is_last_block,
                     last_answer=last_answer,
                     cfg=cfg,
+                    worked_close=worked_close,
                 ),
             ),
             (
@@ -2996,6 +3102,7 @@ def build_kc_prompt(
                 next_block=blocks[index + 1] if close_block_only else None,
                 opening=opening,
                 last_answer=last_answer,
+                worked_close=worked_close,
             ),
             ),
             (
@@ -3029,6 +3136,7 @@ def build_kc_prompt(
                     close_block_only=close_block_only,
                     last_answer=last_answer,
                     opening=opening,
+                    worked_close=worked_close,
                 ),
             ),
             ("How to sound", _how_to_sound(profile=profile, student=student, turn_kind=turn_kind)),

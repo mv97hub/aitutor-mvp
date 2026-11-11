@@ -4216,7 +4216,9 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
     assert faded.next_block_state["substep"] == "solo_solve"
     assert faded.next_block_state["revealed_substep"] is True
     solved = run(worked, "solo_solve", "The river is blue.", substep_passed=True)
-    assert solved.next_block_state["substep"] == "summary_check"
+    assert solved.advance_block is True
+    assert solved.next_step == 1
+    assert solved.block_results[-1]["outcome"] == "passed"
 
     flaw = {
         "id": "flaw",

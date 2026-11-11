@@ -4062,6 +4062,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         fragment=fragment,
         strong=str(body.get("what_was_strong") or body.get("strong") or ""),
         work_on=str(body.get("what_to_work_on") or body.get("work_on") or ""),
+        prior_tutor=next((message.content for message in reversed(messages) if message.role == "assistant"), ""),
     )
     if resolution.mark_fragile:
         _mark_fragile(db, session, node)
