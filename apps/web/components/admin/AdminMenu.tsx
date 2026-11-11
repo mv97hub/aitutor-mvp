@@ -3,11 +3,12 @@ import Link from "next/link";
 export const ADMIN_SECTIONS = [
   { id: "kc-chats", href: "/admin/kc-chats", label: "KC View Chats" },
   { id: "customizations", href: "/admin/agent-customizations", label: "AI Tutor Configurations" },
+  { id: "ai-safety", href: "/admin/ai-safety", label: "AI Safety" },
 ] as const;
 
 export const VISIBLE_ADMIN_SECTIONS = ADMIN_SECTIONS;
 
-export type AdminSection = "kc-chats" | "customizations" | "lessons" | "chats";
+export type AdminSection = "kc-chats" | "customizations" | "ai-safety" | "lessons" | "chats";
 
 const CREATOR_LINKS = [
   { href: "/kc-studio", label: "KC Course Creator" },

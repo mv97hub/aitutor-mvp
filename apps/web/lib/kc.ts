@@ -349,6 +349,8 @@ export type KcChatSummary = {
   created_at: string;
   updated_at: string;
   message_count: number;
+  safety_event_count?: number;
+  unreviewed_safety_count?: number;
 };
 
 export type KcChatDetail = {

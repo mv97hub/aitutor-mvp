@@ -6,6 +6,7 @@ import { KcBanner } from "@/components/KcBanner";
 import { BlockDataEditor } from "@/components/KcBlockCanvas";
 import { ConfigControl } from "@/components/admin/KcTutorConfigFields";
 import { api } from "@/lib/api";
+import { safetyExcerpt } from "@/lib/ai-safety";
 import type { KcBlock, KcBlockType, KcCourse } from "@/lib/kc";
 import { BLOCK_LABELS, BLOCK_TYPES, blankData } from "@/lib/kc-blocks";
 import { hoverFor } from "@/lib/kc-layer-fields";
@@ -174,6 +175,17 @@ export function KcPromptTester({
         {LAYER_HEADINGS.map((heading) => (
           <section key={heading}>
             <h2>{heading}</h2>
+            {heading === "Safety" ? (
+              <div>
+                <p className="kc-prompt-note">
+                  Safety is global. It is the first section and overrides persona, child preferences, humor, and block
+                  rules.
+                </p>
+                <pre aria-label="Safety text">
+                  {safetyExcerpt(prompt) || "Show the prompt to see the Safety section."}
+                </pre>
+              </div>
+            ) : null}
             {heading === "Layer 1, Component" ? (
               <>
                 <label>
@@ -306,6 +318,12 @@ export function KcPromptTester({
         </button>
       </form>
       <section className="kc-prompt-result" aria-live="polite">
+        <h2>Safety</h2>
+        {prompt ? (
+          <pre aria-label="Safety text">{safetyExcerpt(prompt)}</pre>
+        ) : (
+          <p className="kc-prompt-note">Submit the form to see the Safety section.</p>
+        )}
         <h2>System prompt</h2>
         {prompt ? <pre>{prompt}</pre> : <p className="kc-prompt-note">Submit the form to see the prompt.</p>}
       </section>

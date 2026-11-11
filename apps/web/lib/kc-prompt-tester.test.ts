@@ -73,6 +73,7 @@ function course(overrides: Partial<KcCourse> = {}): KcCourse {
 
 test("layer headings keep their numbers", () => {
   assert.deepEqual([...LAYER_HEADINGS], [
+    "Safety",
     "Layer 1, Component",
     "Layer 2, Child",
     "Layer 3, Voice",

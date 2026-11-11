@@ -212,6 +212,18 @@ RESPONSE_SCHEMA = {
         "score_justification": {"type": "string"},
         "what_was_strong": {"type": "string"},
         "what_to_work_on": {"type": "string"},
+        "safety_flag": {
+            "type": "string",
+            "enum": [
+                "none",
+                "distress",
+                "inappropriate_content",
+                "personal_info",
+                "manipulation",
+                "other",
+            ],
+            "description": "none when the turn stays inside the lesson. Otherwise the safety category for an adult to review.",
+        },
     },
     "required": [
         "reply",
@@ -229,6 +241,7 @@ RESPONSE_SCHEMA = {
         "score_justification",
         "what_was_strong",
         "what_to_work_on",
+        "safety_flag",
     ],
 }
 
@@ -2086,7 +2099,12 @@ def _what_happened(
     return lines
 
 
-def _what_to_return(*, needs_dynamic_mcq: bool = False, block_type: str = "") -> list[str]:
+def _what_to_return(
+    *,
+    needs_dynamic_mcq: bool = False,
+    block_type: str = "",
+    safety: dict | None = None,
+) -> list[str]:
     lines = [
         "Return reply, decision, substep_passed, block_complete, generated_mcq, rubric_met, misconception, hint_tier, help_requested, off_course, affect, confidence, score_justification, what_was_strong, and what_to_work_on.",
         "reply is the only text the child reads.",
@@ -2114,6 +2132,9 @@ def _what_to_return(*, needs_dynamic_mcq: bool = False, block_type: str = "") ->
         )
     else:
         lines.append("Set generated_mcq to null when not generating a new dynamic MCQ.")
+    from app.ai_safety import safety_return_line
+
+    lines.append(safety_return_line(safety))
     return lines
 
 
@@ -2160,11 +2181,15 @@ def build_kc_prompt(
     transition_from_block: dict | None = None,
     block_results: list | None = None,
     moves: object | None = None,
+    safety: dict | None = None,
 ) -> dict:
-    """Assemble the 7-section prompt for the active block (`node.blocks[step]`)."""
+    """Assemble the prompt for the active block (`node.blocks[step]`). Safety comes first."""
     del stability
     del moves
     del course_position
+    from app.ai_safety import normalize_ai_safety, safety_lines
+
+    safety_cfg = normalize_ai_safety(safety, strict=False)
     cfg = effective_kc_tutor_config(profile)
     over = cfg.get("overarching") or {}
     blocks = stored_blocks(node)
@@ -2231,6 +2256,10 @@ def build_kc_prompt(
 
     prompt = _blocks_text(
         [
+            (
+                "Safety",
+                safety_lines(safety_cfg, age=student.age if isinstance(student.age, int) else None),
+            ),
             (
                 "This turn",
                 _this_turn(
@@ -2323,7 +2352,14 @@ def build_kc_prompt(
                     block_results=block_results,
                 ),
             ),
-            ("What to return", _what_to_return(needs_dynamic_mcq=needs_dynamic_mcq, block_type=btype)),
+            (
+                "What to return",
+                _what_to_return(
+                    needs_dynamic_mcq=needs_dynamic_mcq,
+                    block_type=btype,
+                    safety=safety_cfg,
+                ),
+            ),
         ]
     )
     return {

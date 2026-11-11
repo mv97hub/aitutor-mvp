@@ -1209,3 +1209,61 @@ class KcCreatorMessage(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
+
+
+class AiSafetySettings(Base):
+    """The one global safety row. It is not stored on a tutor profile."""
+
+    __tablename__ = "ai_safety_settings"
+    __table_args__ = (
+        CheckConstraint("id = 'global'", name="ck_ai_safety_settings_singleton"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    settings: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class AiSafetyEvent(Base):
+    """One flagged tutor turn, kept apart from the chat transcript."""
+
+    __tablename__ = "ai_safety_events"
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('distress', 'inappropriate_content', 'personal_info', 'manipulation', 'other')",
+            name="ck_ai_safety_events_category",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kc_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_sessions.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    kc_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_messages.id", ondelete="SET NULL"), nullable=True
+    )
+    course_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_goals.id", ondelete="CASCADE"), nullable=True
+    )
+    node_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_nodes.id", ondelete="CASCADE"), nullable=True
+    )
+    tutor_profile_id: Mapped[str | None] = mapped_column(
+        String(120),
+        ForeignKey("tutor_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    strictness: Mapped[str] = mapped_column(String(40), nullable=False)
+    child_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tutor_reply: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
