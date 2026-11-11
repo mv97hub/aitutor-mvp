@@ -33,7 +33,7 @@ export default async function ParentSettingsPage({ params }: { params: Promise<{
       key={linked.map((item) => item.id).join(",")}
       parent={parent}
       students={students}
-      linkedIds={linked.map((item) => item.id)}
+      linked={linked}
       error={error}
     />
   );

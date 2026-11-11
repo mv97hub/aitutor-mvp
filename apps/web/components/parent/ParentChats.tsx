@@ -17,6 +17,7 @@ export function ParentChats({
   parentName,
   studentId,
   studentName,
+  learners,
   initialSessions,
   initialError,
 }: {
@@ -24,6 +25,7 @@ export function ParentChats({
   parentName: string;
   studentId: string;
   studentName: string;
+  learners: { id: string; display_name: string }[];
   initialSessions: ParentChatSummary[];
   initialError: string | null;
 }) {
@@ -55,6 +57,7 @@ export function ParentChats({
       parentId={parentId}
       parentName={parentName}
       studentId={studentId}
+      learners={learners}
       current="chats"
       sidebar={
         <>

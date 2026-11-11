@@ -28,6 +28,7 @@ export default async function ParentProgressPage({
 
   let parent: Parent | null = null;
   let learner: Student | null = null;
+  let learners: Student[] = [];
   let courses: KcTutorCourse[] = [];
   let courseId = knownId(query.course) ?? "";
   let progress: KcProgress | null = null;
@@ -41,6 +42,7 @@ export default async function ParentProgressPage({
       api<Student[]>(`/parents/${parentId}/students`),
     ]);
     parent = loaded;
+    learners = linked;
     learner = linked.find((item) => item.id === studentId) ?? null;
     if (learner) {
       courses = coursesStartedFirst(await api<KcTutorCourse[]>(`${base}/courses`));
@@ -73,7 +75,7 @@ export default async function ParentProgressPage({
   }
 
   return (
-    <ParentFrame parentId={parent.id} parentName={parent.name} studentId={learner.id} current="progress">
+    <ParentFrame parentId={parent.id} parentName={parent.name} studentId={learner.id} learners={learners} current="progress">
       <KcCourseProgress
         studentId={learner.id}
         studentName={learner.display_name}

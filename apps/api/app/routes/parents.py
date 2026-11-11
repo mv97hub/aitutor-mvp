@@ -13,6 +13,7 @@ from app.parents import (
     ParentChatDetail,
     ParentChatSummary,
     ParentCreate,
+    ParentDashboardOut,
     ParentOut,
     ParentStudentsIn,
     create_parent,
@@ -20,6 +21,7 @@ from app.parents import (
     list_parents,
     parent_chat_detail,
     parent_chat_summaries,
+    parent_dashboard,
     parent_or_404,
     parent_out,
     require_linked_child,
@@ -43,6 +45,11 @@ def post_parent(body: ParentCreate, db: Session = Depends(get_db)) -> ParentOut:
 @router.get("/parents/{parent_id}", response_model=ParentOut)
 def get_parent(parent_id: uuid.UUID, db: Session = Depends(get_db)) -> ParentOut:
     return parent_out(db, parent_or_404(db, parent_id))
+
+
+@router.get("/parents/{parent_id}/dashboard", response_model=ParentDashboardOut)
+def get_parent_dashboard(parent_id: uuid.UUID, db: Session = Depends(get_db)) -> ParentDashboardOut:
+    return parent_dashboard(db, parent_id)
 
 
 @router.get("/parents/{parent_id}/students", response_model=list[StudentOut])

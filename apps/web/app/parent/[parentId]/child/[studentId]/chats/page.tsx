@@ -21,6 +21,7 @@ export default async function ParentChatsPage({
   }
   let parent: Parent | null = null;
   let learner: Student | null = null;
+  let learners: Student[] = [];
   let sessions: ParentChatSummary[] = [];
   let error: string | null = null;
   try {
@@ -29,6 +30,7 @@ export default async function ParentChatsPage({
       api<Student[]>(`/parents/${parentId}/students`),
     ]);
     parent = loaded;
+    learners = linked;
     learner = linked.find((item) => item.id === studentId) ?? null;
     if (learner) sessions = await api<ParentChatSummary[]>(`/parents/${parentId}/children/${studentId}/sessions`);
   } catch (err) {
@@ -51,6 +53,7 @@ export default async function ParentChatsPage({
       parentName={parent.name}
       studentId={learner.id}
       studentName={learner.display_name}
+      learners={learners}
       initialSessions={sessions}
       initialError={error}
     />
