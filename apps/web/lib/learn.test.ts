@@ -13,6 +13,8 @@ import {
   starBurst,
   topicStars,
   blankChildDraft,
+  childAvatarAfterIconClick,
+  withChildAvatarUrl,
 } from "./learn.ts";
 
 test("explorer ranks follow the shared star thresholds", () => {
@@ -112,6 +114,28 @@ test("a step divider names the finished step and the one that is opening", () =>
     "Step 5 complete · Up next: Step 6 of 6 — Retrieval check — Rise of Julius Caesar",
   );
   assert.equal(blockStepDivider(undefined, 0, [{ index: 0, type_label: "Topic + Goal" }], 6), "Step 1 of 6 — Topic + Goal");
+});
+
+test("an icon click keeps the chosen preset after the picker clears the image", () => {
+  const start = blankChildDraft();
+  start.avatar_url = "https://example.com/photo.png";
+  const chosen = childAvatarAfterIconClick(start, "fox");
+  assert.equal(chosen.avatar_preset, "fox");
+  assert.equal(chosen.avatar_url, "");
+  const staleUrlClear = withChildAvatarUrl(start, null);
+  assert.equal(staleUrlClear.avatar_preset, "");
+  const saved = childWriteBody({ ...chosen, name: "Nova", age: "9" }, { includeName: false });
+  const profile = saved.child_profile as { avatar_preset: string; avatar_url: string };
+  assert.equal(profile.avatar_preset, "fox");
+  assert.equal(profile.avatar_url, "");
+
+  const reset = childAvatarAfterIconClick(chosen, "default_circle");
+  assert.equal(reset.avatar_preset, "");
+  assert.equal(reset.avatar_url, "");
+  const settings = childWriteBody({ ...reset, name: "Nova", age: "9" }, { includeName: false });
+  const resetProfile = settings.child_profile as { avatar_preset: string; avatar_url: string };
+  assert.equal(resetProfile.avatar_preset, "");
+  assert.equal(resetProfile.avatar_url, "");
 });
 
 test("initials fall back when a child has not picked an icon", () => {
