@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type { KcChatDetail } from "@/lib/kc";
 import { promptsOnTranscript } from "@/lib/kc-chat-prompts";
@@ -137,10 +137,13 @@ function scoreCountLabel(score: number | null) {
 export function SessionView({
   session,
   debug = false,
+  actions = null,
 }: {
   session: ChatViewData;
   /** Admin only. A parent view passes false and never receives prompts. */
   debug?: boolean;
+  /** Optional control for the admin chat. The parent view leaves this unset. */
+  actions?: ReactNode;
 }) {
   const [prompt, setPrompt] = useState<KcPrompt | null>(null);
   const [scoresOpen, setScoresOpen] = useState(false);
@@ -152,10 +155,22 @@ export function SessionView({
     setScoresOpen(false);
   }, [session.id]);
   const now = session.status === "completed" ? "component finished" : `now on ${session.step_label}`;
-  return (
-    <article className="transcript-view">
+  const heading = (
+    <>
       <p className="eyebrow">{session.student.display_name}</p>
       <h2>{session.component.title}</h2>
+    </>
+  );
+  return (
+    <article className="transcript-view">
+      {actions ? (
+        <div className="transcript-actions">
+          <div>{heading}</div>
+          {actions}
+        </div>
+      ) : (
+        heading
+      )}
       <p className="meta">
         {session.component.code} · {session.course.title} · {session.status.replaceAll("_", " ")} · opened{" "}
         {when(session.created_at)}

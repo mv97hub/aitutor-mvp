@@ -59,10 +59,12 @@ test("the shared transcript only reads prompts when debug is on", () => {
   assert.match(view, /debug = false/);
   assert.match(view, /debug\s*\?\s*promptsOnTranscript/);
   const admin = source("../components/ViewKcChats.tsx");
-  assert.match(admin, /<SessionView session=\{session\} debug \/>/);
+  assert.match(admin, /session=\{session\}/);
+  assert.match(admin, /\bdebug\b/);
+  assert.match(admin, /downloadKcChat\(session\)/);
   const parent = source("../components/parent/ParentChats.tsx");
   assert.match(parent, /<SessionView session=\{session\} \/>/);
-  assert.doesNotMatch(parent, /debug|PromptDialog|AdminFrame/);
+  assert.doesNotMatch(parent, /debug|PromptDialog|AdminFrame|downloadKcChat|Download/);
 });
 
 test("the parent chat type has no prompts key", () => {
