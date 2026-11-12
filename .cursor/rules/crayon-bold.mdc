@@ -1,0 +1,132 @@
+---
+description: Crayon Bold visual style for the AI Tutor web app
+globs: ["**/*.tsx", "**/*.jsx", "**/*.html", "**/*.css"]
+alwaysApply: true
+---
+
+  Crayon Bold — Design System Rules for AI Tutor
+How to use in Cursor: Save this file as .cursor/rules/crayon-bold.mdc in your repo and add this frontmatter at the very top:
+
+---
+description: Crayon Bold visual style for the AI Tutor web app
+globs: ["**/*.tsx", "**/*.jsx", "**/*.html", "**/*.css"]
+alwaysApply: true
+---
+Then prompt Cursor page by page using the Build prompts at the bottom.
+
+1. Style in one sentence
+Playful, high-contrast "sticker" look for kids aged 6–12: warm off-white paper background, white blocks with 2px black outlines, hard offset shadows (no blur), rounded corners, bright flat primary colors, and chunky rounded type. No gradients, no soft/blurred shadows, no glassmorphism.
+
+2. Design tokens (use these, never hardcode hex values in components)
+Put this in your global stylesheet (e.g. app/globals.css):
+
+@import url('https://fonts.googleapis.com/css2?family=Lexend:wght@400;600;800&display=swap');
+
+:root {
+  /* Surfaces & ink */
+  --bg: #FFFDF7;        /* page background (warm paper) */
+  --surface: #FFFFFF;   /* cards / blocks */
+  --ink: #111111;       /* text + all outlines */
+  --muted: #4A4A4A;     /* secondary text (passes AA on --bg) */
+  --line: #111111;      /* borders + shadows */
+  --track: #EFEFEF;     /* empty progress track */
+
+  /* Brand colors (flat fills only) */
+  --blue: #3B5BFD;      /* primary action, active state */
+  --yellow: #FFD43B;    /* highlight, hero, tutor avatar */
+  --pink: #FF7AB6;      /* student avatar, warm accents */
+  --green: #22C55E;     /* success, mastered, progress fill */
+  --sky: #7DD3FC;       /* info, secondary accent */
+  --tutor-bubble: #FFE8F3; /* tutor chat bubble */
+
+  /* Shape */
+  --r: 14px;            /* blocks, cards, bubbles */
+  --r-sm: 10px;         /* buttons, inputs, chips */
+  --bw: 2px;            /* border width everywhere */
+  --shadow: 4px 4px 0 var(--line);
+  --shadow-sm: 2px 2px 0 var(--line);
+  --shadow-lg: 6px 6px 0 var(--line);
+}
+
+body {
+  font-family: 'Lexend', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+}
+If using Tailwind, map tokens in the theme so classes like bg-brand-blue, border-ink, shadow-hard exist:
+
+// tailwind.config (v3) — or the equivalent @theme block in Tailwind v4
+theme: {
+  extend: {
+    colors: {
+      paper: 'var(--bg)', surface: 'var(--surface)', ink: 'var(--ink)', muted: 'var(--muted)',
+      track: 'var(--track)',
+      brand: { blue: 'var(--blue)', yellow: 'var(--yellow)', pink: 'var(--pink)', green: 'var(--green)', sky: 'var(--sky)' },
+    },
+    borderRadius: { block: 'var(--r)', ctrl: 'var(--r-sm)' },
+    boxShadow: { hard: 'var(--shadow)', 'hard-sm': 'var(--shadow-sm)', 'hard-lg': 'var(--shadow-lg)' },
+    fontFamily: { sans: ['Lexend', 'system-ui', 'sans-serif'] },
+  },
+}
+3. Non-negotiable rules
+Every block, card, button, input, chip, avatar and progress bar has a 2px solid var(--ink) border. No borderless surfaces except the page itself.
+Shadows are always hard offsets (4px 4px 0, 2px 2px 0, 6px 6px 0) in --ink. Never use blur, never use colored or semi-transparent shadows.
+Max 3 accent colors visible in any one block. Blue = action, green = success/mastery, yellow = highlight. Pink and sky are supporting accents only.
+Text is always --ink or --muted, except white text on --blue buttons/active states. Never put white text on yellow, green, sky, or pink (fails contrast).
+Typography: Lexend only. Weights: 400 body, 600 labels/buttons, 800 headings/numbers. Headings 22–32px, body 15px, small labels 12–13px. Minimum body size 15px (kids are reading).
+Pill shapes (border-radius: 999px) for tags, nav links, filter chips, segmented controls, progress bars. --r-sm for buttons and inputs. --r for cards and blocks.
+No emoji as icons. Use an icon library (e.g. lucide-react) at 18–20px, stroke 2.25, in --ink.
+Layout uses flexbox first; CSS grid only for 2D areas (dashboard stats, page shells with sidebars). Spacing scale: 4, 8, 12, 16, 20, 24, 32, 48px. Content max-width 1200px, centered.
+Motion is tactile, short and subtle (≤120ms). Respect prefers-reduced-motion.
+Accessibility: visible focus ring on every interactive element (outline: 3px solid var(--blue); outline-offset: 2px), semantic HTML (header, nav, main, section, aside), aria-pressed on toggle chips, aria-current="page" on active nav, role="progressbar" with aria-valuenow/min/max on all bars, aria-live="polite" on the chat log.
+4. Core components (build these first, reuse everywhere)
+Component	Spec
+Block (base container)	bg surface, border 2px ink, radius --r, --shadow, padding 20–24px
+Card (clickable)	Block + hover: translate(-2px,-2px) & --shadow-lg. Colored top band (yellow / sky / pink / green) 6–8px tall or a colored header strip with the subject
+Button – primary	bg blue, white text, weight 600, 14px, padding 10px 16px, radius --r-sm, border 2px ink, --shadow-sm. Hover: translate(-2px,-2px) + --shadow. Active: translate(1px,1px) + no shadow
+Button – secondary	Same as primary but bg surface, ink text
+Tag / chip	Pill, 12px weight 600, padding 3px 10px, border 2px ink, white bg (or a pale tint)
+Filter chip / toggle	Pill, white bg, --shadow-sm; selected = bg blue, white text, aria-pressed="true"
+Segmented control	Pill container with border 2px; segments separated by 2px ink dividers; active segment bg yellow
+Progress bar	Height 14px, bg track, border 2px ink, pill, inner fill bg green (or blue for "in progress")
+Stacked bar	Height 24px, pill, segments: green = mastered, yellow = learning, sky = started, track = not started; legend squares 14px with 2px border, radius 4px
+Progress ring	120px circle, border 2px, conic-gradient(var(--green) X%, #fff 0), inner 84px circle bg sky with the % in weight 800
+Avatar	36px circle, border 2px ink; student = pink, tutor = yellow; initials weight 800
+Section title	14px colored square (radius 4px, border 2px) + heading weight 800, 20px
+Eyebrow	12px, weight 600, uppercase, letter-spacing .06em, --muted
+Empty state	Dashed 2px ink border, radius --r-sm, bg paper, centered muted 13px text + one secondary button
+Input	15px, padding 12px 14px, border 2px ink, radius --r-sm, bg paper; focus = blue outline
+5. Page layouts
+A. Student home — /learn/[studentId]
+Top bar (sticky, bg surface, bottom border 2px ink): yellow square logo (36px, --shadow-sm) + app name · pill nav (Home / My Progress) with active = bg yellow + border · student avatar (pink) on the right.
+Hero block (bg yellow): "Hi, {name}!" (32px, 800), one-line encouragement, primary button "Continue learning" that resumes the last session. Right side: tutor mascot circle (110px, white, border, --shadow-sm).
+Stats row (3–4 small Blocks in a flex row, wrap on mobile): streak, topics mastered, minutes this week — each with a 64px round badge holding the number.
+"My courses" section: section title + flex-wrap grid of Cards (3 per row desktop, 2 tablet, 1 mobile). Each card: colored subject band, course title (18px/800), short description (muted), progress bar + "X of Y topics", primary button "Start" or "Continue".
+B. Course / tutor session — /learn/[studentId]/course/[courseId]?session=…
+Session header (full-width Block): back button (36px square, white, border, --shadow-sm) · course title + current topic as eyebrow · segmented control (Learn / Practice / Quiz) · step indicator pills (30×12px, filled green = done, blue = current, white = upcoming).
+Two-column body (grid: 280px 1fr desktop, single column under 860px with the sidebar collapsing into a drawer/accordion above the chat):
+Left "Quest map" sidebar (Block): numbered list of topics; number tile 28px radius 8px with border; done = green tile, current = row with bg yellow + border, locked = muted text.
+Chat panel (Block, fills height, display:flex; flex-direction:column):
+Goal pill at top center: dashed 2px border, bg paper, "Today's goal: …".
+Message list (aria-live="polite", scrolls): tutor messages left with yellow avatar + pink bubble (--tutor-bubble, border 2px, radius --r, 15px, line-height 1.6); student messages right with blue bubble + white text.
+Quick-reply chips row above composer (white pills, --shadow-sm): "Give me a hint", "Explain again", "I got it!".
+Composer pinned to bottom: input + primary "Send" button + optional mic icon button. Enter submits (skip while IME composing).
+C. Progress dashboard — /kc-progress?student=…
+Top bar same as page A (active nav = My Progress).
+Course picker: horizontal scroll row of pchips (min-width 150px, radius --r-sm, border, --shadow-sm) showing course name + small %; selected chip = bg blue, white text, --shadow, aria-pressed="true".
+Summary row (flex, wraps): Block with progress ring + "X% mastered" headline · Block with the stacked bar + legend (Mastered / Learning / Started / Not started) and counts.
+Topics list (Block): filter chips at top (All / Mastered / Learning / Not started) · list of topic rows, each: number tile (32px) · topic name (600) · 5 mastery pips (18px squares, radius 5px, border 2px, filled green per level) · status tag · secondary button "Practice".
+Empty state when no data: dashed box "No practice yet — start a lesson to see your progress here" + button back to home.
+6. Responsive rules
+≥1100px: full layouts as above.
+860–1100px: course cards 2 per row; session sidebar narrows to 240px.
+<860px: single column; session sidebar becomes a collapsible "Topics" accordion above the chat; top nav collapses into a menu button.
+<560px: hero stacks (mascot above text), stats become 2×2, shadows drop to --shadow-sm to save space, touch targets stay ≥44px.
+7. Don'ts
+Don't use gradients (except the conic ring), blur, glass, or drop shadows with opacity.
+Don't use more than one font family or thin weights (<400).
+Don't use gray borders — outlines are always --ink.
+Don't put long paragraphs in cards; keep copy to 1–2 short lines for young readers.
+Don't invent new colors; extend the token list if truly needed.
