@@ -280,6 +280,23 @@ def learner_asks_question_or_background(answer: str) -> bool:
     return "background" in text or "more context" in text or "some context" in text
 
 
+def learner_side_question(answer: str, block: dict | None = None) -> bool:
+    """A who/what/where/why question. Not an attempt, a move-on, or a passage reread.
+
+    The topic-goal explain step and explanatory blocks already stay for questions.
+    Every other substep uses this to pause without scoring.
+    """
+    if not learner_asks_question_or_background(answer):
+        return False
+    if (
+        block is not None
+        and str(block.get("type") or "").strip() == "passage_ela"
+        and learner_asks_for_passage(answer)
+    ):
+        return False
+    return True
+
+
 _STOP_EXPLAINING = (
     "dont want to learn more",
     "do not want to learn more",
@@ -909,6 +926,40 @@ def _resolve_explanation_turn(
     )
 
 
+def _unscored_stay(
+    *,
+    hint: str,
+    move_attempts: int,
+    reveals: int,
+    enrichment_turns: int,
+    rubric: list[str],
+    index: int,
+    bid: str,
+    state: dict,
+    results: list[dict],
+) -> BlockResolution:
+    """Stay on this substep. The reply was a question, so the attempt count does not move."""
+    return BlockResolution(
+        decision="stay",
+        hint_tier=hint if hint in HINTS else "nudge",
+        move_attempts=move_attempts,
+        reveals=reveals,
+        enrichment_turns=enrichment_turns,
+        rubric_met=rubric,
+        misconception="",
+        next_step=index,
+        next_block_id=bid,
+        next_block_state=state,
+        block_results=results,
+        mark_known=False,
+        mark_fragile=False,
+        redirect=False,
+        unit_complete=False,
+        advance_block=False,
+        passed=False,
+    )
+
+
 def resolve_block_turn(
     *,
     decision: str,
@@ -1015,27 +1066,22 @@ def resolve_block_turn(
             advance_block=False,
             passed=False,
         )
-    if stay_on_course_enabled(cfg) and unscored_side_request(block, substep, answer, state, cfg):
+    if stay_on_course_enabled(cfg) and (
+        learner_side_question(answer, block)
+        or unscored_side_request(block, substep, answer, state, cfg)
+    ):
         # Unscored help. Same block, same substep, same attempt count.
-        # The model's pass flags and rubric ids do not move the step.
-        return BlockResolution(
-            decision="stay",
-            hint_tier=tier,
+        # A question, "tell me", or a side story is not an attempt.
+        return _unscored_stay(
+            hint=tier,
             move_attempts=move_attempts,
             reveals=reveals,
             enrichment_turns=enrichment_turns,
-            rubric_met=_clean_ids(list(stored_rubric)),
-            misconception="",
-            next_step=index,
-            next_block_id=bid,
-            next_block_state=state,
-            block_results=results,
-            mark_known=False,
-            mark_fragile=False,
-            redirect=False,
-            unit_complete=False,
-            advance_block=False,
-            passed=False,
+            rubric=_clean_ids(list(stored_rubric)),
+            index=index,
+            bid=bid,
+            state=state,
+            results=results,
         )
     max_retries = max_retries_for_block(block, cfg, goal)
 
@@ -1187,38 +1233,11 @@ def resolve_block_turn(
 
     if (
         btype == "topic_goal"
-        and substep == "main"
-        and learner_asks_question_or_background(answer)
-        and not (
-            not stay_on_course_enabled(cfg)
-            and unscored_side_request(block, substep, answer, state, cfg)
-        )
-    ):
-        opening = _proceed_text(answer).split()[:1]
-        opens_as_question = bool(opening) and opening[0] in {
-            "what",
-            "why",
-            "how",
-            "when",
-            "where",
-            "who",
-            "can",
-            "could",
-            "would",
-            "explain",
-            "tell",
-        }
-        # A question that does not answer the goal is not a miss. A reply that
-        # does answer it, and that the model accepts, still opens the summary.
-        if not addressed or (opens_as_question and not substep_passed):
-            return stay(move_attempts, tier)
-
-    if (
-        btype == "topic_goal"
         and bool(bcfg.get("fragment_self_explanation", True))
         and fragment
         and not state.get("fragment_prompted")
         and not unscored_side_request(block, substep, answer, state, cfg)
+        and not learner_side_question(answer, block)
     ):
         state["fragment_prompted"] = True
         return stay(move_attempts, tier)
