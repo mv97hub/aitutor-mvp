@@ -1133,23 +1133,44 @@ _GOAL_START_DEEPEN = (
     "Goal start: The learner wants to keep learning. Explain this same topic more deeply, from a fresh angle. "
     "Write it as teaching, not a question. Do not ask the goal question. Do not ask any question."
 )
+_GOAL_START_CLARIFY = (
+    "Goal start: The learner asked a question. Answer that question first, in a sentence or two, "
+    "then return to this topic. Set help_requested=true. Do not ask the goal question."
+)
 _GOAL_START_ASK = (
     "Goal question: The learner moved on. Ask the opening question for this goal. "
     "One question, and it comes last. Do not answer it."
 )
+_SUMMARY_ELABORATE = (
+    "The learner asked to elaborate on the recap. Elaborate on the summary in this reply. "
+    "Set substep_passed=false and block_complete=false. Do not complete the block and do not advance. "
+    "Do not close with a brief affirmation. Do not open the next block. "
+    "Only an explicit move-on, such as got it - move on, no final questions, or let's continue, "
+    "may complete the block."
+)
 
 
 def _goal_start_mode(block: dict, substep: str, *, opening: bool, last_answer: str) -> str:
-    """explain, deepen, or ask on the opening explanation. Empty once the question is open."""
+    """explain, deepen, clarify, or ask on the opening explanation. Empty once the question is open."""
     if str(block.get("type") or "") != "topic_goal" or substep != "explain":
         return ""
     if opening:
         return "explain"
-    from app.kc_loop import learner_done_with_explanation
+    from app.kc_loop import learner_asks_clarification, learner_done_with_explanation
 
+    if learner_asks_clarification(last_answer):
+        return "clarify"
     if learner_done_with_explanation(last_answer):
         return "ask"
     return "deepen"
+
+
+def _summary_elaboration(block: dict, substep: str, last_answer: str) -> bool:
+    if str(block.get("type") or "") != "explanation" or substep != "summary_check":
+        return False
+    from app.kc_loop import learner_wants_recap_elaboration
+
+    return learner_wants_recap_elaboration(last_answer)
 
 
 def _summary_close_lines(
@@ -1441,6 +1462,8 @@ def _this_turn(
             )
     elif goal_start == "deepen":
         lines.append(_GOAL_START_DEEPEN)
+    elif goal_start == "clarify":
+        lines.append(_GOAL_START_CLARIFY)
     elif goal_start == "ask":
         lines.append(_GOAL_START_ASK)
     elif opening and step_index == 0:
@@ -1473,7 +1496,7 @@ def _this_turn(
         lines.append(
             "Turn Stance: Give a short lead-in for the choice card. Do not ask the multiple-choice question in the reply."
         )
-    elif turn_kind in {"orient", "ask"} and goal_start not in {"explain", "deepen"}:
+    elif turn_kind in {"orient", "ask"} and goal_start not in {"explain", "deepen", "clarify"}:
         if instructional_stance == "direct_instruction_first":
             lines.append(
                 "Turn Stance (direct_instruction_first): Model the key rule or idea concisely before asking the block question."
@@ -1547,7 +1570,7 @@ def _this_turn(
         and str(block.get("type")) == "topic_goal"
         and not (unit_complete or course_complete)
         and not _ready_to_move_on(last_answer)
-        and goal_start not in {"explain", "deepen"}
+        and goal_start not in {"explain", "deepen", "clarify"}
     ):
         lines.append(
             "The learner answered with a 1-2 word fragment. Ask one follow-up to state the idea in a complete sentence before completing this block."
@@ -1569,7 +1592,8 @@ def _this_turn(
             summary_stay=summary_stay,
         )
     )
-    if close_block_only:
+    elaborating = _summary_elaboration(block, substep, last_answer)
+    if close_block_only and not elaborating:
         lines.append(
             "If block_complete=true, this reply only affirms and closes the active block. "
             "Ask no question. Do not open the next block. "
@@ -1582,12 +1606,15 @@ def _this_turn(
                 "then ask if the learner has questions or wants you to elaborate. Do not quiz, and do not start the next topic yet."
             )
         elif substep == "summary_check":
-            lines.append(
-                "The learner is on the block summary. If they ask a final question, answer it and ask whether they have any other final questions about this block. "
-                "If they have no final questions or are ready to continue, complete the block. "
-                "That completing reply is a brief affirmation only. Do not ask whether they have any final questions, and do not open the next block. "
-                "Do not quiz."
-            )
+            if elaborating:
+                lines.append(_SUMMARY_ELABORATE)
+            else:
+                lines.append(
+                    "The learner is on the block summary. If they ask a final question, answer it and ask whether they have any other final questions about this block. "
+                    "If they have no final questions or are ready to continue, complete the block. "
+                    "That completing reply is a brief affirmation only. Do not ask whether they have any final questions, and do not open the next block. "
+                    "Do not quiz."
+                )
         else:
             lines.append(
                 "The learner has replied on the current topic. If they have a question or want elaboration, stay on this topic and answer. "
@@ -1628,7 +1655,14 @@ def _this_turn(
     return lines
 
 
-def _explanation_teach_lines(block: dict, substep: str, state: dict, *, opening: bool) -> list[str]:
+def _explanation_teach_lines(
+    block: dict,
+    substep: str,
+    state: dict,
+    *,
+    opening: bool,
+    last_answer: str = "",
+) -> list[str]:
     data = block.get("data") if isinstance(block.get("data"), dict) else {}
     topics = explanation_topics(block)
     total = max(len(topics), 1)
@@ -1667,14 +1701,17 @@ def _explanation_teach_lines(block: dict, substep: str, state: dict, *, opening:
                 "That completing reply is a brief affirmation only. Do not ask whether they have any final questions, and do not open the next block."
             )
         else:
-            lines.append(
-                "The learner has responded on the summary. "
-                "If they ask a final question, set substep_passed=false and block_complete=false, answer it, "
-                "and you may ask whether they have any other questions about this block. "
-                "If they have no final questions or are ready to continue, set substep_passed=true and block_complete=true. "
-                "That completing reply is a brief affirmation and the takeaway only. "
-                "Do not ask whether they have any final questions. Do not ask any question. Do not open or mention the next block."
-            )
+            if _summary_elaboration(block, substep, last_answer):
+                lines.append(_SUMMARY_ELABORATE)
+            else:
+                lines.append(
+                    "The learner has responded on the summary. "
+                    "If they ask a final question, set substep_passed=false and block_complete=false, answer it, "
+                    "and you may ask whether they have any other questions about this block. "
+                    "If they have no final questions or are ready to continue, set substep_passed=true and block_complete=true. "
+                    "That completing reply is a brief affirmation and the takeaway only. "
+                    "Do not ask whether they have any final questions. Do not ask any question. Do not open or mention the next block."
+                )
         return lines
     topic = topics[index] if topics else {
         "title": "",
@@ -1760,6 +1797,11 @@ def _what_to_teach(
         phase = _goal_start_mode(block, substep, opening=opening, last_answer=last_answer)
         if phase == "ask":
             lines.append("Ask the opening question for this goal now. Do not give the answer.")
+        elif phase == "clarify":
+            lines.append(
+                "Answer the learner's question first, in a sentence or two, then return to this topic. "
+                "Set help_requested=true. Do not ask the learner to state the goal yet."
+            )
         elif phase in {"explain", "deepen"}:
             lines.append(
                 "Explain what this topic is and why it matters. Do not ask the learner to state the goal yet."
@@ -1954,7 +1996,15 @@ def _what_to_teach(
                 )
 
     elif btype == "explanation":
-        lines.extend(_explanation_teach_lines(block, substep, active_block_state, opening=opening))
+        lines.extend(
+            _explanation_teach_lines(
+                block,
+                substep,
+                active_block_state,
+                opening=opening,
+                last_answer=last_answer,
+            )
+        )
 
     elif btype == "passage_ela":
         lines.extend(_passage_teach_lines(block, substep))
@@ -2424,6 +2474,8 @@ def _how_to_teach(
     challenge_appetite = str(cp.get("challenge_appetite") or "steady")
 
     lines = _block_config_rules(block, substep, cfg, goal)
+    if _summary_elaboration(block, substep, last_answer):
+        lines = [line for line in lines if not line.startswith("You are on the summary step.")]
     goal_start = _goal_start_mode(block, substep, opening=opening, last_answer=last_answer)
     move_on_close = str(block.get("type") or "") == "topic_goal" and substep == "main" and _ready_to_move_on(last_answer)
     if move_on_close:
@@ -2449,6 +2501,11 @@ def _how_to_teach(
         )
     if goal_start in {"explain", "deepen"}:
         lines.append("On this goal-start turn that stance does not ask. Teach only. Do not ask yet.")
+    elif goal_start == "clarify":
+        lines.append(
+            "On this goal-start turn, answer the learner's question first, in a sentence or two, then return to the topic. "
+            "Set help_requested=true."
+        )
 
     if escalation == "socratic_probing":
         lines.append(
@@ -2558,6 +2615,8 @@ def _how_to_teach(
             "While the block is still open, the only questions you ask are whether the learner has questions, wants elaboration, or is ready to continue. "
             "When block_complete=true, ask no question, including no check-in about final questions, and do not open the next block."
         )
+        if _summary_elaboration(block, substep, last_answer):
+            lines.append(_SUMMARY_ELABORATE)
     elif worked_close in {"affirm", "continue"}:
         lines.append("This worked-example turn closes the block. Ask no question.")
     elif close_block_only and not choice_on_screen and not presenting_dynamic_mcq:
@@ -2573,6 +2632,10 @@ def _how_to_teach(
             )
         elif goal_start in {"explain", "deepen"}:
             lines.append("Do not end this turn with a question. The goal question waits until the learner moves on.")
+        elif goal_start == "clarify":
+            lines.append(
+                "Answer the learner's question before teaching onward. The goal question waits until the learner moves on."
+            )
         elif goal_start == "ask":
             lines.append(
                 "Ask the opening question for this goal. One question, and it comes last. Do not answer it."
@@ -2725,6 +2788,8 @@ def _what_to_return(
     block_type: str = "",
     safety: dict | None = None,
     close_block_only: bool = False,
+    summary_elaborate: bool = False,
+    clarify_help: bool = False,
 ) -> list[str]:
     if presenting_dynamic_mcq:
         reply_line = (
@@ -2750,13 +2815,21 @@ def _what_to_return(
         "You do not set the block order, the edges, or the final mastery score.",
     ]
     if block_type == "explanation":
-        lines.append(
-            "On an explanation block, set substep_passed=false when the learner asks a question or wants elaboration, "
-            "and substep_passed=true when they are ready to proceed. "
-            "Set block_complete=true only on the summary check when they have no final questions. "
-            "When block_complete=true, reply is a brief affirmation only, with no question. Never quiz."
-        )
-    if close_block_only:
+        if summary_elaborate:
+            lines.append(
+                "On this summary turn, set substep_passed=false and block_complete=false. "
+                "Elaborate on the recap. Do not set block_complete=true."
+            )
+        else:
+            lines.append(
+                "On an explanation block, set substep_passed=false when the learner asks a question or wants elaboration, "
+                "and substep_passed=true when they are ready to proceed. "
+                "Set block_complete=true only on the summary check when they have no final questions. "
+                "When block_complete=true, reply is a brief affirmation only, with no question. Never quiz."
+            )
+    if clarify_help:
+        lines.append("Set help_requested=true. The learner asked a question.")
+    if close_block_only and not summary_elaborate:
         lines.append(
             "When block_complete=true, reply affirms this block only and asks no question. "
             "Do not describe the next block. Set generated_mcq to null."
@@ -3047,6 +3120,12 @@ def build_kc_prompt(
     if worked_close in {"affirm", "continue"} and is_last_block:
         is_final_block_and_substep = True
         include_close = True
+    from app.kc_loop import learner_asks_clarification
+
+    clarify_help = bool(
+        btype == "topic_goal" and substep == "explain" and learner_asks_clarification(last_answer or "")
+    )
+    summary_elaborate = _summary_elaboration(active_block, substep, last_answer or "")
 
     prompt = _blocks_text(
         [
@@ -3156,7 +3235,7 @@ def build_kc_prompt(
                     off_course_count=off_course_count,
                     affect=affect,
                     enrichment_turns=enrichment_turns,
-                    help_requested=help_requested,
+                    help_requested=bool(help_requested) or clarify_help,
                     component_status=component_status,
                     last_answer=last_answer,
                     last_misconception=last_misconception,
@@ -3175,6 +3254,8 @@ def build_kc_prompt(
                     block_type=btype,
                     safety=safety_cfg,
                     close_block_only=close_block_only,
+                    summary_elaborate=summary_elaborate,
+                    clarify_help=clarify_help,
                 ),
             ),
         ]
