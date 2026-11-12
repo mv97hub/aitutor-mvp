@@ -1135,7 +1135,28 @@ _GOAL_START_DEEPEN = (
 )
 _GOAL_START_CLARIFY = (
     "Goal start: The learner asked a question. Answer that question first, in a sentence or two, "
-    "then return to this topic. Set help_requested=true. Do not ask the goal question."
+    "then return to this topic. Set help_requested=true. Do not ask the goal question. "
+    "Do not ask a question applies only to your own reply, so do not quiz. "
+    "It does not mean ignore the question they typed."
+)
+_SIDE_STAY = (
+    "Stay on course: this is not an attempt at the goal. "
+    "Answer it inside the safety rules, in one or two sentences, then repeat the active question "
+    "and ask the goal again. Set substep_passed=false and block_complete=false. "
+    "Do not offer to move on and do not offer another example. "
+    "Stay on this block and this substep. "
+    "Do not call this reply partial, a close, or a good start."
+)
+_SIDE_FOLLOW = (
+    "Stay on course is off. You may follow this tangent. Do not force a return to the question. "
+    "The score still comes only from this step."
+)
+_SIDE_EXPLAIN = (
+    "The learner typed a side request, not an attempt at the goal. "
+    "Answer it inside the safety rules, in one or two sentences, then return to this topic. "
+    "Do not ask a question applies only to your own reply, so do not quiz. "
+    "It does not mean ignore what they typed. "
+    "Do not call this reply partial, a close, or a good start."
 )
 _GOAL_START_ASK = (
     "Goal question: The learner moved on. Ask the opening question for this goal. "
@@ -1148,6 +1169,27 @@ _SUMMARY_ELABORATE = (
     "Only an explicit move-on, such as got it - move on, no final questions, or let's continue, "
     "may complete the block."
 )
+
+
+def _typed_side_request(
+    block: dict,
+    substep: str,
+    answer: str,
+    state: dict | None,
+    cfg: dict | None,
+) -> bool:
+    """A question, "tell me", or a side story that is not a goal attempt."""
+    if not str(answer or "").strip():
+        return False
+    from app.kc_loop import unscored_side_request
+
+    return unscored_side_request(
+        block,
+        substep,
+        answer,
+        state if isinstance(state, dict) else {},
+        cfg,
+    )
 
 
 def _goal_start_mode(block: dict, substep: str, *, opening: bool, last_answer: str) -> str:
@@ -1466,7 +1508,17 @@ def _this_turn(
         lines.append(_GOAL_START_CLARIFY)
     elif goal_start == "ask":
         lines.append(_GOAL_START_ASK)
-    elif opening and step_index == 0:
+    from app.kc_loop import stay_on_course_enabled
+
+    side = _typed_side_request(block, substep, last_answer, active_block_state, cfg)
+    stay_on = stay_on_course_enabled(cfg)
+    if side and goal_start in {"explain", "deepen"}:
+        lines.append(_SIDE_EXPLAIN)
+    elif side and stay_on and goal_start != "clarify":
+        lines.append(_SIDE_STAY)
+    elif side and not stay_on:
+        lines.append(_SIDE_FOLLOW)
+    if not goal_start and opening and step_index == 0:
         if presenting:
             lines.append(
                 "Turn 1 Zero Dead Turns: Open Block 1 with a short lead-in only. "
@@ -1571,6 +1623,7 @@ def _this_turn(
         and not (unit_complete or course_complete)
         and not _ready_to_move_on(last_answer)
         and goal_start not in {"explain", "deepen", "clarify"}
+        and not side
     ):
         lines.append(
             "The learner answered with a 1-2 word fragment. Ask one follow-up to state the idea in a complete sentence before completing this block."
@@ -1629,15 +1682,16 @@ def _this_turn(
     elif str(block.get("type") or "") != "explanation":
         if worked_close == "bare_yes":
             lines.append(_WORKED_BARE_YES)
-        lines.extend(
-            _summary_close_lines(
-                phase=summary_phase,
-                revealed=bool((active_block_state or {}).get("revealed_substep")),
-                opening=opening,
-                block_type=str(block.get("type") or ""),
-                last_answer=last_answer,
+        if not side:
+            lines.extend(
+                _summary_close_lines(
+                    phase=summary_phase,
+                    revealed=bool((active_block_state or {}).get("revealed_substep")),
+                    opening=opening,
+                    block_type=str(block.get("type") or ""),
+                    last_answer=last_answer,
+                )
             )
-        )
     del misconception_policy
     del prerequisite_support_policy
     del learning_support
@@ -2477,8 +2531,12 @@ def _how_to_teach(
     if _summary_elaboration(block, substep, last_answer):
         lines = [line for line in lines if not line.startswith("You are on the summary step.")]
     goal_start = _goal_start_mode(block, substep, opening=opening, last_answer=last_answer)
+    from app.kc_loop import stay_on_course_enabled
+
+    side = _typed_side_request(block, substep, last_answer, None, cfg)
+    stay_on = stay_on_course_enabled(cfg)
     move_on_close = str(block.get("type") or "") == "topic_goal" and substep == "main" and _ready_to_move_on(last_answer)
-    if move_on_close:
+    if move_on_close or side:
         lines = [line for line in lines if "ask for the idea in a full sentence" not in line]
 
     lines.append(
@@ -2527,7 +2585,16 @@ def _how_to_teach(
             "and advance immediately when the block passes." + budget
         )
 
-    if stay_mode == "strict":
+    if side and not stay_on:
+        lines.append(_SIDE_FOLLOW)
+    elif side and goal_start in {"explain", "deepen", "clarify"}:
+        pass
+    elif side:
+        lines.append(
+            "Answer that request inside the safety rules, in one or two sentences, then repeat the active question. "
+            "Do not call the reply partial, a close, or a good start."
+        )
+    elif stay_mode == "strict":
         lines.append(
             "Stay on this component. If the learner leaves the topic, bring them back in the same reply and do not answer the tangent."
         )
@@ -2790,6 +2857,8 @@ def _what_to_return(
     close_block_only: bool = False,
     summary_elaborate: bool = False,
     clarify_help: bool = False,
+    side_hold: bool = False,
+    side_follow: bool = False,
 ) -> list[str]:
     if presenting_dynamic_mcq:
         reply_line = (
@@ -2829,6 +2898,12 @@ def _what_to_return(
             )
     if clarify_help:
         lines.append("Set help_requested=true. The learner asked a question.")
+    if side_hold:
+        lines.append(
+            "This typed line is unscored help. Set substep_passed=false and block_complete=false."
+        )
+    elif side_follow:
+        lines.append("A tangent is not the score. The score still comes only from this step.")
     if close_block_only and not summary_elaborate:
         lines.append(
             "When block_complete=true, reply affirms this block only and asks no question. "
@@ -3126,6 +3201,10 @@ def build_kc_prompt(
         btype == "topic_goal" and substep == "explain" and learner_asks_clarification(last_answer or "")
     )
     summary_elaborate = _summary_elaboration(active_block, substep, last_answer or "")
+    from app.kc_loop import stay_on_course_enabled
+
+    side_request = _typed_side_request(active_block, substep, last_answer or "", state_dict, cfg)
+    course_stay = stay_on_course_enabled(cfg)
 
     prompt = _blocks_text(
         [
@@ -3256,6 +3335,8 @@ def build_kc_prompt(
                     close_block_only=close_block_only,
                     summary_elaborate=summary_elaborate,
                     clarify_help=clarify_help,
+                    side_hold=side_request and course_stay,
+                    side_follow=side_request and not course_stay,
                 ),
             ),
         ]

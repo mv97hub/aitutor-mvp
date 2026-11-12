@@ -560,6 +560,118 @@ def _gives_up(answer: str) -> bool:
     )
 
 
+_STORY_CUES = (
+    "once upon",
+    "yesterday",
+    "the other day",
+    "when i was",
+    "let me tell",
+    "i have a story",
+    "side story",
+    "my dog",
+    "my cat",
+    "one time",
+    "i remember when",
+    "story about",
+)
+
+_GOAL_ANCHOR_KEYS = (
+    "topic",
+    "goal",
+    "acceptance_criteria",
+    "block_title",
+    "question_stem",
+    "recall_prompt",
+    "expected_fact",
+    "problem_statement",
+    "solo_problem",
+    "solo_expected_answer",
+    "central_dilemma",
+    "target_synthesis",
+    "phenomenon_hook",
+    "prediction_question",
+    "invariant_principle",
+    "flaw_description",
+    "corrected_version",
+    "peer_persona_prompt",
+    "evidence_prompt",
+    "central_idea_question",
+    "expected_central_idea",
+    "analysis_question",
+    "expected_analysis",
+)
+
+
+def stay_on_course_enabled(cfg: dict | None) -> bool:
+    """True unless Stay on course is exploratory. The default setting stays on."""
+    over = (cfg or {}).get("overarching") or {}
+    mode = over.get("stay_on_course", "brief_answer_then_return")
+    if isinstance(mode, bool):
+        return mode
+    text = str(mode or "brief_answer_then_return").strip().lower()
+    return text not in {"exploratory", "no", "false", "off"}
+
+
+def _anchor_words(block: dict) -> set[str]:
+    data = _data(block)
+    chunks: list[str] = []
+    for key in _GOAL_ANCHOR_KEYS:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            chunks.append(value)
+    topics = data.get("topics")
+    if isinstance(topics, list):
+        for topic in topics:
+            if isinstance(topic, dict):
+                chunks.append(str(topic.get("title") or ""))
+    return {word for word in _words(" ".join(chunks)) if len(word) > 3}
+
+
+def ancillary_story(answer: str, block: dict) -> bool:
+    """A short aside. A reply that touches the goal is an attempt, even when it is wrong."""
+    text = _proceed_text(answer)
+    if not text or not any(cue in text for cue in _STORY_CUES):
+        return False
+    anchors = _anchor_words(block)
+    have = {word for word in _words(answer) if len(word) > 3}
+    if anchors and (have & anchors):
+        return False
+    return True
+
+
+def unscored_side_request(
+    block: dict,
+    substep: str,
+    answer: str,
+    state: dict | None,
+    cfg: dict | None,
+) -> bool:
+    """A question, "tell me", or a side story. Not a goal attempt and not a move-on.
+
+    A wrong try at the goal stays an attempt. Tell me more, and an explicit move-on,
+    keep today's path. Safety is decided before this loop runs.
+    """
+    raw = answer or ""
+    if not raw.strip():
+        return False
+    if learner_ready_to_proceed(raw, False) or learner_done_with_explanation(raw):
+        return False
+    if learner_wants_deeper_explanation(raw):
+        return False
+    if _gives_up(raw):
+        return False
+    if str(block.get("type") or "") == "passage_ela":
+        from app.kc_blocks import learner_asks_for_passage
+
+        if learner_asks_for_passage(raw):
+            return False
+    if answer_addresses_substep(block, substep, raw, state, cfg):
+        return False
+    if learner_asks_question_or_background(raw) or "tell me" in _proceed_text(raw):
+        return True
+    return ancillary_story(raw, block)
+
+
 def model_accepts_substep(
     block: dict,
     index: int,
@@ -903,6 +1015,28 @@ def resolve_block_turn(
             advance_block=False,
             passed=False,
         )
+    if stay_on_course_enabled(cfg) and unscored_side_request(block, substep, answer, state, cfg):
+        # Unscored help. Same block, same substep, same attempt count.
+        # The model's pass flags and rubric ids do not move the step.
+        return BlockResolution(
+            decision="stay",
+            hint_tier=tier,
+            move_attempts=move_attempts,
+            reveals=reveals,
+            enrichment_turns=enrichment_turns,
+            rubric_met=_clean_ids(list(stored_rubric)),
+            misconception="",
+            next_step=index,
+            next_block_id=bid,
+            next_block_state=state,
+            block_results=results,
+            mark_known=False,
+            mark_fragile=False,
+            redirect=False,
+            unit_complete=False,
+            advance_block=False,
+            passed=False,
+        )
     max_retries = max_retries_for_block(block, cfg, goal)
 
     # Misconception handling
@@ -1051,7 +1185,15 @@ def resolve_block_turn(
             return finish("passed", tries, reveals)
         return finish("revealed", tries, reveals + 1)
 
-    if btype == "topic_goal" and substep == "main" and learner_asks_question_or_background(answer):
+    if (
+        btype == "topic_goal"
+        and substep == "main"
+        and learner_asks_question_or_background(answer)
+        and not (
+            not stay_on_course_enabled(cfg)
+            and unscored_side_request(block, substep, answer, state, cfg)
+        )
+    ):
         opening = _proceed_text(answer).split()[:1]
         opens_as_question = bool(opening) and opening[0] in {
             "what",
@@ -1076,6 +1218,7 @@ def resolve_block_turn(
         and bool(bcfg.get("fragment_self_explanation", True))
         and fragment
         and not state.get("fragment_prompted")
+        and not unscored_side_request(block, substep, answer, state, cfg)
     ):
         state["fragment_prompted"] = True
         return stay(move_attempts, tier)
