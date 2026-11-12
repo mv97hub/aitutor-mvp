@@ -7,7 +7,7 @@ import { KcBlueprintEditor } from "@/components/KcBlueprintEditor";
 import { KcCoverageMatrix } from "@/components/KcCoverageMatrix";
 import { pushKcDraft } from "@/lib/kc-actions";
 import type { KcBlueprint, KcPipeline } from "@/lib/kc";
-import { KC_MODELS, kcModel } from "@/lib/kc-models";
+import { KC_MODEL_OPTIONS, kcModel } from "@/lib/kc-models";
 import { pipelineAction, requestOf, runPipeline, stageRunner, workingText } from "@/lib/kc-pipeline";
 import { promptTurnId } from "@/lib/kc-prompt-log";
 import { progressLine, type StageEvent } from "@/lib/kc-stage";
@@ -338,9 +338,9 @@ export function KcPipelinePanel({
         <label className="kc-model">
           Model
           <select aria-label="Model" value={modelId} disabled={Boolean(working)} onChange={(event) => setModelId(kcModel(event.target.value))}>
-            {KC_MODELS.map((option) => (
-              <option key={option} value={option}>
-                {option}
+            {KC_MODEL_OPTIONS.map(([id, label]) => (
+              <option key={id} value={id}>
+                {label}
               </option>
             ))}
           </select>

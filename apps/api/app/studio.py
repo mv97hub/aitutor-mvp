@@ -48,7 +48,7 @@ CHOICE_MODES = ("predefined", "dynamic")
 DEPTHS = ("survey", "standard", "go_deep")
 QUIZ_MINUTES = (2, 5, 10)
 AGE_BANDS = ("6-8", "9-11", "12-14", "15-17")
-STUDIO_MODELS = ("gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", DEEPSEEK_FLASH_MODEL)
+STUDIO_MODELS = ("gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-6-luna", DEEPSEEK_FLASH_MODEL)
 DEFAULT_STUDIO_MODEL = "gpt-4o-mini"
 SCHEMA_VERSION = 2
 SETTINGS_ID = "default"
@@ -3160,7 +3160,7 @@ def set_model(db: Session, model: str) -> StudioSettings:
     if chosen not in STUDIO_MODELS:
         raise StudioError(
             "model",
-            "must be gpt-4o-mini, gpt-4o, gpt-4.1-mini, or ~deepseek/deepseek-flash-latest",
+            "must be gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-6-luna, or ~deepseek/deepseek-flash-latest",
         )
     row = ensure_settings(db)
     row.model = chosen

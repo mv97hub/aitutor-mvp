@@ -904,9 +904,9 @@ function AddChildDialog({
                 setDraft((current) => ({ ...current, tutor_model }));
               }}
             >
-              {KC_MODEL_OPTIONS.map(([option]) => (
-                <option key={option} value={option}>
-                  {option}
+              {KC_MODEL_OPTIONS.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
                 </option>
               ))}
             </select>
@@ -1161,9 +1161,9 @@ function TutorSettingsDialog({
               value={draft.model}
               onChange={(event) => onChange({ ...draft, model: kcModel(event.target.value) })}
             >
-              {KC_MODEL_OPTIONS.map(([option]) => (
-                <option key={option} value={option}>
-                  {option}
+              {KC_MODEL_OPTIONS.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
                 </option>
               ))}
             </select>

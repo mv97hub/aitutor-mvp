@@ -170,6 +170,7 @@ TUTOR_MODELS = (
     "gpt-4.1-mini",
     "gpt-4.1",
     "gpt-6.1-sol",
+    "gpt-6-luna",
     DEEPSEEK_FLASH_MODEL,
 )
 DEFAULT_TUTOR_MODEL = "gpt-4.1"
@@ -925,7 +926,7 @@ class StudioSettings(Base):
     __table_args__ = (
         CheckConstraint("id = 'default'", name="ck_studio_settings_singleton"),
         CheckConstraint(
-            "model IN ('gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', "
+            "model IN ('gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-6-luna', "
             "'deepseek/deepseek-flash-latest', '~deepseek/deepseek-flash-latest')",
             name="ck_studio_settings_model",
         ),

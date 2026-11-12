@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 
 import { BrandMark } from "@/components/BrandMark";
 import { api } from "@/lib/api";
+import { STUDIO_MODELS, kcModelLabel } from "@/lib/kc-models";
 import {
   AGE_BANDS,
   DEPTHS,
@@ -701,7 +702,7 @@ export function CreateCourse() {
               setSettingsOpen(true);
             }}
           >
-            Model · {settings?.model ?? "gpt-4o-mini"}
+            Model · {kcModelLabel(settings?.model ?? "gpt-4o-mini")}
           </button>
         </div>
       </aside>
@@ -1252,8 +1253,8 @@ export function CreateCourse() {
               <label>
                 Model
                 <select value={modelDraft} onChange={(event) => setModelDraft(event.target.value)}>
-                  {(settings?.options ?? ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "~deepseek/deepseek-flash-latest"]).map((option) => (
-                    <option key={option} value={option}>{option}</option>
+                  {(settings?.options ?? STUDIO_MODELS).map((option) => (
+                    <option key={option} value={option}>{kcModelLabel(option)}</option>
                   ))}
                 </select>
               </label>

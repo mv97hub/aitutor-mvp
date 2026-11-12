@@ -15,6 +15,7 @@ import {
   choiceForMove,
   coursePosition,
   emptyTesterValues,
+  FIELD_OPTIONS,
   fieldsForLayer,
   formFields,
   isReadOnly,
@@ -300,4 +301,16 @@ test("the page posts to the read-only route and the menu link is the tester", ()
   assert.match(tabs, /box-shadow: none/);
   assert.match(tabs, /\.kc-prompt-tab:hover[\s\S]*background: #d5e0ec/);
   assert.match(tabs, /\.kc-prompt-tab\.is-active[\s\S]*background: #c5d3e3/);
+});
+
+test("GPT-6 Luna is a prompt tester choice and is sent as gpt-6-luna", () => {
+  assert.deepEqual(
+    FIELD_OPTIONS["AI Model"]?.find(([id]) => id === "gpt-6-luna"),
+    ["gpt-6-luna", "GPT-6 Luna"],
+  );
+  const values = emptyTesterValues();
+  values["AI Model"] = "gpt-6-luna";
+  assert.equal(testerPayload(values).tutor_model, "gpt-6-luna");
+  const filled = applyChild(values, child({ tutor_model: "gpt-6-luna" }));
+  assert.equal(filled["AI Model"], "gpt-6-luna");
 });

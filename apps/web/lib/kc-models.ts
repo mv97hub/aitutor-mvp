@@ -1,9 +1,10 @@
 /**
  * Models for the KC chats and the KC Tutor settings menu.
  *
- * The first three are the CreateCourse menu. gpt-4.1 is the capable default.
+ * The first three are the original CreateCourse models. gpt-4.1 is the capable default.
  * gpt-6.1-sol is the strongest chat model id openai() accepts in
- * @ai-sdk/openai 4.0.106. ~deepseek/deepseek-flash-latest is the OpenRouter
+ * @ai-sdk/openai 4.0.106. gpt-6-luna is shown as GPT-6 Luna and sent as that
+ * id on the same OpenAI path. ~deepseek/deepseek-flash-latest is the OpenRouter
  * alias for DeepSeek Flash. It does not replace any OpenAI model.
  * A saved deepseek/deepseek-flash-latest id is sent as that alias.
  */
@@ -12,12 +13,16 @@ export const DEEPSEEK_FLASH_MODEL = "~deepseek/deepseek-flash-latest";
 /** OpenRouter rejected this id. Saved rows may still store it. */
 export const LEGACY_DEEPSEEK_FLASH_MODEL = "deepseek/deepseek-flash-latest";
 
+export const GPT6_LUNA_MODEL = "gpt-6-luna";
+export const GPT6_LUNA_LABEL = "GPT-6 Luna";
+
 export const KC_MODELS = [
   "gpt-4o-mini",
   "gpt-4o",
   "gpt-4.1-mini",
   "gpt-4.1",
   "gpt-6.1-sol",
+  GPT6_LUNA_MODEL,
   DEEPSEEK_FLASH_MODEL,
 ] as const;
 
@@ -25,8 +30,26 @@ export type KcModel = (typeof KC_MODELS)[number];
 
 export const DEFAULT_KC_MODEL: KcModel = "gpt-4.1";
 
+/** CreateCourse menu. It is shorter than KC_MODELS and still includes GPT-6 Luna. */
+export const STUDIO_MODELS = [
+  "gpt-4o-mini",
+  "gpt-4o",
+  "gpt-4.1-mini",
+  GPT6_LUNA_MODEL,
+  DEEPSEEK_FLASH_MODEL,
+] as const;
+
+const MODEL_LABELS: Readonly<Record<string, string>> = {
+  [GPT6_LUNA_MODEL]: GPT6_LUNA_LABEL,
+};
+
+/** Visible menu text. Other models keep their id as the label. */
+export function kcModelLabel(id: string): string {
+  return MODEL_LABELS[id] ?? id;
+}
+
 export const KC_MODEL_OPTIONS: readonly (readonly [KcModel, string])[] = KC_MODELS.map(
-  (id) => [id, id] as const,
+  (id) => [id, kcModelLabel(id)] as const,
 );
 
 export const MISSING_OPENAI_KEY =
