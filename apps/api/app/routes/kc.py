@@ -731,6 +731,14 @@ def get_token_usage(
     start: date | None = None,
     end: date | None = None,
     all_time: bool = False,
+    model: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict:
-    return usage_report(db, student_id=student_id, start=start, end=end, all_time=all_time)
+    return usage_report(
+        db,
+        student_id=student_id,
+        start=start,
+        end=end,
+        all_time=all_time,
+        model=model,
+    )

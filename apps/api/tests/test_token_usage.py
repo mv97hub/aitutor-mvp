@@ -140,6 +140,9 @@ def test_token_usage_is_stored_and_filtered() -> None:
         }
         assert empty.json()["by_child"] == []
         assert empty.json()["by_day"] == []
+        assert empty.json()["by_model"] == []
+        assert empty.json()["cost_usd"] == "0"
+        assert empty.json()["unpriced_models"] == []
 
         default = client.get("/kc/token-usage")
         assert default.status_code == 200, default.text
@@ -159,5 +162,99 @@ def test_token_usage_is_stored_and_filtered() -> None:
             json={"kind": "other", "model": "gpt-4.1", "input_tokens": 1, "output_tokens": 1, "cached_tokens": 0},
         )
         assert bad_kind.status_code == 422
+    finally:
+        _drop(code)
+
+
+def test_token_usage_breaks_down_by_model_and_cost() -> None:
+    created = client.post(
+        "/students",
+        json={"display_name": f"Usage {uuid.uuid4().hex[:8]}", "age": 10},
+    )
+    assert created.status_code == 200, created.text
+    student_id = created.json()["id"]
+    code = f"zz-usage-model-{uuid.uuid4().hex[:8]}"
+    session_id, _course_id = _open_session(student_id, code)
+    try:
+        calls = (
+            {
+                "kind": "speak",
+                "model": "gpt-4.1",
+                "input_tokens": 1000,
+                "output_tokens": 100,
+                "cached_tokens": 400,
+            },
+            {
+                "kind": "answer",
+                "model": "gpt-4.1",
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cached_tokens": 250,
+            },
+            {
+                "kind": "speak",
+                "model": "local-test-model",
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cached_tokens": 0,
+            },
+        )
+        for body in calls:
+            saved = client.post(f"/kc/sessions/{session_id}/token-usage", json=body)
+            assert saved.status_code == 200, saved.text
+
+        report = client.get("/kc/token-usage", params={"student_id": student_id, "all_time": True})
+        assert report.status_code == 200, report.text
+        body = report.json()
+        assert [row["model"] for row in body["by_model"]] == ["gpt-4.1", "local-test-model"]
+        priced = body["by_model"][0]
+        assert priced["calls"] == 2
+        assert priced["input_tokens"] == 1100
+        assert priced["output_tokens"] == 150
+        assert priced["cached_tokens"] == 650
+        assert priced["total_tokens"] == 1250
+        # gpt-4.1 is $2 / $0.50 / $8 per million. Cached is a portion of input.
+        # 600 uncached * 2 + 400 cached * 0.50 + 100 output * 8 = $0.0022
+        # overlap 100 * 0.50 + 50 output * 8 = $0.00045
+        assert priced["cost_usd"] == "0.00265"
+        unknown = body["by_model"][1]
+        assert unknown["calls"] == 1
+        assert unknown["total_tokens"] == 15
+        assert unknown["cost_usd"] is None
+        assert body["totals"]["total_tokens"] == 1265
+        assert body["cost_usd"] == "0.00265"
+        assert body["unpriced_models"] == ["local-test-model"]
+
+        filtered = client.get(
+            "/kc/token-usage",
+            params={"student_id": student_id, "all_time": True, "model": "gpt-4.1"},
+        )
+        assert filtered.status_code == 200, filtered.text
+        narrowed = filtered.json()
+        assert narrowed["model"] == "gpt-4.1"
+        assert narrowed["totals"] == {
+            "input_tokens": 1100,
+            "output_tokens": 150,
+            "cached_tokens": 650,
+            "total_tokens": 1250,
+        }
+        assert narrowed["cost_usd"] == "0.00265"
+        assert narrowed["unpriced_models"] == []
+        assert [row["model"] for row in narrowed["by_model"]] == ["gpt-4.1", "local-test-model"]
+        assert narrowed["by_child"][0]["calls"] == 2
+        assert narrowed["by_child"][0]["total_tokens"] == 1250
+        assert sum(day["total_tokens"] for day in narrowed["by_day"]) == 1250
+
+        blank = client.get(
+            "/kc/token-usage",
+            params={"student_id": student_id, "all_time": True, "model": "local-test-model"},
+        )
+        assert blank.status_code == 200, blank.text
+        unpriced = blank.json()
+        assert unpriced["totals"]["total_tokens"] == 15
+        assert unpriced["cost_usd"] is None
+        assert unpriced["unpriced_models"] == ["local-test-model"]
+        assert len(unpriced["by_model"]) == 2
+        assert unpriced["by_child"][0]["calls"] == 1
     finally:
         _drop(code)

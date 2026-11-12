@@ -13,13 +13,19 @@ type Counts = {
   total_tokens: number;
 };
 
+type ModelUsage = Counts & { model: string; calls: number; cost_usd: string | null };
+
 type UsageReport = {
   all_time: boolean;
   start: string | null;
   end: string | null;
+  model: string | null;
   totals: Counts;
+  cost_usd: string | null;
+  unpriced_models: string[];
   by_child: (Counts & { student_id: string; display_name: string; calls: number })[];
   by_day: (Counts & { day: string })[];
+  by_model: ModelUsage[];
 };
 
 function messageOf(error: unknown) {
@@ -28,6 +34,23 @@ function messageOf(error: unknown) {
 
 function formatCount(value: number) {
   return new Intl.NumberFormat("en").format(value);
+}
+
+function formatCost(value: string | null | undefined) {
+  if (value == null || value === "") return "—";
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  }).format(amount);
+}
+
+function leftOutNote(models: string[]) {
+  if (models.length === 0) return "";
+  return `No published rate for ${models.join(", ")}, so that usage is left out of the cost.`;
 }
 
 function UsageChart({ days }: { days: UsageReport["by_day"] }) {
@@ -57,6 +80,7 @@ function UsageChart({ days }: { days: UsageReport["by_day"] }) {
 export function TokenUsage({ initialStudents, initialError }: { initialStudents: Student[]; initialError: string | null }) {
   const [students] = useState(initialStudents);
   const [studentId, setStudentId] = useState("");
+  const [model, setModel] = useState("");
   const [allTime, setAllTime] = useState(false);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
@@ -65,6 +89,7 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.has("student_id")) setStudentId(params.get("student_id") || "");
+    if (params.has("model")) setModel(params.get("model") || "");
     if (params.get("all_time") === "true") setAllTime(true);
     if (params.has("start")) setStart(params.get("start") || "");
     if (params.has("end")) setEnd(params.get("end") || "");
@@ -77,6 +102,7 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
   useEffect(() => {
     const params = new URLSearchParams();
     if (studentId) params.set("student_id", studentId);
+    if (model) params.set("model", model);
     if (allTime) params.set("all_time", "true");
     else {
       if (start) params.set("start", start);
@@ -105,7 +131,7 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
     return () => {
       cancelled = true;
     };
-  }, [filtersReady, studentId, allTime, start, end]);
+  }, [filtersReady, studentId, model, allTime, start, end]);
 
   const totals = report?.totals;
   const empty = !totals || (totals.input_tokens === 0 && totals.output_tokens === 0 && totals.cached_tokens === 0);
@@ -113,7 +139,12 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
   return (
     <AdminFrame
       current="token-usage"
-      sidebar={<p className="help">Input, output, and cached tokens from tutor speak and answer calls.</p>}
+      sidebar={
+        <p className="help">
+          Input, output, and cached tokens from tutor speak and answer calls. Cost uses the published rate for each
+          model.
+        </p>
+      }
     >
       <article className="editor agent-config-editor">
         <p className="eyebrow">Administration</p>
@@ -131,6 +162,20 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
               {students.map((student) => (
                 <option key={student.id} value={student.id}>
                   {student.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Model
+            <select aria-label="Model" value={model} onChange={(event) => setModel(event.target.value)}>
+              <option value="">All models</option>
+              {model && !(report?.by_model ?? []).some((row) => row.model === model) ? (
+                <option value={model}>{model}</option>
+              ) : null}
+              {(report?.by_model ?? []).map((row) => (
+                <option key={row.model} value={row.model}>
+                  {row.model}
                 </option>
               ))}
             </select>
@@ -174,9 +219,43 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
               <h3>Total usage</h3>
               <p className="meta">
                 In {formatCount(totals.input_tokens)} · out {formatCount(totals.output_tokens)} · cached{" "}
-                {formatCount(totals.cached_tokens)} · sum {formatCount(totals.total_tokens)}
+                {formatCount(totals.cached_tokens)} · sum {formatCount(totals.total_tokens)} · cost{" "}
+                {formatCost(report?.cost_usd)}
               </p>
+              {report && report.unpriced_models.length > 0 ? (
+                <p className="help">{leftOutNote(report.unpriced_models)}</p>
+              ) : null}
               {empty ? <p className="help">No usage in this range.</p> : null}
+            </section>
+            <section className="agent-config-card" aria-label="Usage by model">
+              <h3>By model</h3>
+              {report && report.by_model.length === 0 ? <p className="help">No usage in this range.</p> : null}
+              <table className="usage-table">
+                <thead>
+                  <tr>
+                    <th>Model</th>
+                    <th>Calls</th>
+                    <th>Input</th>
+                    <th>Output</th>
+                    <th>Cached</th>
+                    <th>Sum</th>
+                    <th>Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(report?.by_model ?? []).map((row) => (
+                    <tr key={row.model}>
+                      <td>{row.model}</td>
+                      <td>{formatCount(row.calls)}</td>
+                      <td>{formatCount(row.input_tokens)}</td>
+                      <td>{formatCount(row.output_tokens)}</td>
+                      <td>{formatCount(row.cached_tokens)}</td>
+                      <td>{formatCount(row.total_tokens)}</td>
+                      <td>{formatCost(row.cost_usd)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </section>
             <section className="agent-config-card" aria-label="Usage over time">
               <h3>Usage over time</h3>
