@@ -304,6 +304,70 @@ def learner_done_with_explanation(answer: str) -> bool:
     return learner_ready_to_proceed(answer, False)
 
 
+_DEEPEN_EXACT = {
+    "tell me more",
+    "explain more",
+    "can you explain more",
+    "could you explain more",
+    "please explain more",
+    "keep learning",
+    "i want to keep learning",
+    "i want to learn more",
+}
+
+
+def learner_wants_deeper_explanation(answer: str) -> bool:
+    """Tell me more, with no question of their own. That still deepens the same topic."""
+    raw = answer or ""
+    text = _proceed_text(raw)
+    if not text:
+        return False
+    if text in _DEEPEN_EXACT:
+        return True
+    if "tell me more" in text and "?" not in raw and "what" not in text.split():
+        return True
+    return False
+
+
+def learner_asks_clarification(answer: str) -> bool:
+    """A learner question on the topic-goal explain step, not another tell-me-more.
+
+    "what's a lemonade cup?", "what is …", and "can you explain what …" are
+    clarifications. "Tell me more" with no question is not.
+    """
+    raw = answer or ""
+    if not raw.strip() or learner_done_with_explanation(raw) or learner_wants_deeper_explanation(raw):
+        return False
+    text = _proceed_text(raw)
+    if text.startswith(("what is ", "what are ", "whats ", "what s ")):
+        return True
+    if "explain what" in text:
+        return True
+    return learner_asks_question_or_background(raw)
+
+
+def learner_wants_recap_elaboration(answer: str) -> bool:
+    """elaborate, can you elaborate, or tell me more. Those hold a summary check."""
+    raw = answer or ""
+    text = _proceed_text(raw)
+    if not text:
+        return False
+    if "elaborat" in raw.lower():
+        return True
+    return text == "tell me more" or text.startswith("tell me more")
+
+
+def learner_may_complete_explanation_summary(answer: str) -> bool:
+    """Only an explicit move-on closes an explanatory summary. Model flags do not.
+
+    "got it - move on", "no final questions", and "let's continue" may complete.
+    "elaborate", "can you please elaborate?", and "tell me more" never do.
+    """
+    if learner_wants_recap_elaboration(answer):
+        return False
+    return learner_ready_to_proceed(answer, False)
+
+
 def answer_addresses_substep(
     block: dict,
     substep: str,
@@ -660,7 +724,12 @@ def _resolve_explanation_turn(
         substep = "explain_topic"
     state["substep"] = substep
     state["topic_index"] = topic_index
-    ready = learner_ready_to_proceed(answer, bool(substep_passed) or bool(block_complete))
+    if substep == "summary_check":
+        # The model cannot close this check by setting the flags. Elaborate and
+        # tell-me-more stay. Only an explicit move-on completes the block.
+        ready = learner_may_complete_explanation_summary(answer)
+    else:
+        ready = learner_ready_to_proceed(answer, bool(substep_passed) or bool(block_complete))
     if not ready:
         state["elaboration_turns"] = int(state.get("elaboration_turns") or 0) + 1
         return _explanation_stay(
@@ -805,8 +874,10 @@ def resolve_block_turn(
             enrichment_turns=enrichment_turns,
         )
     if btype == "topic_goal" and substep == "explain":
-        # The goal question waits. Only move-on leaves this explanation.
-        if learner_done_with_explanation(answer):
+        # The goal question waits. A question is a clarification to answer here,
+        # not another tell-me-more. Only move-on leaves this explanation.
+        clarifying = learner_asks_clarification(answer)
+        if learner_done_with_explanation(answer) and not clarifying:
             state["substep"] = "main"
             state["elaboration_turns"] = 0
             # A short reply during the explanation is not the goal answer.
