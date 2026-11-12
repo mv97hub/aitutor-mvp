@@ -1596,6 +1596,10 @@ def test_child_tutor_model_is_stored_on_the_profile() -> None:
         assert names["Tutor model"] == "~deepseek/deepseek-flash-latest"
         blank = client.get("/kc/tutor/variables")
         assert blank.json()["tutor_model"] == ""
+        luna = client.patch(f"/students/{storm.id}", json={"tutor_model": "gpt-6-luna"})
+        assert luna.status_code == 200, luna.text
+        assert luna.json()["tutor_model"] == "gpt-6-luna"
+        assert luna.json()["child_profile"]["tutor_model"] == "gpt-6-luna"
         unknown = client.patch(f"/students/{storm.id}", json={"tutor_model": "not-a-model"})
         assert unknown.status_code == 200, unknown.text
         assert unknown.json()["tutor_model"] == "gpt-4.1"

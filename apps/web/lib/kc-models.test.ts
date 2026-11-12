@@ -4,13 +4,17 @@ import test from "node:test";
 import {
   DEFAULT_KC_MODEL,
   DEEPSEEK_FLASH_MODEL,
+  GPT6_LUNA_LABEL,
+  GPT6_LUNA_MODEL,
   KC_MODELS,
   KC_MODEL_OPTIONS,
+  STUDIO_MODELS,
   LEGACY_DEEPSEEK_FLASH_MODEL,
   MISSING_OPENAI_KEY,
   MISSING_OPENROUTER_KEY,
   kcModel,
   missingKeyMessage,
+  kcModelLabel,
   modelForCall,
 } from "./kc-models.ts";
 
@@ -18,13 +22,19 @@ test("the KC menu keeps the CreateCourse models and adds a capable default and a
   assert.deepEqual(KC_MODELS.slice(0, 3), ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"]);
   assert.equal(DEFAULT_KC_MODEL, "gpt-4.1");
   assert.equal(KC_MODELS.includes("gpt-6.1-sol"), true);
+  assert.equal(KC_MODELS.includes(GPT6_LUNA_MODEL), true);
   assert.equal(DEEPSEEK_FLASH_MODEL, "~deepseek/deepseek-flash-latest");
   assert.equal(KC_MODELS.at(-1), DEEPSEEK_FLASH_MODEL);
   assert.deepEqual(
     KC_MODEL_OPTIONS.map(([id]) => id),
     [...KC_MODELS],
   );
+  assert.equal(KC_MODEL_OPTIONS.find(([id]) => id === GPT6_LUNA_MODEL)?.[1], GPT6_LUNA_LABEL);
+  assert.equal(kcModelLabel(GPT6_LUNA_MODEL), GPT6_LUNA_LABEL);
+  assert.equal(kcModelLabel("gpt-4.1"), "gpt-4.1");
+  assert.equal(STUDIO_MODELS.includes(GPT6_LUNA_MODEL), true);
   assert.equal(kcModel("gpt-6.1-sol"), "gpt-6.1-sol");
+  assert.equal(kcModel(GPT6_LUNA_MODEL), GPT6_LUNA_MODEL);
   assert.equal(kcModel(DEEPSEEK_FLASH_MODEL), DEEPSEEK_FLASH_MODEL);
   assert.equal(kcModel(LEGACY_DEEPSEEK_FLASH_MODEL), DEEPSEEK_FLASH_MODEL);
   assert.equal(modelForCall(LEGACY_DEEPSEEK_FLASH_MODEL), DEEPSEEK_FLASH_MODEL);
@@ -41,6 +51,7 @@ test("DeepSeek asks for the OpenRouter key and OpenAI models keep their own key"
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     assert.equal(missingKeyMessage("gpt-4.1"), MISSING_OPENAI_KEY);
+    assert.equal(missingKeyMessage(GPT6_LUNA_MODEL), MISSING_OPENAI_KEY);
     assert.equal(missingKeyMessage(DEEPSEEK_FLASH_MODEL), MISSING_OPENROUTER_KEY);
     assert.equal(missingKeyMessage(LEGACY_DEEPSEEK_FLASH_MODEL), MISSING_OPENROUTER_KEY);
 

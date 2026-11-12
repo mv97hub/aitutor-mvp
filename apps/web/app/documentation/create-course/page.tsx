@@ -61,7 +61,7 @@ export default function CreateCourseDocsPage() {
         </ul>
         <p>
           Model is a separate control. The dialog says this choice is only for Create course and does not change the kid tutor.
-          The menu lists the models the server offers. Before that list loads, it shows gpt-4o-mini, gpt-4o, gpt-4.1-mini, and ~deepseek/deepseek-flash-latest.
+          The menu lists the models the server offers. Before that list loads, it shows gpt-4o-mini, gpt-4o, gpt-4.1-mini, GPT-6 Luna, and ~deepseek/deepseek-flash-latest.
           gpt-4o-mini stays the default. ~deepseek/deepseek-flash-latest uses OPENROUTER_API_KEY. The OpenAI models keep using OPENAI_API_KEY.
         </p>
 

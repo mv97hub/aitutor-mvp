@@ -139,7 +139,7 @@ export default function KcTutorDocsPage() {
         <p>
           This page does not edit the course. The choices on the page are which child, which ready course, Start Course
           Over, which card to open, TEST KC Selection, and Settings. The model list is gpt-4o-mini, gpt-4o,
-          gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, and ~deepseek/deepseek-flash-latest. Component blocks are set in KC
+          gpt-4.1-mini, gpt-4.1, gpt-6.1-sol, GPT-6 Luna, and ~deepseek/deepseek-flash-latest. Component blocks are set in KC
           Creator. How the tutor speaks, and how each block type is taught, is the shared profile on Agent
           customizations.
         </p>

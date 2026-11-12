@@ -1,7 +1,7 @@
 import { Output, convertToModelMessages, jsonSchema, streamText, type JSONSchema7, type UIMessage } from "ai";
 
 import { api, apiBase } from "@/lib/api";
-import { DEEPSEEK_FLASH_MODEL, MISSING_OPENROUTER_KEY, modelForCall, usesOpenRouter } from "@/lib/kc-models";
+import { MISSING_OPENROUTER_KEY, STUDIO_MODELS, modelForCall, usesOpenRouter } from "@/lib/kc-models";
 import { languageModel } from "@/lib/language-model";
 import type { StudioMessage } from "@/lib/studio";
 import { detailFrom, plainFailure, replyIfUnwritten, settleModelResult } from "@/lib/studio-chat";
@@ -9,7 +9,7 @@ import { detailFrom, plainFailure, replyIfUnwritten, settleModelResult } from "@
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const ALLOWED_MODELS = new Set(["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", DEEPSEEK_FLASH_MODEL]);
+const ALLOWED_MODELS = new Set<string>(STUDIO_MODELS);
 
 type PromptBundle = {
   model: string;

@@ -30,6 +30,7 @@ READY_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / 
 QUIZ_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "011_studio_quiz_minutes.py"
 LIFT_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "012_quests_on_course.py"
 TILDE_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "021_deepseek_tilde_model.py"
+LUNA_REVISION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "035_gpt6_luna_model.py"
 
 
 def _wipe(code: str) -> None:
@@ -125,6 +126,19 @@ def test_tilde_revision_allows_the_alias_and_keeps_saved_rows() -> None:
     assert "UPDATE" not in upgrade
     assert "drop_table" not in upgrade
     assert "WHERE model = '~deepseek/deepseek-flash-latest'" in downgrade
+
+
+def test_luna_revision_allows_gpt6_luna_and_resets_it_on_downgrade() -> None:
+    text = LUNA_REVISION.read_text()
+    upgrade = text.split("def upgrade")[1].split("def downgrade")[0]
+    downgrade = text.split("def downgrade")[1]
+    assert "gpt-6-luna" in text
+    assert "gpt-4o-mini" in text
+    assert "_WITH_LUNA" in upgrade
+    assert "UPDATE" not in upgrade
+    assert "drop_table" not in upgrade
+    assert "WHERE model = 'gpt-6-luna'" in downgrade
+    assert "gpt-4o-mini" in downgrade
 
 
 def test_quiz_minutes_revision_adds_one_column() -> None:
@@ -434,8 +448,13 @@ def test_unknown_model_is_rejected_and_prompt_names_the_framework_rule() -> None
             "gpt-4o-mini",
             "gpt-4o",
             "gpt-4.1-mini",
+            "gpt-6-luna",
             "~deepseek/deepseek-flash-latest",
         ]
+        luna = client.put("/studio/settings", json={"model": "gpt-6-luna"})
+        assert luna.status_code == 200, luna.text
+        assert luna.json()["model"] == "gpt-6-luna"
+        assert client.get(f"/studio/courses/{course_id}/prompt").json()["model"] == "gpt-6-luna"
 
         prompt = client.get(f"/studio/courses/{course_id}/prompt").json()
         assert prompt["model"] == "gpt-4o-mini"

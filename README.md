@@ -12,7 +12,7 @@ There is no login. The kid page is a name picker. Admin is a separate URL.
 
 The kid chat model is OpenAI through `@ai-sdk/openai`. The chat route reads `OPENAI_API_KEY` and returns a clear error when it is missing. Do not invent a key. The model id lives in `apps/web/lib/model.ts` and defaults to `gpt-4o-mini`. Set `OPENAI_MODEL` to override it. That uses the same key.
 
-KC Course Creator, KC Creator, CreateCourse, and KC Tutor can also pick `~deepseek/deepseek-flash-latest`. That call goes to OpenRouter and reads `OPENROUTER_API_KEY`. A saved `deepseek/deepseek-flash-latest` id is sent as that alias. A missing OpenRouter key fails only that model. OpenAI models still use `OPENAI_API_KEY`. The KC lists still default to `gpt-4.1`. CreateCourse still defaults to `gpt-4o-mini`. KC Tutor settings uses the KC list and the same `gpt-4.1` default. It does not follow `OPENAI_MODEL`.
+KC Course Creator, KC Creator, CreateCourse, and KC Tutor can also pick `~deepseek/deepseek-flash-latest`. That call goes to OpenRouter and reads `OPENROUTER_API_KEY`. A saved `deepseek/deepseek-flash-latest` id is sent as that alias. A missing OpenRouter key fails only that model. OpenAI models still use `OPENAI_API_KEY`. GPT-6 Luna is on those same menus. Its stored id is `gpt-6-luna`, and that id is what the OpenAI call sends. The KC lists still default to `gpt-4.1`. CreateCourse still defaults to `gpt-4o-mini`. KC Tutor settings uses the KC list and the same `gpt-4.1` default. It does not follow `OPENAI_MODEL`.
 
 ## Syllabus
 
