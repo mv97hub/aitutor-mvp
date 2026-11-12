@@ -52,7 +52,54 @@ Add these as new names. Do not overwrite `--ink`, `--line`, `--shadow`, or any e
 - Pills for tags, nav, chips, and progress. `--cb-r-sm` for buttons and inputs. `--cb-r` for cards.
 - No emoji as icons. A 2px ink border and a hard shadow on every new surface. No hardcoded hex in components.
 - Visible focus ring: `outline: 3px solid var(--cb-blue); outline-offset: 2px`.
-- Do not invent controls. Restyle only elements that already exist. Keep every link, query param, and handler.
+- Keep every existing link, query param, and handler. A recommended object with no current data still belongs in the layout below. Do not remove it from the spec.
+
+## Layouts
+
+Use `--cb-*` inside `.crayon` for every placement below. Do not overwrite `--ink`, `--line`, or `--shadow`. Do not change `body`. Do not add Tailwind.
+
+### Student home — `/learn/[studentId]`
+
+Sticky top bar (`background: var(--cb-surface)`, bottom border 2px `var(--cb-ink)`): yellow square logo (36px, `--cb-shadow-sm`) and the app name, then a pill nav (Home / My Progress) with the active pill on `var(--cb-yellow)` and ink text, then the pink student avatar on the right.
+
+Yellow hero (`background: var(--cb-yellow)`, ink text): "Hi, {name}!" at 32px weight 800, one line of encouragement, and a primary "Continue learning" button that resumes the last session. Tutor mascot circle on the right (110px, white, 2px ink border, `--cb-shadow-sm`).
+
+Stats row: 3–4 small blocks in a flex row that wraps on small screens. Streak, topics mastered, and minutes this week, each with a 64px round badge holding the number.
+
+My courses: a section title, then a wrapping card grid (3 per row on desktop, 2 on tablet, 1 on mobile). Each card has a colored subject band, the course title (18px, weight 800), a short muted description, a progress bar with "X of Y topics", and a primary "Start" or "Continue" button.
+
+### Tutor session — `/learn/[studentId]/course/[courseId]` and learn-mobile
+
+Same placements for `KcTutor` on the course route and for the learn-mobile session.
+
+Session header (full-width block): back button (36px square, white, 2px ink border, `--cb-shadow-sm`), course title with the current topic as the eyebrow, a segmented control (Learn / Practice / Quiz), and step pills (30×12px: `var(--cb-green)` = done, `var(--cb-blue)` = current, white = upcoming).
+
+Two-column body on desktop (`280px 1fr`). Left is the quest-map sidebar: a numbered topic list. Number tiles are 28px with an 8px radius and a 2px ink border. Done tiles use `var(--cb-green)`. The current row uses `var(--cb-yellow)` with a border. Locked rows use `var(--cb-muted)`.
+
+Chat panel fills the remaining height (`display: flex; flex-direction: column`). Goal pill at the top center: dashed 2px ink border, `var(--cb-bg)`, "Today's goal: …". Message list (`aria-live="polite"`, scrolls): tutor messages on the left with a yellow avatar and a pink bubble (`var(--cb-tutor-bubble)`, 2px border, `--cb-r`, 15px, line-height 1.6, ink text); student messages on the right with a blue bubble and white text. Quick-reply chips above the composer (white pills, `--cb-shadow-sm`): "Give me a hint", "Explain again", "I got it!". Composer pinned to the bottom: input, primary "Send" button, and an optional mic button. Enter submits, and skips while an IME is composing.
+
+Under 860px the page is one column and the quest map becomes a collapsible Topics accordion above the chat.
+
+### Progress — `/kc-progress` and `KcCourseProgress`
+
+Same sticky top bar as the student home, with My Progress active.
+
+Horizontal course chips (scroll row, min-width 150px, `--cb-r-sm`, 2px ink border, `--cb-shadow-sm`) showing the course name and a small percent. The selected chip uses `var(--cb-blue)`, white text, `--cb-shadow`, and `aria-pressed="true"`.
+
+Summary row (flex, wraps): one block with the progress ring and an "X% mastered" headline, and one block with the stacked bar plus a legend (Mastered / Learning / Started / Not started) and counts.
+
+Topics list block: filter chips at the top (All / Mastered / Learning / Not started), then topic rows. Each row has a 32px number tile, the topic name at weight 600, five mastery pips (18px squares, 5px radius, 2px ink border, filled `var(--cb-green)` per level), a status tag, and a secondary "Practice" button.
+
+Empty state when there is no data: dashed 2px ink box, "No practice yet — start a lesson to see your progress here", and a button back to home.
+
+Keep the student and course query params, the existing progress data, and the knowledge network. Mastery pips and stacked-bar statuses stay in this layout even when the current data does not already have them.
+
+### Responsive
+
+- At 1100px and above, use the full layouts above.
+- From 860px to 1100px, course cards are 2 per row and the session sidebar narrows to 240px.
+- Under 860px, use a single column. The session sidebar becomes a collapsible Topics accordion above the chat. The top nav collapses into a menu button.
+- Under 560px, the hero stacks with the mascot above the text, stats become 2×2, shadows drop to `--cb-shadow-sm`, and touch targets stay at least 44px.
 
 ## Prompts
 
@@ -60,10 +107,10 @@ Run one at a time. Stop and check the page before the next prompt.
 
 Prompt 1. Add the Crayon Bold colors as the `--cb-*` names above. Do not overwrite `--ink`, `--line`, or `--shadow`. Do not change `body` for the whole app. Do not add Tailwind. Load Lexend and the paper background only inside a `.crayon` wrapper used on the kid pages. Build Block, Card, Button, Tag, FilterChip, SegmentedControl, ProgressBar, StackedBar, ProgressRing, Avatar, SectionTitle, EmptyState, Input, and TopBar for that wrapper. Do not change data fetching or routes.
 
-Prompt 2. Restyle `/learn/[studentId]` with that wrapper. Keep the existing data and links. Restyle only elements that already exist. Do not add streak, minutes, a new nav, or any control the page does not already have.
+Prompt 2. Restyle `/learn/[studentId]` with the `.crayon` wrapper and the student-home layout above. Sticky top bar: yellow square logo and app name, pill nav (Home / My Progress, active pill on yellow with ink text), pink student avatar on the right. Yellow hero: greeting, one line of encouragement, primary "Continue learning" that resumes the last session, tutor mascot on the right. Stats row: streak, topics mastered, minutes this week. My courses: section title and a card grid (3 / 2 / 1) with a subject band, title, description, progress, and Start or Continue. Keep the existing data and links. A recommended object with no current data still belongs in this layout.
 
-Prompt 3. Restyle `KcTutor` on `/learn/[studentId]/course/[courseId]` and the learn-mobile session. Keep every handler, API call, and the `session`, `kc`, and `model` query params. Do not add Learn / Practice / Quiz, hint chips, or any control the page does not already have.
+Prompt 3. Restyle `KcTutor` on `/learn/[studentId]/course/[courseId]` and the learn-mobile session with the tutor-session layout above. Session header: back button, course title and current-topic eyebrow, segmented control (Learn / Practice / Quiz), and step pills. Quest-map sidebar on the left; under 860px it becomes a Topics accordion above the chat. Chat panel: goal pill, tutor bubbles (yellow avatar, pink bubble, ink text) and student bubbles (blue, white text), quick-reply chips, and a pinned composer. Keep every handler, API call, and the `session`, `kc`, and `model` query params. A recommended object with no current data still belongs in this layout.
 
-Prompt 4. Restyle `/kc-progress` and `KcCourseProgress`. Keep the student and course query params, the existing progress data, and the knowledge network. Do not add mastery pips or stacked-bar statuses the data does not already have.
+Prompt 4. Restyle `/kc-progress` and `KcCourseProgress` with the progress layout above. Same sticky top bar, with My Progress active. Horizontal course chips. Summary row with the progress ring and the stacked bar plus legend. Filterable topic list with number tiles, five mastery pips, status tags, and a Practice button. Empty state when there is no data. Keep the student and course query params, the existing progress data, and the knowledge network. Mastery pips and stacked-bar statuses stay in the layout even when the current data does not already have them.
 
-Prompt 5. Check those pages only. Every new surface has a 2px ink border and a hard shadow, no hardcoded hex, no white text on yellow, green, sky, or pink, focus rings are visible, and the layout works at 375px, 768px, and 1440px. Do not restyle admin, parent, or creator.
+Prompt 5. Check those pages only. Every new surface has a 2px ink border and a hard shadow, no hardcoded hex, no white text on yellow, green, sky, or pink, focus rings are visible, and the layout works at 375px, 768px, and 1440px. Also check the 1100px, 860px, and 560px breakpoints, including the session sidebar becoming an accordion under 860px. Do not restyle admin, parent, or creator.
