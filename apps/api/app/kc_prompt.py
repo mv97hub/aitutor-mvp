@@ -1173,6 +1173,33 @@ def _summary_elaboration(block: dict, substep: str, last_answer: str) -> bool:
     return learner_wants_recap_elaboration(last_answer)
 
 
+def _side_question_reply(answer: str) -> str:
+    asked = " ".join((answer or "").split())
+    return (
+        "Side question: The learner asked a question instead of answering the active step. "
+        f"Their question: {asked}. "
+        "Do not score this message. Set help_requested=true, substep_passed=false, and block_complete=false. "
+        "Answer that question in one or two sentences. "
+        "If they ask what something is or who someone is, define it. "
+        "Then repeat the active question unchanged. "
+        "Do not say the reply was partial, close, or a good start."
+    )
+
+
+def _prompts_side_question(block: dict, substep: str, last_answer: str, *, opening: bool) -> bool:
+    """True when this turn should answer a side question and then re-ask.
+
+    The topic-goal explain step and explanatory blocks already have their own lines.
+    """
+    if str(block.get("type") or "") == "explanation":
+        return False
+    if _goal_start_mode(block, substep, opening=opening, last_answer=last_answer) in {"explain", "deepen", "clarify"}:
+        return False
+    from app.kc_loop import learner_side_question
+
+    return learner_side_question(last_answer, block)
+
+
 def _summary_close_lines(
     *,
     phase: str,
@@ -1180,6 +1207,7 @@ def _summary_close_lines(
     opening: bool,
     block_type: str = "",
     last_answer: str = "",
+    side_question: bool = False,
 ) -> list[str]:
     """How to speak on the summary check, and how to answer a learner who is already there."""
     if phase == "task" and block_type == "topic_goal" and _ready_to_move_on(last_answer):
@@ -1191,6 +1219,14 @@ def _summary_close_lines(
             ),
             _SUMMARY_NO_PRAISE,
         ]
+    if side_question and phase in {"task", "check"}:
+        lines = [_side_question_reply(last_answer)]
+        if phase == "task" and block_type == "topic_goal":
+            lines.append(
+                "Then ask the goal again. Do not summarize the block, do not offer to move on, and do not offer another example."
+            )
+        lines.append(_SUMMARY_NO_PRAISE)
+        return lines
     if phase == "task":
         lines = []
         if block_type == "topic_goal":
@@ -1269,7 +1305,13 @@ def _ending(
     course_title: str,
     is_final_block_and_substep: bool,
     summary_stay: bool = False,
+    side_question: bool = False,
 ) -> str:
+    if summary_stay and side_question and not unit_complete and not course_complete:
+        return (
+            "Close Contract: This question does not complete the block and does not end the unit. "
+            "Do not ask whether the learner wants to move on."
+        )
     if summary_stay and not unit_complete and not course_complete:
         length = _close_summary_sentence(close_depth, kind)
         outro = _outro_sentence(others_known, course_title, required=False)
@@ -1454,6 +1496,7 @@ def _this_turn(
     ]
     outline = stored_outline(node)
     goal_start = _goal_start_mode(block, substep, opening=opening, last_answer=last_answer)
+    side_question = _prompts_side_question(block, substep, last_answer, opening=opening)
     if goal_start == "explain":
         lines.append(_GOAL_START_EXPLAIN)
         if opening and step_index == 0 and outline:
@@ -1509,7 +1552,7 @@ def _this_turn(
             lines.append(
                 "Turn Stance (guided_discovery): Pair a short concrete anchor with a guiding question."
             )
-    elif turn_kind in {"nudge", "scaffold"}:
+    elif turn_kind in {"nudge", "scaffold"} and not side_question:
         if scaffolding_escalation == "socratic_probing":
             lines.append(
                 "Turn Escalation (socratic_probing): Ask targeted diagnostic questions to help the learner spot the gap themselves."
@@ -1526,7 +1569,7 @@ def _this_turn(
             lines.append(
                 "Reassurance on miss (challenge_appetite=needs_reassurance): Soften this miss transition, normalize the effort warmly, and keep stakes low."
             )
-    if turn_kind in {"nudge", "scaffold", "reveal"}:
+    if turn_kind in {"nudge", "scaffold", "reveal"} and not side_question:
         lines.append(
             "Humor guardrail: suppress jokes and banter on this turn "
             "(an incorrect attempt (nudge/scaffold/reveal)); stay clear, earnest, and supportive."
@@ -1534,7 +1577,7 @@ def _this_turn(
     topic_feedback_here = (
         str(block.get("type") or "") == "topic_goal" and turn_kind in {"ask", "nudge", "scaffold"}
     )
-    if not topic_feedback_here and turn_kind in {"pass", "nudge", "scaffold"}:
+    if not side_question and not topic_feedback_here and turn_kind in {"pass", "nudge", "scaffold"}:
         if encouragement_style == "matter_of_fact_confirm":
             lines.append(
                 "Turn Feedback (matter_of_fact_confirm): Confirm clearly and warmly without extra fanfare."
@@ -1571,6 +1614,7 @@ def _this_turn(
         and not (unit_complete or course_complete)
         and not _ready_to_move_on(last_answer)
         and goal_start not in {"explain", "deepen", "clarify"}
+        and not side_question
     ):
         lines.append(
             "The learner answered with a 1-2 word fragment. Ask one follow-up to state the idea in a complete sentence before completing this block."
@@ -1590,6 +1634,7 @@ def _this_turn(
             course_title=course_title,
             is_final_block_and_substep=is_final_block_and_substep,
             summary_stay=summary_stay,
+            side_question=side_question,
         )
     )
     elaborating = _summary_elaboration(block, substep, last_answer)
@@ -1636,8 +1681,11 @@ def _this_turn(
                 opening=opening,
                 block_type=str(block.get("type") or ""),
                 last_answer=last_answer,
+                side_question=side_question,
             )
         )
+    if side_question and summary_phase not in {"task", "check"}:
+        lines.append(_side_question_reply(last_answer))
     del misconception_policy
     del prerequisite_support_policy
     del learning_support
@@ -2477,6 +2525,7 @@ def _how_to_teach(
     if _summary_elaboration(block, substep, last_answer):
         lines = [line for line in lines if not line.startswith("You are on the summary step.")]
     goal_start = _goal_start_mode(block, substep, opening=opening, last_answer=last_answer)
+    side_question = _prompts_side_question(block, substep, last_answer, opening=opening)
     move_on_close = str(block.get("type") or "") == "topic_goal" and substep == "main" and _ready_to_move_on(last_answer)
     if move_on_close:
         lines = [line for line in lines if "ask for the idea in a full sentence" not in line]
@@ -2507,18 +2556,19 @@ def _how_to_teach(
             "Set help_requested=true."
         )
 
-    if escalation == "socratic_probing":
-        lines.append(
-            "Scaffolding escalation (socratic_probing): on misses, ask targeted diagnostic questions to help the learner spot the gap themselves."
-        )
-    elif escalation == "worked_example_on_first_miss":
-        lines.append(
-            "Scaffolding escalation (worked_example_on_first_miss): show a brief parallel worked example or sub-step immediately on the first miss before asking them to retry."
-        )
-    else:
-        lines.append(
-            "Scaffolding escalation (progressive_nudge_then_scaffold): a nudge on the first miss, then a concrete partial step."
-        )
+    if not side_question:
+        if escalation == "socratic_probing":
+            lines.append(
+                "Scaffolding escalation (socratic_probing): on misses, ask targeted diagnostic questions to help the learner spot the gap themselves."
+            )
+        elif escalation == "worked_example_on_first_miss":
+            lines.append(
+                "Scaffolding escalation (worked_example_on_first_miss): show a brief parallel worked example or sub-step immediately on the first miss before asking them to retry."
+            )
+        else:
+            lines.append(
+                "Scaffolding escalation (progressive_nudge_then_scaffold): a nudge on the first miss, then a concrete partial step."
+            )
 
     if goal.kind == "time_boxed":
         budget = f" Budget: {goal.minutes} minutes ({minutes_used} used)." if goal.minutes is not None else ""
@@ -2527,7 +2577,11 @@ def _how_to_teach(
             "and advance immediately when the block passes." + budget
         )
 
-    if stay_mode == "strict":
+    if side_question:
+        lines.append(
+            "Answer the learner's side question in one or two sentences, then repeat the active question. Do not skip it."
+        )
+    elif stay_mode == "strict":
         lines.append(
             "Stay on this component. If the learner leaves the topic, bring them back in the same reply and do not answer the tangent."
         )
@@ -3126,6 +3180,7 @@ def build_kc_prompt(
         btype == "topic_goal" and substep == "explain" and learner_asks_clarification(last_answer or "")
     )
     summary_elaborate = _summary_elaboration(active_block, substep, last_answer or "")
+    side_help = _prompts_side_question(active_block, substep, last_answer or "", opening=opening)
 
     prompt = _blocks_text(
         [
@@ -3235,7 +3290,7 @@ def build_kc_prompt(
                     off_course_count=off_course_count,
                     affect=affect,
                     enrichment_turns=enrichment_turns,
-                    help_requested=bool(help_requested) or clarify_help,
+                    help_requested=bool(help_requested) or clarify_help or side_help,
                     component_status=component_status,
                     last_answer=last_answer,
                     last_misconception=last_misconception,
