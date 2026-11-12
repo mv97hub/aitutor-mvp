@@ -1,16 +1,16 @@
 ---
-description: Crayon Bold visual style for the AI Tutor web app
-globs: ["**/*.tsx", "**/*.jsx", "**/*.html", "**/*.css"]
-alwaysApply: true
+description: Crayon Bold visual style for the kid tutor pages only
+globs: ["apps/web/app/learn/**/*.tsx", "apps/web/app/learn-mobile/**/*.tsx", "apps/web/components/KcTutor.tsx", "apps/web/components/KcCourseProgress.tsx"]
+alwaysApply: false
 ---
 
   Crayon Bold — Design System Rules for AI Tutor
 How to use in Cursor: Save this file as .cursor/rules/crayon-bold.mdc in your repo and add this frontmatter at the very top:
 
 ---
-description: Crayon Bold visual style for the AI Tutor web app
-globs: ["**/*.tsx", "**/*.jsx", "**/*.html", "**/*.css"]
-alwaysApply: true
+description: Crayon Bold visual style for the kid tutor pages only
+globs: ["apps/web/app/learn/**/*.tsx", "apps/web/app/learn-mobile/**/*.tsx", "apps/web/components/KcTutor.tsx", "apps/web/components/KcCourseProgress.tsx"]
+alwaysApply: false
 ---
 Then prompt Cursor page by page using the Build prompts at the bottom.
 
