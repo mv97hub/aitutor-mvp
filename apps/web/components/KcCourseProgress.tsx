@@ -5,14 +5,12 @@ import Link from "next/link";
 
 import { BrandMark } from "@/components/BrandMark";
 import { NETWORK_WIDTH, NetworkMap, networkHeight } from "@/components/KcNetwork";
-import { Block, Button, Crayon, EmptyState, FilterChip, ProgressRing, StackedBar, Tag, TopBar } from "@/components/crayon";
 import { ProgressRecommend } from "@/components/progress/ProgressRecommend";
 import { ProgressTotals } from "@/components/progress/ProgressTotals";
 import type { KcNetwork, KcProgress, KcTutorCourse } from "@/lib/kc";
 import { friendlyStrength, learnCoursePath } from "@/lib/learn";
 import {
   blockRows,
-  childComponentLabel,
   childNoteByCode,
   componentLine,
   componentRecommendations,
@@ -174,12 +172,10 @@ export function KcCourseProgress({
   error: string | null;
 }) {
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
-  const [topicFilter, setTopicFilter] = useState<"all" | "mastered" | "learning" | "not-started">("all");
   const detailRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     setSelectedCode(null);
-    setTopicFilter("all");
   }, [courseId]);
 
   useEffect(() => {
@@ -399,254 +395,5 @@ export function KcCourseProgress({
   );
 
   if (area) return <div className="parent-work progress-page">{body}</div>;
-
-  const topics = units.filter((unit) => !unit.patch);
-  const masteredPct =
-    progress && progress.total > 0
-      ? Math.round((progress.known / progress.total) * 100)
-      : topics.length === 0
-        ? 0
-        : Math.round((totals.mastered / topics.length) * 100);
-  const visibleTopics = topics.filter((unit) => {
-    const label = childComponentLabel(unit);
-    if (topicFilter === "mastered") return label === "Mastered";
-    if (topicFilter === "learning") return label === "In Progress";
-    if (topicFilter === "not-started") return label === "";
-    return true;
-  });
-  const noPractice = !progress || topics.length === 0;
-
-  return (
-    <Crayon>
-      <TopBar
-        appName="Kinder Computers"
-        studentName={studentName}
-        items={[
-          { href: `/learn/${studentId}`, label: "Home" },
-          { href: `/kc-progress?student=${encodeURIComponent(studentId)}`, label: "My Progress", active: true },
-        ]}
-      />
-      <main className="cb-page">
-        <div className="cb-chip-row" role="group" aria-label="Courses">
-          {courses.map((course) => {
-            const selectedCard = course.id === courseId;
-            return (
-              <Link
-                key={course.id}
-                href={progressPath(studentId, course.id)}
-                className={selectedCard ? "cb-chip is-wide is-blue" : "cb-chip is-wide"}
-                aria-pressed={selectedCard}
-              >
-                {course.title}
-              </Link>
-            );
-          })}
-        </div>
-        {error ? (
-          <div className="banner" role="alert">
-            <p>{error}</p>
-          </div>
-        ) : null}
-        {noPractice ? (
-          <EmptyState title="No practice yet — start a lesson to see your progress here">
-            <Button tone="primary" href={`/learn/${studentId}`}>
-              Back to lessons
-            </Button>
-          </EmptyState>
-        ) : (
-          <>
-            <section className="cb-summary" aria-label={progress?.title || "Course"}>
-              <Block className="cb-master">
-                <ProgressRing value={masteredPct} label={`${masteredPct}% mastered`} />
-                <h2>{masteredPct}% mastered</h2>
-              </Block>
-              <Block>
-                <StackedBar
-                  segments={[
-                    { id: "mastered", label: "Mastered", count: totals.mastered, tone: "green" },
-                    { id: "learning", label: "Learning", count: totals.inProgress, tone: "blue" },
-                    { id: "started", label: "Started", count: totals.completed, tone: "yellow" },
-                    { id: "not-started", label: "Not started", count: totals.notStarted, tone: "track" },
-                  ]}
-                />
-              </Block>
-            </section>
-            <div className="cb-filters" role="group" aria-label="Topic status">
-              {(
-                [
-                  ["all", "All"],
-                  ["mastered", "Mastered"],
-                  ["learning", "Learning"],
-                  ["not-started", "Not started"],
-                ] as const
-              ).map(([id, label]) => (
-                <FilterChip key={id} pressed={topicFilter === id} onClick={() => setTopicFilter(id)}>
-                  {label}
-                </FilterChip>
-              ))}
-            </div>
-            <ol className="cb-topic-list">
-              {visibleTopics.map((unit) => {
-                const label = childComponentLabel(unit);
-                const status = label === "In Progress" ? "Learning" : label || "Not started";
-                const tone = label === "Mastered" ? "green" : label === "In Progress" ? "sky" : label === "Completed" ? "yellow" : "surface";
-                const filled = pipCount(unit);
-                const index = topics.findIndex((item) => item.id === unit.id);
-                return (
-                  <li key={unit.id} className="cb-topic-row">
-                    <button
-                      type="button"
-                      className="cb-topic-main"
-                      aria-pressed={unit.code === selectedCode}
-                      onClick={() => setSelectedCode(unit.code)}
-                    >
-                      <span className={`cb-num${label === "Mastered" ? " is-done" : ""}`}>{index + 1}</span>
-                      <span>{unit.title}</span>
-                    </button>
-                    <span className="cb-pips" aria-label={`${filled} of 5 mastery`}>
-                      {Array.from({ length: 5 }, (_, pip) => (
-                        <i key={pip} className={pip < filled ? "cb-pip is-on" : "cb-pip"} />
-                      ))}
-                    </span>
-                    <Tag tone={tone}>{status}</Tag>
-                    <Button href={learnCoursePath(studentId, courseId, { kc: unit.id })}>Practice</Button>
-                  </li>
-                );
-              })}
-            </ol>
-            {progress && score ? (
-              <Block>
-                <p className="cb-muted-copy">
-                  {score.percent}% · {score.finished} of {score.total}
-                  {lastActivity ? ` · Last activity ${lastActivity}` : " · No activity yet"}
-                </p>
-                <ProgressTotals
-                  label="Course totals"
-                  items={[
-                    { label: "Components mastered", value: totals.mastered },
-                    { label: "Components completed", value: totals.completed },
-                    { label: "Components in progress", value: totals.inProgress },
-                    { label: "Components not started", value: totals.notStarted },
-                    { label: "Blocks passed", value: totals.blocksPassed },
-                    { label: "Blocks revealed", value: totals.blocksRevealed },
-                    { label: "Blocks not yet", value: totals.blocksNotYet },
-                  ]}
-                />
-                {revisit.length > 0 ? (
-                  <ProgressRecommend heading="Revisit" label="Recommendations">
-                    <ul>
-                      {revisit.map((item) => (
-                        <li key={item.code}>{item.title}</li>
-                      ))}
-                    </ul>
-                  </ProgressRecommend>
-                ) : null}
-                <div className="progress-split">
-                  <div className="progress-map">
-                    {network && network.nodes.length > 0 ? (
-                      <NetworkFrame
-                        network={network}
-                        statuses={statusByCode(units)}
-                        noteByCode={childNoteByCode(units)}
-                        selectedCode={selectedCode}
-                        onSelectNode={setSelectedCode}
-                        resetKey={courseId}
-                      />
-                    ) : (
-                      <p className="cb-muted-copy">This course has no prerequisite map yet.</p>
-                    )}
-                  </div>
-                </div>
-                {finished.length > 0 ? (
-                  <ul className="progress-finished" aria-label="Finished components">
-                    {finished.map((unit) => {
-                      const updated = formatTimestamp(unit.updated_at || unit.completed_at);
-                      const sentence = finishedSentence(unit, progress.accomplishments);
-                      const pressed = unit.code === selectedCode;
-                      return (
-                        <li key={unit.id}>
-                          <button
-                            type="button"
-                            className={pressed ? "is-selected" : undefined}
-                            aria-pressed={pressed}
-                            onClick={() => setSelectedCode(unit.code)}
-                          >
-                            <span>{[unit.title, componentLine(unit), updated].filter(Boolean).join(" · ")}</span>
-                            {sentence ? <span className="progress-finished-sentence">{sentence}</span> : null}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : null}
-                {finished.length > 0 && progress.course_complete && (rubric.completed || rubric.struggled) ? (
-                  <div className="progress-rubric">
-                    {rubric.completed ? <p>{rubric.completed}</p> : null}
-                    {rubric.struggled ? <p>{rubric.struggled}</p> : null}
-                  </div>
-                ) : null}
-                {selected && selectedRecommendations ? (
-                  <article className="progress-detail" ref={detailRef}>
-                    <h2>{selected.title}</h2>
-                    <p>{componentLine(selected)}</p>
-                    {showed ? <p>{showed}</p> : null}
-                    {selectedRows.length > 0 ? (
-                      <ul className="progress-blocks" aria-label="Blocks">
-                        {selectedRows.map((row) => (
-                          <li key={row.id}>
-                            <span className="progress-block-name">{row.name}</span>
-                            <span className="progress-block-type">{row.type}</span>
-                            <span className={`progress-block-state ${stateClass(row.state)}`}>{row.state}</span>
-                            <span className="progress-block-attempts">
-                              {row.attempts} {row.attempts === 1 ? "attempt" : "attempts"}
-                            </span>
-                            {row.firstTry ? <span className="progress-block-first">First try</span> : null}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    {selectedRecommendations.workOn ||
-                    selectedRecommendations.misconceptions.length > 0 ||
-                    selectedRecommendations.opportunities.length > 0 ? (
-                      <ProgressRecommend heading="Recommendations" level="h3" label="Recommendations">
-                        {selectedRecommendations.workOn ? <p>{selectedRecommendations.workOn}</p> : null}
-                        {selectedRecommendations.misconceptions.length > 0 ? (
-                          <ul aria-label="Misconceptions">
-                            {selectedRecommendations.misconceptions.map((item) => (
-                              <li key={item}>{item}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                        {selectedRecommendations.opportunities.length > 0 ? (
-                          <ul aria-label="Opportunities">
-                            {selectedRecommendations.opportunities.map((item) => (
-                              <li key={item}>{item}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </ProgressRecommend>
-                    ) : null}
-                    <Link className="cb-btn" href={learnCoursePath(studentId, courseId, { kc: selected.id })}>
-                      Continue with your tutor
-                    </Link>
-                  </article>
-                ) : null}
-              </Block>
-            ) : null}
-          </>
-        )}
-      </main>
-    </Crayon>
-  );
-}
-
-function pipCount(unit: { p_known?: number; status?: string; mastery?: string }): number {
-  if (typeof unit.p_known === "number" && Number.isFinite(unit.p_known)) {
-    return Math.max(0, Math.min(5, Math.round(unit.p_known * 5)));
-  }
-  const label = childComponentLabel(unit);
-  if (label === "Mastered") return 5;
-  if (label === "Completed") return 4;
-  if (label === "In Progress") return 2;
-  return 0;
+  return <main className="learn-shell progress-page">{body}</main>;
 }
