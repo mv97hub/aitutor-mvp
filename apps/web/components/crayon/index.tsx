@@ -366,16 +366,13 @@ export function TopBar({
   appName,
   items,
   studentName,
-  mark,
 }: {
   appName: string;
   items: readonly CrayonNavItem[];
   studentName?: string;
-  mark?: string;
 }) {
   const [open, setOpen] = useState(false);
   const navId = useId();
-  const logo = (mark || appName.trim().charAt(0) || "A").slice(0, 2).toUpperCase();
 
   useEffect(() => {
     if (!open) return;
@@ -389,9 +386,7 @@ export function TopBar({
   return (
     <header className={cx("cb-topbar", open && "is-open")}>
       <div className="cb-brand">
-        <span className="cb-logo" aria-hidden="true">
-          {logo}
-        </span>
+        <img className="cb-logo" src="/kinder-computers-logo.png" alt="" width={32} height={32} />
         <span className="cb-app-name">{appName}</span>
       </div>
       {items.length > 0 ? (

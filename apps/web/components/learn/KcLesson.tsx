@@ -10,7 +10,6 @@ import type { KcTutorSession } from "@/lib/kc";
 import { goalStartActions } from "@/lib/kc-goal-start";
 import { choiceShowing, lessonComposerVisible, quizFor } from "@/lib/learn-mobile";
 import { blockStepDivider, starBurst } from "@/lib/learn";
-import { getTutorAvatarPreset } from "@/lib/tutor-avatars";
 import type { TutorProfile } from "@/lib/types";
 
 function isTyping(element: HTMLElement) {
@@ -63,7 +62,6 @@ export function KcLesson({
   const [settled, setSettled] = useState<{ anchorId: string; ids: string[]; note: string } | null>(null);
   const [burst, setBurst] = useState<{ award: number; firstTry: boolean; revealed: boolean } | null>(null);
   const seenBlocks = useRef<string[] | null>(null);
-  const tutorFace = getTutorAvatarPreset(session.avatar_preset || activeTutor.avatar_preset);
   const anchor = [...session.messages].reverse().find((message) => message.role === "assistant");
   const quiz = session.choice ? quizFor(session.choice) : null;
   const activeSettled = settled && anchor && settled.anchorId === anchor.id ? settled : null;
@@ -228,7 +226,7 @@ export function KcLesson({
   }
 
   return (
-    <div className="kc-lesson">
+    <div className={learnMode ? "kc-lesson cb-lesson" : "kc-lesson"}>
       {burst ? (
         <p className="learn-star-burst" role="status">
           +{burst.award} ★
@@ -236,7 +234,7 @@ export function KcLesson({
           {burst.revealed && !burst.firstTry ? " · Guided Walkthrough Complete" : ""}
         </p>
       ) : null}
-      <div ref={threadRef} className="ds-scroll" role="log" aria-live="polite" aria-relevant="additions">
+      <div ref={threadRef} className={learnMode ? "ds-scroll cb-thread" : "ds-scroll"} role="log" aria-live="polite" aria-relevant="additions">
         <div className="ds-column">
           {learnMode && (session.completed_blocks ?? 0) === 0 && session.status !== "completed" ? (
             <article className="learn-topic-banner">
@@ -268,23 +266,39 @@ export function KcLesson({
                 </div>
               ) : null}
               <div
-                className={`bubble ${message.role === "user" ? "user" : "assistant"}${learnMode && message.role === "assistant" ? " learn-tutor-bubble" : ""}`}
-                style={learnMode && message.role === "assistant" ? { borderColor: tutorFace.fg } : undefined}
+                className={
+                  learnMode
+                    ? `cb-msg ${message.role === "user" ? "is-student" : "is-tutor"}`
+                    : `bubble ${message.role === "user" ? "user" : "assistant"}`
+                }
               >
-                {message.role === "assistant" ? (
-                  <div className="bubble-tutor-head">
-                    <TutorAvatar
-                      preset={session.avatar_preset || activeTutor.avatar_preset}
-                      avatarUrl={session.avatar_url ?? activeTutor.avatar_url}
-                      name={session.tutor_name || activeTutor.name || "Default"}
-                      size={learnMode ? "md" : "sm"}
-                    />
-                    <strong className="bubble-tutor-name">
-                      {session.tutor_name || activeTutor.name || "Default"}
-                    </strong>
-                  </div>
+                {learnMode && message.role === "assistant" ? (
+                  <span className="cb-avatar is-yellow" aria-hidden="true">
+                    {(session.tutor_name || activeTutor.name || "T").slice(0, 1).toUpperCase()}
+                  </span>
                 ) : null}
-                <p>{message.content}</p>
+                {learnMode ? (
+                  <div className="cb-bubble">
+                    <p>{message.content}</p>
+                  </div>
+                ) : (
+                  <>
+                    {message.role === "assistant" ? (
+                      <div className="bubble-tutor-head">
+                        <TutorAvatar
+                          preset={session.avatar_preset || activeTutor.avatar_preset}
+                          avatarUrl={session.avatar_url ?? activeTutor.avatar_url}
+                          name={session.tutor_name || activeTutor.name || "Default"}
+                          size="sm"
+                        />
+                        <strong className="bubble-tutor-name">
+                          {session.tutor_name || activeTutor.name || "Default"}
+                        </strong>
+                      </div>
+                    ) : null}
+                    <p>{message.content}</p>
+                  </>
+                )}
               </div>
               {quiz && anchor?.id === message.id ? (
                 <article
@@ -307,9 +321,17 @@ export function KcLesson({
             );
           })}
           {showPendingLine && pendingLine ? (
-            <div className="bubble user">
-              <p>{pendingLine.text}</p>
-            </div>
+            learnMode ? (
+              <div className="cb-msg is-student">
+                <div className="cb-bubble">
+                  <p>{pendingLine.text}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="bubble user">
+                <p>{pendingLine.text}</p>
+              </div>
+            )
           ) : null}
           {learnMode && session.status === "completed" ? (
             <article className="learn-next-card">
@@ -347,7 +369,7 @@ export function KcLesson({
       {goalActions.length > 0 ? (
         <div className="kc-explain-chips">
           {goalActions.map((label) => (
-            <button key={label} type="button" onClick={() => void sendAnswer(label)}>
+            <button key={label} type="button" className={learnMode ? "cb-chip" : undefined} onClick={() => void sendAnswer(label)}>
               {label}
             </button>
           ))}
@@ -356,56 +378,96 @@ export function KcLesson({
       {composerOpen && session.active_block_type === "explanation" && !choosing ? (
         <div className="kc-explain-chips">
           {session.active_substep === "summary_check" ? (
-            <button type="button" onClick={() => void sendAnswer("No final questions — let's continue!")}>
+            <button type="button" className={learnMode ? "cb-chip" : undefined} onClick={() => void sendAnswer("No final questions — let's continue!")}>
               No final questions — let&apos;s continue!
             </button>
           ) : (
             <>
-              <button type="button" onClick={() => void sendAnswer("Tell me more")}>
+              <button type="button" className={learnMode ? "cb-chip" : undefined} onClick={() => void sendAnswer("Tell me more")}>
                 Tell me more
               </button>
-              <button type="button" onClick={() => void sendAnswer("Got it - move on")}>
+              <button type="button" className={learnMode ? "cb-chip" : undefined} onClick={() => void sendAnswer("Got it - move on")}>
                 Got it - move on
               </button>
             </>
           )}
         </div>
       ) : null}
+      {learnMode && showComposer ? (
+        <div className="cb-quick">
+          <button type="button" className="cb-chip" onClick={() => void sendAnswer("Give me a hint")}>
+            Give me a hint
+          </button>
+          <button type="button" className="cb-chip" onClick={() => void sendAnswer("Explain again")}>
+            Explain again
+          </button>
+          <button type="button" className="cb-chip" onClick={() => void sendAnswer("I got it!")}>
+            I got it!
+          </button>
+        </div>
+      ) : null}
       {showComposer ? (
         <form
-          className="ds-composer-seat"
+          className={learnMode ? "cb-composer" : "ds-composer-seat"}
           onSubmit={(event) => {
             event.preventDefault();
             if (choosing || sending.current) return;
             void sendAnswer(draft);
           }}
         >
-          <div className="ds-card">
-            <textarea
-              ref={draftRef}
-              className="ds-draft"
-              name="answer"
-              rows={1}
-              value={draft}
-              required={!choosing}
-              placeholder={choosing ? "Choose an answer above" : "Message"}
-              aria-label="Your answer"
-              disabled={choosing}
-              maxLength={2000}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  if (!choosing) event.currentTarget.form?.requestSubmit();
-                }
-              }}
-            />
-            <div className="ds-card-row">
-              <button className="ds-send" type="submit" aria-label="Send" disabled={choosing || answering || draft.trim().length === 0}>
-                ↑
+          {learnMode ? (
+            <>
+              <textarea
+                ref={draftRef}
+                className="cb-input"
+                name="answer"
+                rows={1}
+                value={draft}
+                required={!choosing}
+                placeholder={choosing ? "Choose an answer above" : "Message"}
+                aria-label="Your answer"
+                disabled={choosing}
+                maxLength={2000}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    if (!choosing) event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+              />
+              <button className="cb-btn is-primary" type="submit" disabled={choosing || answering || draft.trim().length === 0}>
+                Send
               </button>
+            </>
+          ) : (
+            <div className="ds-card">
+              <textarea
+                ref={draftRef}
+                className="ds-draft"
+                name="answer"
+                rows={1}
+                value={draft}
+                required={!choosing}
+                placeholder={choosing ? "Choose an answer above" : "Message"}
+                aria-label="Your answer"
+                disabled={choosing}
+                maxLength={2000}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    if (!choosing) event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+              />
+              <div className="ds-card-row">
+                <button className="ds-send" type="submit" aria-label="Send" disabled={choosing || answering || draft.trim().length === 0}>
+                  ↑
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </form>
       ) : null}
     </div>

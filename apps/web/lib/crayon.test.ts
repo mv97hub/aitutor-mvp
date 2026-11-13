@@ -80,21 +80,23 @@ test("components use token classes and no hardcoded hex", () => {
   }
 });
 
-test("kid pages are not restyled yet", () => {
-  const pages = [
-    "app/learn/[studentId]/page.tsx",
-    "app/learn/[studentId]/course/[courseId]/page.tsx",
-    "app/learn-mobile/[studentId]/page.tsx",
-    "app/learn-mobile/[studentId]/course/[courseId]/page.tsx",
-    "app/kc-progress/page.tsx",
-    "components/KcTutor.tsx",
-    "components/KcCourseProgress.tsx",
+test("kid pages use crayon and parent progress stays on the old shell", () => {
+  const restyled = [
     "components/learn/ChildHome.tsx",
+    "components/KcTutor.tsx",
     "components/learn/LearnMobileTutor.tsx",
+    "components/KcCourseProgress.tsx",
   ];
-  for (const page of pages) {
+  for (const page of restyled) {
     const source = readFileSync(join(root, page), "utf8");
-    assert.equal(source.includes("crayon"), false, page);
-    assert.equal(source.includes("cb-"), false, page);
+    assert.equal(/crayon|Crayon|cb-/.test(source), true, page);
   }
+  const parent = readFileSync(join(root, "app/parent/[parentId]/child/[studentId]/progress/page.tsx"), "utf8");
+  assert.equal(parent.includes("crayon"), false);
+  assert.match(parent, /area=\{/);
+  const progress = readFileSync(join(root, "components/KcCourseProgress.tsx"), "utf8");
+  assert.match(progress, /if \(area\) return <div className="parent-work progress-page">/);
+  const tutor = readFileSync(join(root, "components/KcTutor.tsx"), "utf8");
+  assert.match(tutor, /if \(learnMode\)/);
+  assert.match(tutor, /<KcBanner name="KC Tutor">/);
 });

@@ -1,22 +1,19 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { BrandMark } from "@/components/BrandMark";
 import { TutorAvatar } from "@/components/TutorAvatar";
-import { BasicsFields, ChildMark, PersonaFields } from "@/components/learn/ChildFields";
+import { Block, Button, Card, Crayon, ProgressBar, SectionTitle, TopBar, type CrayonTone } from "@/components/crayon";
+import { BasicsFields, PersonaFields } from "@/components/learn/ChildFields";
 import { api } from "@/lib/api";
 import type { KcTutorCourse } from "@/lib/kc";
 import {
-  STAR_TOOLTIP,
   childDraftError,
   childWriteBody,
   courseMinutes,
   draftFromStudent,
   explorerFor,
-  gradePill,
   sumStars,
   type ChildDraft,
 } from "@/lib/learn";
@@ -42,7 +39,6 @@ export function ChildHome({
   const [picker, setPicker] = useState<{ course: KcTutorCourse; mode: "start" | "change" } | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [completedOpen, setCompletedOpen] = useState(false);
 
   const stars = sumStars(courses);
   const rank = explorerFor(stars);
@@ -52,7 +48,6 @@ export function ChildHome({
   const fresh = courses.filter((course) => !course.started);
   const done = courses.filter((course) => course.course_complete);
   const hero = inProgress[0];
-  const rest = inProgress.slice(1);
 
   async function continueCourse(courseId: string) {
     setBusy(true);
@@ -104,136 +99,98 @@ export function ChildHome({
     }
   }
 
+  const masteredTopics = courses.reduce((sum, course) => sum + (course.known_count ?? 0), 0);
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const minutesWeek = courses.reduce((sum, course) => {
+    const activeAt = course.last_active_at ? Date.parse(course.last_active_at) : Number.NaN;
+    if (!Number.isFinite(activeAt) || activeAt < weekAgo) return sum;
+    return sum + courseMinutes(course);
+  }, 0);
+  const mascotName = hero?.tutor?.name || tutors.find((tutor) => tutor.id === student.preferred_tutor_profile_id)?.name || tutors[0]?.name || "Tutor";
+  const encouragement = hero
+    ? `Pick up ${hero.title} where you left off.`
+    : `You are a ${rank.explorer_rank}. Pick a course and keep going.`;
+  const catalog = [...inProgress, ...fresh, ...done];
+
+  function resumeLearning() {
+    if (hero) {
+      void continueCourse(hero.id);
+      return;
+    }
+    if (fresh[0]) setPicker({ course: fresh[0], mode: "start" });
+  }
+
   return (
-    <main className={phone ? "learn-shell learn-mobile-shell" : "learn-shell"}>
-      <BrandMark />
-      <header className="learn-home-bar">
-        <div className="learn-who">
-          <ChildMark
-            name={student.display_name}
-            preset={student.child_profile?.avatar_preset}
-            avatarUrl={student.child_profile?.avatar_url}
-            size="lg"
-          />
+    <Crayon className={phone ? "learn-mobile-shell" : undefined}>
+      <TopBar
+        appName="Kinder Computers"
+        studentName={student.display_name}
+        items={[
+          { href: `${basePath}/${student.id}`, label: "Home", active: true },
+          { href: `/kc-progress?student=${encodeURIComponent(student.id)}`, label: "My Progress" },
+        ]}
+      />
+      <main className="cb-page">
+        {error || notice ? (
+          <div className="banner" role="alert">
+            <p>{error || notice}</p>
+          </div>
+        ) : null}
+        <Block as="section" tone="yellow" className="cb-hero">
           <div>
             <h1>Hi, {student.display_name}!</h1>
-            <Link href={basePath} className="learn-switch">
-              Switch learner
-            </Link>
+            <p>{encouragement}</p>
+            <div className="cb-hero-actions">
+              <Button tone="primary" disabled={busy || (!hero && fresh.length === 0)} onClick={resumeLearning}>
+                Continue learning
+              </Button>
+              <Button href={basePath}>Switch learner</Button>
+              <Button type="button" onClick={() => setSettingsOpen(true)}>
+                My Settings
+              </Button>
+            </div>
           </div>
-        </div>
-        <div className="learn-home-actions">
-          <span className="learn-stars" title={STAR_TOOLTIP}>
-            ★ {stars}
+          <span className="cb-mascot" role="img" aria-label={mascotName}>
+            {mascotName.slice(0, 1).toUpperCase()}
           </span>
-          <button type="button" className="learn-btn" onClick={() => setSettingsOpen(true)}>
-            My Settings
-          </button>
-          <Link className="learn-text-link" href={`/kc-progress?student=${student.id}`}>
-            Detailed progress
-          </Link>
-        </div>
-      </header>
-
-      <section className="learn-rank" aria-label="Explorer level">
-        <div>
-          <p className="eyebrow">Mastery stars</p>
-          <h2>
-            Level {rank.explorer_level}: {rank.explorer_rank}
-          </h2>
-        </div>
-        <div className="learn-rank-bar" title={STAR_TOOLTIP}>
-          <span style={{ width: `${rank.explorer_percent}%` }} />
-        </div>
-        <p className="learn-quiet">
-          {rank.explorer_next == null
-            ? `${stars} stars`
-            : `${stars} stars · ${rank.explorer_next - stars} to the next level`}
-        </p>
-      </section>
-
-      {error || notice ? (
-        <div className="banner" role="alert">
-          <p>{error || notice}</p>
-        </div>
-      ) : null}
-
-      <section className="learn-section">
-        <h2>Continue learning</h2>
-        {inProgress.length === 0 ? (
-          <p className="learn-quiet">No courses in progress yet. Start one below.</p>
+        </Block>
+        <section className="cb-stats" aria-label="This week">
+          <Block className="cb-stat">
+            <span className="cb-badge">0</span>
+            <p>Streak</p>
+          </Block>
+          <Block className="cb-stat">
+            <span className="cb-badge">{masteredTopics}</span>
+            <p>Topics mastered</p>
+          </Block>
+          <Block className="cb-stat">
+            <span className="cb-badge">{minutesWeek}</span>
+            <p>Minutes this week</p>
+          </Block>
+          <Block className="cb-stat">
+            <span className="cb-badge">{stars}</span>
+            <p>Stars</p>
+          </Block>
+        </section>
+        <SectionTitle>My courses</SectionTitle>
+        {catalog.length === 0 ? (
+          <p className="cb-muted-copy">No courses yet. A new course will show up here when it is ready.</p>
         ) : (
-          <div className="learn-continue">
-            {hero ? (
-              <CourseCard
-                course={hero}
-                hero
-                busy={busy}
-                onContinue={() => void continueCourse(hero.id)}
-                onChangeTutor={() => setPicker({ course: hero, mode: "change" })}
-              />
-            ) : null}
-            {rest.map((course) => (
+          <div className="cb-course-grid">
+            {catalog.map((course, index) => (
               <CourseCard
                 key={course.id}
                 course={course}
+                band={BANDS[index % BANDS.length]}
                 busy={busy}
-                onContinue={() => void continueCourse(course.id)}
-                onChangeTutor={() => setPicker({ course, mode: "change" })}
+                fresh={!course.started}
+                onContinue={() => (course.started ? void continueCourse(course.id) : setPicker({ course, mode: "start" }))}
+                onChangeTutor={() => setPicker({ course, mode: course.started ? "change" : "start" })}
               />
             ))}
           </div>
         )}
-      </section>
-
-      <section className="learn-section">
-        <h2>Start a new course</h2>
-        {fresh.length === 0 ? (
-          <p className="learn-quiet">Every ready course is already started.</p>
-        ) : (
-          <div className="learn-catalog">
-            {fresh.map((course) => (
-              <article key={course.id} className="learn-course-card">
-                <h3>{course.title}</h3>
-                <p>{course.description || "A new set of topics to explore."}</p>
-                <p className="learn-meta">
-                  {course.component_count ?? 0} topics · ~{courseMinutes(course)} min
-                </p>
-                <button
-                  type="button"
-                  className="learn-btn primary"
-                  disabled={busy}
-                  onClick={() => setPicker({ course, mode: "start" })}
-                >
-                  Choose tutor & start
-                </button>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {done.length > 0 ? (
-        <section className="learn-section">
-          <button type="button" className="learn-disclosure" onClick={() => setCompletedOpen((open) => !open)}>
-            Completed courses ({done.length})
-          </button>
-          {completedOpen ? (
-            <ul className="learn-done-list">
-              {done.map((course) => (
-                <li key={course.id}>
-                  <strong>{course.title}</strong>
-                  <span>Finished · ★ {course.stars ?? 0}</span>
-                  <button type="button" className="learn-btn" disabled={busy} onClick={() => void continueCourse(course.id)}>
-                    Review
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
-      ) : null}
-
+      </main>
       {settingsOpen ? (
         <SettingsModal
           student={student}
@@ -255,58 +212,50 @@ export function ChildHome({
           onChoose={(tutorId) => void chooseTutor(tutorId)}
         />
       ) : null}
-    </main>
+    </Crayon>
   );
 }
 
+const BANDS: CrayonTone[] = ["sky", "pink", "yellow", "green", "blue"];
+
+
 function CourseCard({
   course,
-  hero,
+  band,
   busy,
+  fresh,
   onContinue,
   onChangeTutor,
 }: {
   course: KcTutorCourse;
-  hero?: boolean;
+  band: CrayonTone;
   busy: boolean;
+  fresh: boolean;
   onContinue: () => void;
   onChangeTutor: () => void;
 }) {
   const total = course.component_count ?? 0;
   const completed = course.completed_count ?? 0;
-  const percent = course.percent ?? 0;
   const topic = course.current_topic?.title;
+  const description = [course.description, topic ? `Currently on: ${topic}` : "", course.tutor ? `Guided by ${course.tutor.name}` : ""]
+    .filter(Boolean)
+    .join(" ");
   return (
-    <article className={`learn-course-card${hero ? " is-hero" : ""}`}>
-      {hero ? <p className="eyebrow">Jump right back in</p> : null}
-      <h3>{course.title}</h3>
-      {course.tutor ? (
-        <p className="learn-guided">
-          <TutorAvatar
-            preset={course.tutor.avatar_preset}
-            avatarUrl={course.tutor.avatar_url}
-            name={course.tutor.name}
-            size="sm"
-          />
-          Guided by {course.tutor.name}
-        </p>
-      ) : null}
-      {topic ? <p className="learn-meta">Currently on: {topic}</p> : null}
-      <div className="learn-progress" aria-hidden="true">
-        <span style={{ width: `${percent}%` }} />
+    <Card band={band}>
+      <h3 className="cb-course-title">{course.title}</h3>
+      <p className="cb-muted-copy">{description || "A set of topics to explore."}</p>
+      <ProgressBar value={completed} max={total || 1} caption={`${completed} of ${total} topics`} />
+      <div className="cb-card-actions">
+        <Button tone="primary" disabled={busy} onClick={onContinue}>
+          {fresh ? "Start" : "Continue"}
+        </Button>
+        {fresh ? null : (
+          <Button disabled={busy} onClick={onChangeTutor}>
+            Change tutor
+          </Button>
+        )}
       </div>
-      <p className="learn-meta">
-        {completed} of {total} topics complete · {percent}% · ★ {course.stars ?? 0}
-      </p>
-      <div className="learn-actions">
-        <button type="button" className="learn-btn primary" disabled={busy} onClick={onContinue}>
-          Continue
-        </button>
-        <button type="button" className="learn-btn" disabled={busy} onClick={onChangeTutor}>
-          Change tutor
-        </button>
-      </div>
-    </article>
+    </Card>
   );
 }
 
