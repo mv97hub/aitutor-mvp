@@ -656,6 +656,48 @@ def ancillary_story(answer: str, block: dict) -> bool:
     return True
 
 
+_SHORT_REMARK_WORDS = 8
+
+
+def _matches_mcq_choice(block: dict, answer: str, state: dict | None) -> bool:
+    """True when the reply picks a choice, including a wrong one."""
+    if str(block.get("type") or "") != "mcq":
+        return False
+    choices, _correct = mcq_payload(block, state if isinstance(state, dict) else {})
+    return match_mcq_choice_index(answer, choices) is not None
+
+
+def _short_off_topic_remark(
+    answer: str,
+    block: dict,
+    substep: str,
+    state: dict | None,
+    cfg: dict | None,
+) -> bool:
+    """A brief aside that does not use the lesson's words, such as "arsenal are great".
+
+    On a topic or goal, sharing none of those words means it is not an attempt.
+    On every other block, a substantive try still counts, even when the words miss.
+    """
+    words = _proceed_text(answer).split()
+    # One word can be a real try. "arsenal are great" is a short aside.
+    if len(words) < 2 or len(words) > _SHORT_REMARK_WORDS:
+        return False
+    if _matches_mcq_choice(block, answer, state):
+        return False
+    anchors = _anchor_words(block)
+    if not anchors:
+        return False
+    have = {word for word in _words(answer) if len(word) > 3}
+    if have & anchors:
+        return False
+    if str(block.get("type") or "") != "topic_goal" and learner_gave_real_attempt(
+        block, substep, answer, cfg
+    ):
+        return False
+    return True
+
+
 def unscored_side_request(
     block: dict,
     substep: str,
@@ -663,10 +705,12 @@ def unscored_side_request(
     state: dict | None,
     cfg: dict | None,
 ) -> bool:
-    """A question, "tell me", or a side story. Not a goal attempt and not a move-on.
+    """A question, a short off-topic remark, "tell me", or a side story.
 
-    A wrong try at the goal stays an attempt. Tell me more, and an explicit move-on,
-    keep today's path. Safety is decided before this loop runs.
+    Not a goal attempt and not a move-on. A question counts even when it shares
+    the lesson's words and even without a question mark. A wrong try at the goal
+    stays an attempt. Tell me more, and an explicit move-on, keep today's path.
+    Safety is decided before this loop runs.
     """
     raw = answer or ""
     if not raw.strip():
@@ -675,18 +719,48 @@ def unscored_side_request(
         return False
     if learner_wants_deeper_explanation(raw):
         return False
-    if _gives_up(raw):
-        return False
     if str(block.get("type") or "") == "passage_ela":
         from app.kc_blocks import learner_asks_for_passage
 
         if learner_asks_for_passage(raw):
             return False
+    # Before the goal-overlap check. "What is a computer?" is still a question.
+    if learner_asks_question_or_background(raw):
+        return True
+    if _gives_up(raw):
+        return False
     if answer_addresses_substep(block, substep, raw, state, cfg):
         return False
-    if learner_asks_question_or_background(raw) or "tell me" in _proceed_text(raw):
+    if "tell me" in _proceed_text(raw):
         return True
-    return ancillary_story(raw, block)
+    if ancillary_story(raw, block):
+        return True
+    return _short_off_topic_remark(raw, block, substep, state, cfg)
+
+
+def unanswered_side_turn(
+    block: dict,
+    substep: str,
+    answer: str,
+    state: dict | None,
+    cfg: dict | None,
+) -> bool:
+    """One check for the opening explanation and the later steps.
+
+    A question, with or without a question mark, and a short off-topic remark
+    are unanswered side turns. On the opening explanation, "Tell me more" with
+    no side topic still deepens. A real attempt and an explicit move-on do not.
+    """
+    raw = answer or ""
+    if str(substep or "") == "explain" and learner_wants_deeper_explanation(raw):
+        return False
+    return learner_side_question(raw, block) or unscored_side_request(
+        block,
+        substep,
+        raw,
+        state,
+        cfg,
+    )
 
 
 def model_accepts_substep(
@@ -1036,9 +1110,26 @@ def resolve_block_turn(
             work_text=(work_on or "").strip(),
             enrichment_turns=enrichment_turns,
         )
+    # Same side-turn check on the opening explanation and on later steps.
+    # A question or a short aside is not a deeper lesson and is not a score.
+    side_turn = stay_on_course_enabled(cfg) and unanswered_side_turn(
+        block, substep, answer, state, cfg
+    )
     if btype == "topic_goal" and substep == "explain":
-        # The goal question waits. A question is a clarification to answer here,
-        # not another tell-me-more. Only move-on leaves this explanation.
+        if side_turn:
+            return _unscored_stay(
+                hint=tier,
+                move_attempts=move_attempts,
+                reveals=reveals,
+                enrichment_turns=enrichment_turns,
+                rubric=_clean_ids(list(stored_rubric)),
+                index=index,
+                bid=bid,
+                state=state,
+                results=results,
+            )
+        # The goal question waits. Tell me more deepens this explanation.
+        # Only an explicit move-on leaves it. A real attempt stays here.
         clarifying = learner_asks_clarification(answer)
         if learner_done_with_explanation(answer) and not clarifying:
             state["substep"] = "main"
@@ -1066,12 +1157,8 @@ def resolve_block_turn(
             advance_block=False,
             passed=False,
         )
-    if stay_on_course_enabled(cfg) and (
-        learner_side_question(answer, block)
-        or unscored_side_request(block, substep, answer, state, cfg)
-    ):
+    if side_turn:
         # Unscored help. Same block, same substep, same attempt count.
-        # A question, "tell me", or a side story is not an attempt.
         return _unscored_stay(
             hint=tier,
             move_attempts=move_attempts,

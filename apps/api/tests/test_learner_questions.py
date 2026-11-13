@@ -30,7 +30,7 @@ SUPPLY = {
 NEXT = {"id": "next", "type": "mcq", "data": {"question_stem": "A smartphone price rises."}}
 
 CLARIFY = (
-    "Answer that question first, in a sentence or two, then return to this topic."
+    "Answer that question first, in a sentence or two, then one line back to the active lesson."
 )
 
 
@@ -57,6 +57,8 @@ def test_lemonade_cup_is_answered_before_the_topic_moves_on() -> None:
         text = _prompt(opening=False, last_answer=phrase)
         turn = _section(text, "This turn")
         assert CLARIFY in turn, phrase
+        assert "one line back to the active lesson" in turn, phrase
+        assert "Do not start a new explanation of this block." in turn, phrase
         assert "Set help_requested=true." in text, phrase
         assert "The child has asked for help." in text, phrase
         assert "The child has not asked for help." not in text, phrase
@@ -66,7 +68,10 @@ def test_lemonade_cup_is_answered_before_the_topic_moves_on() -> None:
         stayed = _turn(phrase, state={"substep": "explain", "elaboration_turns": 0})
         assert stayed.advance_block is False, phrase
         assert stayed.unit_complete is False, phrase
+        assert stayed.passed is False, phrase
+        assert stayed.rubric_met == [], phrase
         assert stayed.next_block_state["substep"] == "explain", phrase
+        assert stayed.next_block_state["elaboration_turns"] == 0, phrase
         forced = resolve_block_turn(
             decision="complete",
             substep_passed=True,
@@ -89,7 +94,10 @@ def test_lemonade_cup_is_answered_before_the_topic_moves_on() -> None:
         )
         assert forced.advance_block is False, phrase
         assert forced.next_step == 0, phrase
+        assert forced.passed is False, phrase
+        assert forced.rubric_met == [], phrase
         assert forced.next_block_state["substep"] == "explain", phrase
+        assert forced.next_block_state["elaboration_turns"] == 1, phrase
 
 
 def test_tell_me_more_with_no_question_still_deepens() -> None:
