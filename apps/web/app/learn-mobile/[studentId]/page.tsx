@@ -1,6 +1,4 @@
-import Link from "next/link";
-
-import { BrandMark } from "@/components/BrandMark";
+import { Button, Crayon } from "@/components/crayon";
 import { ChildHome } from "@/components/learn/ChildHome";
 import { api } from "@/lib/api";
 import type { KcTutorCourse } from "@/lib/kc";
@@ -31,14 +29,15 @@ export default async function MobileChildHomePage({ params }: { params: Promise<
   }
   if (!student) {
     return (
-      <main className="learn-shell learn-mobile-shell">
-        <BrandMark />
-        <h1>That learner is not on this device.</h1>
-        <p className="lede">{error || "Pick someone from the learner list."}</p>
-        <Link href={LEARN_MOBILE} className="learn-btn primary">
-          Who&apos;s learning today?
-        </Link>
-      </main>
+      <Crayon>
+        <main className="cb-page">
+          <h1 className="cb-course-title">That learner is not on this device.</h1>
+          <p className="cb-muted-copy">{error || "Pick someone from the learner list."}</p>
+          <Button tone="primary" href={LEARN_MOBILE}>
+            Who&apos;s learning today?
+          </Button>
+        </main>
+      </Crayon>
     );
   }
   return <ChildHome student={student} courses={courses} tutors={tutors} error={error} basePath={LEARN_MOBILE} />;
