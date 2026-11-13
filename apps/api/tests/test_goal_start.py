@@ -1,5 +1,7 @@
 """A topic or goal starts with an explanation. The question waits for move on."""
 
+from copy import deepcopy
+
 from app.kc_loop import learner_done_with_explanation, resolve_block_turn
 from app.kc_prompt import build_kc_prompt, default_substep_for_block, substeps_for_block
 from app.models import default_kc_tutor_config
@@ -134,6 +136,111 @@ def test_the_question_phase_still_checks_the_goal() -> None:
         answer="The river is blue.",
     )
     assert answered.next_block_state["substep"] == "summary_check"
+
+
+APPLE = {
+    "id": "apple",
+    "type": "topic_goal",
+    "data": {
+        "topic": "The Apple I computer",
+        "goal": "Explain what the Apple I was and why that computer mattered.",
+        "acceptance_criteria": "The Apple I was an early personal computer.",
+    },
+}
+APPLE_NEXT = {"id": "next", "type": "topic_goal", "data": {"topic": "Next", "goal": "Explain next."}}
+ASIDE = (
+    "Answer it inside the safety rules, in one or two sentences, then one line back to the active lesson."
+)
+REAL_APPLE = "The Apple I was an early personal computer."
+
+
+def _apple_cfg(mode: str = "brief_answer_then_return") -> dict:
+    cfg = deepcopy(default_kc_tutor_config())
+    cfg["overarching"]["stay_on_course"] = mode
+    return cfg
+
+
+def _apple_prompt(answer: str, *, opening: bool = False, mode: str = "brief_answer_then_return") -> str:
+    cfg = _apple_cfg(mode)
+    return _text(
+        node=_node(blocks=[dict(APPLE), dict(APPLE_NEXT)]),
+        profile=_profile(kc_tutor_config=cfg, stay_on_course=mode != "exploratory"),
+        opening=opening,
+        last_answer=answer,
+        attempts=0,
+        active_block_state={"substep": "explain", "dialogue_turns": 1, "elaboration_turns": 0},
+    )
+
+
+def _apple_turn(answer: str, *, mode: str = "brief_answer_then_return"):
+    return resolve_block_turn(
+        decision="complete",
+        substep_passed=True,
+        block_complete=True,
+        rubric_met=["apple"],
+        stored_rubric=["kept"],
+        matched_wrong="",
+        blocks=[dict(APPLE), dict(APPLE_NEXT)],
+        step=0,
+        active_block_state={"substep": "explain", "elaboration_turns": 0, "dialogue_turns": 1},
+        block_results=[],
+        move_attempts=2,
+        hint_tier="scaffold",
+        reveals=0,
+        enrichment_turns=0,
+        cfg=_apple_cfg(mode),
+        goal=None,
+        last_misconception="",
+        answer=answer,
+    )
+
+
+def test_opening_side_remarks_stay_on_the_step_and_are_not_scored() -> None:
+    for phrase in ("arsenal are great", "What is an apple", "What is a computer?"):
+        stayed = _apple_turn(phrase)
+        assert stayed.advance_block is False, phrase
+        assert stayed.unit_complete is False, phrase
+        assert stayed.passed is False, phrase
+        assert stayed.next_step == 0, phrase
+        assert stayed.next_block_state["substep"] == "explain", phrase
+        assert stayed.next_block_state["elaboration_turns"] == 0, phrase
+        assert stayed.move_attempts == 2, phrase
+        assert stayed.block_results == [], phrase
+        assert stayed.rubric_met == ["kept"], phrase
+        text = _apple_prompt(phrase)
+        turn = _section(text, "This turn")
+        assert ASIDE in turn, phrase
+        assert "Do not start a new explanation of this block." in turn, phrase
+        assert "Do not ask a question applies to your lesson text, not to the student." in turn, phrase
+        assert "Do not score this reply." in turn, phrase
+        assert "Do not say Nice connection" in turn, phrase
+        assert "substep_passed=false" in turn, phrase
+        assert DEEPEN not in text, phrase
+        assert "Do not ask any question." not in text, phrase
+        assert "Explain this same topic more deeply" not in text, phrase
+
+
+def test_tell_me_more_on_the_apple_intro_still_deepens() -> None:
+    text = _apple_prompt("Tell me more")
+    turn = _section(text, "This turn")
+    assert DEEPEN in turn
+    assert "Do not ask any question." in turn
+    assert ASIDE not in text
+    stayed = _apple_turn("Tell me more")
+    assert stayed.next_block_state["substep"] == "explain"
+    assert stayed.next_block_state["elaboration_turns"] == 1
+    assert stayed.advance_block is False
+
+
+def test_a_real_apple_attempt_and_move_on_keep_the_opening_path() -> None:
+    stayed = _apple_turn(REAL_APPLE)
+    assert stayed.next_block_state["substep"] == "explain"
+    assert stayed.next_block_state["elaboration_turns"] == 1
+    assert stayed.rubric_met == ["kept", "apple"]
+    assert "Do not start a new explanation of this block." not in _apple_prompt(REAL_APPLE)
+    opened = _apple_turn("Got it - move on")
+    assert opened.next_block_state["substep"] == "main"
+    assert opened.advance_block is False
 
 
 def test_prompt_builder_uses_the_same_goal_start_lines() -> None:
