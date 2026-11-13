@@ -5,7 +5,6 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { KcBanner } from "@/components/KcBanner";
 import { KcDebugPanel } from "@/components/KcDebugPanel";
 import { KcLesson } from "@/components/learn/KcLesson";
-import { CrayonSession } from "@/components/learn/CrayonSession";
 import { LearnCourseBar, LearnQuestPanel, type TutorMood } from "@/components/learn/LearnQuestPanel";
 import { TutorAvatar } from "@/components/TutorAvatar";
 import { api } from "@/lib/api";
@@ -454,63 +453,6 @@ export function KcTutor({
   function openLearnTopic(nextKc: string) {
     router.push(learnCoursePath(studentId, courseId, { kc: nextKc }));
     router.refresh();
-  }
-
-  if (learnMode) {
-    const steps: Array<"done" | "current" | "upcoming"> = (session?.block_progress ?? []).map((item) =>
-      item.status === "completed" ? "done" : item.status === "active" ? "current" : "upcoming",
-    );
-    const topicTitle = currentTopic?.title || session?.title || "Lesson";
-    return (
-      <>
-        <CrayonSession
-          backHref={homeHref}
-          courseTitle={course?.title || progress?.title || "Course"}
-          topicTitle={topicTitle}
-          goal={topicTitle}
-          steps={steps}
-          tools={
-            <button type="button" className="cb-btn" aria-pressed={debugOpen} onClick={() => setDebugOpen((open) => !open)}>
-              Debug
-            </button>
-          }
-          quest={
-            <LearnQuestPanel
-              tutor={activeTutor}
-              mood={mood}
-              progress={progress}
-              session={session}
-              activeId={session?.kc_id || openKc}
-              onOpenTopic={openLearnTopic}
-            />
-          }
-        >
-          {error ? (
-            <div className="banner" role="alert">
-              <p>{error}</p>
-            </div>
-          ) : null}
-          {session ? null : <p className="cb-muted-copy">This course is opening.</p>}
-          {session ? (
-            <KcLesson
-              key={session.id}
-              session={session}
-              model={activeModel}
-              activeTutor={activeTutor}
-              learnMode
-              onActivity={setMood}
-              nextTopic={nextTopic ? { id: nextTopic.id, title: nextTopic.title } : null}
-              homeHref={homeHref}
-              topicCompleteStars={currentTopic ? topicStars(currentTopic) : 0}
-              topicStrength={friendlyStrength(currentTopic?.what_was_strong)}
-              onOpenTopic={openLearnTopic}
-              courseDone={Boolean(progress?.course_complete) && session.status === "completed" && !nextTopic}
-            />
-          ) : null}
-        </CrayonSession>
-        {debugOpen ? <KcDebugPanel variables={variables} turns={turns} /> : null}
-      </>
-    );
   }
 
   return (
