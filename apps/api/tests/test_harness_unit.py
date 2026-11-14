@@ -4,7 +4,7 @@ from app.harness import fixture_document
 from app.harness_checks import automatic_checks, stop_reason, stuck_after_turn
 from app.harness_report import stuck_nudge_rows
 from app.harness_personas import BOUNDARY_PROBES, starter_children
-from app.harness_prompt_source import block_label_from_prompt, prompt_builder_excerpts, prompt_sections, select_turns
+from app.harness_prompt_source import block_label_from_prompt, example_from_turn, prompt_builder_excerpts, prompt_sections, select_turns
 from app.harness_report import compare_runs, findings, kept_run_ids, rollup
 from app.models import ALL_BLOCK_TYPES
 from app.token_usage import MODEL_TOKEN_PRICES, _model_cost
@@ -169,6 +169,30 @@ def test_prompt_builder_excerpts_name_the_section_and_function() -> None:
         assert row["section"] == "This turn"
         assert row["function"] == "_this_turn"
         assert any(phrase in line for line in row["literals"])
+
+
+def test_example_turn_keeps_the_reply_and_the_turn_block() -> None:
+    row = example_from_turn(
+        "chat",
+        {
+            "seq": 3,
+            "child_text": "What does govern mean?",
+            "tutor_prompt": "This turn\nActive step: Block 2 of 6: Explanatory Walkthrough. The child will type.\nGoal start: explain the topic.\n",
+            "session_after": {
+                "tutor_reply": "The river kept its name.",
+                "substep": "explain_topic",
+                "block_id": "b2",
+                "block_type": "explanation",
+            },
+        },
+        block_title="How a river cuts rock",
+    )
+    assert row is not None
+    assert row["tutor_reply"] == "The river kept its name."
+    assert row["child_text"] == "What does govern mean?"
+    assert row["block_label"] == "Explanatory Walkthrough"
+    assert row["block_title"] == "How a river cuts rock"
+    assert row["substep"] == "explain_topic"
 
 
 def test_stored_prompt_sections_and_example_turns() -> None:

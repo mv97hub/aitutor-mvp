@@ -1,17 +1,5 @@
-import { generateText, jsonSchema, Output } from "ai";
-
-import {
-  applyModelReplacements,
-  drafterPrompt,
-  findingsOf,
-  prepareDraft,
-  recommendationMarkdown,
-  type DraftMaterials,
-  type ModelDraft,
-} from "@/lib/harness-draft";
+import { findingsOf, prepareDraft, recommendationMarkdown, type DraftMaterials } from "@/lib/harness-draft";
 import { writeRecommendationDoc } from "@/lib/harness-draft-doc";
-import { isKcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
-import { languageModel } from "@/lib/language-model";
 import { readModelUsage } from "@/lib/model-usage";
 
 export const runtime = "nodejs";
@@ -19,42 +7,17 @@ export const maxDuration = 60;
 
 const RECOMMENDATION_DOC_FLAG = "docs/harness-prompt-recommendations.md";
 
-const schema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    cards: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          current_quote: { type: "string" },
-          replacement: { type: "string" },
-          shorter: { type: "string" },
-          evidence_summary: { type: "string" },
-        },
-        required: ["current_quote", "replacement", "shorter", "evidence_summary"],
-      },
-    },
-  },
-  required: ["cards"],
-};
-
 export async function POST(req: Request) {
-  let body: DraftMaterials & { model?: string };
+  let body: DraftMaterials;
   try {
-    body = (await req.json()) as typeof body;
+    body = (await req.json()) as DraftMaterials;
   } catch {
     return new Response("Expected JSON.", { status: 400 });
   }
-  const requested = modelForCall(body.model || "");
-  const modelName = requested || "gpt-6.1-sol";
-  if (!isKcModel(modelName)) return new Response("That model is not allowed.", { status: 422 });
   const prepared = prepareDraft(body);
-  const grounded = prepared.cards;
+  const cards = prepared.cards;
   const materials = prepared.materials;
-  if (grounded.length === 0) {
+  if (cards.length === 0) {
     const findings = findingsOf(materials);
     const several = (materials.run_id || "").includes(",");
     if (findings.length === 0) {
@@ -65,39 +28,18 @@ export async function POST(req: Request) {
     }
     return new Response(
       several
-        ? "The selected runs have no stored tutor prompt to quote, so no card was drafted."
-        : "This run has no stored tutor prompt to quote, so no card was drafted.",
+        ? "The selected runs have no stored turn to quote, so no observation was drafted."
+        : "This run has no stored turn to quote, so no observation was drafted.",
       { status: 422 },
     );
-  }
-  let cards = grounded;
-  let drafter = "prompt-builder";
-  let usage = readModelUsage(undefined);
-  const missing = missingKeyMessage(modelName);
-  if (!missing) {
-    try {
-      const result = await generateText({
-        model: languageModel(modelName),
-        prompt: drafterPrompt(materials, grounded),
-        temperature: 0.2,
-        output: Output.object({ schema: jsonSchema(schema) }),
-      });
-      const output = result.output as { cards?: ModelDraft[] };
-      cards = applyModelReplacements(grounded, output.cards ?? []);
-      usage = readModelUsage(result.usage);
-      drafter = modelName;
-    } catch {
-      cards = grounded;
-      drafter = "prompt-builder";
-    }
   }
   const runId = String(materials.run_id || body.run_id || "");
   const wrote = writeRecommendationDoc(recommendationMarkdown(runId, cards));
   return Response.json({
     cards,
-    usage,
-    judge_model: modelName,
-    drafter,
+    usage: readModelUsage(undefined),
+    judge_model: "",
+    drafter: "observations",
     recommendations_doc: wrote ? RECOMMENDATION_DOC_FLAG : "",
   });
 }

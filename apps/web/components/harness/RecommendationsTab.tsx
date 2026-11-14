@@ -2,9 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { HARNESS_MODELS } from "@/lib/harness";
 import { defaultSelectedRunIds, recommendationPageSummary, skippedRunMessage, type DraftMaterials } from "@/lib/harness-draft";
-import { kcModelLabel } from "@/lib/kc-models";
 import { api } from "@/lib/api";
 
 type Card = {
@@ -24,11 +22,17 @@ type Card = {
     function?: string;
     symbol?: string;
     current?: string;
-    replacement?: string;
-    shorter?: string;
     nudges?: { turn?: number; asked?: string; answered?: string; block_type?: string; block_id?: string; substep?: string; run_id?: string }[];
     sources?: { run_id?: string; turn?: number; block_type?: string }[];
     findings?: { tag?: string; title?: string }[];
+    block_title?: string;
+    substep?: string;
+    child_text?: string;
+    tutor_reply?: string;
+    turn?: number;
+    run_id?: string;
+    fault?: string;
+    mismatch?: string;
   };
   proposed: { text?: string; shorter?: string };
   trial_profile_id?: string | null;
@@ -47,7 +51,6 @@ export function RecommendationsTab({
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [picked, setPicked] = useState<string[] | null>(null);
   const [viewId, setViewId] = useState("");
-  const [model, setModel] = useState("gpt-6.1-sol");
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -124,7 +127,7 @@ export function RecommendationsTab({
       const response = await fetch("/api/kc/harness/recommend", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model, runs: contexts }),
+        body: JSON.stringify({ runs: contexts }),
       });
       if (!response.ok) {
         const text = (await response.text()) || "Could not draft cards.";
@@ -135,18 +138,14 @@ export function RecommendationsTab({
       const saveId = String(contexts[0]?.run_id || chosen[0]);
       await api("/kc/harness/recommendations", {
         method: "POST",
-        body: JSON.stringify({ run_id: saveId, replace: true, cards: drafted.cards }),
+        body: JSON.stringify({ run_id: saveId, replace: true, observations: true, cards: drafted.cards }),
       });
       setViewId(saveId);
       onSelectRun(saveId);
       await load(saveId);
       const named = skippedRunMessage(failures);
       if (named) setError(named);
-      setNote(
-        drafted.drafter && drafted.drafter !== "prompt-builder"
-          ? "Drafted one set of cards from the selected runs. The model rewrote the shorter lines."
-          : "Drafted one set of cards from the selected runs.",
-      );
+      setNote("Drafted observations from the selected runs.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not draft cards.");
     } finally {
@@ -203,15 +202,8 @@ export function RecommendationsTab({
       <header className="harness-panel-head">
         <h2>Recommendations</h2>
         <div className="harness-actions">
-          <select aria-label="Drafter model" value={model} onChange={(event) => setModel(event.target.value)}>
-            {HARNESS_MODELS.map((item) => (
-              <option key={item} value={item}>
-                {kcModelLabel(item)}
-              </option>
-            ))}
-          </select>
           <button type="button" className="harness-draft" disabled={chosen.length === 0 || busy} onClick={() => void draft()}>
-            {busy ? "Drafting cards…" : "Draft from selected"}
+            {busy ? "Drafting…" : "Draft from selected"}
           </button>
           <button type="button" disabled={!activeId || busy} onClick={() => void saveSuite()}>
             Save as suite
@@ -243,7 +235,7 @@ export function RecommendationsTab({
         </fieldset>
       ) : null}
       <p className="help">
-        Nothing here changes the live prompt. Each card names the prompt-builder section and function, quotes the current sentences from the stored tutor prompt, and gives a replacement, including a shorter or removed line. Accepting a setting does not apply it. Try it copies the tutor profile into a hidden trial profile and queues the same slice. You start that run yourself.
+        Nothing here changes the live tutor prompt, and this page does not edit the prompt builder. Draft from selected writes one observation per turn and fault from the stored transcript. A stored prompt line is quoted as the line that was in force. Accept does not change the live tutor. Try it copies the tutor profile into a hidden trial profile and queues the same slice. You start that run yourself.
       </p>
       {error ? <p className="banner">{error}</p> : null}
       {note ? <p className="help">{note}</p> : null}
@@ -251,15 +243,15 @@ export function RecommendationsTab({
         <p className="harness-empty">No runs yet. Start a run, then draft cards from the runs you check.</p>
       ) : cards.length === 0 ? (
         <p className="harness-empty">
-          No cards yet. The newest runs start checked. Press Draft from selected. The button shows Drafting cards… while the request runs. One set of cards covers every checked run. Finishing a run does not create cards. Drafting does not change the live tutor.
+          No observations yet. The newest runs start checked. Press Draft from selected. The button shows Drafting… while the request runs. One set of observations covers every checked run. Finishing a run does not create them. Drafting does not change the live tutor.
         </p>
       ) : (
-        <p className="help">These cards are one set for the selected runs. Accept does not change the live tutor.</p>
+        <p className="help">These observations are one set for the selected runs. Accept does not change the live tutor.</p>
       )}
       {summary ? (
         <div className="harness-summary">
           <div className="harness-actions">
-            <h3>Draft summary</h3>
+            <h3>Observations</h3>
             <button type="button" onClick={() => void copySummary()}>
               {copied ? "Copied" : "Copy"}
             </button>
@@ -269,58 +261,45 @@ export function RecommendationsTab({
       ) : null}
       {cards.map((card) => {
         const evidence = card.evidence || {};
-        const replacement = evidence.replacement || card.proposed?.text || "";
-        const shorter = evidence.shorter || card.proposed?.shorter || "";
+        const run = evidence.run_id || evidence.sources?.[0]?.run_id || "unknown";
+        const turn = evidence.turn ?? evidence.sources?.[0]?.turn;
         return (
           <article key={card.id} className="harness-card">
             <h3>{card.title}</h3>
+            <p>Run: {run}</p>
             <p>Block type: {evidence.block_type || "an unknown block"}</p>
-            {evidence.findings && evidence.findings.length > 0 ? (
-              <p>Findings: {evidence.findings.map((finding) => finding.title || finding.tag).filter(Boolean).join("; ")}</p>
+            <p>Block title: {evidence.block_title || "not stored"}</p>
+            <p>Substep: {evidence.substep || "not stored"}</p>
+            <p>Turn: {turn ?? "unknown"}</p>
+            <p>Child: {evidence.child_text || "not stored"}</p>
+            <p>Tutor: {evidence.tutor_reply || "not stored"}</p>
+            <p>What was suboptimal: {evidence.fault || evidence.summary || "The stored turn was marked."}</p>
+            {evidence.current ? (
+              <>
+                <p>
+                  Line in force
+                  {evidence.section || evidence.function
+                    ? ` (${[evidence.section, evidence.function].filter(Boolean).join(", ")})`
+                    : ""}
+                  . This was the line in force on that turn, not a line to change.
+                </p>
+                <blockquote>{evidence.current}</blockquote>
+              </>
             ) : null}
-            {evidence.sources && evidence.sources.length > 0 ? (
-              <ul>
-                {evidence.sources.map((source, index) => (
-                  <li key={`${source.run_id ?? "run"}-${source.turn ?? index}`}>
-                    Run {source.run_id || "unknown"} · turn {source.turn ?? "—"} · {source.block_type || evidence.block_type || "an unknown block"}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            <p>
-              Section: {evidence.section || "—"}. Function: {evidence.function || "—"}
-              {evidence.symbol && evidence.symbol !== evidence.function ? ` (${evidence.symbol})` : ""}
-            </p>
-            <p>
-              {card.kind} · prompt gets {card.prompt_direction} · {card.status} · {card.confidence}
-            </p>
-            <p>{evidence.summary}</p>
+            {evidence.mismatch ? <p>{evidence.mismatch}</p> : null}
             {evidence.nudges && evidence.nudges.length > 0 ? (
               <ul>
                 {evidence.nudges.map((nudge, index) => (
                   <li key={`${nudge.turn ?? index}`}>
-                    {nudge.run_id ? `Run ${nudge.run_id}. ` : ""}Turn {nudge.turn} on {nudge.block_type || evidence.block_type || "an unknown block"}
-                    {nudge.block_id || nudge.substep ? ` (${[nudge.block_id, nudge.substep].filter(Boolean).join(" / ")})` : ""}: the child asked “{nudge.asked}”. The tutor answered “{nudge.answered}”. The block did not move.
+                    Turn {nudge.turn} on {nudge.block_type || evidence.block_type || "an unknown block"}
+                    {nudge.block_id || nudge.substep ? ` (${[nudge.block_id, nudge.substep].filter(Boolean).join(" / ")})` : ""}: the child asked “{nudge.asked}”. The tutor answered “{nudge.answered}”. The step did not move.
                   </li>
                 ))}
               </ul>
             ) : null}
             <p>
-              <strong>Current sentences</strong>
+              {card.status} · {card.confidence}
             </p>
-            <blockquote>{evidence.current || "The stored prompt had no sentence for this card."}</blockquote>
-            <p>
-              <strong>Replacement.</strong> {replacement}
-            </p>
-            {shorter ? (
-              <p>
-                <strong>Shorter or removed.</strong> {shorter}
-              </p>
-            ) : null}
-            <p>
-              <strong>{card.cause_class}.</strong> {card.place}
-            </p>
-            <p>Risk: {card.risk}</p>
             <div className="harness-actions">
               <button type="button" onClick={() => void setStatus(card, "accepted")}>
                 Accept

@@ -152,22 +152,21 @@ export default function AiTestChildrenDocsPage() {
 
         <h2>Recommendations</h2>
         <p>
-          Findings name the block type the issue happened on. Cards are not created when a run finishes. Recommendations
-          lists recent runs, newest first, each with a checkbox. The newest few start selected. Press Draft from selected
-          to run the drafter once over every checked run. The button shows Drafting cards… while that request runs. If a
-          run cannot be read, its name stays in the error and the other checked runs are still drafted. The result is one
-          set of cards. Each card is one prompt line: the section, the function, and the quoted sentence. Every finding
-          that points at that line is listed on the card, with one replacement. The quote comes from the stored tutor
-          prompt of the evidence turn. A line is not cited for a block whose stored prompt did not contain it. Pressing
-          Draft again replaces the previous draft for that selection. Evidence names the block type, the run, and the
-          turn. Stuck nudges appear once, on the card for the step that did not move. It also shows the cause, whether the prompt gets shorter or longer,
-          the risk, and a status. Statuses are new, accepted, rejected, on trial, shipped, verified, and regressed.
-          Drafting does not change the live tutor and does not edit the prompt builder. Accept does not change the live tutor.
+          Findings name the block type the issue happened on. Observations are not created when a run finishes.
+          Recommendations lists recent runs, newest first, each with a checkbox. The newest few start selected. Press
+          Draft from selected to write one observation per turn and fault from the stored transcript. The button shows
+          Drafting… while that request runs. If a run cannot be read, its name stays in the error and the other checked
+          runs are still drafted. Each observation names the run, the block type and title, the substep, the turn, the
+          child&apos;s message, and the tutor&apos;s reply. A stored prompt line is quoted only as the line that was in
+          force, with its section and function. When that line belongs to a different block type than the turn, the
+          observation says so. Stuck nudges keep the nudge, the tutor reply, the block, the turn, and that the step did
+          not move. Pressing Draft again replaces the previous draft for that selection. The copyable text at the top
+          says how many runs and which block types the observations come from. Drafting does not change the live tutor
+          and does not edit the prompt builder. Accept does not change the live tutor.
         </p>
         <p>
-          The drafter looks for a line to cut or shorten before it looks for a line to add. A batch that only proposes
-          additions is incomplete, and the page adds a shorter option when that happens. Remove or shorten is a normal
-          outcome. You review every card. Accept does not change the live profile.
+          The drafter does not propose a replacement, a shorter line, or a sentence to remove. You read the observations
+          and decide any prompt change in chat. Accept does not change the live profile.
         </p>
         <p>
           Try it, on a settings card, copies the tutor profile into a trial profile and queues the same children,
