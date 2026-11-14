@@ -7,6 +7,7 @@ import {
   draftPromptCards,
   drafterPrompt,
   recommendationMarkdown,
+  recommendationPageSummary,
   skippedRunMessage,
   type DraftMaterials,
 } from "./harness-draft.ts";
@@ -200,4 +201,60 @@ test("a failed run is named and the other runs still draft one card per theme", 
   assert.match(markdown, /run-a/);
   assert.match(markdown, /run-b/);
   assert.match(markdown, /turn 11/);
+});
+
+test("the page summary is plain text for a later run and keeps stuck nudges", () => {
+  const text = recommendationPageSummary([
+    {
+      title: "Topic / Goal: Shorten This turn for stuck",
+      evidence: {
+        section: "This turn",
+        function: "_this_turn",
+        current: "Explain this same topic more deeply.",
+        shorter: "Explain this topic in two sentences, then stop.",
+        block_type: "Topic / Goal",
+        sources: [{ run_id: "run-a", turn: 9, block_type: "Topic / Goal" }],
+        nudges: [
+          {
+            turn: 9,
+            asked: "What's next?",
+            answered: "Let's keep going.",
+            block_type: "Topic / Goal",
+            block_id: "b1",
+            substep: "explain",
+          },
+        ],
+      },
+    },
+    {
+      title: "one question",
+      evidence: {
+        section: "How to teach",
+        function: "_how_to_teach",
+        current: "Do not ask any question.",
+        shorter: "Ask no question.",
+        block_type: "Topic / Goal",
+        sources: [{ run_id: "run-b", turn: 2, block_type: "Topic / Goal" }],
+      },
+    },
+  ]);
+  assert.match(text, /later Cursor run/);
+  assert.match(text, /does not change the live tutor prompt/);
+  assert.match(text, /kc_prompt\.py/);
+  assert.match(text, /Theme 1: Topic \/ Goal: Shorten This turn for stuck/);
+  assert.match(text, /Section: This turn/);
+  assert.match(text, /Function: _this_turn/);
+  assert.match(text, /Quoted stored line: Explain this same topic more deeply\./);
+  assert.match(text, /Shorter replacement: Explain this topic in two sentences, then stop\./);
+  assert.match(text, /block type Topic \/ Goal/);
+  assert.match(text, /Run run-a/);
+  assert.match(text, /Turn 9/);
+  assert.match(text, /the child asked "What's next\?"/);
+  assert.match(text, /The tutor answered "Let's keep going\."/);
+  assert.match(text, /did not move/);
+  assert.match(text, /Theme 2: one question/);
+  assert.match(text, /Run run-b/);
+  assert.match(text, /Turn 2/);
+  const second = text.split("Theme 2:")[1] || "";
+  assert.equal(second.includes("did not move"), false);
 });
