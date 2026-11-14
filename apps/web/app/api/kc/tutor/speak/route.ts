@@ -94,6 +94,7 @@ export async function POST(req: Request) {
   let spoken = "";
   let safetyFlag = "none";
   let generatedMcq: Record<string, unknown> | null = null;
+  let decision: Decision | null = null;
   let usage: ModelUsageCounts = readModelUsage(undefined);
   try {
     const result = await generateText({
@@ -104,7 +105,7 @@ export async function POST(req: Request) {
       output: Output.object({ schema: jsonSchema(bundle.response_schema) }),
     });
     usage = readModelUsage(result.usage);
-    const decision = result.output as Decision | undefined;
+    decision = (result.output as Decision | undefined) ?? null;
     spoken = (decision?.reply || result.text || "").trim();
     safetyFlag = typeof decision?.safety_flag === "string" && decision.safety_flag ? decision.safety_flag : "none";
     const generated = decision?.generated_mcq;
@@ -146,6 +147,7 @@ export async function POST(req: Request) {
         messages: stored.messages,
         model: stored.model,
         message_id: messageId,
+        decision: decision ?? null,
       }),
     });
     await api(`/kc/sessions/${sessionId}/token-usage`, {

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes.ai_safety import router as ai_safety_router
+from app.routes.harness import router as harness_router
 from app.routes.catalog import router as catalog_router
 from app.routes.kc import router as kc_router
 from app.routes.parents import router as parents_router
@@ -23,6 +24,7 @@ app.include_router(studio_router)
 app.include_router(kc_router)
 app.include_router(ai_safety_router)
 app.include_router(parents_router)
+app.include_router(harness_router)
 
 
 @app.get("/health")

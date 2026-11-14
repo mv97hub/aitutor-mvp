@@ -10,7 +10,7 @@ export default async function TokenUsagePage() {
   let students: Student[] = [];
   let error: string | null = null;
   try {
-    students = await api<Student[]>("/students");
+    students = await api<Student[]>("/students?include_test=true");
   } catch (err) {
     error = err instanceof Error ? err.message : "The tutor service is not reachable.";
   }

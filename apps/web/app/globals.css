@@ -6669,3 +6669,133 @@ button.progress-card {
 @media (max-width: 720px) {
   .kc-flow-close li { grid-template-columns: 1fr; }
 }
+
+.harness-page {
+  padding: 8px 16px 40px;
+}
+
+.harness-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.harness-panel-head,
+.harness-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.harness-split,
+.harness-two {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.harness-card,
+.harness-editor,
+.harness-child-list,
+.harness-profile-list {
+  display: grid;
+  gap: 8px;
+}
+
+.harness-card,
+.harness-editor {
+  padding: 12px;
+  border: 1px solid #d2dce6;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.harness-child-list button,
+.harness-actions button,
+.harness-panel button,
+.harness-panel select,
+.harness-panel input,
+.harness-panel textarea {
+  font: inherit;
+}
+
+.harness-child-list button {
+  display: grid;
+  text-align: left;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d2dce6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.harness-child-list button.is-active {
+  border-color: #8aa0b8;
+  background: #e8eef5;
+}
+
+.harness-traits {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.harness-traits li {
+  display: grid;
+  grid-template-columns: 12em 2em 1fr;
+  gap: 8px;
+}
+
+.harness-slider {
+  display: grid;
+  gap: 2px;
+}
+
+.harness-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.harness-table th,
+.harness-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #d2dce6;
+  vertical-align: top;
+}
+
+.harness-grid,
+.harness-grid-scores {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.harness-transcript {
+  display: grid;
+  gap: 10px;
+}
+
+.harness-json {
+  overflow: auto;
+  padding: 8px;
+  background: #f8fafc;
+  border: 1px solid #d2dce6;
+  border-radius: 8px;
+}
+
+.harness-panel fieldset {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #d2dce6;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.harness-panel label {
+  display: grid;
+  gap: 4px;
+}

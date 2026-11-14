@@ -184,6 +184,7 @@ export async function POST(req: Request) {
         message_id: added?.id ?? null,
         rubric_met: decision.rubric_met,
         misconception: decision.misconception,
+        decision,
       }),
     });
     await api(`/kc/sessions/${sessionId}/token-usage`, {

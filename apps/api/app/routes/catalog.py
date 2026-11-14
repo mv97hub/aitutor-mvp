@@ -130,8 +130,11 @@ def profile_defaults(age: int) -> ProfileDefaults:
 
 
 @router.get("/students", response_model=list[StudentOut])
-def list_students(db: Session = Depends(get_db)) -> list[StudentOut]:
-    students = list(db.scalars(select(Student)).all())
+def list_students(include_test: bool = False, db: Session = Depends(get_db)) -> list[StudentOut]:
+    stmt = select(Student)
+    if not include_test:
+        stmt = stmt.where(Student.is_test.is_(False))
+    students = list(db.scalars(stmt).all())
     students.sort(
         key=lambda student: (
             ROSTER.index(student.slug) if student.slug in ROSTER else len(ROSTER),
