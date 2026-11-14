@@ -1503,6 +1503,7 @@ class HarnessTurn(Base):
     session_before: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     session_after: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     child_tokens: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    child_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     elapsed_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False

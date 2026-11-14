@@ -55,7 +55,15 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (response.status === 204) return undefined as T;
   const text = await response.text();
-  const body = text ? (JSON.parse(text) as unknown) : null;
+  let body: unknown = null;
+  if (text) {
+    try {
+      body = JSON.parse(text) as unknown;
+    } catch {
+      if (!response.ok) throw new Error(text.trim() || `Request failed (${response.status})`);
+      throw new Error("The tutor service sent a response that could not be read.");
+    }
+  }
   if (!response.ok) {
     throw new Error(detailFrom(body, text || `Request failed (${response.status})`));
   }

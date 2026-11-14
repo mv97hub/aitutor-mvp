@@ -8,17 +8,23 @@ type Turn = {
   seq: number;
   intent: string;
   child_text: string;
+  child_prompt?: string;
+  tutor_prompt?: string;
   inner_state: { boredom?: number; frustration?: number; confusion?: number };
   session_after?: { tutor_reply?: string };
 };
 
+type LiveMessage = { role: string; content: string };
+
 type ChatDetail = {
   id: string;
+  status?: string;
   session_id?: string;
   ended_how: string;
   cost_usd: string | null;
   luna_tokens: number;
   child?: { name?: string; description?: string };
+  model_prompts?: { seq: number; model: string; system_prompt: string }[];
   turns?: Turn[];
   evaluations?: {
     kind: string;
@@ -32,13 +38,35 @@ type ChatDetail = {
 
 export function ChatTab({ chatId }: { chatId: string }) {
   const [chat, setChat] = useState<ChatDetail | null>(null);
+  const [live, setLive] = useState<LiveMessage[]>([]);
+  const [openPrompt, setOpenPrompt] = useState<number | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (!chatId) return;
-    api<ChatDetail>(`/kc/harness/chats/${chatId}`)
-      .then(setChat)
-      .catch((err) => setError(err instanceof Error ? err.message : "Could not load the chat."));
+    let stop = false;
+    let timer = 0;
+    async function pull() {
+      const next = await api<ChatDetail>(`/kc/harness/chats/${chatId}`);
+      if (stop) return;
+      setChat(next);
+      setError("");
+      const active = next.status === "running" || next.status === "queued";
+      if (active && next.session_id) {
+        const session = await api<{ messages?: LiveMessage[] }>(`/kc/tutor/sessions/${next.session_id}`);
+        if (!stop) setLive(session.messages || []);
+      } else if (!stop) {
+        setLive([]);
+      }
+      if (active && !stop) timer = window.setTimeout(() => void pull().catch(() => undefined), 2000);
+    }
+    void pull().catch((err) => {
+      if (!stop) setError(err instanceof Error ? err.message : "Could not load the chat.");
+    });
+    return () => {
+      stop = true;
+      window.clearTimeout(timer);
+    };
   }, [chatId]);
 
   if (!chatId) return <p className="help">Open a chat from a run.</p>;
@@ -71,6 +99,18 @@ export function ChatTab({ chatId }: { chatId: string }) {
         {chat.child?.description} · priced cost {chat.cost_usd ?? "blank"} · luna tokens {chat.luna_tokens}
         {chat.session_id ? ` · session ${chat.session_id}` : ""}
       </p>
+      {live.length > 0 ? (
+        <>
+          <h3>Live transcript</h3>
+          <ol className="harness-transcript">
+            {live.map((message, index) => (
+              <li key={`${index}-${message.role}`}>
+                <strong>{message.role === "assistant" ? "Tutor" : "Child"}:</strong> {message.content}
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : null}
       <ol className="harness-transcript">
         {(chat.turns || []).map((turn) => (
           <li key={turn.seq}>
@@ -79,9 +119,33 @@ export function ChatTab({ chatId }: { chatId: string }) {
             </p>
             <p>Child: {turn.child_text}</p>
             <p>Tutor: {turn.session_after?.tutor_reply}</p>
+            <button type="button" onClick={() => setOpenPrompt(openPrompt === turn.seq ? null : turn.seq)}>
+              {openPrompt === turn.seq ? "Hide prompts" : "Show both prompts"}
+            </button>
+            {openPrompt === turn.seq ? (
+              <>
+                <h4>Tutor prompt</h4>
+                <pre className="harness-json">{turn.tutor_prompt || "This turn has no stored tutor prompt."}</pre>
+                <h4>Child prompt</h4>
+                <pre className="harness-json">
+                  {turn.child_prompt || "This turn did not call the child model."}
+                </pre>
+              </>
+            ) : null}
           </li>
         ))}
       </ol>
+      {(chat.model_prompts || []).length > 0 ? (
+        <>
+          <h3>Tutor prompts stored for this session</h3>
+          {(chat.model_prompts || []).map((prompt) => (
+            <details key={prompt.seq}>
+              <summary>Tutor prompt {prompt.seq} · {prompt.model || "model"}</summary>
+              <pre className="harness-json">{prompt.system_prompt}</pre>
+            </details>
+          ))}
+        </>
+      ) : null}
       <h3>Automatic checks</h3>
       <pre className="harness-json">{JSON.stringify(automatic?.checks || {}, null, 2)}</pre>
       <h3>Judge</h3>

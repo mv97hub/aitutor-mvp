@@ -6779,6 +6779,17 @@ button.progress-card {
   gap: 10px;
 }
 
+.harness-empty {
+  padding: 16px;
+  border: 1px solid #d2dce6;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.harness-draft {
+  font-weight: 700;
+}
+
 .harness-json {
   overflow: auto;
   padding: 8px;

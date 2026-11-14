@@ -12,7 +12,7 @@ type Report = {
   by_model: { name: string; chats: number; completion_rate: number; mean_score: number | null }[];
   top_problems: { tag: string; count: number }[];
   grid: { child: string; block: string; score: number | null }[];
-  findings: { title: string; count: number; place: string }[];
+  findings: { title: string; count: number; place: string; block_label?: string }[];
   baseline?: { verdict: string; band: string; mean_score_delta: number | null };
 };
 
@@ -71,7 +71,7 @@ export function ResultsTab({ runId }: { runId: string }) {
       <ul>
         {report.findings.map((finding) => (
           <li key={finding.title}>
-            {finding.title} ({finding.count}). {finding.place}
+            {finding.title} ({finding.count}). Block type: {finding.block_label || "an unknown block"}. {finding.place}
           </li>
         ))}
       </ul>

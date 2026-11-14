@@ -129,10 +129,12 @@ def test_small_score_gap_is_no_clear_difference() -> None:
             "tags": [],
         }
 
-    report = rollup([chat(2), chat(4, "stuck")])
+    report = rollup([chat(2), dict(chat(4, "stuck"), stuck_blocks=["Topic / Goal"])])
     assert report["usable_chats"] == 2
     found = findings(report)
-    assert any(item["tag"] == "stuck" for item in found)
+    stuck = next(item for item in found if item["tag"] == "stuck")
+    assert stuck["block_label"] == "Topic / Goal"
+    assert "Topic / Goal" in stuck["title"]
     comparison = compare_runs([chat(3.1)], [chat(3.2)])
     assert comparison["verdict"] == "no clear difference"
     hard = compare_runs([chat(3)], [dict(chat(3), ended_how="stuck", checks={"stuck_spans": 1})])

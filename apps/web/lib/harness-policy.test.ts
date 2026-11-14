@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { EMPTY_INNER, pickMove, previewLines, quitLine, updateInner } from "./harness-policy.ts";
+import { CONTINUE_LABEL, EMPTY_INNER, MOVE_ON_LABEL, pickMove, previewLines, quitLine, updateInner } from "./harness-policy.ts";
 
 const middle = {
   maturity: 3,
@@ -72,16 +72,49 @@ test("a scripted line needs no model, and a bored child can quit", () => {
   });
   assert.equal(scripted.text, "tell me");
   assert.equal(scripted.needsModel, false);
-  const quit = pickMove({
+  const once = pickMove({
     traits: { ...middle, quit: 1 },
-    inner: { boredom: 100, frustration: 0, confusion: 0, hints: 0 },
+    inner: { boredom: 100, frustration: 0, confusion: 0, hints: 0, strain: 0 },
     seed: 1,
     turn: 0,
     actions: { canType: true, buttons: [], choices: [] },
     mode: "rule",
+    lastTutor: "What color is the river?",
+  });
+  assert.notEqual(once.intent, "quit");
+  const quit = pickMove({
+    traits: { ...middle, quit: 1 },
+    inner: { boredom: 100, frustration: 0, confusion: 0, hints: 0, strain: 1 },
+    seed: 1,
+    turn: 1,
+    actions: { canType: true, buttons: [], choices: [] },
+    mode: "rule",
+    lastTutor: "What color is the river?",
   });
   assert.equal(quit.intent, "quit");
   assert.ok(quitLine({ quit: 1 }) < 100);
+  const offered = pickMove({
+    traits: { ...middle, quit: 1 },
+    inner: { boredom: 100, frustration: 100, confusion: 0, hints: 0, strain: 4 },
+    seed: 1,
+    turn: 2,
+    actions: { canType: true, buttons: [MOVE_ON_LABEL, "Tell me more"], choices: [] },
+    mode: "rule",
+    lastTutor: "Do you want to move on?",
+  });
+  assert.equal(offered.intent, "move_on");
+  assert.equal(offered.text, MOVE_ON_LABEL);
+  const asked = pickMove({
+    traits: { ...middle, quit: 1 },
+    inner: { boredom: 100, frustration: 100, confusion: 0, hints: 0, strain: 4 },
+    seed: 1,
+    turn: 3,
+    actions: { canType: true, buttons: [CONTINUE_LABEL], choices: [] },
+    mode: "rule",
+    lastTutor: "Do you want to move on?",
+  });
+  assert.notEqual(asked.intent, "quit");
+  assert.equal(asked.text, CONTINUE_LABEL);
 });
 
 test("a long tutor message raises boredom for a short attention span", () => {

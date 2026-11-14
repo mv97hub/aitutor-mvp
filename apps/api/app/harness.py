@@ -22,9 +22,11 @@ from app.harness_checks import (
     DEFAULT_LUNA_TOKEN_CEILING,
     DEFAULT_STUCK_LIMIT,
     DEFAULT_TURN_LIMIT,
+    WRONG_INTENTS,
     automatic_checks,
     stop_reason,
 )
+from app.harness_report import block_label
 from app.harness_personas import TRAIT_KEYS, starter_children
 from app.harness_report import compare_runs, findings, kept_run_ids, regression_band, rollup
 from app.kc import course_out, load_targets, mark_ready, open_session
@@ -72,6 +74,14 @@ _EXPECTED_FIELDS = (
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_dict(value: object) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _as_list(value: object) -> list:
+    return list(value) if isinstance(value, list) else []
 
 
 def _uuid(value: object) -> uuid.UUID | None:
@@ -423,8 +433,8 @@ def run_out(db: Session, run: HarnessRun) -> dict:
     return {
         "id": run.id,
         "status": run.status,
-        "plan": dict(run.plan or {}),
-        "totals": dict(run.totals or {}),
+        "plan": _as_dict(run.plan),
+        "totals": _as_dict(run.totals),
         "code_version": run.code_version,
         "suite_id": run.suite_id,
         "created_at": run.created_at,
@@ -441,7 +451,7 @@ def chat_out(chat: HarnessChat) -> dict:
         "run_id": chat.run_id,
         "status": chat.status,
         "persona_id": chat.persona_id,
-        "child": dict(chat.child_snapshot or {}),
+        "child": _as_dict(chat.child_snapshot),
         "student_id": chat.student_id,
         "session_id": chat.session_id,
         "course_id": chat.course_id,
@@ -453,9 +463,9 @@ def chat_out(chat: HarnessChat) -> dict:
         "seed": chat.seed,
         "iteration": chat.iteration,
         "behavior": chat.behavior,
-        "script": list(chat.script or []),
+        "script": _as_list(chat.script),
         "ended_how": chat.ended_how,
-        "tokens": dict(chat.tokens or {}),
+        "tokens": _as_dict(chat.tokens),
         "cost_usd": chat.cost_usd,
         "luna_tokens": chat.luna_tokens,
         "turn_count": chat.turn_count,
@@ -582,6 +592,7 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
         select(HarnessChat)
         .where(HarnessChat.run_id == run.id, HarnessChat.status == "queued")
         .order_by(HarnessChat.created_at)
+        .with_for_update(skip_locked=True)
     )
     if chat is None:
         open_count = db.scalar(
@@ -602,10 +613,11 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
         chat.updated_at = _now()
         db.flush()
         return claim_chat(db, run_id)
-    snapshot = dict(chat.child_snapshot or {})
+    snapshot = _as_dict(chat.child_snapshot)
     profile_body = normalize_child_profile(snapshot.get("child_profile"), age=int(snapshot.get("age") or 10))
+    base_slug = unique_student_slug(db, str(snapshot.get("name") or "ai-child"))
     student = Student(
-        slug=unique_student_slug(db, str(snapshot.get("name") or "ai-child")),
+        slug=f"{base_slug[:48]}-{uuid.uuid4().hex[:8]}"[:80],
         display_name=str(snapshot.get("name") or "AI child"),
         age=int(snapshot.get("age") or 10),
         reading_level=str(profile_body.get("reading_level") or ""),
@@ -799,7 +811,7 @@ def _same_place(turns: list[HarnessTurn]) -> int:
 
 
 def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
-    chat = db.get(HarnessChat, chat_id)
+    chat = db.scalar(select(HarnessChat).where(HarnessChat.id == chat_id).with_for_update())
     if chat is None:
         raise HTTPException(status_code=404, detail="That chat was not found.")
     if chat.status not in {"running", "paused"}:
@@ -818,6 +830,7 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
         session_before=before,
         session_after=after,
         child_tokens=tokens,
+        child_prompt=str(body.get("child_prompt") or ""),
         elapsed_ms=max(0, int(body.get("elapsed_ms") or 0)),
     )
     db.add(turn)
@@ -990,16 +1003,28 @@ def chat_detail(db: Session, chat: HarnessChat) -> dict:
             {"id": str(event.id), "category": event.category, "child_message": event.child_message, "tutor_reply": event.tutor_reply}
             for event in events
         ]
+    prompts = []
+    if chat.session_id is not None:
+        prompts = list(
+            db.scalars(
+                select(KcModelPrompt).where(KcModelPrompt.session_id == chat.session_id).order_by(KcModelPrompt.seq)
+            ).all()
+        )
     body = chat_out(chat)
+    body["model_prompts"] = [
+        {"seq": row.seq, "model": row.model, "system_prompt": row.system_prompt} for row in prompts
+    ]
     body["turns"] = [
         {
             "seq": turn.seq,
             "intent": turn.intent,
             "child_text": turn.child_text,
-            "inner_state": turn.inner_state,
-            "session_before": turn.session_before,
-            "session_after": turn.session_after,
-            "child_tokens": turn.child_tokens,
+            "child_prompt": turn.child_prompt or "",
+            "tutor_prompt": _tutor_prompt(turn, prompts),
+            "inner_state": turn.inner_state if isinstance(turn.inner_state, dict) else {},
+            "session_before": turn.session_before if isinstance(turn.session_before, dict) else {},
+            "session_after": turn.session_after if isinstance(turn.session_after, dict) else {},
+            "child_tokens": turn.child_tokens if isinstance(turn.child_tokens, dict) else {},
             "elapsed_ms": turn.elapsed_ms,
         }
         for turn in turns
@@ -1008,6 +1033,20 @@ def chat_detail(db: Session, chat: HarnessChat) -> dict:
     body["safety_flags"] = flags
     body["settings_copy"] = dict(chat.settings_copy or {})
     return body
+
+
+def _tutor_prompt(turn: HarnessTurn, prompts: list[KcModelPrompt]) -> str:
+    after = turn.session_after if isinstance(turn.session_after, dict) else {}
+    stored = str(after.get("prompt") or "").strip()
+    if stored:
+        return stored
+    chosen = None
+    for row in prompts:
+        if row.seq <= turn.seq:
+            chosen = row
+    if chosen is None and prompts:
+        chosen = prompts[0]
+    return chosen.system_prompt if chosen is not None else ""
 
 
 def get_chat(db: Session, chat_id: uuid.UUID) -> dict:
@@ -1035,9 +1074,56 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
     snapshot = chat.child_snapshot if isinstance(chat.child_snapshot, dict) else {}
     settings = chat.settings_copy if isinstance(chat.settings_copy, dict) else {}
     block_types = []
+    blocks_by_id: dict[str, str] = {}
     for block in settings.get("blocks") or []:
         if isinstance(block, dict) and block.get("type"):
             block_types.append(str(block["type"]))
+            if block.get("id"):
+                blocks_by_id[str(block["id"])] = str(block["type"])
+
+    def turn_label(turn: HarnessTurn) -> str:
+        after = turn.session_after if isinstance(turn.session_after, dict) else {}
+        typed = str(after.get("block_type") or "")
+        if not typed:
+            typed = blocks_by_id.get(str(after.get("block_id") or ""), "")
+        return block_label(typed)
+
+    false_pass_blocks: list[str] = []
+    stuck_blocks: list[str] = []
+    turn_blocks: list[str] = []
+    last_place = ""
+    same_step = 0
+    for turn in turns:
+        label = turn_label(turn)
+        if label and label not in turn_blocks:
+            turn_blocks.append(label)
+        after = turn.session_after if isinstance(turn.session_after, dict) else {}
+        if turn.intent in WRONG_INTENTS and after.get("passed") and label and label not in false_pass_blocks:
+            false_pass_blocks.append(label)
+        place = f"{after.get('block_id')}:{after.get('substep')}"
+        if place == last_place:
+            same_step += 1
+            if same_step >= 8 and label and label not in stuck_blocks:
+                stuck_blocks.append(label)
+        else:
+            same_step = 1
+            last_place = place
+    if chat.ended_how == "stuck" and turns:
+        last_label = turn_label(turns[-1])
+        if last_label and last_label not in stuck_blocks:
+            stuck_blocks.append(last_label)
+    tag_blocks: dict[str, str] = {}
+    for tag in tags:
+        if not isinstance(tag, dict):
+            continue
+        try:
+            index = int(tag.get("turn") or 0)
+        except (TypeError, ValueError):
+            index = 0
+        if 0 <= index < len(turns):
+            label = turn_label(turns[index])
+            if label:
+                tag_blocks[str(tag.get("tag") or "")] = label
     goal = db.get(KcGoal, chat.course_id) if chat.course_id else None
     node = db.get(KcNode, chat.component_id) if chat.component_id else None
     return {
@@ -1048,6 +1134,10 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
         "component_title": node.title if node is not None else "",
         "component_id": str(chat.component_id or ""),
         "block_types": block_types,
+        "false_pass_blocks": false_pass_blocks,
+        "stuck_blocks": stuck_blocks,
+        "turn_blocks": turn_blocks,
+        "tag_blocks": tag_blocks,
         "tutor_model": chat.tutor_model,
         "profile_name": settings.get("profile_name") or chat.tutor_profile_id or "",
         "ended_how": chat.ended_how,
@@ -1251,11 +1341,15 @@ def save_recommendations(db: Session, body: dict) -> list[dict]:
         direction = str(card.get("prompt_direction") or "same")
         if direction not in {"shorter", "longer", "same"}:
             direction = "same"
+        evidence = card.get("evidence") if isinstance(card.get("evidence"), dict) else {"summary": str(card.get("evidence") or "")}
+        block_type = str(card.get("block_type") or evidence.get("block_type") or "").strip()
+        if block_type:
+            evidence = {**evidence, "block_type": block_type}
         row = HarnessRecommendation(
             run_id=run_id,
             suite_id=suite_id,
             title=str(card.get("title") or "Change")[:200],
-            evidence=card.get("evidence") if isinstance(card.get("evidence"), dict) else {"summary": str(card.get("evidence") or "")},
+            evidence=evidence,
             cause_class=str(card.get("cause_class") or "")[:40],
             place=str(card.get("place") or "")[:2000],
             proposed=card.get("proposed") if isinstance(card.get("proposed"), dict) else {"text": str(card.get("proposed") or "")},

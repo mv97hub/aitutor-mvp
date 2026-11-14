@@ -86,7 +86,8 @@ export function sameModelWarning(childModel: string, tutorModels: string[]): boo
 
 export type RecommendationCard = {
   title: string;
-  evidence?: { summary?: string; count?: number };
+  evidence?: { summary?: string; count?: number; block_type?: string };
+  block_type?: string;
   cause_class?: string;
   place?: string;
   proposed?: Record<string, unknown>;
