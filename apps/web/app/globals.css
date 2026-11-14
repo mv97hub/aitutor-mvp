@@ -6821,6 +6821,25 @@ button.progress-card {
   align-items: center;
 }
 
+.harness-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.harness-summary h3 {
+  margin: 0;
+}
+
+.harness-summary pre {
+  margin: 0;
+  padding: 12px;
+  white-space: pre-wrap;
+  border: 1px solid #d2dce6;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+}
+
 .harness-json {
   overflow: auto;
   padding: 8px;

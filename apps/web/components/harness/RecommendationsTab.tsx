@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { HARNESS_MODELS } from "@/lib/harness";
-import { defaultSelectedRunIds, skippedRunMessage, type DraftMaterials } from "@/lib/harness-draft";
+import { defaultSelectedRunIds, recommendationPageSummary, skippedRunMessage, type DraftMaterials } from "@/lib/harness-draft";
 import { kcModelLabel } from "@/lib/kc-models";
 import { api } from "@/lib/api";
 
@@ -50,9 +50,11 @@ export function RecommendationsTab({
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
   const recent = runs.slice(0, 8);
   const chosen = (picked ?? defaultSelectedRunIds(recent.map((run) => run.id))).filter((id) => recent.some((run) => run.id === id));
   const activeId = viewId || recent[0]?.id || "";
+  const summary = cards.length > 0 ? recommendationPageSummary(cards) : "";
 
   async function load(id = activeId) {
     if (!id) {
@@ -89,6 +91,10 @@ export function RecommendationsTab({
   useEffect(() => {
     void load().catch((err) => setError(err instanceof Error ? err.message : "Could not load recommendations."));
   }, [activeId]);
+
+  useEffect(() => {
+    setCopied(false);
+  }, [summary]);
 
   function toggleRun(id: string) {
     const current = picked ?? defaultSelectedRunIds(recent.map((run) => run.id));
@@ -144,6 +150,17 @@ export function RecommendationsTab({
       setError(err instanceof Error ? err.message : "Could not draft cards.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function copySummary() {
+    if (!summary) return;
+    try {
+      await navigator.clipboard.writeText(summary);
+      setCopied(true);
+    } catch (err) {
+      setCopied(false);
+      setError(err instanceof Error ? err.message : "Could not copy the summary.");
     }
   }
 
@@ -238,6 +255,17 @@ export function RecommendationsTab({
       ) : (
         <p className="help">These cards are one set for the selected runs. Accept does not change the live tutor.</p>
       )}
+      {summary ? (
+        <div className="harness-summary">
+          <div className="harness-actions">
+            <h3>Draft summary</h3>
+            <button type="button" onClick={() => void copySummary()}>
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <pre>{summary}</pre>
+        </div>
+      ) : null}
       {cards.map((card) => {
         const evidence = card.evidence || {};
         const replacement = evidence.replacement || card.proposed?.text || "";

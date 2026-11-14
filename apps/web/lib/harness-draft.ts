@@ -603,6 +603,54 @@ function runList(runId: string): string {
   return ids.map((id) => "`" + id + "`").join(", ");
 }
 
+export type SummaryCard = {
+  title?: string;
+  evidence?: {
+    block_type?: string;
+    section?: string;
+    function?: string;
+    current?: string;
+    shorter?: string;
+    sources?: DraftSource[];
+    nudges?: StuckNudge[];
+  };
+  proposed?: { text?: string; shorter?: string };
+};
+
+/** Plain text for a later Cursor run. Built only from the cards already on the page. */
+export function recommendationPageSummary(cards: SummaryCard[]): string {
+  const lines = [
+    "Harness recommendation summary",
+    "",
+    "This text is for a later Cursor run. The harness does not change the live tutor prompt, and it does not edit apps/api/app/kc_prompt.py.",
+    "",
+  ];
+  cards.forEach((card, index) => {
+    const evidence = card.evidence || {};
+    const shorter = (evidence.shorter || card.proposed?.shorter || "").trim();
+    lines.push(`Theme ${index + 1}: ${card.title || "Recommendation"}`);
+    lines.push(`Section: ${evidence.section || "unknown"}`);
+    lines.push(`Function: ${evidence.function || "unknown"}`);
+    lines.push(`Quoted stored line: ${evidence.current || ""}`);
+    lines.push(`Shorter replacement: ${shorter}`);
+    const sources = evidence.sources || [];
+    if (sources.length === 0) {
+      lines.push(`Evidence: block type ${evidence.block_type || "an unknown block"}.`);
+    } else {
+      for (const source of sources) {
+        const block = source.block_type || evidence.block_type || "an unknown block";
+        const turn = source.turn === undefined || source.turn === null ? "unknown" : String(source.turn);
+        lines.push(`Evidence: block type ${block}. Run ${source.run_id || "unknown"}. Turn ${turn}.`);
+      }
+    }
+    for (const sentence of nudgeSentences(evidence.nudges || [], evidence.block_type || "")) {
+      lines.push(`Stuck nudge: ${sentence}`);
+    }
+    lines.push("");
+  });
+  return lines.join("\n").trim();
+}
+
 export function recommendationMarkdown(runId: string, cards: DraftCard[]): string {
   const lines = [
     "# Harness prompt recommendations",
