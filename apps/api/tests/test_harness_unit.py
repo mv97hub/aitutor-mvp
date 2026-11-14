@@ -156,6 +156,19 @@ def test_prompt_builder_excerpts_name_the_section_and_function() -> None:
     assert teach["function"] == "_how_to_teach"
     ladder = next(row for row in rows if row["symbol"] == "_block_config_rules")
     assert any("nudge" in line for line in ladder["literals"])
+    named = {
+        "_GOAL_START_DEEPEN": "still on the explanation",
+        "_GOAL_START_READY": "ready to go on",
+        "_GOAL_START_NO_TURN": "it is their turn",
+        "_GOAL_START_CAP": "two extra turns on this explanation",
+        "_GOAL_EARLY_ANSWER": "answered during the explanation",
+        "_EXPLANATION_CAP": "two extra turns on this topic",
+    }
+    for symbol, phrase in named.items():
+        row = next(item for item in rows if item["symbol"] == symbol)
+        assert row["section"] == "This turn"
+        assert row["function"] == "_this_turn"
+        assert any(phrase in line for line in row["literals"])
 
 
 def test_stored_prompt_sections_and_example_turns() -> None:

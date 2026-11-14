@@ -1376,6 +1376,8 @@ def save_recommendations(db: Session, body: dict) -> list[dict]:
             status_code=422,
             detail="A batch that only proposes additions is incomplete. Include a removal or a shorter wording.",
         )
+    if body.get("replace") and run_id is not None:
+        db.execute(delete(HarnessRecommendation).where(HarnessRecommendation.run_id == run_id))
     saved = []
     for card in cards:
         if not isinstance(card, dict):

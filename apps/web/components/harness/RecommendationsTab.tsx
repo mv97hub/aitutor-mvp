@@ -28,6 +28,7 @@ type Card = {
     shorter?: string;
     nudges?: { turn?: number; asked?: string; answered?: string; block_type?: string; block_id?: string; substep?: string; run_id?: string }[];
     sources?: { run_id?: string; turn?: number; block_type?: string }[];
+    findings?: { tag?: string; title?: string }[];
   };
   proposed: { text?: string; shorter?: string };
   trial_profile_id?: string | null;
@@ -134,7 +135,7 @@ export function RecommendationsTab({
       const saveId = String(contexts[0]?.run_id || chosen[0]);
       await api("/kc/harness/recommendations", {
         method: "POST",
-        body: JSON.stringify({ run_id: saveId, cards: drafted.cards }),
+        body: JSON.stringify({ run_id: saveId, replace: true, cards: drafted.cards }),
       });
       setViewId(saveId);
       onSelectRun(saveId);
@@ -274,6 +275,9 @@ export function RecommendationsTab({
           <article key={card.id} className="harness-card">
             <h3>{card.title}</h3>
             <p>Block type: {evidence.block_type || "an unknown block"}</p>
+            {evidence.findings && evidence.findings.length > 0 ? (
+              <p>Findings: {evidence.findings.map((finding) => finding.title || finding.tag).filter(Boolean).join("; ")}</p>
+            ) : null}
             {evidence.sources && evidence.sources.length > 0 ? (
               <ul>
                 {evidence.sources.map((source, index) => (

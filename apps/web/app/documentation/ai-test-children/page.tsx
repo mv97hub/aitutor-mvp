@@ -156,10 +156,11 @@ export default function AiTestChildrenDocsPage() {
           lists recent runs, newest first, each with a checkbox. The newest few start selected. Press Draft from selected
           to run the drafter once over every checked run. The button shows Drafting cards… while that request runs. If a
           run cannot be read, its name stays in the error and the other checked runs are still drafted. The result is one
-          set of cards: findings are grouped into a few themes, and each theme is one prompt-builder recommendation. A
-          card names the prompt-builder section and function, quotes the current sentences from the stored tutor prompt,
-          and gives a shorter replacement. Evidence names the block type, the run, and the turn, and includes the stuck
-          nudges when a selected run closed as stuck. It also shows the cause, whether the prompt gets shorter or longer,
+          set of cards. Each card is one prompt line: the section, the function, and the quoted sentence. Every finding
+          that points at that line is listed on the card, with one replacement. The quote comes from the stored tutor
+          prompt of the evidence turn. A line is not cited for a block whose stored prompt did not contain it. Pressing
+          Draft again replaces the previous draft for that selection. Evidence names the block type, the run, and the
+          turn. Stuck nudges appear once, on the card for the step that did not move. It also shows the cause, whether the prompt gets shorter or longer,
           the risk, and a status. Statuses are new, accepted, rejected, on trial, shipped, verified, and regressed.
           Drafting does not change the live tutor and does not edit the prompt builder. Accept does not change the live tutor.
         </p>
