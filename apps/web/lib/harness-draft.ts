@@ -1,8 +1,8 @@
-/** Turn harness findings plus stored prompts into review cards.
+/** Turn stored harness turns and findings into observations.
 
-The cards quote sentences that are already in the stored tutor prompt and name
-the prompt-builder section and function that wrote them. Nothing here edits
-kc_prompt.py or applies a setting.
+An observation quotes the child and the tutor from the transcript and, when a
+stored prompt line was in force, names that line. Nothing here edits
+kc_prompt.py or kc_loop.py, and nothing here proposes new prompt wording.
 */
 
 import { type RecommendationCard } from "./harness.ts";
@@ -53,7 +53,11 @@ export type ExampleTurn = {
   turn?: number;
   intent?: string;
   child_text?: string;
+  tutor_reply?: string;
   block_label?: string;
+  block_title?: string;
+  block_id?: string;
+  substep?: string;
   tutor_prompt?: string;
   sections?: Record<string, string>;
   run_id?: string;
@@ -79,6 +83,14 @@ export type DraftEvidence = {
   nudges?: StuckNudge[];
   sources?: DraftSource[];
   findings?: { tag?: string; title?: string }[];
+  block_title?: string;
+  substep?: string;
+  child_text?: string;
+  tutor_reply?: string;
+  turn?: number;
+  run_id?: string;
+  fault?: string;
+  mismatch?: string;
 };
 
 export type DraftCard = RecommendationCard & {
@@ -200,13 +212,6 @@ export function sourceSentences(sources: DraftSource[]): string[] {
   });
 }
 
-function sentences(text: string): string[] {
-  return fold(text)
-    .split(/(?<=[.!?])\s+/)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 20);
-}
-
 function appearsIn(prompt: string, sentence: string): boolean {
   const needle = fold(sentence).toLowerCase();
   if (needle.length < 20) return false;
@@ -263,289 +268,251 @@ function pickQuote(
   return best ? { excerpt: best.excerpt, current: best.current } : null;
 }
 
-function propose(tag: string, current: string): { replacement: string; shorter: string; kind: DraftCard["kind"] } {
-  const text = current.toLowerCase();
-  if (tag === "repeated_itself" || /nudge|those hints|missed answers/.test(text)) {
-    return {
-      replacement: "On a goal-start turn, do not climb the hint ladder and do not repeat the last explanation. Answer once.",
-      shorter: "Remove this sentence.",
-      kind: "remove",
-    };
-  }
-  if (tag === "one_question") {
-    if (text.includes("side remark") || text.includes("question they typed")) {
-      return {
-        replacement: "Answer the side remark in one sentence, then one line back to the lesson. Ask no question. One question waits until the learner moves on.",
-        shorter: "Answer in one sentence. Ask no question.",
-        kind: "reword",
-      };
-    }
-    return {
-      replacement: "Explain this topic in two or three sentences, then stop. Ask no question. One question waits until the learner moves on.",
-      shorter: "Ask no question.",
-      kind: "reword",
-    };
-  }
-  if (tag === "stay_on_course") {
-    return {
-      replacement: "Stay on course: answer in one sentence, then one line back to this block. Do not ask a question.",
-      shorter: "Stay on course: one sentence, then back to this block.",
-      kind: "reword",
-    };
-  }
-  if (tag === "ignored_question") {
-    return {
-      replacement: "Answer the question they typed in one sentence, then one line back to the lesson.",
-      shorter: "Answer their question in one sentence.",
-      kind: "reword",
-    };
-  }
-  if (/side remark/.test(text)) {
-    return {
-      replacement: "Answer the side remark in one sentence, then one line back to the lesson. Do not start a new explanation. Do not ask a question.",
-      shorter: "One sentence on the side remark, then stop.",
-      kind: "reword",
-    };
-  }
-  return {
-    replacement: "Explain this topic in two or three sentences, then stop. The learner leaves this step with Got it - move on. Ask no question.",
-    shorter: "Explain this topic in two sentences, then stop.",
-    kind: "reword",
-  };
-}
-
-function sectionText(example: ExampleTurn, name: string): string {
-  return example.sections?.[name] || "";
-}
-
-function duplicateSentence(examples: ExampleTurn[]): { prompt: string; sentence: string } | null {
-  for (const example of examples) {
-    const turn = sectionText(example, "This turn") || example.tutor_prompt || "";
-    const teach = sectionText(example, "How to teach");
-    if (!turn || !teach) continue;
-    const turnFold = fold(turn).toLowerCase();
-    for (const sentence of sentences(teach)) {
-      if (sentence.length < 40) continue;
-      if (turnFold.includes(fold(sentence).toLowerCase())) {
-        return { prompt: example.tutor_prompt || teach, sentence: quoteFromPrompt(example.tutor_prompt || teach, sentence) || sentence };
-      }
-    }
-  }
-  return null;
-}
-
-function cardFrom(input: {
-  block: string;
-  findings: DraftFinding[];
-  excerpt: BuilderExcerpt;
-  current: string;
-  replacement: string;
-  shorter: string;
-  kind: DraftCard["kind"];
-  title: string;
-  sources: DraftSource[];
-  nudges: StuckNudge[];
-}): DraftCard {
-  const place = `${input.excerpt.section} — ${input.excerpt.function}${
-    input.excerpt.symbol !== input.excerpt.function ? ` (${input.excerpt.symbol})` : ""
-  }`;
-  const listed = input.findings.map((finding) => ({
-    tag: finding.tag || "",
-    title: finding.title || finding.tag || "Finding",
-  }));
-  const findingLine = listed.map((finding) => finding.title).filter(Boolean).join("; ");
-  const nudgeLines = nudgeSentences(input.nudges, input.block);
-  const summary = [
-    findingLine ? `Findings: ${findingLine}.` : "",
-    `${input.excerpt.section} is written by ${input.excerpt.function} in kc_prompt.py.`,
-    input.excerpt.symbol !== input.excerpt.function ? `The sentence is ${input.excerpt.symbol}.` : "",
-    ...sourceSentences(input.sources),
-    "The quoted line is taken from the stored tutor prompt of each evidence turn. One replacement covers every finding on this line. Nothing here changes the live tutor.",
-    ...nudgeLines,
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const cause = input.findings.find((finding) => finding.cause_class)?.cause_class || "prompt";
-  return {
-    title: input.title.slice(0, 200),
-    cause_class: cause,
-    place,
-    kind: input.kind,
-    prompt_direction: "shorter",
-    risk: "A shorter line can drop a reminder the tutor was using. Read the quote before editing the prompt builder.",
-    confidence: "high",
-    block_type: input.block,
-    proposed: { text: input.replacement, shorter: input.shorter },
-    evidence: {
-      summary,
-      block_type: input.block,
-      section: input.excerpt.section,
-      function: input.excerpt.function,
-      symbol: input.excerpt.symbol,
-      current: input.current,
-      replacement: input.replacement,
-      shorter: input.shorter,
-      nudges: nudgeLines.length ? input.nudges : undefined,
-      sources: input.sources.length ? input.sources : undefined,
-      findings: listed,
-    },
-  };
-}
-
-type LineHit = {
-  finding: DraftFinding;
-  excerpt: BuilderExcerpt;
-  current: string;
-  turns: ExampleTurn[];
-};
-
-function lineKey(excerpt: BuilderExcerpt, current: string): string {
-  return `${excerpt.section}\n${excerpt.function}\n${fold(current)}`;
-}
-
-function evidenceTurns(finding: DraftFinding, examples: ExampleTurn[]): ExampleTurn[] {
-  const runId = finding.run_id || "";
-  const pool = examples.filter((item) => item.tutor_prompt && (!runId || !item.run_id || item.run_id === runId));
-  const listed = finding.examples || [];
-  if (listed.length > 0) {
-    const chats = new Set(listed.map((item) => item.chat_id).filter(Boolean));
-    const turns = new Set(listed.map((item) => Number(item.turn)).filter((turn) => !Number.isNaN(turn)));
-    return pool.filter((item) => {
-      if (item.chat_id && chats.size > 0 && !chats.has(item.chat_id)) return false;
-      if (turns.size === 0) return true;
-      return turns.has(Number(item.turn));
-    });
-  }
-  const block = namedBlock(finding.block_label);
-  if (!block) return [];
-  return pool.filter((item) => namedBlock(item.block_label) === block);
-}
-
-function tagFit(tag: string, current: string): number {
-  let score = scoreLiteral(tag, current);
-  if (tag === "duplicate") score += 1500;
-  if (tag === "repeated_itself" && /nudge|those hints|missed answers/.test(current.toLowerCase())) score += 3000;
-  return score;
-}
-
-function replacementFor(current: string, tags: string[]): { replacement: string; shorter: string; kind: DraftCard["kind"] } {
-  const ranked = [...tags].sort((a, b) => tagFit(b, current) - tagFit(a, current) || a.localeCompare(b));
-  return propose(ranked[0] || "", current);
-}
-
-function pushHit(groups: Map<string, LineHit[]>, hit: LineHit) {
-  const key = lineKey(hit.excerpt, hit.current);
-  const list = groups.get(key) || [];
-  list.push(hit);
-  groups.set(key, list);
-}
-
-function sourceKey(source: DraftSource): string {
-  return `${source.run_id || ""}|${source.chat_id || ""}|${source.turn ?? ""}|${source.block_type || ""}`;
-}
-
 function nudgeKey(nudge: StuckNudge, runId: string): string {
   return `${nudge.run_id || runId}|${nudge.turn ?? ""}|${nudge.asked || ""}|${nudge.block_type || ""}`;
+}
+
+const FAULTS: Record<string, string> = {
+  ignored_question: "The tutor ignored the child's question.",
+  repeated_itself: "The tutor repeated itself.",
+  stuck: "The step stayed where it was.",
+  too_long: "The tutor's reply was too long.",
+  generic_praise: "The tutor gave generic praise.",
+  missed_boredom: "The tutor missed that the child was bored.",
+  false_pass: "A wrong answer was marked as passed.",
+  stay_on_course: "The tutor did not stay on course.",
+  one_question: "The tutor did not keep to one question.",
+  gave_away_answer: "The tutor gave away the answer.",
+  vocabulary_too_hard: "The tutor's words were too hard.",
+  missed_frustration: "The tutor missed the child's frustration.",
+  abrupt_return: "The tutor returned to the lesson abruptly.",
+  talked_down: "The tutor talked down to the child.",
+  factual_error: "The tutor's reply had a factual error.",
+};
+
+const FAULT_TITLES: Record<string, string> = {
+  ignored_question: "ignored the child's question",
+  repeated_itself: "repeated itself",
+  stuck: "stayed on the step",
+  too_long: "too long",
+  generic_praise: "generic praise",
+  missed_boredom: "missed boredom",
+  false_pass: "false pass",
+  stay_on_course: "left the step",
+  one_question: "more than one question",
+  gave_away_answer: "gave away the answer",
+  vocabulary_too_hard: "words too hard",
+  missed_frustration: "missed frustration",
+};
+
+type Moment = {
+  key: string;
+  run_id: string;
+  chat_id: string;
+  turn: number;
+  tag: string;
+  title: string;
+  cause: string;
+  block_type: string;
+  block_title: string;
+  substep: string;
+  child: string;
+  tutor: string;
+  prompt: string;
+  fromNudge: boolean;
+  nudges: StuckNudge[];
+};
+
+function momentKey(runId: string, chatId: string, turn: number, tag: string): string {
+  return `${runId}|${chatId}|${turn}|${tag}`;
+}
+
+function storedTurn(examples: ExampleTurn[], runId: string, chatId: string, turn: number): ExampleTurn | undefined {
+  return examples.find((item) => {
+    if (runId && item.run_id && item.run_id !== runId) return false;
+    if (chatId && item.chat_id && item.chat_id !== chatId) return false;
+    return Number(item.turn) === turn;
+  });
+}
+
+function faultSentence(tag: string, fromNudge: boolean): string {
+  if (fromNudge) return "The child nudged and the step did not move.";
+  return FAULTS[tag] || `The turn was marked ${tag.replaceAll("_", " ")}.`;
+}
+
+function faultTitle(tag: string, fromNudge: boolean): string {
+  if (fromNudge) return "nudge with no movement";
+  return FAULT_TITLES[tag] || tag.replaceAll("_", " ");
+}
+
+function lineHome(symbol: string, quote: string): string {
+  const text = quote.trim();
+  if (symbol.startsWith("_GOAL_") || /^Goal (start|question|answer)\b/i.test(text) || text.startsWith("Ready check:")) {
+    return "Topic / Goal";
+  }
+  if (symbol.startsWith("_EXPLANATION")) return "Explanatory Walkthrough";
+  return "";
+}
+
+function mergeMoment(map: Map<string, Moment>, moment: Moment) {
+  const prev = map.get(moment.key);
+  if (!prev) {
+    map.set(moment.key, moment);
+    return;
+  }
+  if (!prev.child && moment.child) prev.child = moment.child;
+  if (!prev.tutor && moment.tutor) prev.tutor = moment.tutor;
+  if (!prev.prompt && moment.prompt) prev.prompt = moment.prompt;
+  if (!prev.block_type && moment.block_type) prev.block_type = moment.block_type;
+  if (!prev.block_title && moment.block_title) prev.block_title = moment.block_title;
+  if (!prev.substep && moment.substep) prev.substep = moment.substep;
+  if (moment.fromNudge) {
+    prev.fromNudge = true;
+    const seen = new Set(prev.nudges.map((nudge) => nudgeKey(nudge, prev.run_id)));
+    for (const nudge of moment.nudges) {
+      const key = nudgeKey(nudge, prev.run_id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      prev.nudges.push(nudge);
+    }
+  }
+}
+
+function momentFromTurn(
+  finding: DraftFinding,
+  turnNo: number,
+  chatId: string,
+  stored: ExampleTurn | undefined,
+  child: string,
+  tutor: string,
+  fromNudge: boolean,
+  nudges: StuckNudge[],
+): Moment | null {
+  const spokenChild = fold(child);
+  const spokenTutor = fold(tutor);
+  if (!spokenChild && !spokenTutor) return null;
+  const runId = stored?.run_id || finding.run_id || "";
+  const tag = String(finding.tag || "finding");
+  const block = namedBlock(stored?.block_label) || namedBlock(finding.block_label);
+  return {
+    key: momentKey(runId, chatId || stored?.chat_id || "", turnNo, tag),
+    run_id: runId,
+    chat_id: chatId || stored?.chat_id || "",
+    turn: turnNo,
+    tag,
+    title: finding.title || tag,
+    cause: finding.cause_class || "prompt",
+    block_type: block,
+    block_title: fold(stored?.block_title || ""),
+    substep: fold(stored?.substep || ""),
+    child: spokenChild,
+    tutor: spokenTutor,
+    prompt: stored?.tutor_prompt || "",
+    fromNudge,
+    nudges,
+  };
 }
 
 function draftFlatCards(materials: DraftMaterials): DraftCard[] {
   const findings = findingsOf(materials);
   const examples = materials.examples || [];
   const builder = materials.builder || [];
-  const groups = new Map<string, LineHit[]>();
+  const moments = new Map<string, Moment>();
   for (const finding of findings) {
-    const turns = evidenceTurns(finding, examples);
-    const picked = pickQuote(String(finding.tag || ""), builder, turns.map((turn) => turn.tutor_prompt || ""));
-    if (!picked) continue;
-    const containing = turns.filter((turn) => appearsIn(turn.tutor_prompt || "", picked.current));
-    if (containing.length === 0) continue;
-    const current = quoteFromPrompt(containing[0].tutor_prompt || "", picked.current) || picked.current;
-    pushHit(groups, { finding, excerpt: picked.excerpt, current, turns: containing });
+    const runId = finding.run_id || "";
+    for (const listed of finding.examples || []) {
+      const turnNo = Number(listed.turn);
+      if (Number.isNaN(turnNo)) continue;
+      const chatId = listed.chat_id || "";
+      const stored = storedTurn(examples, listed.run_id || runId, chatId, turnNo);
+      const moment = momentFromTurn(finding, turnNo, chatId, stored, stored?.child_text || "", stored?.tutor_reply || "", false, []);
+      if (moment) mergeMoment(moments, moment);
+    }
+    if (String(finding.tag || "") !== "stuck") continue;
+    for (const nudge of finding.nudges || []) {
+      const turnNo = Number(nudge.turn);
+      if (Number.isNaN(turnNo)) continue;
+      const chatId = "";
+      const stored = storedTurn(examples, nudge.run_id || runId, chatId, turnNo);
+      const carried: StuckNudge = { ...nudge, run_id: nudge.run_id || runId };
+      const moment = momentFromTurn(
+        finding,
+        turnNo,
+        stored?.chat_id || chatId,
+        stored
+          ? {
+              ...stored,
+              block_label: stored.block_label || nudge.block_type,
+              substep: stored.substep || nudge.substep,
+            }
+          : {
+              run_id: nudge.run_id || runId,
+              turn: turnNo,
+              block_label: nudge.block_type,
+              substep: nudge.substep,
+              block_id: nudge.block_id,
+            },
+        stored?.child_text || nudge.asked || "",
+        stored?.tutor_reply || nudge.answered || "",
+        true,
+        [carried],
+      );
+      if (moment) mergeMoment(moments, moment);
+    }
   }
-  const teach = builder.find((item) => item.function === "_how_to_teach" && item.section === "How to teach");
-  if (teach) {
-    for (const example of examples) {
-      const duplicate = duplicateSentence([example]);
-      if (!duplicate?.sentence || !appearsIn(example.tutor_prompt || "", duplicate.sentence)) continue;
-      const current = quoteFromPrompt(example.tutor_prompt || "", duplicate.sentence) || duplicate.sentence;
-      pushHit(groups, {
-        finding: {
-          title: "The same sentence is in This turn and How to teach",
-          tag: "duplicate",
-          cause_class: "prompt",
-          run_id: example.run_id,
-          block_label: example.block_label,
+  const ordered = [...moments.values()].sort((a, b) => a.run_id.localeCompare(b.run_id) || a.turn - b.turn || a.tag.localeCompare(b.tag));
+  return ordered.map((moment) => observationCard(moment, builder));
+}
+
+function observationCard(moment: Moment, builder: BuilderExcerpt[]): DraftCard {
+  const picked = moment.prompt ? pickQuote(moment.fromNudge ? "stuck" : moment.tag, builder, [moment.prompt]) : null;
+  const quote = picked && appearsIn(moment.prompt, picked.current) ? quoteFromPrompt(moment.prompt, picked.current) || picked.current : "";
+  const home = picked && quote ? lineHome(picked.excerpt.symbol, quote) : "";
+  const mismatch =
+    home && moment.block_type && fold(home).toLowerCase() !== fold(moment.block_type).toLowerCase()
+      ? `This line is for ${home}. The turn was on ${moment.block_type}. Those block types do not match.`
+      : "";
+  const fault = faultSentence(moment.tag, moment.fromNudge);
+  const block = moment.block_type || "an unknown block";
+  const title = `Turn ${moment.turn}: ${faultTitle(moment.tag, moment.fromNudge)}`;
+  const nudgeLines = nudgeSentences(moment.nudges, block);
+  return {
+    title: title.slice(0, 200),
+    cause_class: moment.cause || "prompt",
+    place: `${block}${moment.substep ? ` · ${moment.substep}` : ""} · turn ${moment.turn}`,
+    kind: "setting",
+    prompt_direction: "same",
+    risk: "This is an observation from the stored turn. It does not change the live tutor prompt.",
+    confidence: "high",
+    block_type: block,
+    proposed: { text: "", shorter: "" },
+    evidence: {
+      summary: fault,
+      fault,
+      block_type: block,
+      block_title: moment.block_title,
+      substep: moment.substep,
+      section: picked && quote ? picked.excerpt.section : "",
+      function: picked && quote ? picked.excerpt.function : "",
+      symbol: picked && quote ? picked.excerpt.symbol : "",
+      current: quote,
+      mismatch,
+      child_text: moment.child,
+      tutor_reply: moment.tutor,
+      turn: moment.turn,
+      run_id: moment.run_id,
+      nudges: nudgeLines.length ? moment.nudges : undefined,
+      sources: [
+        {
+          run_id: moment.run_id,
+          turn: moment.turn,
+          block_type: block,
+          chat_id: moment.chat_id,
         },
-        excerpt: teach,
-        current,
-        turns: [example],
-      });
-    }
-  }
-  const seenNudges = new Set<string>();
-  const cards: DraftCard[] = [];
-  for (const hits of groups.values()) {
-    const excerpt = hits[0].excerpt;
-    const current = hits[0].current;
-    const findings: DraftFinding[] = [];
-    const seenFindings = new Set<string>();
-    for (const hit of hits) {
-      const mark = `${hit.finding.tag || ""}|${hit.finding.title || ""}|${hit.finding.run_id || ""}`;
-      if (seenFindings.has(mark)) continue;
-      seenFindings.add(mark);
-      findings.push(hit.finding);
-    }
-    const tags = uniqueText(findings.map((finding) => finding.tag || finding.title || "finding"));
-    const next = replacementFor(current, tags);
-    const sources: DraftSource[] = [];
-    const seenSources = new Set<string>();
-    for (const hit of hits) {
-      for (const turn of hit.turns) {
-        if (!appearsIn(turn.tutor_prompt || "", current)) continue;
-        const source: DraftSource = {
-          run_id: turn.run_id || hit.finding.run_id,
-          turn: turn.turn,
-          block_type: namedBlock(turn.block_label),
-          chat_id: turn.chat_id,
-        };
-        const key = sourceKey(source);
-        if (seenSources.has(key)) continue;
-        seenSources.add(key);
-        sources.push(source);
-      }
-    }
-    if (sources.length === 0) continue;
-    const blocks = uniqueText(sources.map((source) => source.block_type || ""));
-    const block = blocks.length ? blocks.join(", ") : "an unknown block";
-    const nudges: StuckNudge[] = [];
-    for (const hit of hits) {
-      if (hit.finding.tag !== "stuck") continue;
-      for (const nudge of hit.finding.nudges || []) {
-        const key = nudgeKey(nudge, hit.finding.run_id || "");
-        if (seenNudges.has(key)) continue;
-        const nudgeBlock = namedBlock(nudge.block_type);
-        if (nudgeBlock && blocks.length > 0 && !blocks.includes(nudgeBlock)) continue;
-        seenNudges.add(key);
-        nudges.push({ ...nudge, run_id: nudge.run_id || hit.finding.run_id });
-      }
-    }
-    const labels = tags.map((tag) => tag.replaceAll("_", " "));
-    cards.push(
-      cardFrom({
-        block,
-        findings,
-        excerpt,
-        current,
-        replacement: next.replacement,
-        shorter: next.shorter,
-        kind: next.kind,
-        title: `${block}: ${excerpt.section} (${excerpt.function}) — ${labels.join(", ")}`,
-        sources,
-        nudges,
-      }),
-    );
-  }
-  return cards;
+      ],
+      findings: [{ tag: moment.tag, title: moment.title }],
+    },
+  };
 }
 
 export function draftPromptCards(materials: DraftMaterials): DraftCard[] {
@@ -582,10 +549,6 @@ export function applyModelReplacements(cards: DraftCard[], modelCards: ModelDraf
 }
 
 export function drafterPrompt(materials: DraftMaterials, cards: DraftCard[]): string {
-  const excerpts = (materials.builder || [])
-    .filter((item) => cards.some((card) => card.evidence.symbol === item.symbol || card.evidence.function === item.function))
-    .map((item) => `### ${item.section} · ${item.function} · ${item.symbol}\n${item.source}`)
-    .join("\n\n");
   const stored = (materials.examples || [])
     .slice(0, 4)
     .map((example, index) => {
@@ -603,66 +566,76 @@ export function drafterPrompt(materials: DraftMaterials, cards: DraftCard[]): st
     )
     .join("\n");
   return [
-    "Rewrite the replacement for each card. A person reviews every card. Do not edit the live prompt builder.",
-    "current_quote is an exact sentence from the stored tutor prompt. Repeat it unchanged.",
-    "replacement replaces those sentences. shorter is a shorter sentence, or Remove this sentence, when cutting the line fixes the finding.",
-    "Prefer the shorter or removed line over adding a new paragraph.",
-    `Cards:\n${quoted}`,
-    `Prompt builder source:\n${excerpts}`,
-    `Stored prompts for the example turns:\n${stored}`,
+    "These are observations from stored turns. Do not rewrite them into prompt lines.",
+    "The harness does not change the live tutor prompt and does not edit kc_prompt.py.",
+    `Observations:\n${quoted}`,
+    `Stored turns:\n${stored}`,
   ].join("\n\n");
-}
-
-function runList(runId: string): string {
-  const ids = (runId || "").split(",").map((id) => id.trim()).filter(Boolean);
-  if (ids.length === 0) return "`unknown`";
-  return ids.map((id) => "`" + id + "`").join(", ");
 }
 
 export type SummaryCard = {
   title?: string;
   evidence?: {
     block_type?: string;
+    block_title?: string;
+    substep?: string;
     section?: string;
     function?: string;
+    symbol?: string;
     current?: string;
-    shorter?: string;
     sources?: DraftSource[];
     nudges?: StuckNudge[];
     findings?: { tag?: string; title?: string }[];
+    child_text?: string;
+    tutor_reply?: string;
+    turn?: number;
+    run_id?: string;
+    fault?: string;
+    mismatch?: string;
+    summary?: string;
   };
-  proposed?: { text?: string; shorter?: string };
 };
 
-/** Plain text for a later Cursor run. Built only from the cards already on the page. */
+function shown(value: string | undefined, fallback: string): string {
+  const text = fold(value || "");
+  return text || fallback;
+}
+
+/** Plain text of the observations already on the page. */
 export function recommendationPageSummary(cards: SummaryCard[]): string {
+  const runs = uniqueText(cards.map((card) => card.evidence?.run_id || card.evidence?.sources?.[0]?.run_id || ""));
+  const blocks = uniqueText(cards.map((card) => card.evidence?.block_type || card.evidence?.sources?.[0]?.block_type || ""));
   const lines = [
-    "Harness recommendation summary",
+    "Harness observations",
     "",
-    "This text is for a later Cursor run. The harness does not change the live tutor prompt, and it does not edit apps/api/app/kc_prompt.py.",
+    "The harness does not change the live tutor prompt, and it does not edit apps/api/app/kc_prompt.py.",
+    "",
+    `Runs: ${runs.length}`,
+    ...runs,
+    `Block types: ${blocks.join(", ") || "none"}`,
     "",
   ];
   cards.forEach((card, index) => {
     const evidence = card.evidence || {};
-    const shorter = (evidence.shorter || card.proposed?.shorter || "").trim();
-    lines.push(`Theme ${index + 1}: ${card.title || "Recommendation"}`);
-    const findingNames = (evidence.findings || []).map((finding) => finding.title || finding.tag || "").filter(Boolean);
-    if (findingNames.length > 0) lines.push(`Findings: ${findingNames.join("; ")}`);
-    lines.push(`Section: ${evidence.section || "unknown"}`);
-    lines.push(`Function: ${evidence.function || "unknown"}`);
-    lines.push(`Quoted stored line: ${evidence.current || ""}`);
-    lines.push(`Shorter replacement: ${shorter}`);
-    const sources = evidence.sources || [];
-    if (sources.length === 0) {
-      lines.push(`Evidence: block type ${evidence.block_type || "an unknown block"}.`);
-    } else {
-      for (const source of sources) {
-        const block = source.block_type || evidence.block_type || "an unknown block";
-        const turn = source.turn === undefined || source.turn === null ? "unknown" : String(source.turn);
-        lines.push(`Evidence: block type ${block}. Run ${source.run_id || "unknown"}. Turn ${turn}.`);
-      }
+    const block = evidence.block_type || evidence.sources?.[0]?.block_type || "an unknown block";
+    const run = evidence.run_id || evidence.sources?.[0]?.run_id || "unknown";
+    const turn = evidence.turn ?? evidence.sources?.[0]?.turn;
+    lines.push(`Observation ${index + 1}: ${card.title || "Observation"}`);
+    lines.push(`Run: ${run}`);
+    lines.push(`Block type: ${block}`);
+    lines.push(`Block title: ${shown(evidence.block_title, "not stored")}`);
+    lines.push(`Substep: ${shown(evidence.substep, "not stored")}`);
+    lines.push(`Turn: ${turn === undefined || turn === null ? "unknown" : String(turn)}`);
+    lines.push(`Child: ${shown(evidence.child_text, "not stored")}`);
+    lines.push(`Tutor: ${shown(evidence.tutor_reply, "not stored")}`);
+    lines.push(`What was suboptimal: ${evidence.fault || evidence.summary || "The stored turn was marked."}`);
+    if (evidence.current) {
+      const where = [evidence.section, evidence.function].filter(Boolean).join(", ");
+      lines.push(`Line in force${where ? ` (${where})` : ""}: ${evidence.current}`);
+      lines.push("This was the line in force on that turn, not a line to change.");
     }
-    for (const sentence of nudgeSentences(evidence.nudges || [], evidence.block_type || "")) {
+    if (evidence.mismatch) lines.push(evidence.mismatch);
+    for (const sentence of nudgeSentences(evidence.nudges || [], block)) {
       lines.push(`Stuck nudge: ${sentence}`);
     }
     lines.push("");
@@ -670,50 +643,7 @@ export function recommendationPageSummary(cards: SummaryCard[]): string {
   return lines.join("\n").trim();
 }
 
-export function recommendationMarkdown(runId: string, cards: DraftCard[]): string {
-  const lines = [
-    "# Harness prompt recommendations",
-    "",
-    "Runs: " + runList(runId),
-    "",
-    "These cards are prompt-tuning instructions for a later Cursor run. Drafting does not change the live tutor and does not edit `apps/api/app/kc_prompt.py`. Apply a card only when a person asks.",
-    "",
-  ];
-  cards.forEach((card, index) => {
-    lines.push(`## ${index + 1}. ${card.title}`);
-    lines.push("");
-    lines.push(`- Block type: ${card.evidence.block_type || "an unknown block"}`);
-    for (const source of card.evidence.sources || []) {
-      lines.push(`- Run \`${source.run_id || ""}\`, turn ${source.turn ?? ""}, ${source.block_type || card.evidence.block_type || "an unknown block"}`);
-    }
-    lines.push(`- Section: ${card.evidence.section || ""}`);
-    lines.push(`- Function: \`${card.evidence.function || ""}\`${card.evidence.symbol && card.evidence.symbol !== card.evidence.function ? ` (\`${card.evidence.symbol}\`)` : ""}`);
-    lines.push(`- Kind: ${card.kind}, prompt gets ${card.prompt_direction}`);
-    lines.push(`- Place: ${card.place || ""}`);
-    lines.push("");
-    lines.push(card.evidence.summary || "");
-    lines.push("");
-    if (card.evidence.nudges && card.evidence.nudges.length > 0) {
-      lines.push("### Nudges");
-      lines.push("");
-      for (const sentence of nudgeSentences(card.evidence.nudges, card.evidence.block_type || "")) {
-        lines.push(`- ${sentence}`);
-      }
-      lines.push("");
-    }
-    lines.push("### Current sentences");
-    lines.push("");
-    lines.push(`> ${card.evidence.current || ""}`);
-    lines.push("");
-    lines.push("### Replacement");
-    lines.push("");
-    lines.push(card.evidence.replacement || card.proposed.text || "");
-    lines.push("");
-    lines.push("### Shorter or removed");
-    lines.push("");
-    lines.push(card.evidence.shorter || card.proposed.shorter || "");
-    lines.push("");
-  });
-  return lines.join("\n");
+export function recommendationMarkdown(_runId: string, cards: DraftCard[]): string {
+  return recommendationPageSummary(cards);
 }
 

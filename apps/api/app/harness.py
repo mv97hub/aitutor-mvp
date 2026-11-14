@@ -1371,7 +1371,7 @@ def save_recommendations(db: Session, body: dict) -> list[dict]:
     if not cards:
         raise HTTPException(status_code=422, detail="A review needs at least one card.")
     kinds = {str(card.get("kind") or "") for card in cards if isinstance(card, dict)}
-    if "remove" not in kinds and "reword" not in kinds:
+    if not body.get("observations") and "remove" not in kinds and "reword" not in kinds:
         raise HTTPException(
             status_code=422,
             detail="A batch that only proposes additions is incomplete. Include a removal or a shorter wording.",

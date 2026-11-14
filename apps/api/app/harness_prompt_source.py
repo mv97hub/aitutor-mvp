@@ -12,6 +12,8 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from app.harness_report import block_label
+
 PROMPT_FILE = Path(__file__).resolve().parent / "kc_prompt.py"
 
 SECTION_HEADERS = (
@@ -145,23 +147,61 @@ def select_turns(turns: list[dict], wanted: set[int]) -> list[dict]:
     return [turns[index] for index in sorted(indexes)][:6]
 
 
-def example_from_turn(chat_id: str, turn: dict) -> dict | None:
-    prompt = str(turn.get("tutor_prompt") or "").strip()
-    if not prompt:
+def example_from_turn(chat_id: str, turn: dict, *, block_title: str = "") -> dict | None:
+    after = turn.get("session_after") if isinstance(turn.get("session_after"), dict) else {}
+    prompt = str(turn.get("tutor_prompt") or after.get("prompt") or "").strip()
+    child = str(turn.get("child_text") or "")
+    reply = str(after.get("tutor_reply") or "")
+    if not prompt and not child and not reply:
         return None
     try:
         seq = int(turn.get("seq") or 0)
     except (TypeError, ValueError):
         seq = 0
+    label = block_label_from_prompt(prompt) or block_label(str(after.get("block_type") or ""))
     return {
         "chat_id": chat_id,
         "turn": seq,
         "intent": str(turn.get("intent") or ""),
-        "child_text": str(turn.get("child_text") or "")[:400],
-        "block_label": block_label_from_prompt(prompt),
+        "child_text": child[:2000],
+        "tutor_reply": reply[:2000],
+        "block_label": label,
+        "block_title": block_title,
+        "block_id": str(after.get("block_id") or ""),
+        "substep": str(after.get("substep") or ""),
         "tutor_prompt": prompt[:20000],
-        "sections": prompt_sections(prompt),
+        "sections": prompt_sections(prompt) if prompt else {},
     }
+
+
+def _block_title(detail: dict, block_id: str) -> str:
+    if not block_id:
+        return ""
+    settings = detail.get("settings_copy") if isinstance(detail.get("settings_copy"), dict) else {}
+    blocks = settings.get("blocks") if isinstance(settings.get("blocks"), list) else []
+    for block in blocks:
+        if not isinstance(block, dict) or str(block.get("id") or "") != block_id:
+            continue
+        data = block.get("data") if isinstance(block.get("data"), dict) else {}
+        return str(data.get("block_title") or "").strip()
+    return ""
+
+
+def turns_for_draft(turns: list[dict], wanted: set[int]) -> list[dict]:
+    """Cited turns when a finding names them, otherwise the opening and closing turns."""
+    if not wanted:
+        return select_turns(turns, set())
+    chosen = []
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        try:
+            seq = int(turn.get("seq") or 0)
+        except (TypeError, ValueError):
+            continue
+        if seq in wanted:
+            chosen.append(turn)
+    return chosen
 
 
 def _wanted_turns(findings: list[dict]) -> dict[str, set[int]]:
@@ -175,6 +215,17 @@ def _wanted_turns(findings: list[dict]) -> dict[str, set[int]]:
                 continue
             try:
                 turn = int(example.get("turn") or 0)
+            except (TypeError, ValueError):
+                turn = 0
+            wanted.setdefault(chat_id, set()).add(turn)
+        for nudge in finding.get("nudges") or []:
+            if not isinstance(nudge, dict):
+                continue
+            chat_id = str(nudge.get("chat_id") or "")
+            if not chat_id:
+                continue
+            try:
+                turn = int(nudge.get("turn") or 0)
             except (TypeError, ValueError):
                 turn = 0
             wanted.setdefault(chat_id, set()).add(turn)
@@ -206,17 +257,14 @@ def draft_context(db: Session, run_id: uuid.UUID) -> dict:
         except Exception:
             continue
         turns = detail.get("turns") if isinstance(detail.get("turns"), list) else []
-        for turn in select_turns(turns, wanted.get(chat_id, set())):
+        for turn in turns_for_draft(turns, wanted.get(chat_id, set())):
             if not isinstance(turn, dict):
                 continue
-            row = example_from_turn(chat_id, turn)
+            after = turn.get("session_after") if isinstance(turn.get("session_after"), dict) else {}
+            row = example_from_turn(chat_id, turn, block_title=_block_title(detail, str(after.get("block_id") or "")))
             if row is None:
                 continue
             examples.append(row)
-            if len(examples) >= 8:
-                break
-        if len(examples) >= 8:
-            break
     return {
         "run_id": str(run_id),
         "findings": findings,

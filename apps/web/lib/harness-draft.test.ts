@@ -2,438 +2,167 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  applyModelReplacements,
   defaultSelectedRunIds,
   draftPromptCards,
-  drafterPrompt,
   recommendationMarkdown,
   recommendationPageSummary,
   skippedRunMessage,
   type DraftMaterials,
 } from "./harness-draft.ts";
 
-const ASIDE =
-  "Goal start: The learner typed a side remark. It is not an attempt and it is not a request to learn more. Answer it inside the safety rules, in one or two sentences, then one line back to the active lesson. Do not start a new explanation of this block. Answer that question first, in a sentence or two, then one line back to the active lesson. Do not ask the goal question. It does not mean ignore the question they typed.";
-const DEEPEN =
-  "Goal start: The learner wants to keep learning. Explain this same topic more deeply, from a fresh angle. Write it as teaching, not a question. Do not ask the goal question. Do not ask any question.";
-const HINT =
-  "When the learner is stuck, start with a nudge, then an analogy, then a scaffold, and reveal the goal only after those hints.";
-const TEACH_DUP =
-  "Do not start a new explanation of this block. Answer the side remark in one or two sentences, then one line back to the active lesson.";
+const GOAL =
+  "Goal start: The learner is still on the explanation. Explain this same topic in two or three sentences, from a fresh angle. Ask no question.";
 
-function prompt(turn: string): string {
-  return [
-    "This turn",
-    "Active step: Block 1 of 6: Topic / Goal. The child will type.",
-    turn,
-    "",
-    "How to teach",
-    HINT,
-    TEACH_DUP,
-  ].join("\n");
+function explanatoryPrompt(): string {
+  return ["This turn", "Active step: Block 2 of 6: Explanatory Walkthrough. The child will type.", GOAL].join("\n");
 }
 
-const materials: DraftMaterials = {
-  run_id: "run-1",
-  findings: [
-    {
-      title: "AI_Child1 got stuck",
-      tag: "stuck",
-      block_label: "Topic / Goal",
-      cause_class: "prompt",
-      count: 1,
-      nudges: [
-        { turn: 9, asked: "What's next?", answered: "Let's keep going.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
-        { turn: 10, asked: "What should we do next?", answered: "We are still here.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
-      ],
-    },
-    { title: "one question was not in the prompt", tag: "one_question", block_label: "an unknown block", cause_class: "prompt", count: 0 },
-    { title: "stay on course was not in the prompt", tag: "stay_on_course", block_label: "an unknown block", cause_class: "prompt", count: 0 },
-    {
-      title: "repeated itself",
-      tag: "repeated_itself",
-      block_label: "Topic / Goal",
-      cause_class: "setting",
-      count: 3,
-      examples: [{ chat_id: "chat-1", turn: 4, block: "Topic / Goal" }],
-    },
-    {
-      title: "ignored question",
-      tag: "ignored_question",
-      block_label: "Topic / Goal",
-      cause_class: "loop",
-      count: 2,
-      examples: [{ chat_id: "chat-1", turn: 2, block: "Topic / Goal" }],
-    },
-  ],
-  examples: [
-    { chat_id: "chat-1", turn: 1, tutor_prompt: prompt(DEEPEN), block_label: "Topic / Goal", sections: { "This turn": DEEPEN, "How to teach": `${HINT}\n${TEACH_DUP}` } },
-    { chat_id: "chat-1", turn: 2, child_text: "What does govern mean?", tutor_prompt: prompt(ASIDE), block_label: "Topic / Goal", sections: { "This turn": ASIDE, "How to teach": `${HINT}\n${TEACH_DUP}` } },
-    { chat_id: "chat-1", turn: 4, tutor_prompt: prompt(ASIDE), block_label: "Topic / Goal", sections: { "This turn": ASIDE, "How to teach": `${HINT}\n${TEACH_DUP}` } },
-  ],
-  builder: [
-    { symbol: "_GOAL_START_DEEPEN", section: "This turn", function: "_this_turn", source: DEEPEN, literals: [DEEPEN] },
-    { symbol: "_GOAL_START_ASIDE", section: "This turn", function: "_this_turn", source: ASIDE, literals: [ASIDE] },
-    { symbol: "_block_config_rules", section: "How to teach", function: "_block_config_rules", source: HINT, literals: [HINT] },
-    { symbol: "_how_to_teach", section: "How to teach", function: "_how_to_teach", source: TEACH_DUP, literals: [TEACH_DUP] },
-  ],
-};
+function topicPrompt(): string {
+  return ["This turn", "Active step: Block 1 of 6: Topic / Goal. The child will type.", GOAL].join("\n");
+}
 
-test("drafted cards quote the stored prompt and name the function", () => {
-  const cards = draftPromptCards(materials);
-  const stored = (materials.examples || []).map((item) => item.tutor_prompt).join("\n");
-  const keys = cards.map((card) => `${card.evidence.section}|${card.evidence.function}|${card.evidence.current}`);
-  assert.equal(new Set(keys).size, keys.length);
-  assert.ok(cards.length >= 3);
-  for (const card of cards) {
-    assert.ok(card.evidence.section);
-    assert.ok(card.evidence.function);
-    assert.ok(card.evidence.current);
-    assert.ok(stored.includes(card.evidence.current || ""));
-    assert.equal(typeof card.evidence.replacement, "string");
-    assert.ok(card.evidence.replacement);
-    assert.ok(card.evidence.shorter);
-    assert.ok(card.proposed.shorter);
-    assert.equal(card.prompt_direction, "shorter");
-  }
-  const stuck = cards.find((card) => card.evidence.summary?.includes("got stuck"));
-  assert.match(stuck?.evidence.current || "", /more deeply/);
-  assert.equal(stuck?.evidence.function, "_this_turn");
-  assert.equal(stuck?.evidence.section, "This turn");
-  assert.equal(stuck?.evidence.block_type, "Topic / Goal");
-  assert.match(stuck?.evidence.summary || "", /What's next\?/);
-  assert.match(stuck?.evidence.summary || "", /What should we do next\?/);
-  assert.match(stuck?.evidence.summary || "", /Let's keep going/);
-  assert.match(stuck?.evidence.summary || "", /We are still here/);
-  assert.match(stuck?.evidence.summary || "", /did not move/);
-  assert.equal(stuck?.evidence.nudges?.length, 2);
-  const nudgeCards = cards.filter((card) => (card.evidence.nudges || []).length > 0);
-  assert.equal(nudgeCards.length, 1);
-  const borrowed = cards.find((card) => (card.evidence.findings || []).some((finding) => finding.tag === "one_question"));
-  assert.equal(borrowed, undefined);
-  const repeated = cards.find((card) => card.evidence.summary?.includes("repeated"));
-  assert.match(repeated?.evidence.current || "", /nudge/);
-  assert.equal(repeated?.kind, "remove");
-  assert.ok(cards.some((card) => card.kind === "remove"));
-  const prompt = drafterPrompt(materials, cards);
-  assert.match(prompt, /_this_turn/);
-  assert.match(prompt, /more deeply/);
-  assert.match(prompt, /What does govern mean/);
-});
+const builder = [
+  { symbol: "_GOAL_START_DEEPEN", section: "This turn", function: "_this_turn", source: GOAL, literals: [GOAL] },
+];
 
-test("a model replacement is kept only when it quotes the stored sentence and is shorter", () => {
-  const cards = draftPromptCards(materials);
-  const current = cards[0].evidence.current || "";
-  const kept = applyModelReplacements(cards, [
-    { current_quote: "a sentence the tutor never saw", replacement: "Ignore the child.", shorter: "Remove this sentence." },
-    { current_quote: current, replacement: current + " Add another paragraph of rules.", shorter: "Remove this sentence." },
-    { current_quote: current, replacement: "Two sentences, then stop.", shorter: "Remove this sentence." },
-  ]);
-  assert.equal(kept[0].evidence.replacement, "Two sentences, then stop.");
-  assert.equal(kept[0].evidence.current, current);
-  const other = cards.find((card) => card.evidence.current !== current);
-  assert.ok(other);
-  const keptOther = kept.find((card) => card.title === other?.title);
-  assert.equal(keptOther?.evidence.replacement, other?.evidence.replacement);
-});
+function sample(): DraftMaterials {
+  return {
+    run_id: "run-1",
+    findings: [
+      {
+        title: "ignored question on Explanatory Walkthrough",
+        tag: "ignored_question",
+        block_label: "Explanatory Walkthrough",
+        examples: [{ chat_id: "chat-1", turn: 4, block: "Explanatory Walkthrough" }],
+      },
+      {
+        title: "ignored question again",
+        tag: "ignored_question",
+        block_label: "Explanatory Walkthrough",
+        examples: [{ chat_id: "chat-1", turn: 4, block: "Explanatory Walkthrough" }],
+      },
+      {
+        title: "ignored question a third time",
+        tag: "ignored_question",
+        block_label: "Explanatory Walkthrough",
+        examples: [{ chat_id: "chat-1", turn: 4, block: "Explanatory Walkthrough" }],
+      },
+      {
+        title: "too long on the same turn",
+        tag: "too_long",
+        block_label: "Explanatory Walkthrough",
+        examples: [{ chat_id: "chat-1", turn: 4, block: "Explanatory Walkthrough" }],
+      },
+      {
+        title: "AI_Child1 got stuck",
+        tag: "stuck",
+        block_label: "Topic / Goal",
+        nudges: [
+          { turn: 9, asked: "What's next?", answered: "Let's keep going.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
+          { turn: 9, asked: "What's next?", answered: "Let's keep going.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
+          { turn: 10, asked: "What should we do next?", answered: "We are still here.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
+        ],
+      },
+    ],
+    examples: [
+      {
+        chat_id: "chat-1",
+        turn: 4,
+        run_id: "run-1",
+        block_label: "Explanatory Walkthrough",
+        block_title: "How a river cuts rock",
+        substep: "explain_topic",
+        child_text: "What does govern mean?",
+        tutor_reply: "The river kept its old name and moved on.",
+        tutor_prompt: explanatoryPrompt(),
+      },
+      {
+        chat_id: "chat-1",
+        turn: 2,
+        run_id: "run-1",
+        block_label: "Topic / Goal",
+        block_title: "Why Cuba",
+        substep: "explain",
+        child_text: "Tell me more about Cuba.",
+        tutor_reply: "Cuba sat between two powers.",
+        tutor_prompt: topicPrompt(),
+      },
+    ],
+    builder,
+  };
+}
 
 test("the newest few runs start selected", () => {
   assert.deepEqual(defaultSelectedRunIds(["a", "b", "c", "d"]), ["a", "b", "c"]);
   assert.deepEqual(defaultSelectedRunIds(["a"]), ["a"]);
 });
 
-test("a failed run is named and the other runs still draft one card per line", () => {
-  const named = skippedRunMessage([
-    { runId: "11111111-1111-1111-1111-111111111111", message: "Load failed" },
-  ]);
+test("a failed run is named and the other runs are still drafted", () => {
+  const named = skippedRunMessage([{ runId: "11111111-1111-1111-1111-111111111111", message: "Load failed" }]);
   assert.match(named, /11111111-1111-1111-1111-111111111111/);
   assert.match(named, /Load failed/);
   assert.match(named, /other selected runs were still drafted/);
-  const quiet: DraftMaterials = {
-    run_id: "run-quiet",
-    findings: [
-      {
-        title: "quiet finding",
-        tag: "quiet_only",
-        block_label: "Topic / Goal",
-        examples: [{ chat_id: "quiet", turn: 3, block: "Topic / Goal" }],
-      },
-    ],
-    examples: [{ chat_id: "quiet", turn: 3, run_id: "run-quiet", tutor_prompt: "No builder sentence is in this prompt.", block_label: "Topic / Goal" }],
-    builder: materials.builder,
-  };
-  const second: DraftMaterials = {
-    run_id: "run-b",
-    findings: [
-      {
-        title: "AI_Child2 got stuck",
-        tag: "stuck",
-        block_label: "Topic / Goal",
-        cause_class: "prompt",
-        examples: [{ chat_id: "chat-2", turn: 11, block: "Topic / Goal" }],
-        nudges: [
-          { turn: 11, asked: "And then?", answered: "Same step.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
-          { turn: 12, asked: "Now what?", answered: "Still explain.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
-        ],
-      },
-    ],
-    examples: [
-      ...(materials.examples || []).map((example) => ({ ...example, chat_id: "chat-2", run_id: "run-b" })),
-      {
-        chat_id: "chat-2",
-        turn: 11,
-        run_id: "run-b",
-        tutor_prompt: prompt(DEEPEN),
-        block_label: "Topic / Goal",
-        sections: { "This turn": DEEPEN, "How to teach": `${HINT}\n${TEACH_DUP}` },
-      },
-    ],
-    builder: materials.builder,
-  };
-  const cards = draftPromptCards({ runs: [{ ...materials, run_id: "run-a" }, second, quiet] });
-  const stuckCards = cards.filter((card) => card.evidence.summary?.includes("got stuck"));
-  assert.equal(stuckCards.length, 1);
-  const stuck = stuckCards[0];
-  assert.equal(stuck.evidence.block_type, "Topic / Goal");
-  assert.equal(stuck.evidence.section, "This turn");
-  assert.equal(stuck.evidence.function, "_this_turn");
-  assert.match(stuck.evidence.current || "", /more deeply/);
-  assert.ok(stuck.evidence.replacement);
-  assert.ok((stuck.evidence.replacement || "").length < (stuck.evidence.current || "").length);
-  const sources = stuck.evidence.sources || [];
-  assert.ok(sources.some((source) => source.run_id === "run-a"));
-  assert.ok(sources.some((source) => source.run_id === "run-b" && source.turn === 11 && source.block_type === "Topic / Goal"));
-  assert.match(stuck.evidence.summary || "", /What's next\?/);
-  assert.match(stuck.evidence.summary || "", /Let's keep going/);
-  assert.match(stuck.evidence.summary || "", /And then\?/);
-  assert.match(stuck.evidence.summary || "", /Same step/);
-  assert.match(stuck.evidence.summary || "", /did not move/);
-  assert.equal(stuck.evidence.nudges?.length, 4);
-  assert.equal(cards.some((card) => card.evidence.summary?.includes("quiet finding")), false);
-  const markdown = recommendationMarkdown("run-a,run-b", cards);
-  assert.match(markdown, /run-a/);
-  assert.match(markdown, /run-b/);
-  assert.match(markdown, /turn 11/);
 });
 
-test("the page summary is plain text for a later run and keeps stuck nudges", () => {
-  const text = recommendationPageSummary([
+test("one observation per turn and fault, with quotes and no replacement wording", () => {
+  const materials = sample();
+  materials.findings = [
+    ...(materials.findings || []),
     {
-      title: "Topic / Goal: Shorten This turn for stuck",
-      evidence: {
-        section: "This turn",
-        function: "_this_turn",
-        current: "Explain this same topic more deeply.",
-        shorter: "Explain this topic in two sentences, then stop.",
-        block_type: "Topic / Goal",
-        sources: [{ run_id: "run-a", turn: 9, block_type: "Topic / Goal" }],
-        nudges: [
-          {
-            turn: 9,
-            asked: "What's next?",
-            answered: "Let's keep going.",
-            block_type: "Topic / Goal",
-            block_id: "b1",
-            substep: "explain",
-          },
-        ],
-      },
+      title: "stay on the goal step",
+      tag: "stuck",
+      examples: [{ chat_id: "chat-1", turn: 2, block: "Topic / Goal" }],
     },
-    {
-      title: "one question",
-      evidence: {
-        section: "How to teach",
-        function: "_how_to_teach",
-        current: "Do not ask any question.",
-        shorter: "Ask no question.",
-        block_type: "Topic / Goal",
-        sources: [{ run_id: "run-b", turn: 2, block_type: "Topic / Goal" }],
-      },
-    },
-  ]);
-  assert.match(text, /later Cursor run/);
-  assert.match(text, /does not change the live tutor prompt/);
-  assert.match(text, /kc_prompt\.py/);
-  assert.match(text, /Theme 1: Topic \/ Goal: Shorten This turn for stuck/);
-  assert.match(text, /Section: This turn/);
-  assert.match(text, /Function: _this_turn/);
-  assert.match(text, /Quoted stored line: Explain this same topic more deeply\./);
-  assert.match(text, /Shorter replacement: Explain this topic in two sentences, then stop\./);
-  assert.match(text, /block type Topic \/ Goal/);
-  assert.match(text, /Run run-a/);
-  assert.match(text, /Turn 9/);
-  assert.match(text, /the child asked "What's next\?"/);
-  assert.match(text, /The tutor answered "Let's keep going\."/);
-  assert.match(text, /did not move/);
-  assert.match(text, /Theme 2: one question/);
-  assert.match(text, /Run run-b/);
-  assert.match(text, /Turn 2/);
-  const second = text.split("Theme 2:")[1] || "";
-  assert.equal(second.includes("did not move"), false);
-});
-
-const NEW_DEEPEN =
-  "Goal start: The learner is still on the explanation. Explain this same topic in two or three sentences, from a fresh angle. Ask no question.";
-const EXPLAIN =
-  "Goal start: Explain what this topic is and why it matters. Write it as teaching, not a question. Do not ask the goal question. Do not ask any question.";
-
-test("stuck quotes the current Tell me more line and still the older more deeply line", () => {
-  const older = draftPromptCards(materials).find((card) => card.evidence.summary?.includes("got stuck"));
-  assert.match(older?.evidence.current || "", /more deeply/);
-  const fresh = draftPromptCards({
-    run_id: "run-new",
-    findings: [
-      {
-        title: "AI_Child1 got stuck",
-        tag: "stuck",
-        block_label: "Topic / Goal",
-        examples: [{ chat_id: "chat-new", turn: 2, block: "Topic / Goal" }],
-        nudges: [
-          { turn: 2, asked: "What's next?", answered: "Still explaining.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
-        ],
-      },
-    ],
-    examples: [
-      {
-        chat_id: "chat-new",
-        turn: 2,
-        tutor_prompt: prompt(`${NEW_DEEPEN}\n${EXPLAIN}`),
-        block_label: "Topic / Goal",
-        sections: { "This turn": `${NEW_DEEPEN}\n${EXPLAIN}` },
-      },
-    ],
-    builder: [
-      { symbol: "_GOAL_START_DEEPEN", section: "This turn", function: "_this_turn", source: NEW_DEEPEN, literals: [NEW_DEEPEN] },
-      { symbol: "_GOAL_START_EXPLAIN", section: "This turn", function: "_this_turn", source: EXPLAIN, literals: [EXPLAIN] },
-    ],
-  });
-  const stuck = fresh.find((card) => (card.evidence.findings || []).some((finding) => finding.tag === "stuck"));
-  assert.equal(stuck?.evidence.current, NEW_DEEPEN);
-  assert.equal(stuck?.evidence.section, "This turn");
-  assert.equal(stuck?.evidence.function, "_this_turn");
-  assert.equal(stuck?.evidence.nudges?.length, 1);
-  assert.equal(fresh.some((card) => card.evidence.current === EXPLAIN), false);
-});
-
-const GOAL = "Goal start: explain this same topic more deeply before the next question.";
-const HINT_LINE = "When the learner is stuck, start with a nudge, then an analogy, then a scaffold, and reveal the goal only after those hints.";
-
-test("one card per prompt line, quoted only from the evidence turn", () => {
-  const goalPrompt = `This turn\n${GOAL}\n`;
-  const otherPrompt = "This turn\nStay with the case the learner already opened and do not jump ahead.\n";
-  const hintPrompt = `How to teach\n${HINT_LINE}\n`;
-  const shared = { chat_id: "goal-chat", turn: 3, run_id: "run-lines", tutor_prompt: goalPrompt, block_label: "Topic / Goal" };
-  const tags = [
-    ["missed_boredom", "Missed boredom"],
-    ["false_pass", "False pass"],
-    ["generic_praise", "Generic praise"],
-    ["too_long", "Too long"],
-    ["ignored_question", "Ignored the question"],
-    ["stay_on_course", "Stay on course"],
-  ] as const;
-  const pack: DraftMaterials = {
-    run_id: "run-lines",
-    findings: [
-      ...tags.map(([tag, title]) => ({
-        title,
-        tag,
-        block_label: "Topic / Goal",
-        examples: [{ chat_id: "goal-chat", turn: 3, block: "Topic / Goal" }],
-      })),
-      {
-        title: "Case study boredom",
-        tag: "missed_boredom",
-        block_label: "Case Study",
-        examples: [{ chat_id: "case-chat", turn: 1, block: "Case Study" }],
-      },
-      {
-        title: "Walkthrough pass",
-        tag: "false_pass",
-        block_label: "Explanatory Walkthrough",
-        examples: [{ chat_id: "walk-chat", turn: 2, block: "Explanatory Walkthrough" }],
-      },
-      {
-        title: "Socratic praise",
-        tag: "generic_praise",
-        block_label: "Socratic",
-        examples: [{ chat_id: "socratic-chat", turn: 4, block: "Socratic" }],
-      },
-      {
-        title: "Hint on another step",
-        tag: "repeated_itself",
-        block_label: "Case Study",
-        examples: [{ chat_id: "case-chat", turn: 1, block: "Case Study" }],
-      },
-      {
-        title: "Hint on the goal step",
-        tag: "repeated_itself",
-        block_label: "Topic / Goal",
-        examples: [{ chat_id: "hint-chat", turn: 5, block: "Topic / Goal" }],
-      },
-      {
-        title: "AI_Child1 got stuck",
-        tag: "stuck",
-        block_label: "Topic / Goal",
-        examples: [{ chat_id: "goal-chat", turn: 3, block: "Topic / Goal" }],
-        nudges: [
-          { turn: 8, asked: "What's next?", answered: "Still here.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
-          { turn: 9, asked: "What should we do next?", answered: "Same step.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
-        ],
-      },
-    ],
-    examples: [
-      shared,
-      { chat_id: "case-chat", turn: 1, run_id: "run-lines", tutor_prompt: otherPrompt, block_label: "Case Study" },
-      { chat_id: "walk-chat", turn: 2, run_id: "run-lines", tutor_prompt: otherPrompt, block_label: "Explanatory Walkthrough" },
-      { chat_id: "socratic-chat", turn: 4, run_id: "run-lines", tutor_prompt: otherPrompt, block_label: "Socratic" },
-      { chat_id: "hint-chat", turn: 5, run_id: "run-lines", tutor_prompt: hintPrompt, block_label: "Topic / Goal" },
-    ],
-    builder: [
-      { symbol: "_GOAL_START_DEEPEN", section: "This turn", function: "_this_turn", source: GOAL, literals: [GOAL] },
-      { symbol: "_block_config_rules", section: "How to teach", function: "_block_config_rules", source: HINT_LINE, literals: [HINT_LINE] },
-    ],
-  };
-  const cards = draftPromptCards(pack);
-  const again = draftPromptCards(pack);
-  assert.equal(again.length, cards.length);
-  const goalCards = cards.filter((card) => (card.evidence.current || "").startsWith("Goal start"));
-  assert.equal(goalCards.length, 1);
-  const goal = goalCards[0];
-  assert.equal(goal.evidence.section, "This turn");
-  assert.equal(goal.evidence.function, "_this_turn");
-  assert.equal(goal.evidence.current, GOAL);
-  assert.equal(typeof goal.evidence.replacement, "string");
-  assert.ok(goal.evidence.replacement);
-  assert.equal(goal.evidence.shorter, goal.proposed.shorter);
-  const listed = (goal.evidence.findings || []).map((finding) => finding.tag);
-  for (const [tag] of tags) assert.ok(listed.includes(tag));
-  assert.ok(listed.includes("stuck"));
-  assert.equal(listed.includes("missed_boredom") && listed.filter((tag) => tag === "missed_boredom").length, 1);
-  const blocks = (goal.evidence.sources || []).map((source) => source.block_type);
-  assert.ok(blocks.every((block) => block === "Topic / Goal"));
-  assert.equal(blocks.includes("Case Study"), false);
-  assert.equal(blocks.includes("Explanatory Walkthrough"), false);
-  assert.equal(blocks.includes("Socratic"), false);
-  const hintCards = cards.filter((card) => (card.evidence.current || "").includes("those hints"));
-  assert.equal(hintCards.length, 1);
-  const hint = hintCards[0];
-  assert.equal(hint.evidence.current, HINT_LINE);
-  assert.equal(hint.kind, "remove");
-  assert.equal(hint.evidence.shorter, "Remove this sentence.");
-  const hintSources = hint.evidence.sources || [];
-  assert.equal(hintSources.length, 1);
-  assert.equal(hintSources[0].turn, 5);
-  assert.equal(hintSources[0].block_type, "Topic / Goal");
-  assert.equal(hintSources.some((source) => source.block_type === "Case Study"), false);
-  const nudgeCards = cards.filter((card) => (card.evidence.nudges || []).length > 0);
-  assert.equal(nudgeCards.length, 1);
-  assert.equal(nudgeCards[0], goal);
-  assert.equal(nudgeCards[0].evidence.nudges?.length, 2);
+  ];
+  const cards = draftPromptCards(materials);
   const summary = recommendationPageSummary(cards);
-  const goalThemes = summary.split("Theme ").filter((part) => part.includes("Goal start:"));
-  assert.equal(goalThemes.length, 1);
-  assert.match(summary, /Findings:/);
-  assert.match(summary, /Missed boredom/);
-  assert.match(summary, /False pass/);
-  assert.equal(summary.split("What's next?").length, 2);
+  assert.equal(recommendationMarkdown("run-1", cards), summary);
+  assert.equal(/Remove this sentence|Shorter replacement|shorter replacement/i.test(summary), false);
+  for (const card of cards) {
+    assert.equal(card.evidence.replacement, undefined);
+    assert.equal(card.evidence.shorter, undefined);
+    assert.equal(card.proposed.text, "");
+    assert.equal(card.proposed.shorter, "");
+    assert.match(summary, new RegExp(card.evidence.child_text || "missing child"));
+    assert.match(summary, new RegExp(card.evidence.tutor_reply || "missing tutor"));
+  }
+  const keys = cards.map((card) => `${card.evidence.run_id}|${card.evidence.sources?.[0]?.chat_id || ""}|${card.evidence.turn}|${card.evidence.findings?.[0]?.tag}`);
+  assert.equal(new Set(keys).size, keys.length);
+  const ignored = cards.filter((card) => card.evidence.findings?.[0]?.tag === "ignored_question");
+  assert.equal(ignored.length, 1);
+  assert.equal(ignored[0].evidence.turn, 4);
+  assert.equal(ignored[0].evidence.child_text, "What does govern mean?");
+  assert.equal(ignored[0].evidence.tutor_reply, "The river kept its old name and moved on.");
+  assert.match(ignored[0].evidence.fault || "", /ignored the child's question/);
+  const sameTurn = cards.filter((card) => card.evidence.turn === 4);
+  assert.equal(sameTurn.length, 2);
+  assert.equal(sameTurn.filter((card) => card.evidence.findings?.[0]?.tag === "too_long").length, 1);
+  const goalQuotes = cards.filter((card) => (card.evidence.current || "") === GOAL);
+  assert.ok(goalQuotes.length >= 1);
+  assert.equal(goalQuotes.every((card) => card.evidence.replacement === undefined), true);
+  const mismatch = cards.find((card) => card.evidence.block_type === "Explanatory Walkthrough" && card.evidence.current === GOAL);
+  assert.ok(mismatch);
+  assert.match(mismatch?.evidence.mismatch || "", /Topic \/ Goal/);
+  assert.match(mismatch?.evidence.mismatch || "", /Explanatory Walkthrough/);
+  assert.match(mismatch?.evidence.mismatch || "", /do not match/);
+  assert.match(summary, /This line is for Topic \/ Goal/);
+  assert.match(summary, /not a line to change/);
+  const goalTurn = cards.find((card) => card.evidence.turn === 2);
+  assert.equal(goalTurn?.evidence.block_type, "Topic / Goal");
+  assert.equal(goalTurn?.evidence.current, GOAL);
+  assert.equal(goalTurn?.evidence.mismatch || "", "");
+  const nudges = cards.filter((card) => (card.evidence.nudges || []).length > 0);
+  assert.equal(nudges.length, 2);
+  assert.match(summary, /What's next\?/);
+  assert.match(summary, /Let's keep going/);
+  assert.match(summary, /What should we do next\?/);
+  assert.match(summary, /did not move/);
+  assert.match(summary, /Runs: 1/);
+  assert.match(summary, /run-1/);
+  assert.match(summary, /Block types: .*Explanatory Walkthrough/);
+  assert.match(summary, /Topic \/ Goal/);
+  assert.match(summary, /does not change the live tutor prompt/);
+  assert.match(summary, /kc_prompt\.py/);
+  assert.match(summary, /How a river cuts rock/);
+  assert.match(summary, /explain_topic/);
 });
