@@ -21,6 +21,17 @@ export type DraftFinding = {
   cause_class?: string;
   place?: string;
   examples?: { chat_id?: string; turn?: number; block?: string; child?: string }[];
+  nudges?: StuckNudge[];
+};
+
+export type StuckNudge = {
+  turn?: number;
+  asked?: string;
+  answered?: string;
+  block_type?: string;
+  block_id?: string;
+  substep?: string;
+  child?: string;
 };
 
 export type BuilderExcerpt = {
@@ -57,6 +68,7 @@ export type DraftEvidence = {
   current?: string;
   replacement?: string;
   shorter?: string;
+  nudges?: StuckNudge[];
 };
 
 export type DraftCard = RecommendationCard & {
@@ -86,6 +98,15 @@ const TAG_PREFER: Record<string, RegExp> = {
   repeated_itself: /nudge|hint|missed answer/,
   ignored_question: /question they typed|side remark|answer that question/,
 };
+
+export function nudgeSentences(nudges: StuckNudge[], block: string): string[] {
+  return nudges.map((nudge) => {
+    const named = nudge.block_type || block || "an unknown block";
+    const place = [nudge.block_id, nudge.substep].filter(Boolean).join(" / ");
+    const where = place ? `${named} (${place})` : named;
+    return `Turn ${nudge.turn ?? ""}: the child asked "${nudge.asked || ""}". The tutor answered "${nudge.answered || ""}". ${where} did not move.`;
+  });
+}
 
 export function fold(text: string): string {
   return text.replace(/\s+/g, " ").trim();
@@ -280,11 +301,14 @@ function cardFrom(input: {
     input.excerpt.symbol !== input.excerpt.function ? ` (${input.excerpt.symbol})` : ""
   }`;
   const findingTitle = input.finding.title || input.finding.tag || "Finding";
+  const nudges = input.finding.tag === "stuck" ? input.finding.nudges || [] : [];
+  const nudgeLines = nudgeSentences(nudges, input.block);
   const summary = [
     findingTitle.endsWith(".") ? findingTitle : `${findingTitle}.`,
     `${input.excerpt.section} is written by ${input.excerpt.function} in kc_prompt.py.`,
     input.excerpt.symbol !== input.excerpt.function ? `The sentence is ${input.excerpt.symbol}.` : "",
     "The current sentences are quoted from the stored tutor prompt. The replacement is shorter. Nothing here changes the live tutor.",
+    ...nudgeLines,
   ]
     .filter(Boolean)
     .join(" ");
@@ -307,6 +331,7 @@ function cardFrom(input: {
       current: input.current,
       replacement: input.replacement,
       shorter: input.shorter,
+      nudges: nudgeLines.length ? nudges : undefined,
     },
   };
 }
@@ -437,6 +462,14 @@ export function recommendationMarkdown(runId: string, cards: DraftCard[]): strin
     lines.push("");
     lines.push(card.evidence.summary || "");
     lines.push("");
+    if (card.evidence.nudges && card.evidence.nudges.length > 0) {
+      lines.push("### Nudges");
+      lines.push("");
+      for (const sentence of nudgeSentences(card.evidence.nudges, card.evidence.block_type || "")) {
+        lines.push(`- ${sentence}`);
+      }
+      lines.push("");
+    }
     lines.push("### Current sentences");
     lines.push("");
     lines.push(`> ${card.evidence.current || ""}`);

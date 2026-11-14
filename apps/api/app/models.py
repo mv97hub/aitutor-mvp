@@ -1480,6 +1480,7 @@ class HarnessChat(Base):
     cost_usd: Mapped[str | None] = mapped_column(String(32), nullable=True)
     luna_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pending_nudges: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )

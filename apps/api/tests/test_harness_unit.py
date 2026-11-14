@@ -1,7 +1,8 @@
 """Harness checks that do not need a database."""
 
 from app.harness import fixture_document
-from app.harness_checks import automatic_checks, stop_reason
+from app.harness_checks import automatic_checks, stop_reason, stuck_after_turn
+from app.harness_report import stuck_nudge_rows
 from app.harness_personas import BOUNDARY_PROBES, starter_children
 from app.harness_prompt_source import block_label_from_prompt, prompt_builder_excerpts, prompt_sections, select_turns
 from app.harness_report import compare_runs, findings, kept_run_ids, rollup
@@ -174,3 +175,59 @@ def test_stored_prompt_sections_and_example_turns() -> None:
     assert seqs[0] == 1
     assert 8 in seqs
     assert 4 in seqs or 5 in seqs
+
+
+def test_stuck_waits_for_two_nudges_and_a_move_resets() -> None:
+    assert stuck_after_turn(reason="stuck", same_place_turns=8, stuck_limit=8, pending_nudges=0) == ("", 2)
+    assert stuck_after_turn(reason="stuck", same_place_turns=9, stuck_limit=8, pending_nudges=2) == ("", 1)
+    assert stuck_after_turn(reason="stuck", same_place_turns=10, stuck_limit=8, pending_nudges=1) == ("stuck", 0)
+    assert stuck_after_turn(reason="", same_place_turns=1, stuck_limit=8, pending_nudges=2) == ("", 0)
+    assert stuck_after_turn(reason="quit", same_place_turns=9, stuck_limit=8, pending_nudges=2) == ("quit", 2)
+    assert stuck_after_turn(reason="turn_limit", same_place_turns=9, stuck_limit=8, pending_nudges=1) == ("turn_limit", 1)
+    assert stuck_after_turn(reason="cap", same_place_turns=9, stuck_limit=8, pending_nudges=2) == ("cap", 2)
+    assert (
+        stop_reason(
+            session_status="in_progress",
+            intent="nudge",
+            turn_count=9,
+            same_place_turns=9,
+            priced_cents=1,
+            cap_cents=40,
+            luna_tokens=0,
+            luna_ceiling=100_000,
+            consecutive_errors=0,
+            safety_flag="none",
+            stop_on_safety=False,
+        )
+        == "stuck"
+    )
+
+
+def test_stuck_finding_keeps_both_nudges_on_the_block() -> None:
+    rows = stuck_nudge_rows(
+        [
+            {"intent": "answer_right", "turn": 8, "child_text": "earls", "tutor_reply": "Yes.", "block_id": "b1", "substep": "explain", "block_type": "Topic / Goal"},
+            {"intent": "nudge", "turn": 9, "child_text": "What's next?", "tutor_reply": "Let's keep going.", "block_id": "b1", "substep": "explain", "block_type": "Topic / Goal"},
+            {"intent": "nudge", "turn": 10, "child_text": "What should we do next?", "tutor_reply": "We are still here.", "block_id": "b1", "substep": "explain", "block_type": "Topic / Goal"},
+        ]
+    )
+    assert [row["asked"] for row in rows] == ["What's next?", "What should we do next?"]
+    assert rows[0]["answered"] == "Let's keep going."
+    assert rows[1]["block_type"] == "Topic / Goal"
+    assert rows[1]["block_id"] == "b1"
+    assert rows[1]["substep"] == "explain"
+    report = {
+        "by_child": [{"name": "AI_Child1", "chats": 1, "false_passes": 0, "stuck": 1}],
+        "instructions": [],
+        "top_problems": [],
+        "issue_blocks": {"false_pass": {}, "stuck": {"AI_Child1": ["Topic / Goal"]}, "instructions": {}},
+        "stuck_nudges": [
+            {**rows[0], "child": "AI_Child1"},
+            {**rows[1], "child": "AI_Child1"},
+        ],
+    }
+    stuck = next(item for item in findings(report) if item["tag"] == "stuck")
+    assert stuck["block_label"] == "Topic / Goal"
+    assert len(stuck["nudges"]) == 2
+    assert stuck["nudges"][0]["asked"] == "What's next?"
+    assert stuck["nudges"][1]["answered"] == "We are still here."

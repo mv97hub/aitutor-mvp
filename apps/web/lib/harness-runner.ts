@@ -1,7 +1,7 @@
 /** One chat in the open tab. Turns are one after another. Several chats can run side by side. */
 
 import { availableActions } from "./harness-actions.ts";
-import { EMPTY_INNER, holdQuit, pickMove, updateInner, type InnerState, type Traits } from "./harness-policy.ts";
+import { EMPTY_INNER, holdQuit, nudgeTurn, pickMove, updateInner, type InnerState, type Traits } from "./harness-policy.ts";
 
 export type RunStatus = { status: string };
 
@@ -30,10 +30,12 @@ export type ClaimedChat = {
   seed: number;
   script?: string[];
   child: { description?: string; traits?: Traits; child_profile?: { interests?: string } };
+  pending_nudges?: number;
 };
 
 export type TurnRecord = {
   stop: string;
+  pending_nudges?: number;
   cost_usd: string | null;
   luna_tokens: number;
 };
@@ -115,6 +117,7 @@ export async function playChat(
   let errors = 0;
   let turn = 0;
   let previousPlace = "";
+  let nudgesLeft = Math.max(0, Number(chat.pending_nudges) || 0);
   const traits = chat.child.traits ?? {};
   while (!signal?.aborted) {
     const run = await transport.runStatus();
@@ -147,18 +150,21 @@ export async function playChat(
       }));
     }
     const tutor = lastTutor(session);
-    const move = pickMove({
-      traits,
-      inner,
-      seed: chat.seed,
-      turn,
-      actions,
-      mode: chat.behavior,
-      script: chat.script,
-      answerKey: key,
-      lastTutor: tutor,
-      interests: chat.child.child_profile?.interests,
-    });
+    const nudging = nudgesLeft > 0;
+    const move = nudging
+      ? { ...nudgeTurn(nudgesLeft), inner }
+      : pickMove({
+          traits,
+          inner,
+          seed: chat.seed,
+          turn,
+          actions,
+          mode: chat.behavior,
+          script: chat.script,
+          answerKey: key,
+          lastTutor: tutor,
+          interests: chat.child.child_profile?.interests,
+        });
     let text = move.text;
     let intent = move.intent;
     let childPrompt = "";
@@ -232,6 +238,7 @@ export async function playChat(
       elapsed_ms: 0,
     });
     turn += 1;
+    if (typeof recorded.pending_nudges === "number") nudgesLeft = Math.max(0, recorded.pending_nudges);
     if (recorded.stop) return "done";
     session = afterSession;
     if (errors >= 2) {
