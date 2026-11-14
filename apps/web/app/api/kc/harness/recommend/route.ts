@@ -35,6 +35,34 @@ const schema = {
   required: ["cards"],
 };
 
+function blockNames(findings: unknown): string {
+  const labels: string[] = [];
+  if (Array.isArray(findings)) {
+    for (const finding of findings) {
+      if (!finding || typeof finding !== "object") continue;
+      const label = String((finding as { block_label?: string }).block_label || "").trim();
+      if (label && !labels.includes(label)) labels.push(label);
+    }
+  }
+  return labels.join(", ") || "an unknown block";
+}
+
+function stampBlockType(cards: RecommendationCard[], findings: unknown): RecommendationCard[] {
+  const named = blockNames(findings);
+  return cards.map((card) => {
+    const evidence = { ...(card.evidence || {}), block_type: named };
+    const blob = `${card.title} ${card.place} ${evidence.summary || ""}`;
+    const already = named.split(", ").every((label) => blob.includes(label));
+    return {
+      ...card,
+      block_type: named,
+      title: already ? card.title : `${card.title} on ${named}`,
+      place: already ? card.place : `${card.place} Block type: ${named}.`,
+      evidence,
+    };
+  });
+}
+
 export async function POST(req: Request) {
   let body: { model?: string; findings?: unknown };
   try {
@@ -51,6 +79,7 @@ export async function POST(req: Request) {
     "Look for a line to cut or shorten before you look for a line to add. A batch that only proposes additions is incomplete.",
     "kind is setting, reword, remove, or add. prompt_direction is shorter, longer, or same.",
     "Say whether the prompt gets shorter or longer. Adding text has to beat the shorter option.",
+    "Every card title and place must name the finding's block_label, the block type the issue happened on.",
     `Findings:\n${JSON.stringify(body.findings ?? [], null, 2)}`,
   ].join("\n\n");
   try {
@@ -72,7 +101,7 @@ export async function POST(req: Request) {
       confidence: card.confidence,
       evidence: { summary: (card as { evidence_summary?: string }).evidence_summary || "" },
     }));
-    const cards = ensureSimplification(drafted);
+    const cards = stampBlockType(ensureSimplification(drafted), body.findings);
     return Response.json({ cards, usage: readModelUsage(result.usage), judge_model: modelName });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The drafter failed.";

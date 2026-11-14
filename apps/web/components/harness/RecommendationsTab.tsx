@@ -16,7 +16,7 @@ type Card = {
   risk: string;
   confidence: string;
   status: string;
-  evidence: { summary?: string };
+  evidence: { summary?: string; block_type?: string };
   proposed: { text?: string };
   trial_profile_id?: string | null;
 };
@@ -27,8 +27,13 @@ export function RecommendationsTab({ runId }: { runId: string }) {
   const [error, setError] = useState("");
 
   async function load() {
-    const query = runId ? `?run_id=${runId}` : "";
-    setCards(await api<Card[]>(`/kc/harness/recommendations${query}`));
+    if (!runId) {
+      setCards([]);
+      return;
+    }
+    const body = await api<unknown>(`/kc/harness/recommendations?run_id=${runId}`);
+    setCards(Array.isArray(body) ? (body as Card[]) : []);
+    if (!Array.isArray(body)) setError("Recommendations did not come back as a list.");
   }
 
   useEffect(() => {
@@ -101,8 +106,8 @@ export function RecommendationsTab({ runId }: { runId: string }) {
               </option>
             ))}
           </select>
-          <button type="button" disabled={!runId} onClick={() => void draft()}>
-            Draft cards
+          <button type="button" className="harness-draft" disabled={!runId} onClick={() => void draft()}>
+            Draft cards from this run
           </button>
           <button type="button" disabled={!runId} onClick={() => void saveSuite()}>
             Save as suite
@@ -116,9 +121,19 @@ export function RecommendationsTab({ runId }: { runId: string }) {
         Nothing here changes the live prompt. A card can propose a removal or shorter wording. Accepting a setting does not apply it. Try it copies the tutor profile into a hidden trial profile and queues the same slice. You start that run yourself.
       </p>
       {error ? <p className="banner">{error}</p> : null}
+      {!runId ? (
+        <p className="harness-empty">Open a run from the Runs tab first. Cards are saved on that run, and they show up here after you draft them.</p>
+      ) : cards.length === 0 ? (
+        <p className="harness-empty">
+          No cards yet. Cards appear only after you press Draft cards from this run. Finishing a run does not create them. Drafting reads this run&apos;s findings and asks the drafter model. Nothing is applied to the live tutor.
+        </p>
+      ) : (
+        <p className="help">These cards are saved on this run. Accept does not change the live tutor.</p>
+      )}
       {cards.map((card) => (
         <article key={card.id} className="harness-card">
           <h3>{card.title}</h3>
+          <p>Block type: {card.evidence?.block_type || "an unknown block"}</p>
           <p>
             {card.kind} · prompt gets {card.prompt_direction} · {card.status} · {card.confidence}
           </p>

@@ -35,6 +35,40 @@ JUDGE_TAGS = (
     "factual_error",
 )
 
+BLOCK_LABELS = {
+    "topic_goal": "Topic / Goal",
+    "mcq": "Multiple Choice Question",
+    "case_study": "Case Study / Contrasting Cases",
+    "socratic": "Socratic Discussion",
+    "curiosity": "Curiosity / Wonder Hook",
+    "worked_example": "Worked Example + Faded Step",
+    "spot_the_flaw": "Spot the Flaw / Buggy Rule",
+    "teach_back": "Teach-Back / Feynman",
+    "retrieval_check": "Retrieval & Elaborative Interrogation",
+    "explanation": "Explanatory Walkthrough",
+    "passage_ela": "ELA Reading Passage",
+}
+
+
+def block_label(value: object) -> str:
+    key = str(value or "").strip()
+    if not key:
+        return ""
+    return BLOCK_LABELS.get(key, key.replace("_", " "))
+
+
+def join_labels(labels: object) -> str:
+    clean: list[str] = []
+    rows = labels if isinstance(labels, list) else []
+    for label in rows:
+        text = str(label or "").strip()
+        if text and text not in clean:
+            clean.append(text)
+    if not clean:
+        return "an unknown block"
+    return ", ".join(clean)
+
+
 CAUSE_BY_TAG = {
     "too_long": ("setting", "Who you are talking to, response length; explanation_depth"),
     "ignored_question": ("loop", "unanswered_side_turn in kc_loop.py; Stay on course"),
@@ -109,12 +143,15 @@ def rollup(chats: list[dict]) -> dict:
             name = str(tag.get("tag") or "")
             if not name:
                 continue
+            named = (chat.get("tag_blocks") or {}).get(name) if isinstance(chat.get("tag_blocks"), dict) else ""
+            if not named:
+                named = ((chat.get("turn_blocks") or [None])[0]) or ((chat.get("block_types") or [""])[0])
             tags[name].append(
                 {
                     "chat_id": chat.get("id"),
                     "turn": tag.get("turn"),
                     "child": chat.get("persona_name"),
-                    "block": (chat.get("block_types") or ["—"])[0],
+                    "block": block_label(named) or "an unknown block",
                 }
             )
     top = []
@@ -140,6 +177,27 @@ def rollup(chats: list[dict]) -> dict:
                 "rate": round(row["obeyed"] / present, 2) if present else None,
             }
         )
+    false_blocks: dict[str, list[str]] = defaultdict(list)
+    stuck_blocks: dict[str, list[str]] = defaultdict(list)
+    instruction_blocks: dict[str, list[str]] = defaultdict(list)
+    for chat in usable:
+        child = str(chat.get("persona_name") or "")
+        for label in chat.get("false_pass_blocks") or []:
+            if label not in false_blocks[child]:
+                false_blocks[child].append(str(label))
+        for label in chat.get("stuck_blocks") or []:
+            if label not in stuck_blocks[child]:
+                stuck_blocks[child].append(str(label))
+        visited = [str(label) for label in (chat.get("turn_blocks") or []) if label]
+        for key, row in ((chat.get("checks") or {}).get("instructions") or {}).items():
+            if not isinstance(row, dict):
+                continue
+            present = int(row.get("present") or 0)
+            obeyed = int(row.get("obeyed") or 0)
+            if present and obeyed < present:
+                for label in visited:
+                    if label not in instruction_blocks[str(key)]:
+                        instruction_blocks[str(key)].append(label)
     return {
         "chats": len(chats),
         "usable_chats": len(usable),
@@ -156,6 +214,11 @@ def rollup(chats: list[dict]) -> dict:
         "by_intent": _intent_rows(usable),
         "instructions": instruction_rows,
         "top_problems": top,
+        "issue_blocks": {
+            "false_pass": dict(false_blocks),
+            "stuck": dict(stuck_blocks),
+            "instructions": dict(instruction_blocks),
+        },
         "grid": _grid(usable),
         "worst": sorted(usable, key=_worst_key)[:8],
     }
@@ -202,70 +265,85 @@ def _worst_key(chat: dict) -> tuple:
     return (-problems, score)
 
 
+def _finding(title: str, labels: object, **rest: object) -> dict:
+    named = join_labels(labels)
+    return {"title": f"{title} on {named}", "block_label": named, **rest}
+
+
 def findings(report: dict) -> list[dict]:
-    """Numbers first. Each finding names a cause class and a place to change."""
+    """Numbers first. Each finding names a cause class, the block type, and a place to change."""
     found = []
+    issues = report.get("issue_blocks") if isinstance(report.get("issue_blocks"), dict) else {}
+    false_map = issues.get("false_pass") if isinstance(issues.get("false_pass"), dict) else {}
+    stuck_map = issues.get("stuck") if isinstance(issues.get("stuck"), dict) else {}
+    instruction_map = issues.get("instructions") if isinstance(issues.get("instructions"), dict) else {}
     for row in report.get("by_child") or []:
         if row["chats"] and row["false_passes"]:
             found.append(
-                {
-                    "title": f"False passes for {row['name']}",
-                    "tag": "false_pass",
-                    "count": row["false_passes"],
-                    "who": row["name"],
-                    "cause_class": "loop",
-                    "place": CAUSE_BY_TAG["false_pass"][1],
-                }
+                _finding(
+                    f"False passes for {row['name']}",
+                    false_map.get(row["name"]),
+                    tag="false_pass",
+                    count=row["false_passes"],
+                    who=row["name"],
+                    cause_class="loop",
+                    place=CAUSE_BY_TAG["false_pass"][1],
+                )
             )
         if row["stuck"]:
             found.append(
-                {
-                    "title": f"{row['name']} got stuck",
-                    "tag": "stuck",
-                    "count": row["stuck"],
-                    "who": row["name"],
-                    "cause_class": "prompt",
-                    "place": CAUSE_BY_TAG["stuck"][1],
-                }
+                _finding(
+                    f"{row['name']} got stuck",
+                    stuck_map.get(row["name"]),
+                    tag="stuck",
+                    count=row["stuck"],
+                    who=row["name"],
+                    cause_class="prompt",
+                    place=CAUSE_BY_TAG["stuck"][1],
+                )
             )
     for row in report.get("instructions") or []:
         if row["present"] and row["rate"] is not None and row["rate"] < 0.8:
             found.append(
-                {
-                    "title": f"The model ignored {row['id'].replace('_', ' ')}",
-                    "tag": row["id"],
-                    "count": row["present"] - row["obeyed"],
-                    "who": "",
-                    "cause_class": "prompt",
-                    "place": f"The stored prompt already contains {row['id']}. Shorten or move that line before adding another.",
-                }
+                _finding(
+                    f"The model ignored {row['id'].replace('_', ' ')}",
+                    instruction_map.get(row["id"]),
+                    tag=row["id"],
+                    count=row["present"] - row["obeyed"],
+                    who="",
+                    cause_class="prompt",
+                    place=f"The stored prompt already contains {row['id']}. Shorten or move that line before adding another.",
+                )
             )
         if row["present"] == 0 and row["id"] in {"stay_on_course", "one_question"}:
             found.append(
-                {
-                    "title": f"{row['id'].replace('_', ' ')} was not in the prompt",
-                    "tag": row["id"],
-                    "count": 0,
-                    "who": "",
-                    "cause_class": "prompt",
-                    "place": "The section builder in kc_prompt.py never wrote this instruction.",
-                }
+                _finding(
+                    f"{row['id'].replace('_', ' ')} was not in the prompt",
+                    instruction_map.get(row["id"]),
+                    tag=row["id"],
+                    count=0,
+                    who="",
+                    cause_class="prompt",
+                    place="The section builder in kc_prompt.py never wrote this instruction.",
+                )
             )
     for problem in report.get("top_problems") or []:
         tag = problem["tag"]
         if tag not in CAUSE_BY_TAG:
             continue
         cause, place = CAUSE_BY_TAG[tag]
+        labels = [example.get("block") for example in (problem.get("examples") or []) if isinstance(example, dict)]
         found.append(
-            {
-                "title": tag.replace("_", " "),
-                "tag": tag,
-                "count": problem["count"],
-                "who": "",
-                "cause_class": cause,
-                "place": place,
-                "examples": problem.get("examples") or [],
-            }
+            _finding(
+                tag.replace("_", " "),
+                labels,
+                tag=tag,
+                count=problem["count"],
+                who="",
+                cause_class=cause,
+                place=place,
+                examples=problem.get("examples") or [],
+            )
         )
     return found
 

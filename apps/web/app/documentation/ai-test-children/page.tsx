@@ -86,7 +86,11 @@ export default function AiTestChildrenDocsPage() {
         <p>A chat stops when any of these happen:</p>
         <ul>
           <li>The component is completed.</li>
-          <li>The child quits. That is a result, not an error.</li>
+          <li>
+            The child quits. That is a result, not an error. Quitting is the last resort: the child stays when the
+            tutor asks whether to move on, or when a continue button is on screen. A quit happens only after boredom
+            or frustration has stayed past the quit point, and nothing offers a way to continue.
+          </li>
           <li>The turn limit is reached. The default is 40 child turns.</li>
           <li>The chat is stuck: no change of block or substep for 8 child turns.</li>
           <li>The chat reaches its spending cap. The default is 40 cents. That chat ends and its tutor session is closed. Other chats in the run continue.</li>
@@ -96,7 +100,8 @@ export default function AiTestChildrenDocsPage() {
         </ul>
         <p>
           If you close the tab, the run pauses. Resume picks up queued chats. Turns inside one chat stay in order.
-          Several chats run side by side. The default is 3.
+          Several chats run side by side. The default is 3. While a chat is running, the Runs tab and the chat view show
+          each tutor message and each child reply as they happen.
         </p>
 
         <h2>New run settings</h2>
@@ -139,9 +144,11 @@ export default function AiTestChildrenDocsPage() {
 
         <h2>Recommendations</h2>
         <p>
-          Findings become cards. A card has a plain title, the evidence, the cause (a setting, a prompt section, a loop
-          rule, or the course content), the proposed change, whether the prompt gets shorter or longer, the risk, and a
-          status. Statuses are new, accepted, rejected, on trial, shipped, verified, and regressed.
+          Findings name the block type the issue happened on. Cards are not created when a run finishes. They appear
+          after you press Draft cards from this run on the Recommendations tab. A card has a plain title, the block
+          type, the evidence, the cause (a setting, a prompt section, a loop rule, or the course content), the proposed
+          change, whether the prompt gets shorter or longer, the risk, and a status. Statuses are new, accepted,
+          rejected, on trial, shipped, verified, and regressed. Drafting does not change the live tutor.
         </p>
         <p>
           The drafter looks for a line to cut or shorten before it looks for a line to add. A batch that only proposes
@@ -186,7 +193,9 @@ export default function AiTestChildrenDocsPage() {
 
         <h2>Stored prompts</h2>
         <p>
-          Every tutor call stores its prompt. Trim stored prompts, on the Runs tab, keeps prompts for the baseline run
+          Every tutor call stores its prompt. Each harness turn can also store the child prompt that went to the model.
+          On a chat, Show both prompts labels the tutor prompt and the child prompt. Trim stored prompts, on the Runs
+          tab, keeps prompts for the baseline run
           and the most recent run of each suite. Older runs keep the transcript, the scores, the intents, and the
           recommendations. Trimming does not delete a chat or a score.
         </p>

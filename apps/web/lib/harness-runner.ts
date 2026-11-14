@@ -1,7 +1,7 @@
 /** One chat in the open tab. Turns are one after another. Several chats can run side by side. */
 
 import { availableActions } from "./harness-actions.ts";
-import { EMPTY_INNER, pickMove, updateInner, type InnerState, type Traits } from "./harness-policy.ts";
+import { EMPTY_INNER, holdQuit, pickMove, updateInner, type InnerState, type Traits } from "./harness-policy.ts";
 
 export type RunStatus = { status: string };
 
@@ -50,6 +50,7 @@ export type HarnessTransport = {
     probes?: string[];
     choices?: { id: string; text: string; correct?: boolean }[];
     block_id?: string;
+    block_type?: string;
     move_attempts?: number;
   }>;
   childText: (input: {
@@ -61,7 +62,7 @@ export type HarnessTransport = {
     wrongMove?: string;
     lastTutor: string;
     interests?: string;
-  }) => Promise<{ text: string; input_tokens: number; output_tokens: number; model: string }>;
+  }) => Promise<{ text: string; input_tokens: number; output_tokens: number; model: string; prompt?: string }>;
   recordTurn: (chatId: string, body: Record<string, unknown>) => Promise<TurnRecord>;
   finish: (chatId: string, reason: string) => Promise<void>;
 };
@@ -71,10 +72,14 @@ function lastTutor(session: SessionSnap): string {
   return message?.content ?? "";
 }
 
-function placeOf(session: SessionSnap, key?: { block_id?: string; move_attempts?: number }): Record<string, unknown> {
+function placeOf(
+  session: SessionSnap,
+  key?: { block_id?: string; block_type?: string; move_attempts?: number },
+): Record<string, unknown> {
   return {
     status: session.status,
     block_id: key?.block_id || session.block_id || String(session.active_block_index ?? ""),
+    block_type: key?.block_type || session.active_block_type || "",
     substep: session.active_substep || "",
     move_attempts: key?.move_attempts ?? session.move_attempts ?? 0,
     tutor_reply: lastTutor(session),
@@ -84,12 +89,28 @@ function placeOf(session: SessionSnap, key?: { block_id?: string; move_attempts?
   };
 }
 
+export type LiveLine = { chatId: string; role: "tutor" | "child"; text: string };
+
+function emitNew(seen: Set<string>, session: SessionSnap, chatId: string, onLive?: (line: LiveLine) => void) {
+  if (!onLive) return;
+  session.messages.forEach((message) => {
+    const role = message.role === "assistant" ? "tutor" : "child";
+    const key = `${role}:${message.content}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    onLive({ chatId, role, text: message.content });
+  });
+}
+
 export async function playChat(
   chat: ClaimedChat,
   transport: HarnessTransport,
   signal?: { aborted: boolean },
+  onLive?: (line: LiveLine) => void,
 ): Promise<"done" | "paused"> {
   let session = await transport.session(chat.session_id);
+  const seen = new Set<string>();
+  emitNew(seen, session, chat.id, onLive);
   let inner: InnerState = { ...EMPTY_INNER };
   let errors = 0;
   let turn = 0;
@@ -101,6 +122,7 @@ export async function playChat(
     if (session.needs_speech) {
       try {
         session = await transport.speak(session.id, chat.tutor_model);
+        emitNew(seen, session, chat.id, onLive);
         errors = 0;
       } catch {
         errors += 1;
@@ -116,6 +138,7 @@ export async function playChat(
       return "done";
     }
     const key = await transport.answerKey(chat.id);
+    const answerKey = key as { block_type?: string; block_id?: string; move_attempts?: number };
     const actions = availableActions(session);
     if (key.choices && key.choices.length > 0 && actions.choices.length > 0) {
       actions.choices = actions.choices.map((choice) => ({
@@ -137,6 +160,8 @@ export async function playChat(
       interests: chat.child.child_profile?.interests,
     });
     let text = move.text;
+    let intent = move.intent;
+    let childPrompt = "";
     let childTokens = { input_tokens: 0, output_tokens: 0, model: chat.child_model };
     if (move.needsModel) {
       const written = await transport.childText({
@@ -150,21 +175,41 @@ export async function playChat(
         interests: chat.child.child_profile?.interests,
       });
       text = written.text;
+      childPrompt = written.prompt || "";
       childTokens = { input_tokens: written.input_tokens, output_tokens: written.output_tokens, model: written.model };
     }
+    const held = holdQuit({
+      intent,
+      text,
+      traits,
+      inner: move.inner,
+      buttons: actions.buttons,
+      lastTutor: tutor,
+      scripted: chat.behavior === "script",
+    });
+    intent = held.intent;
+    text = held.text;
     if (!text.trim()) text = "ok";
-    const before = placeOf(session, key);
+    if (onLive && !seen.has(`child:${text}`)) {
+      seen.add(`child:${text}`);
+      onLive({ chatId: chat.id, role: "child", text });
+    }
+    const before = placeOf(session, { ...key, block_type: answerKey.block_type || session.active_block_type });
     let afterSession = session;
     let error = "";
     try {
       afterSession = await transport.answer(session.id, text.slice(0, 2000), chat.tutor_model);
+      emitNew(seen, afterSession, chat.id, onLive);
       errors = 0;
     } catch (err) {
       errors += 1;
       error = err instanceof Error ? err.message : "The tutor route failed.";
     }
     const afterKey = error ? key : await transport.answerKey(chat.id).catch(() => key);
-    const after = placeOf(afterSession, afterKey);
+    const after = placeOf(afterSession, {
+      ...afterKey,
+      block_type: (afterKey as { block_type?: string }).block_type || afterSession.active_block_type,
+    });
     if (error) after.error = error;
     const place = `${after.block_id}:${after.substep}`;
     inner = updateInner(move.inner, {
@@ -177,8 +222,9 @@ export async function playChat(
     if (move.intent === "ask_hint") inner = { ...inner, hints: inner.hints + 1 };
     previousPlace = place;
     const recorded = await transport.recordTurn(chat.id, {
-      intent: move.intent,
+      intent,
       child_text: text,
+      child_prompt: childPrompt,
       inner_state: inner,
       session_before: before,
       session_after: after,
@@ -202,6 +248,7 @@ export async function driveRun(
   transport: HarnessTransport,
   concurrency: number,
   signal?: { aborted: boolean },
+  onLive?: (line: LiveLine) => void,
 ): Promise<void> {
   const workers = Array.from({ length: Math.max(1, concurrency) }, async () => {
     while (!signal?.aborted) {
@@ -209,7 +256,7 @@ export async function driveRun(
       if (run.status === "paused" || run.status === "cancelled" || run.status === "completed") return;
       const chat = await claim();
       if (!chat) return;
-      await playChat(chat, transport, signal);
+      await playChat(chat, transport, signal, onLive);
     }
   });
   await Promise.all(workers);

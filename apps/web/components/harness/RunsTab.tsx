@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "@/lib/api";
-import type { ClaimedChat, HarnessTransport, SessionSnap } from "@/lib/harness-runner";
+import type { ClaimedChat, HarnessTransport, LiveLine, SessionSnap } from "@/lib/harness-runner";
 import { driveRun } from "@/lib/harness-runner";
 
 type RunRow = {
@@ -112,16 +112,47 @@ export function RunsTab({
   const [detail, setDetail] = useState<{ id: string; chat_rows?: { id: string; status: string; ended_how: string; child?: { name?: string }; tutor_model: string; cost_usd: string | null; luna_tokens: number }[] } | null>(null);
   const [error, setError] = useState("");
   const [driving, setDriving] = useState("");
+  const [live, setLive] = useState<LiveLine[]>([]);
 
   async function refresh() {
-    const next = await api<RunRow[]>("/kc/harness/runs");
-    setRuns(next);
+    let next: RunRow[] = [];
+    try {
+      const body = await api<unknown>("/kc/harness/runs");
+      if (!Array.isArray(body)) {
+        setError("The run list did not come back as a list.");
+        return;
+      }
+      next = body as RunRow[];
+      setRuns(next);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load runs.");
+      return;
+    }
     const id = selected || next[0]?.id;
-    if (id) setDetail(await api(`/kc/harness/runs/${id}`));
+    if (!id) {
+      setDetail(null);
+      return;
+    }
+    try {
+      setDetail(await api(`/kc/harness/runs/${id}`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load this run.");
+    }
   }
 
   useEffect(() => {
-    void refresh().catch((err) => setError(err instanceof Error ? err.message : "Could not load runs."));
+    let stop = false;
+    void refresh().catch((err) => {
+      if (!stop) setError(err instanceof Error ? err.message : "Could not load runs.");
+    });
+    const timer = window.setInterval(() => {
+      if (!stop) void refresh();
+    }, 3000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
   }, [selected]);
 
   async function act(path: string, method = "POST") {
@@ -150,6 +181,13 @@ export function RunsTab({
         client,
         run.plan?.concurrency || 3,
         gate,
+        (line) => {
+          setLive((current) => {
+            const last = current[current.length - 1];
+            if (last && last.role === line.role && last.text === line.text && last.chatId === line.chatId) return current;
+            return [...current, line].slice(-40);
+          });
+        },
       );
       const latest = await api<{ chat_rows?: { id: string; status: string }[]; plan?: { judge_model?: string } }>(`/kc/harness/runs/${run.id}`);
       const judgeModel = latest.plan?.judge_model || "gpt-6.1-sol";
@@ -220,6 +258,18 @@ export function RunsTab({
       <p className="help">
         Trim keeps prompts for the baseline and the newest run of each suite. Older runs keep the transcript, scores, intents, and recommendations.
       </p>
+      {live.length > 0 ? (
+        <>
+          <h3>Live transcript</h3>
+          <ol className="harness-transcript">
+            {live.map((line, index) => (
+              <li key={`${line.chatId}-${index}`}>
+                <strong>{line.role === "tutor" ? "Tutor" : "Child"}:</strong> {line.text}
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : null}
       <ul>
         {(detail?.chat_rows || []).map((chat) => (
           <li key={chat.id}>
