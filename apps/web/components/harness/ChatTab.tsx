@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "@/lib/api";
+import { childPromptText } from "@/lib/harness-policy";
 
 type Turn = {
   seq: number;
@@ -10,6 +11,7 @@ type Turn = {
   child_text: string;
   child_prompt?: string;
   tutor_prompt?: string;
+  child_tokens?: { input_tokens?: number; output_tokens?: number };
   inner_state: { boredom?: number; frustration?: number; confusion?: number };
   session_after?: { tutor_reply?: string };
 };
@@ -128,7 +130,7 @@ export function ChatTab({ chatId }: { chatId: string }) {
                 <pre className="harness-json">{turn.tutor_prompt || "This turn has no stored tutor prompt."}</pre>
                 <h4>Child prompt</h4>
                 <pre className="harness-json">
-                  {turn.child_prompt || "This turn did not call the child model."}
+                  {childPromptText(turn)}
                 </pre>
               </>
             ) : null}

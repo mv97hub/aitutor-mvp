@@ -1,6 +1,6 @@
 /** Rule-led intents for a test child. The same seed repeats the same intents. */
 
-export const POLICY_VERSION = "1";
+export const POLICY_VERSION = "2";
 
 export const INTENTS = [
   "answer_right",
@@ -81,7 +81,7 @@ export function trait(traits: Traits, key: string, fallback = 3): number {
 }
 
 export function quitLine(traits: Traits): number {
-  return 30 + trait(traits, "quit") * 12;
+  return 84 + trait(traits, "quit") * 2;
 }
 
 export function updateInner(
@@ -93,12 +93,15 @@ export function updateInner(
   const tolerance = trait(input.traits, "frustration");
   let boredom = inner.boredom;
   let frustration = inner.frustration;
-  if (input.tutorMessage.length > attention * 80) boredom += (6 - attention) * 3 + boredomTrait;
+  // A normal explanation is not a long reply. Only a very long one adds a little boredom.
+  if (input.tutorMessage.length > 900 + attention * 200) boredom += 2;
   if (input.samePlace) {
-    boredom += 2 + boredomTrait;
-    frustration += 2;
+    boredom += 2 + Math.round((boredomTrait - 1) / 2);
+    frustration += 1;
+  } else {
+    boredom = Math.max(0, boredom - 2);
   }
-  if (input.wrong) frustration += (6 - tolerance) * 3;
+  if (input.wrong) frustration += 6 - tolerance;
   if (input.usedInterest) boredom = Math.max(0, boredom - 4);
   return {
     boredom: clamp(boredom),
@@ -124,10 +127,10 @@ export function pastQuitLine(inner: InnerState, traits: Traits): boolean {
   return inner.boredom >= line || inner.frustration >= line;
 }
 
-/** Quitting is the last resort: only after the quit line has already repeated, and nothing offers a way to stay. */
+/** Quitting is the last resort: the quit line has to hold for several decisions, and nothing may offer a way to stay. */
 export function mayQuit(inner: InnerState, traits: Traits, buttons: string[], tutor: string): boolean {
   if (continueOffered(buttons, tutor)) return false;
-  return (inner.strain ?? 0) >= 2 && pastQuitLine(inner, traits);
+  return (inner.strain ?? 0) >= 4 && pastQuitLine(inner, traits);
 }
 
 export function preferStay(buttons: string[], tutor: string): { intent: Intent; text: string } {
@@ -334,4 +337,15 @@ export function childPrompt(input: {
   lines.push("One short message only. Do not mention that you are a test.");
   lines.push("Do not quit. If you are asked to move on, or a way to continue is offered, say yes or give a short answer.");
   return lines.join("\n");
+}
+
+export function childPromptText(input: {
+  child_prompt?: string;
+  child_tokens?: { input_tokens?: number; output_tokens?: number };
+}): string {
+  const stored = (input.child_prompt || "").trim();
+  if (stored) return stored;
+  const called = Number(input.child_tokens?.input_tokens || 0) + Number(input.child_tokens?.output_tokens || 0) > 0;
+  if (called) return "The child model was called for this turn, but its prompt was not stored.";
+  return "This turn did not call the child model.";
 }
