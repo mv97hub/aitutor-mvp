@@ -65,11 +65,16 @@ test("menu sections keep every destination under the six headers", () => {
   assert.deepEqual(byTitle["Testing pages"], [
     ["KC Tutor", "/kc-tutor"],
     ["KC Prompt Tester", "/kc-prompt-tester"],
+    ["AI Test Children", "/kc-test-children"],
     ["Detailed Progress", "/kc-progress"],
   ]);
   assert.equal(
     byTitle["Testing pages"].findIndex((link) => link[0] === "KC Prompt Tester"),
     byTitle["Testing pages"].findIndex((link) => link[0] === "KC Tutor") + 1,
+  );
+  assert.equal(
+    byTitle["Testing pages"].findIndex((link) => link[0] === "AI Test Children"),
+    byTitle["Testing pages"].findIndex((link) => link[0] === "KC Prompt Tester") + 1,
   );
   assert.deepEqual(byTitle["Deprecated Pages"], [
     ["Lesson Desk", "/admin/lessons"],

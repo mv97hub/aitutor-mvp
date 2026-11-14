@@ -667,9 +667,11 @@ def post_tutor_decision(session_id: uuid.UUID, body: DecisionIn, db: Session = D
 
 @router.get("/kc/sessions", response_model=list[KcChatSummary])
 def list_kc_chats(
-    student_id: uuid.UUID | None = None, db: Session = Depends(get_db)
+    student_id: uuid.UUID | None = None,
+    include_test: bool = False,
+    db: Session = Depends(get_db),
 ) -> list[KcChatSummary]:
-    return kc_chat_summaries(db, student_id)
+    return kc_chat_summaries(db, student_id, include_test=include_test)
 
 
 @router.get("/kc/sessions/{session_id}", response_model=KcChatDetail)
@@ -703,6 +705,7 @@ def post_kc_model_prompt(
             body.message_id,
             list(body.rubric_met),
             body.misconception,
+            body.decision,
         )
     )
 
@@ -732,6 +735,7 @@ def get_token_usage(
     end: date | None = None,
     all_time: bool = False,
     model: str | None = None,
+    audience: str = "both",
     db: Session = Depends(get_db),
 ) -> dict:
     return usage_report(
@@ -741,4 +745,5 @@ def get_token_usage(
         end=end,
         all_time=all_time,
         model=model,
+        audience=audience,
     )

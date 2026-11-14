@@ -192,6 +192,14 @@ def _scope(stmt, student_id: uuid.UUID | None, start: date | None, end: date | N
     return stmt
 
 
+def _audience(stmt, audience: str, *, joined: bool):
+    if audience == "both":
+        return stmt
+    if not joined:
+        stmt = stmt.join(Student, Student.id == TutorTokenUsage.student_id)
+    return stmt.where(Student.is_test.is_(audience == "test"))
+
+
 def usage_report(
     db: Session,
     *,
@@ -200,9 +208,13 @@ def usage_report(
     end: date | None = None,
     all_time: bool = False,
     model: str | None = None,
+    audience: str = "both",
 ) -> dict:
     if student_id is not None and db.get(Student, student_id) is None:
         raise HTTPException(status_code=404, detail="That child was not found.")
+    audience = (audience or "both").strip().lower()
+    if audience not in {"real", "test", "both"}:
+        raise HTTPException(status_code=422, detail="audience is real, test, or both.")
     chosen = _clean_model(model)
     start, end = _day_bounds(start, end, all_time=all_time)
     day = func.date(func.timezone("UTC", TutorTokenUsage.created_at))
@@ -223,9 +235,10 @@ def usage_report(
             func.coalesce(func.sum(TutorTokenUsage.cached_tokens), 0),
             func.coalesce(func.sum(TutorTokenUsage.total_tokens), 0),
             func.count(TutorTokenUsage.id),
+            Student.is_test,
         )
         .join(Student, Student.id == TutorTokenUsage.student_id)
-        .group_by(TutorTokenUsage.student_id, Student.display_name)
+        .group_by(TutorTokenUsage.student_id, Student.display_name, Student.is_test)
         .order_by(func.sum(TutorTokenUsage.total_tokens).desc(), Student.display_name)
     )
     day_stmt = (
@@ -252,10 +265,10 @@ def usage_report(
         )
         .group_by(TutorTokenUsage.model)
     )
-    totals_stmt = _scope(totals_stmt, student_id, start, end, chosen)
-    child_stmt = _scope(child_stmt, student_id, start, end, chosen)
-    day_stmt = _scope(day_stmt, student_id, start, end, chosen)
-    model_stmt = _scope(model_stmt, student_id, start, end, None)
+    totals_stmt = _audience(_scope(totals_stmt, student_id, start, end, chosen), audience, joined=False)
+    child_stmt = _audience(_scope(child_stmt, student_id, start, end, chosen), audience, joined=True)
+    day_stmt = _audience(_scope(day_stmt, student_id, start, end, chosen), audience, joined=False)
+    model_stmt = _audience(_scope(model_stmt, student_id, start, end, None), audience, joined=False)
     totals = db.execute(totals_stmt).one()
     children = [
         {
@@ -266,6 +279,7 @@ def usage_report(
             "cached_tokens": int(row[4] or 0),
             "total_tokens": int(row[5] or 0),
             "calls": int(row[6] or 0),
+            "is_test": bool(row[7]),
         }
         for row in db.execute(child_stmt)
     ]
@@ -301,6 +315,7 @@ def usage_report(
         "start": start.isoformat() if start is not None else None,
         "end": end.isoformat() if end is not None else None,
         "model": chosen,
+        "audience": audience,
         "totals": {
             "input_tokens": int(totals[0] or 0),
             "output_tokens": int(totals[1] or 0),

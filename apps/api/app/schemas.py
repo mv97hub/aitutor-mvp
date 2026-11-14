@@ -42,6 +42,7 @@ class StudentOut(BaseModel):
     tutor_anti_spoiler: bool = True
     tutor_pacing: str = "short-turns-one-question"
     preferred_tutor_profile_id: str | None = None
+    is_test: bool = False
 
 
 class StudentCreate(BaseModel):
@@ -526,6 +527,7 @@ class ModelPromptOut(BaseModel):
     model: str
     rubric_met: list[str] = Field(default_factory=list)
     misconception: str | None = None
+    decision: dict | None = None
     created_at: datetime
 
 
@@ -598,6 +600,7 @@ class ModelPromptIn(BaseModel):
     message_id: UUID | None = None
     rubric_met: list[str] = Field(default_factory=list)
     misconception: str | None = None
+    decision: dict | None = None
 
 
 class KcChatSummary(BaseModel):

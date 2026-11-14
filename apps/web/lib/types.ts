@@ -44,6 +44,7 @@ export type Student = {
   tutor_anti_spoiler: boolean;
   tutor_pacing: string;
   preferred_tutor_profile_id?: string | null;
+  is_test?: boolean;
 };
 
 export type TutorProfile = {

@@ -55,6 +55,7 @@ export const menuSections: readonly MenuSection[] = [
     links: [
       { href: "/kc-tutor", label: "KC Tutor" },
       { href: "/kc-prompt-tester", label: "KC Prompt Tester" },
+      { href: "/kc-test-children", label: "AI Test Children" },
       { href: "/kc-progress", label: "Detailed Progress" },
     ],
   },

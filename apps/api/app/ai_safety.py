@@ -588,10 +588,12 @@ def latest_safety_flag(db: Session, session_id: uuid.UUID) -> str:
     return row.category if row is not None else "none"
 
 
-def safety_counts(db: Session, session_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[int, int]]:
+def safety_counts(
+    db: Session, session_ids: list[uuid.UUID], *, include_test: bool = False
+) -> dict[uuid.UUID, tuple[int, int]]:
     if not session_ids:
         return {}
-    rows = db.execute(
+    stmt = (
         select(
             AiSafetyEvent.kc_session_id,
             func.count(AiSafetyEvent.id),
@@ -599,7 +601,10 @@ def safety_counts(db: Session, session_ids: list[uuid.UUID]) -> dict[uuid.UUID, 
         )
         .where(AiSafetyEvent.kc_session_id.in_(session_ids))
         .group_by(AiSafetyEvent.kc_session_id)
-    ).all()
+    )
+    if not include_test:
+        stmt = stmt.join(Student, Student.id == AiSafetyEvent.student_id).where(Student.is_test.is_(False))
+    rows = db.execute(stmt).all()
     return {
         session_id: (int(total or 0), int(unreviewed or 0))
         for session_id, total, unreviewed in rows
@@ -661,6 +666,8 @@ def list_safety_events(
         filters.append(AiSafetyEvent.reviewed_at.is_not(None))
     elif reviewed is False:
         filters.append(AiSafetyEvent.reviewed_at.is_(None))
+    real_children = select(Student.id).where(Student.is_test.is_(False))
+    filters.append(AiSafetyEvent.student_id.in_(real_children))
     total = db.scalar(select(func.count()).select_from(AiSafetyEvent).where(*filters)) or 0
     rows = db.scalars(
         select(AiSafetyEvent)

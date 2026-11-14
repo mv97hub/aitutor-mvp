@@ -1952,7 +1952,7 @@ def tutor_courses(db: Session, *, student_id: uuid.UUID | None = None) -> list[d
     """Ready-course cards. The same counts and stars as progress(), without that payload."""
     student = db.get(Student, student_id) if student_id is not None else None
     if student is None:
-        student = db.scalar(select(Student).order_by(Student.created_at))
+        student = db.scalar(select(Student).where(Student.is_test.is_(False)).order_by(Student.created_at))
     if student is not None:
         return _ready_course_cards(db, [student]).get(student.id, [])
     goals = list(db.scalars(select(KcGoal).where(KcGoal.ready.is_(True)).order_by(KcGoal.title)))
@@ -2112,8 +2112,8 @@ def start_course(
 
 
 def learner_roster(db: Session) -> list[dict]:
-    """Chooser cards: each child, courses in progress, and stars across ready courses."""
-    students = list(db.scalars(select(Student)))
+    """Chooser cards: each real child, courses in progress, and stars across ready courses."""
+    students = [row for row in db.scalars(select(Student)) if not row.is_test]
     students.sort(key=lambda student: (student.display_name or "").lower())
     cards = _ready_course_cards(db, students)
     roster: list[dict] = []
@@ -4160,6 +4160,7 @@ def kc_prompt_out(row: KcModelPrompt) -> dict:
         "model": row.model,
         "rubric_met": [str(item) for item in (row.rubric_met or [])],
         "misconception": row.misconception,
+        "decision": row.decision if isinstance(row.decision, dict) else None,
         "created_at": row.created_at,
     }
 
@@ -4208,12 +4209,15 @@ def _chat_summary(
     }
 
 
-def kc_chat_summaries(db: Session, student_id: uuid.UUID | None) -> list[dict]:
+def kc_chat_summaries(db: Session, student_id: uuid.UUID | None, *, include_test: bool = False) -> list[dict]:
     stmt = select(KcSession).options(*_chat_load_options()).order_by(KcSession.updated_at.desc())
     if student_id is not None:
         stmt = stmt.where(KcSession.student_id == student_id)
+    if not include_test:
+        real_ids = select(Student.id).where(Student.is_test.is_(False))
+        stmt = stmt.where(KcSession.student_id.in_(real_ids))
     rows = db.scalars(stmt).unique().all()
-    counts = safety_counts(db, [row.id for row in rows])
+    counts = safety_counts(db, [row.id for row in rows], include_test=include_test)
     summaries = []
     for row in rows:
         total, unreviewed = counts.get(row.id, (0, 0))
@@ -4278,6 +4282,7 @@ def append_kc_model_prompt(
     message_id: uuid.UUID | None = None,
     rubric_met: list | None = None,
     misconception: str | None = None,
+    decision: dict | None = None,
 ) -> KcModelPrompt:
     linked = None
     if message_id is not None:
@@ -4298,6 +4303,7 @@ def append_kc_model_prompt(
         model=stored_model,
         rubric_met=[str(item) for item in (rubric_met or []) if str(item).strip()],
         misconception=(misconception or "").strip() or None,
+        decision=decision if isinstance(decision, dict) else None,
     )
     db.add(row)
     db.flush()

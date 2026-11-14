@@ -318,6 +318,7 @@ class Student(Base):
         nullable=True,
         default=None,
     )
+    is_test: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -482,6 +483,7 @@ class TutorProfile(Base):
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    is_test: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     instructive: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     persona: Mapped[str] = mapped_column(String(40), nullable=False)
     lexicon: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -1222,6 +1224,7 @@ class KcModelPrompt(Base):
     model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     rubric_met: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     misconception: Mapped[str | None] = mapped_column(Text)
+    decision: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -1373,6 +1376,191 @@ class ParentStudent(Base):
     student_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class HarnessPersona(Base):
+    """A reusable test child. A run stores its own copy of these fields."""
+
+    __tablename__ = "harness_personas"
+    __table_args__ = (
+        UniqueConstraint("number", name="uq_harness_personas_number"),
+        UniqueConstraint("name", name="uq_harness_personas_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    age: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    child_profile: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    traits: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class HarnessSuite(Base):
+    __tablename__ = "harness_suites"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    plan: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    baseline_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("harness_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class HarnessRun(Base):
+    __tablename__ = "harness_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'paused', 'completed', 'cancelled')",
+            name="ck_harness_runs_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    plan: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    totals: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    code_version: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    suite_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("harness_suites.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class HarnessChat(Base):
+    __tablename__ = "harness_chats"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'paused', 'completed', 'cancelled', 'failed')",
+            name="ck_harness_chats_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("harness_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    persona_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("harness_personas.id", ondelete="SET NULL"), nullable=True
+    )
+    child_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    student_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("students.id", ondelete="SET NULL"), nullable=True
+    )
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    course_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    component_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    tutor_model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    child_model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    judge_model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    tutor_profile_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    settings_copy: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    seed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    iteration: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    behavior: Mapped[str] = mapped_column(String(16), nullable=False, default="rule")
+    script: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    ended_how: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    tokens: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    cost_usd: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    luna_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class HarnessTurn(Base):
+    __tablename__ = "harness_turns"
+    __table_args__ = (UniqueConstraint("chat_id", "seq", name="uq_harness_turns_chat_seq"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    chat_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("harness_chats.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    intent: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    child_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    inner_state: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    session_before: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    session_after: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    child_tokens: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    elapsed_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class HarnessEvaluation(Base):
+    __tablename__ = "harness_evaluations"
+    __table_args__ = (
+        CheckConstraint("kind IN ('automatic', 'judged')", name="ck_harness_evaluations_kind"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    chat_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("harness_chats.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    checks: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    scores: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    rubric_version: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    judge_model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    child_realism: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class HarnessRecommendation(Base):
+    __tablename__ = "harness_recommendations"
+    __table_args__ = (
+        CheckConstraint("kind IN ('setting', 'reword', 'remove', 'add')", name="ck_harness_recommendations_kind"),
+        CheckConstraint(
+            "status IN ('new', 'accepted', 'rejected', 'on_trial', 'shipped', 'verified', 'regressed')",
+            name="ck_harness_recommendations_status",
+        ),
+        CheckConstraint(
+            "prompt_direction IN ('shorter', 'longer', 'same')",
+            name="ck_harness_recommendations_direction",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("harness_runs.id", ondelete="SET NULL"), nullable=True)
+    suite_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("harness_suites.id", ondelete="SET NULL"), nullable=True
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    evidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    cause_class: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    place: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    proposed: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    prompt_direction: Mapped[str] = mapped_column(String(16), nullable=False, default="same")
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="reword")
+    risk: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    confidence: Mapped[str] = mapped_column(String(16), nullable=False, default="low")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="new")
+    trial_profile_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )

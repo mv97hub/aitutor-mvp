@@ -837,7 +837,11 @@ def resolve_active_profile(
 
 def list_profiles(db: Session) -> list[TutorProfile]:
     ensure_default_profile(db)
-    stmt = select(TutorProfile).order_by(TutorProfile.is_default.desc(), TutorProfile.id.asc())
+    stmt = (
+        select(TutorProfile)
+        .where(TutorProfile.is_test.is_(False))
+        .order_by(TutorProfile.is_default.desc(), TutorProfile.id.asc())
+    )
     return list(db.scalars(stmt).all())
 
 

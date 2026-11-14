@@ -20,10 +20,11 @@ type UsageReport = {
   start: string | null;
   end: string | null;
   model: string | null;
+  audience?: "real" | "test" | "both";
   totals: Counts;
   cost_usd: string | null;
   unpriced_models: string[];
-  by_child: (Counts & { student_id: string; display_name: string; calls: number })[];
+  by_child: (Counts & { student_id: string; display_name: string; calls: number; is_test?: boolean })[];
   by_day: (Counts & { day: string })[];
   by_model: ModelUsage[];
 };
@@ -81,6 +82,7 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
   const [students] = useState(initialStudents);
   const [studentId, setStudentId] = useState("");
   const [model, setModel] = useState("");
+  const [audience, setAudience] = useState<"real" | "test" | "both">("both");
   const [allTime, setAllTime] = useState(false);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
@@ -90,6 +92,8 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
     const params = new URLSearchParams(window.location.search);
     if (params.has("student_id")) setStudentId(params.get("student_id") || "");
     if (params.has("model")) setModel(params.get("model") || "");
+    const audienceParam = params.get("audience");
+    if (audienceParam === "real" || audienceParam === "test" || audienceParam === "both") setAudience(audienceParam);
     if (params.get("all_time") === "true") setAllTime(true);
     if (params.has("start")) setStart(params.get("start") || "");
     if (params.has("end")) setEnd(params.get("end") || "");
@@ -103,6 +107,7 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
     const params = new URLSearchParams();
     if (studentId) params.set("student_id", studentId);
     if (model) params.set("model", model);
+    if (audience !== "both") params.set("audience", audience);
     if (allTime) params.set("all_time", "true");
     else {
       if (start) params.set("start", start);
@@ -131,7 +136,7 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
     return () => {
       cancelled = true;
     };
-  }, [filtersReady, studentId, model, allTime, start, end]);
+  }, [filtersReady, studentId, model, audience, allTime, start, end]);
 
   const totals = report?.totals;
   const empty = !totals || (totals.input_tokens === 0 && totals.output_tokens === 0 && totals.cached_tokens === 0);
@@ -162,8 +167,17 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
               {students.map((student) => (
                 <option key={student.id} value={student.id}>
                   {student.display_name}
+                  {student.is_test ? " (test)" : ""}
                 </option>
               ))}
+            </select>
+          </label>
+          <label>
+            Children
+            <select aria-label="Real or test children" value={audience} onChange={(event) => setAudience(event.target.value as "real" | "test" | "both")}>
+              <option value="both">Both</option>
+              <option value="real">Real</option>
+              <option value="test">Test</option>
             </select>
           </label>
           <label>
@@ -291,6 +305,7 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
                 <thead>
                   <tr>
                     <th>Child</th>
+                    <th>Kind</th>
                     <th>Calls</th>
                     <th>Input</th>
                     <th>Output</th>
@@ -302,6 +317,7 @@ export function TokenUsage({ initialStudents, initialError }: { initialStudents:
                   {(report?.by_child ?? []).map((child) => (
                     <tr key={child.student_id}>
                       <td>{child.display_name}</td>
+                      <td>{child.is_test ? "Test" : "Real"}</td>
                       <td>{formatCount(child.calls)}</td>
                       <td>{formatCount(child.input_tokens)}</td>
                       <td>{formatCount(child.output_tokens)}</td>

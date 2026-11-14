@@ -32,6 +32,7 @@ export function ViewKcChats({
 }) {
   const [students] = useState(initialStudents);
   const [studentFilter, setStudentFilter] = useState("");
+  const [showTestChildren, setShowTestChildren] = useState(false);
   const [unreviewedOnly, setUnreviewedOnly] = useState(false);
   const [sessions, setSessions] = useState<KcChatSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -41,7 +42,10 @@ export function ViewKcChats({
   const [error, setError] = useState(initialError);
 
   useEffect(() => {
-    const query = studentFilter ? `?student_id=${studentFilter}` : "";
+    const params = new URLSearchParams();
+    if (studentFilter) params.set("student_id", studentFilter);
+    if (showTestChildren) params.set("include_test", "true");
+    const query = params.toString() ? `?${params.toString()}` : "";
     let cancelled = false;
     api<KcChatSummary[]>(`/kc/sessions${query}`)
       .then((next) => {
@@ -58,7 +62,7 @@ export function ViewKcChats({
     return () => {
       cancelled = true;
     };
-  }, [studentFilter, sessionId, refreshKey]);
+  }, [studentFilter, showTestChildren, sessionId, refreshKey]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -94,6 +98,14 @@ export function ViewKcChats({
           <p className="safety-list-head" aria-live="polite">
             {unreviewedChatTotal(sessions)} unreviewed
           </p>
+          <label className="safety-filter">
+            <input
+              type="checkbox"
+              checked={showTestChildren}
+              onChange={(event) => setShowTestChildren(event.target.checked)}
+            />
+            Show test children
+          </label>
           <label className="safety-filter">
             <input
               type="checkbox"

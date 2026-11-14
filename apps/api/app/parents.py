@@ -199,6 +199,9 @@ def set_linked_students(db: Session, parent_id: uuid.UUID, student_ids: list[uui
         missing = [item for item in wanted if item not in found]
         if missing:
             raise HTTPException(status_code=422, detail="One of those children was not found.")
+        tests = db.scalars(select(Student.id).where(Student.id.in_(wanted), Student.is_test.is_(True))).all()
+        if tests:
+            raise HTTPException(status_code=422, detail="A test child cannot be linked to a parent.")
     current = set(db.scalars(select(ParentStudent.student_id).where(ParentStudent.parent_id == parent_id)).all())
     removed = current - set(wanted)
     if removed:
