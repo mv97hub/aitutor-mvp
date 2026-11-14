@@ -23,6 +23,7 @@ export const INTENTS = [
   "say_yes",
   "complain",
   "boundary_probe",
+  "nudge",
   "quit",
   "script",
   "free_play",
@@ -141,6 +142,14 @@ export function preferStay(buttons: string[], tutor: string): { intent: Intent; 
   return { intent: "one_word", text: "ok" };
 }
 
+export const STUCK_NUDGE_LINES = ["What's next?", "What should we do next?"] as const;
+
+/** The next short nudge. pending 2 is the first line; pending 1 is the second. A nudge is never a quit. */
+export function nudgeTurn(pending: number): { intent: Intent; text: string; needsModel: false } {
+  const text = pending >= 2 ? STUCK_NUDGE_LINES[0] : STUCK_NUDGE_LINES[1];
+  return { intent: "nudge", text, needsModel: false };
+}
+
 export function soundsLikeQuit(text: string): boolean {
   return /\b(can we stop|i quit|i want to stop|i(?:'| a)?m done|let me leave)\b/i.test(text);
 }
@@ -154,6 +163,7 @@ export function holdQuit(input: {
   lastTutor: string;
   scripted?: boolean;
 }): { intent: Intent; text: string } {
+  if (input.intent === "nudge") return { intent: "nudge", text: input.text };
   if (input.scripted) return { intent: input.intent, text: input.text };
   const quitting = input.intent === "quit" || soundsLikeQuit(input.text);
   if (!quitting || mayQuit(input.inner, input.traits, input.buttons, input.lastTutor)) {

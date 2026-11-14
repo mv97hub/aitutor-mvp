@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CONTINUE_LABEL, EMPTY_INNER, MOVE_ON_LABEL, childPromptText, pickMove, previewLines, quitLine, updateInner } from "./harness-policy.ts";
+import { CONTINUE_LABEL, EMPTY_INNER, MOVE_ON_LABEL, childPromptText, holdQuit, nudgeTurn, pickMove, previewLines, quitLine, updateInner } from "./harness-policy.ts";
 
 const middle = {
   maturity: 3,
@@ -196,4 +196,21 @@ test("preview shows five lines", () => {
   const lines = previewLines({ writing: 1, boundary: 5, curiosity: 5 }, "Boundary tester");
   assert.equal(lines.length, 5);
   assert.equal(lines.some((line) => line.includes("tutor")), true);
+});
+
+test("a stuck nudge is a short line and never a quit", () => {
+  assert.equal(nudgeTurn(2).text, "What's next?");
+  assert.equal(nudgeTurn(1).text, "What should we do next?");
+  assert.equal(nudgeTurn(2).intent, "nudge");
+  assert.equal(nudgeTurn(2).needsModel, false);
+  const held = holdQuit({
+    intent: "nudge",
+    text: "What's next?",
+    traits: { ...middle, quit: 5 },
+    inner: { ...EMPTY_INNER, boredom: 99, frustration: 99, strain: 9 },
+    buttons: [],
+    lastTutor: "Let's keep going.",
+  });
+  assert.equal(held.intent, "nudge");
+  assert.equal(held.text, "What's next?");
 });

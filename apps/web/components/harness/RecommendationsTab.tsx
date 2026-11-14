@@ -25,6 +25,7 @@ type Card = {
     current?: string;
     replacement?: string;
     shorter?: string;
+    nudges?: { turn?: number; asked?: string; answered?: string; block_type?: string; block_id?: string; substep?: string }[];
   };
   proposed: { text?: string; shorter?: string };
   trial_profile_id?: string | null;
@@ -213,6 +214,16 @@ export function RecommendationsTab({
               {card.kind} · prompt gets {card.prompt_direction} · {card.status} · {card.confidence}
             </p>
             <p>{evidence.summary}</p>
+            {evidence.nudges && evidence.nudges.length > 0 ? (
+              <ul>
+                {evidence.nudges.map((nudge, index) => (
+                  <li key={`${nudge.turn ?? index}`}>
+                    Turn {nudge.turn} on {nudge.block_type || evidence.block_type || "an unknown block"}
+                    {nudge.block_id || nudge.substep ? ` (${[nudge.block_id, nudge.substep].filter(Boolean).join(" / ")})` : ""}: the child asked “{nudge.asked}”. The tutor answered “{nudge.answered}”. The block did not move.
+                  </li>
+                ))}
+              </ul>
+            ) : null}
             <p>
               <strong>Current sentences</strong>
             </p>

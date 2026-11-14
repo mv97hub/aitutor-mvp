@@ -50,6 +50,35 @@ BLOCK_LABELS = {
 }
 
 
+def stuck_nudge_rows(turns: list[dict]) -> list[dict]:
+    """Closing nudges that stayed on the same block and substep."""
+    if not turns:
+        return []
+    last = turns[-1]
+    last_place = (str(last.get("block_id") or ""), str(last.get("substep") or ""))
+    chosen: list[dict] = []
+    for turn in reversed(turns):
+        if not isinstance(turn, dict):
+            break
+        place = (str(turn.get("block_id") or ""), str(turn.get("substep") or ""))
+        if str(turn.get("intent") or "") != "nudge" or place != last_place:
+            break
+        chosen.append(turn)
+    rows = []
+    for turn in reversed(chosen):
+        rows.append(
+            {
+                "turn": int(turn.get("turn") or turn.get("seq") or 0),
+                "asked": str(turn.get("child_text") or turn.get("asked") or ""),
+                "answered": str(turn.get("tutor_reply") or turn.get("answered") or ""),
+                "block_type": str(turn.get("block_type") or ""),
+                "block_id": str(turn.get("block_id") or ""),
+                "substep": str(turn.get("substep") or ""),
+            }
+        )
+    return rows
+
+
 def block_label(value: object) -> str:
     key = str(value or "").strip()
     if not key:
@@ -214,6 +243,7 @@ def rollup(chats: list[dict]) -> dict:
         "by_intent": _intent_rows(usable),
         "instructions": instruction_rows,
         "top_problems": top,
+        "stuck_nudges": _stuck_nudges(usable),
         "issue_blocks": {
             "false_pass": dict(false_blocks),
             "stuck": dict(stuck_blocks),
@@ -222,6 +252,45 @@ def rollup(chats: list[dict]) -> dict:
         "grid": _grid(usable),
         "worst": sorted(usable, key=_worst_key)[:8],
     }
+
+
+def _stuck_nudges(chats: list[dict]) -> list[dict]:
+    rows = []
+    for chat in chats:
+        if str(chat.get("ended_how") or "") != "stuck":
+            continue
+        for nudge in chat.get("stuck_nudges") or []:
+            if not isinstance(nudge, dict):
+                continue
+            rows.append(
+                {
+                    **nudge,
+                    "child": str(chat.get("persona_name") or ""),
+                    "chat_id": str(chat.get("id") or ""),
+                }
+            )
+    return rows
+
+
+def _with_stuck_nudges(found: list[dict], report: dict) -> list[dict]:
+    nudges = report.get("stuck_nudges") if isinstance(report.get("stuck_nudges"), list) else []
+    if not nudges:
+        return found
+    attached = []
+    for item in found:
+        if str(item.get("tag") or "") != "stuck":
+            attached.append(item)
+            continue
+        who = str(item.get("who") or "")
+        chosen = [
+            row
+            for row in nudges
+            if isinstance(row, dict) and (not who or str(row.get("child") or "") == who)
+        ]
+        if not chosen:
+            chosen = [row for row in nudges if isinstance(row, dict)]
+        attached.append({**item, "nudges": chosen})
+    return attached
 
 
 def _intent_rows(chats: list[dict]) -> list[dict]:
@@ -345,7 +414,7 @@ def findings(report: dict) -> list[dict]:
                 examples=problem.get("examples") or [],
             )
         )
-    return found
+    return _with_stuck_nudges(found, report)
 
 
 def _match_key(chat: dict) -> tuple:

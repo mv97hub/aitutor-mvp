@@ -9,6 +9,7 @@ CHECKS_VERSION = "1"
 DEFAULT_CHAT_CAP_CENTS = 40
 DEFAULT_TURN_LIMIT = 40
 DEFAULT_STUCK_LIMIT = 8
+STUCK_NUDGE_COUNT = 2
 DEFAULT_LUNA_TOKEN_CEILING = 100_000
 
 
@@ -46,6 +47,34 @@ def stop_reason(
     if stop_on_safety and safety_flag and safety_flag != "none":
         return "safety"
     return ""
+
+
+def stuck_after_turn(
+    *,
+    reason: str,
+    same_place_turns: int,
+    stuck_limit: int,
+    pending_nudges: int,
+) -> tuple[str, int]:
+    """Stop reason and pending nudge count after one stored turn.
+
+    Hitting the stuck limit arms two nudges instead of closing. Each later
+    turn that stays on the same block and substep spends one. The chat closes
+    as stuck only when both are spent and the place is still unchanged. A move
+    clears the count. Quit, the turn limit, and the spending cap are unchanged.
+    """
+    pending = max(0, int(pending_nudges or 0))
+    if reason != "stuck":
+        if same_place_turns < stuck_limit and pending:
+            return reason, 0
+        return reason, pending
+    if pending > 0:
+        remaining = pending - 1
+        if remaining > 0:
+            return "", remaining
+        return "stuck", 0
+    return "", STUCK_NUDGE_COUNT
+
 
 WRONG_INTENTS = {
     "answer_wrong",

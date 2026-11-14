@@ -120,3 +120,110 @@ test("a paused run leaves the chat for resume", async () => {
   };
   assert.equal(await playChat(chat(), transport), "paused");
 });
+
+test("eight same-place turns are followed by two nudges, then stuck", async () => {
+  const childLines: string[] = [];
+  const intents: string[] = [];
+  const live: string[] = [];
+  const answered: string[] = [];
+  let pending = 0;
+  const transport: HarnessTransport = {
+    runStatus: async () => ({ status: "running" }),
+    session: async () => session({ block_id: "b1", active_substep: "explain", active_block_type: "topic_goal" }),
+    speak: async () => session(),
+    answer: async (_id, text) => {
+      answered.push(text);
+      return session({
+        block_id: "b1",
+        active_substep: "explain",
+        active_block_type: "topic_goal",
+        messages: [
+          { role: "user", content: text },
+          { role: "assistant", content: `Still on explain after ${text}` },
+        ],
+      });
+    },
+    answerKey: async () => ({ block_id: "b1", block_type: "topic_goal", move_attempts: 0 }),
+    childText: async () => {
+      throw new Error("a nudge does not call the child model");
+    },
+    recordTurn: async (_id, body) => {
+      childLines.push(String(body.child_text));
+      intents.push(String(body.intent));
+      const after = body.session_after as { block_id?: string; block_type?: string; substep?: string; tutor_reply?: string };
+      assert.equal(after.block_id, "b1");
+      assert.equal(after.block_type, "topic_goal");
+      assert.equal(after.substep, "explain");
+      assert.match(String(after.tutor_reply), /Still on explain/);
+      if (childLines.length === 1) pending = 2;
+      else if (pending > 0) pending -= 1;
+      return { stop: pending === 0 && childLines.length > 1 ? "stuck" : "", pending_nudges: pending, cost_usd: "0", luna_tokens: 0 };
+    },
+    finish: async () => undefined,
+  };
+  const result = await playChat(chat(), transport, undefined, (line) => {
+    if (line.role === "child") live.push(line.text);
+  });
+  assert.equal(result, "done");
+  assert.deepEqual(childLines, ["the river is blue", "What's next?", "What should we do next?"]);
+  assert.deepEqual(intents.slice(1), ["nudge", "nudge"]);
+  assert.deepEqual(answered.slice(1), ["What's next?", "What should we do next?"]);
+  assert.ok(live.includes("What's next?"));
+  assert.ok(live.includes("What should we do next?"));
+});
+
+test("a nudge that moves the block does not send the second nudge", async () => {
+  const childLines: string[] = [];
+  let calls = 0;
+  const moving = chat();
+  moving.script = ["one", "two", "three"];
+  const transport: HarnessTransport = {
+    runStatus: async () => ({ status: "running" }),
+    session: async () => session(),
+    speak: async () => session(),
+    answer: async (_id, text) =>
+      session({
+        status: calls >= 2 ? "completed" : "in_progress",
+        block_id: text === "What's next?" ? "b2" : "b1",
+        active_substep: text === "What's next?" ? "ask" : "explain",
+        messages: [{ role: "assistant", content: "Next step." }],
+      }),
+    answerKey: async () => ({ block_id: "b1", block_type: "topic_goal" }),
+    childText: async () => ({ text: "unused", input_tokens: 0, output_tokens: 0, model: "gpt-4.1-mini" }),
+    recordTurn: async (_id, body) => {
+      calls += 1;
+      childLines.push(String(body.child_text));
+      if (calls === 1) return { stop: "", pending_nudges: 2, cost_usd: "0", luna_tokens: 0 };
+      return { stop: "", pending_nudges: 0, cost_usd: "0", luna_tokens: 0 };
+    },
+    finish: async () => undefined,
+  };
+  await playChat(moving, transport);
+  assert.equal(childLines[0], "one");
+  assert.equal(childLines[1], "What's next?");
+  assert.notEqual(childLines[2], "What should we do next?");
+});
+
+test("a refresh resumes the remaining nudge instead of repeating the first", async () => {
+  const childLines: string[] = [];
+  const resumed = chat();
+  resumed.pending_nudges = 1;
+  const transport: HarnessTransport = {
+    runStatus: async () => ({ status: "running" }),
+    session: async () => session(),
+    speak: async () => session(),
+    answer: async () => session({ status: "completed", messages: [{ role: "assistant", content: "Still here." }] }),
+    answerKey: async () => ({ block_id: "b1", block_type: "topic_goal" }),
+    childText: async () => {
+      throw new Error("a resumed nudge does not call the child model");
+    },
+    recordTurn: async (_id, body) => {
+      childLines.push(String(body.child_text));
+      assert.equal(body.intent, "nudge");
+      return { stop: "stuck", pending_nudges: 0, cost_usd: "0", luna_tokens: 0 };
+    },
+    finish: async () => undefined,
+  };
+  await playChat(resumed, transport);
+  assert.deepEqual(childLines, ["What should we do next?"]);
+});

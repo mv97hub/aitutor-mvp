@@ -32,7 +32,17 @@ function prompt(turn: string): string {
 const materials: DraftMaterials = {
   run_id: "run-1",
   findings: [
-    { title: "AI_Child1 got stuck", tag: "stuck", block_label: "Topic / Goal", cause_class: "prompt", count: 1 },
+    {
+      title: "AI_Child1 got stuck",
+      tag: "stuck",
+      block_label: "Topic / Goal",
+      cause_class: "prompt",
+      count: 1,
+      nudges: [
+        { turn: 9, asked: "What's next?", answered: "Let's keep going.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
+        { turn: 10, asked: "What should we do next?", answered: "We are still here.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
+      ],
+    },
     { title: "one question was not in the prompt", tag: "one_question", block_label: "an unknown block", cause_class: "prompt", count: 0 },
     { title: "stay on course was not in the prompt", tag: "stay_on_course", block_label: "an unknown block", cause_class: "prompt", count: 0 },
     {
@@ -83,6 +93,13 @@ test("drafted cards quote the stored prompt and name the function", () => {
   assert.match(stuck?.evidence.current || "", /more deeply/);
   assert.equal(stuck?.evidence.function, "_this_turn");
   assert.equal(stuck?.evidence.section, "This turn");
+  assert.equal(stuck?.evidence.block_type, "Topic / Goal");
+  assert.match(stuck?.evidence.summary || "", /What's next\?/);
+  assert.match(stuck?.evidence.summary || "", /What should we do next\?/);
+  assert.match(stuck?.evidence.summary || "", /Let's keep going/);
+  assert.match(stuck?.evidence.summary || "", /We are still here/);
+  assert.match(stuck?.evidence.summary || "", /did not move/);
+  assert.equal(stuck?.evidence.nudges?.length, 2);
   const question = cards.find((card) => card.evidence.summary?.includes("one question"));
   assert.match(question?.evidence.current || "", /Do not ask any question/);
   assert.match(question?.evidence.replacement || "", /One question/);

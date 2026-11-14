@@ -25,10 +25,18 @@ from app.harness_checks import (
     WRONG_INTENTS,
     automatic_checks,
     stop_reason,
+    stuck_after_turn,
 )
-from app.harness_report import block_label
 from app.harness_personas import TRAIT_KEYS, starter_children
-from app.harness_report import compare_runs, findings, kept_run_ids, regression_band, rollup
+from app.harness_report import (
+    block_label,
+    compare_runs,
+    findings,
+    kept_run_ids,
+    regression_band,
+    rollup,
+    stuck_nudge_rows,
+)
 from app.kc import course_out, load_targets, mark_ready, open_session
 from app.kc import _block_context
 from app.kc_course_io import SCHEMA, _BLOCK_EXAMPLES, import_new_course
@@ -469,6 +477,7 @@ def chat_out(chat: HarnessChat) -> dict:
         "cost_usd": chat.cost_usd,
         "luna_tokens": chat.luna_tokens,
         "turn_count": chat.turn_count,
+        "pending_nudges": int(chat.pending_nudges or 0),
         "created_at": chat.created_at,
         "updated_at": chat.updated_at,
     }
@@ -847,11 +856,13 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
         else:
             break
     plan = dict(run.plan or {}) if run is not None else {}
+    same_place = _same_place(list(turns))
+    stuck_limit = int(plan.get("stuck_limit") or DEFAULT_STUCK_LIMIT)
     reason = stop_reason(
         session_status=str(after.get("status") or ""),
         intent=turn.intent,
         turn_count=seq,
-        same_place_turns=_same_place(list(turns)),
+        same_place_turns=same_place,
         priced_cents=_cents(chat.cost_usd),
         cap_cents=int(plan.get("chat_cap_cents") or DEFAULT_CHAT_CAP_CENTS),
         luna_tokens=int(chat.luna_tokens or 0),
@@ -860,14 +871,28 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
         safety_flag=str(after.get("safety_flag") or "none"),
         stop_on_safety=bool(plan.get("stop_on_safety")),
         turn_limit=int(plan.get("turn_limit") or DEFAULT_TURN_LIMIT),
-        stuck_limit=int(plan.get("stuck_limit") or DEFAULT_STUCK_LIMIT),
+        stuck_limit=stuck_limit,
     )
+    reason, pending = stuck_after_turn(
+        reason=reason,
+        same_place_turns=same_place,
+        stuck_limit=stuck_limit,
+        pending_nudges=int(chat.pending_nudges or 0),
+    )
+    chat.pending_nudges = pending
     if reason:
         _finish(db, chat, reason)
     elif run is not None:
         _refresh_totals(db, run)
     db.flush()
-    return {"turn": seq, "stop": reason, "cost_usd": chat.cost_usd, "luna_tokens": chat.luna_tokens, "chat": chat_out(chat)}
+    return {
+        "turn": seq,
+        "stop": reason,
+        "pending_nudges": pending,
+        "cost_usd": chat.cost_usd,
+        "luna_tokens": chat.luna_tokens,
+        "chat": chat_out(chat),
+    }
 
 
 def _turns_for_checks(db: Session, chat: HarnessChat) -> list[dict]:
@@ -1112,6 +1137,20 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
         last_label = turn_label(turns[-1])
         if last_label and last_label not in stuck_blocks:
             stuck_blocks.append(last_label)
+    nudge_turns = []
+    for turn in turns:
+        after = turn.session_after if isinstance(turn.session_after, dict) else {}
+        nudge_turns.append(
+            {
+                "intent": turn.intent,
+                "turn": turn.seq,
+                "child_text": turn.child_text,
+                "tutor_reply": str(after.get("tutor_reply") or ""),
+                "block_id": str(after.get("block_id") or ""),
+                "substep": str(after.get("substep") or ""),
+                "block_type": turn_label(turn),
+            }
+        )
     tag_blocks: dict[str, str] = {}
     for tag in tags:
         if not isinstance(tag, dict):
@@ -1136,6 +1175,7 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
         "block_types": block_types,
         "false_pass_blocks": false_pass_blocks,
         "stuck_blocks": stuck_blocks,
+        "stuck_nudges": stuck_nudge_rows(nudge_turns) if chat.ended_how == "stuck" else [],
         "turn_blocks": turn_blocks,
         "tag_blocks": tag_blocks,
         "tutor_model": chat.tutor_model,
