@@ -239,6 +239,7 @@ class DecisionIn(BaseModel):
     hint_tier: str = "nudge"
     help_requested: bool = False
     off_course: bool = False
+    ready_to_move_on: bool = False
     affect: str = "engaged"
     confidence: str = "ok"
     score_justification: str = ""

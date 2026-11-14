@@ -1,4 +1,8 @@
-"""A topic or goal starts with an explanation. The question waits for move on."""
+"""A topic or goal starts with an explanation. The question waits until the learner leaves it.
+
+Got it - move on leaves it. tests/test_explain_step_exits.py covers the ready
+flag, an answer typed during the explanation, and the cap.
+"""
 
 from copy import deepcopy
 
@@ -22,8 +26,8 @@ EXPLAIN = (
     "Write it as teaching, not a question. Do not ask the goal question. Do not ask any question."
 )
 DEEPEN = (
-    "Goal start: The learner wants to keep learning. Explain this same topic more deeply, from a fresh angle. "
-    "Write it as teaching, not a question. Do not ask the goal question. Do not ask any question."
+    "Goal start: The learner is still on the explanation. Explain this same topic in two or three sentences, "
+    "from a fresh angle. Ask no question."
 )
 ASK = (
     "Goal question: The learner moved on. Ask the opening question for this goal. "
@@ -69,10 +73,12 @@ def test_tell_me_more_keeps_explaining_without_the_goal_question() -> None:
         turn = _section(text, "This turn")
         assert DEEPEN in turn, phrase
         assert ASK not in text, phrase
-        assert "Do not ask any question." in turn, phrase
+        assert "Ask no question." in turn, phrase
+        assert "Do not ask any question." not in text, phrase
+        assert "more deeply" not in text, phrase
 
 
-def test_move_on_is_the_only_prompt_path_to_the_opening_question() -> None:
+def test_move_on_asks_the_opening_question() -> None:
     for phrase in ("Got it - move on", "move on", "I don't want to learn more"):
         assert learner_done_with_explanation(phrase), phrase
         text = _prompt(opening=False, last_answer=phrase)
@@ -108,10 +114,12 @@ def test_move_on_opens_the_question_and_does_not_finish_the_goal() -> None:
         assert opened.block_results == [], phrase
 
 
-def test_a_goal_answer_during_the_explanation_does_not_open_the_question() -> None:
-    stayed = _turn("The river is blue.")
-    assert stayed.next_block_state["substep"] == "explain"
-    assert stayed.advance_block is False
+def test_a_goal_answer_during_the_explanation_is_scored_as_the_first_try() -> None:
+    answered = _turn("The river is blue.")
+    assert answered.next_block_state["substep"] == "summary_check"
+    assert answered.next_block_state["block_attempts"] == 1
+    assert answered.advance_block is False
+    assert answered.unit_complete is False
 
 
 def test_the_question_phase_still_checks_the_goal() -> None:
@@ -224,7 +232,7 @@ def test_tell_me_more_on_the_apple_intro_still_deepens() -> None:
     text = _apple_prompt("Tell me more")
     turn = _section(text, "This turn")
     assert DEEPEN in turn
-    assert "Do not ask any question." in turn
+    assert "Ask no question." in turn
     assert ASIDE not in text
     stayed = _apple_turn("Tell me more")
     assert stayed.next_block_state["substep"] == "explain"
@@ -232,11 +240,12 @@ def test_tell_me_more_on_the_apple_intro_still_deepens() -> None:
     assert stayed.advance_block is False
 
 
-def test_a_real_apple_attempt_and_move_on_keep_the_opening_path() -> None:
-    stayed = _apple_turn(REAL_APPLE)
-    assert stayed.next_block_state["substep"] == "explain"
-    assert stayed.next_block_state["elaboration_turns"] == 1
-    assert stayed.rubric_met == ["kept", "apple"]
+def test_a_real_apple_attempt_is_scored_and_move_on_opens_the_question() -> None:
+    answered = _apple_turn(REAL_APPLE)
+    assert answered.next_block_state["substep"] == "summary_check"
+    assert answered.next_block_state["elaboration_turns"] == 0
+    assert answered.rubric_met == ["kept", "apple"]
+    assert answered.advance_block is False
     assert "Do not start a new explanation of this block." not in _apple_prompt(REAL_APPLE)
     opened = _apple_turn("Got it - move on")
     assert opened.next_block_state["substep"] == "main"

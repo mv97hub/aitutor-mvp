@@ -4415,3 +4415,104 @@ def test_session_block_progress_short_title() -> None:
     assert progress[2]["title"] == "Why did the rise matter?"
 
 
+
+
+def _explain_session(code: str) -> str:
+    storm = _storm()
+    _clear_progress(storm.id)
+    course = _make(code, description="How boats stay up.")
+    blocks = [
+        {
+            "id": "blk-1",
+            "type": "topic_goal",
+            "data": {
+                "topic": "Why boats float",
+                "goal": "A boat floats because its hull pushes aside water that weighs more than the boat.",
+            },
+        },
+        {"id": "blk-2", "type": "topic_goal", "data": {"topic": "Sinking", "goal": "Explain why a stone sinks."}},
+    ]
+    ready = _ready(course, [_spec(f"{code}-float", "Floating", blocks=blocks)])
+    opened = client.post(
+        "/kc/tutor/sessions",
+        json={"student_id": str(storm.id), "course_id": ready["id"], "kc_id": ready["components"][0]["id"]},
+    )
+    assert opened.status_code == 200, opened.text
+    session_id = opened.json()["id"]
+    assert opened.json()["active_substep"] == "explain"
+    spoken = client.post(
+        f"/kc/tutor/sessions/{session_id}/speech",
+        json={"content": "A boat floats because its hull pushes water out of the way."},
+    )
+    assert spoken.status_code == 200, spoken.text
+    return session_id
+
+
+def _explain_turn(session_id: str, answer: str, **decision: object) -> tuple[dict, dict]:
+    """Post one learner message. Return the prompt bundle the model would get, and the loop result."""
+    posted = client.post(f"/kc/tutor/sessions/{session_id}/turn", json={"answer": answer})
+    assert posted.status_code == 200, posted.text
+    bundle = client.get(f"/kc/tutor/sessions/{session_id}/prompt").json()
+    decided = client.post(
+        f"/kc/tutor/sessions/{session_id}/decision",
+        json={"reply": "Noted.", "decision": "stay", "rubric_met": [], **decision},
+    )
+    assert decided.status_code == 200, decided.text
+    return bundle, decided.json()
+
+
+def test_a_ready_signal_ends_the_opening_explanation_over_http() -> None:
+    session_id = _explain_session("zz-ready")
+    try:
+        # The stuck chat: without the ready flag every What's next? left the step where it was.
+        for _ in range(2):
+            bundle, held = _explain_turn(session_id, "What's next?", help_requested=True)
+            assert "ready_to_move_on" in bundle["response_schema"]["properties"]
+            assert "Ready check:" in bundle["system_prompt"]
+            assert held["active_substep"] == "explain"
+            assert held["step"] == 0
+        # A third message is past the cap, so the tutor asks the goal question itself.
+        bundle, capped = _explain_turn(session_id, "What's next?", help_requested=True)
+        assert "Goal question: The learner has had two extra turns on this explanation" in bundle["system_prompt"]
+        assert "ready_to_move_on" not in bundle["response_schema"]["properties"]
+        assert capped["active_substep"] == "main"
+        assert capped["step"] == 0
+        assert capped["passed"] is False
+        assert capped["unit_complete"] is False
+    finally:
+        _wipe_zz()
+
+    session_id = _explain_session("zz-ready")
+    try:
+        # With the flag the first What's next? opens the goal question.
+        bundle, moved = _explain_turn(session_id, "What's next?", ready_to_move_on=True, help_requested=True)
+        assert "ready_to_move_on" in bundle["response_schema"]["properties"]
+        assert moved["active_substep"] == "main"
+        assert moved["step"] == 0
+        assert moved["step_label"] == "Block 1 of 2: Topic / Goal"
+        assert moved["passed"] is False
+        # The block's question must still be passed before the block closes.
+        _, summary = _explain_turn(
+            session_id,
+            "The hull pushes aside water that weighs more than the boat, so it floats.",
+            substep_passed=True,
+        )
+        assert summary["active_substep"] == "summary_check"
+        assert summary["step"] == 0
+    finally:
+        _wipe_zz()
+
+
+def test_an_answer_during_the_opening_explanation_is_scored_over_http() -> None:
+    session_id = _explain_session("zz-early")
+    try:
+        answer = "The hull pushes aside water that weighs more than the boat, so it floats."
+        bundle, scored = _explain_turn(session_id, answer, substep_passed=True)
+        assert "Goal answer: The learner answered during the explanation" in bundle["system_prompt"]
+        assert "Active substep: main." in bundle["system_prompt"]
+        assert "ready_to_move_on" not in bundle["response_schema"]["properties"]
+        assert scored["active_substep"] == "summary_check"
+        assert scored["step"] == 0
+        assert scored["unit_complete"] is False
+    finally:
+        _wipe_zz()

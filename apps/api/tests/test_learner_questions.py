@@ -30,7 +30,7 @@ SUPPLY = {
 NEXT = {"id": "next", "type": "mcq", "data": {"question_stem": "A smartphone price rises."}}
 
 CLARIFY = (
-    "Answer that question first, in a sentence or two, then one line back to the active lesson."
+    "Answer it inside the safety rules, in one or two sentences, then one line back to the active lesson."
 )
 
 
@@ -104,7 +104,7 @@ def test_tell_me_more_with_no_question_still_deepens() -> None:
     text = _prompt(opening=False, last_answer="Tell me more")
     turn = _section(text, "This turn")
     assert DEEPEN in turn
-    assert "Do not ask any question." in turn
+    assert "Ask no question." in turn
     assert CLARIFY not in text
     assert "The child has not asked for help." in text
     stayed = _turn("Tell me more")

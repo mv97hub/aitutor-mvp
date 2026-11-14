@@ -491,12 +491,40 @@ def _schema_without_generated_mcq(schema: dict) -> dict:
     return copied
 
 
-def turn_response_schema(*, presenting_dynamic_mcq: bool = False, needs_dynamic_mcq: bool = False) -> dict:
-    """Include generated_mcq only when this turn presents one or is the last substep before one."""
+READY_FIELD = "ready_to_move_on"
+
+
+def _schema_with_ready(schema: dict) -> dict:
+    """Put the ready flag first, so the model settles it before it writes the reply."""
+    ready = {
+        "type": "boolean",
+        "description": (
+            "True when the learner's message means they are ready to go on to the goal question, "
+            "such as What's next?, ok, I get it, or let's go. False for a question, a remark, or a request for more."
+        ),
+    }
+    copied = dict(schema)
+    copied["properties"] = {READY_FIELD: ready, **schema["properties"]}
+    copied["required"] = [READY_FIELD, *schema["required"]]
+    return copied
+
+
+def turn_response_schema(
+    *,
+    presenting_dynamic_mcq: bool = False,
+    needs_dynamic_mcq: bool = False,
+    ready_check: bool = False,
+) -> dict:
+    """Include generated_mcq only when this turn presents one or is the last substep before one.
+
+    ready_to_move_on is included only on an opening-explanation turn that asks for it.
+    """
     include = bool(presenting_dynamic_mcq or needs_dynamic_mcq)
     schema = RESPONSE_SCHEMA if include else _schema_without_generated_mcq(RESPONSE_SCHEMA)
     if presenting_dynamic_mcq:
-        return _dynamic_mcq_schema(schema)
+        schema = _dynamic_mcq_schema(schema)
+    if ready_check:
+        schema = _schema_with_ready(schema)
     return schema
 
 
@@ -1130,8 +1158,8 @@ _GOAL_START_EXPLAIN = (
     "Write it as teaching, not a question. Do not ask the goal question. Do not ask any question."
 )
 _GOAL_START_DEEPEN = (
-    "Goal start: The learner wants to keep learning. Explain this same topic more deeply, from a fresh angle. "
-    "Write it as teaching, not a question. Do not ask the goal question. Do not ask any question."
+    "Goal start: The learner is still on the explanation. Explain this same topic in two or three sentences, "
+    "from a fresh angle. Ask no question."
 )
 _GOAL_START_CLARIFY = (
     "Goal start: The learner asked a question. Answer that question first, in a sentence or two, "
@@ -1143,13 +1171,41 @@ _GOAL_START_ASIDE = (
     "Goal start: The learner typed a side remark. It is not an attempt and it is not a request to learn more. "
     "Answer it inside the safety rules, in one or two sentences, then one line back to the active lesson. "
     "Do not start a new explanation of this block. "
-    "Answer that question first, in a sentence or two, then one line back to the active lesson. "
     "Do not ask the goal question. "
     "Do not ask a question applies to your lesson text, not to the student. "
     "It does not mean ignore the question they typed. "
     "Do not score this reply. Do not say Nice connection. "
     "Set help_requested=true, substep_passed=false, and block_complete=false. "
     "Do not call this reply partial, a close, or a good start."
+)
+_GOAL_START_READY = (
+    "Ready check: If the learner's message means they are ready to go on, such as What's next?, ok, I get it, "
+    "or let's go, set ready_to_move_on=true and ask the opening question for this goal instead. "
+    "One question, and it comes last. Do not answer it. "
+    "That reply replaces every line here that holds the goal question back. "
+    "Otherwise set ready_to_move_on=false."
+)
+_GOAL_START_NO_TURN = (
+    "Do not tell the learner it is their turn, and do not ask them to put the idea in their own words, "
+    "unless this reply asks the goal question."
+)
+_GOAL_START_CAP = (
+    "Goal question: The learner has had two extra turns on this explanation, so you ask the goal question now. "
+    "If their last message was a question or a remark, answer it in one sentence first. "
+    "Do not explain the topic again. "
+    "Ask the opening question for this goal. One question, and it comes last. Do not answer it."
+)
+_GOAL_EARLY_ANSWER = (
+    "Goal answer: The learner answered during the explanation, before the goal question was asked. "
+    "Count that answer as their attempt at this goal and score it. "
+    "If it does not pass, acknowledge what they said, then ask the opening question for this goal. "
+    "One question, and it comes last."
+)
+_EXPLANATION_CAP = (
+    "The learner has had two extra turns on this topic, so the lesson moves on now. "
+    "If their last message was a question or a remark, answer it in one sentence first. "
+    "Then follow the move-on instruction in What to teach in this same reply: explain the next topic, "
+    "or summarize when this was the last topic. Do not quiz."
 )
 _SIDE_STAY = (
     "Stay on course: this is not an attempt at the goal. "
@@ -1213,29 +1269,53 @@ def _goal_start_mode(
     cfg: dict | None = None,
     state: dict | None = None,
 ) -> str:
-    """explain, deepen, aside, clarify, or ask on the opening explanation. Empty once the question is open."""
+    """explain, deepen, aside, clarify, ask, cap, or attempt on the opening explanation.
+
+    Empty once the question is open. After the opening turn this is the same
+    reading the loop uses, so the reply and the step change agree.
+    """
     if str(block.get("type") or "") != "topic_goal" or substep != "explain":
         return ""
-    from app.kc_loop import (
-        learner_asks_clarification,
-        learner_done_with_explanation,
-        stay_on_course_enabled,
-        unanswered_side_turn,
-    )
+    from app.kc_loop import explain_step_turn, stay_on_course_enabled, unanswered_side_turn
 
-    if (
-        str(last_answer or "").strip()
-        and stay_on_course_enabled(cfg)
-        and unanswered_side_turn(block, substep, last_answer, state, cfg)
-    ):
-        return "aside"
     if opening:
+        if (
+            str(last_answer or "").strip()
+            and stay_on_course_enabled(cfg)
+            and unanswered_side_turn(block, substep, last_answer, state, cfg)
+        ):
+            return "aside"
         return "explain"
-    if learner_asks_clarification(last_answer):
-        return "clarify"
-    if learner_done_with_explanation(last_answer):
-        return "ask"
-    return "deepen"
+    return explain_step_turn(block, last_answer, state, cfg)
+
+
+_GOAL_START_HOLDS = {"explain", "deepen", "clarify", "aside"}
+
+
+def _ready_check(
+    block: dict,
+    substep: str,
+    *,
+    opening: bool,
+    last_answer: str,
+    cfg: dict | None = None,
+    state: dict | None = None,
+) -> bool:
+    """This turn asks the model whether the learner is ready for the goal question."""
+    if opening or not str(last_answer or "").strip():
+        return False
+    mode = _goal_start_mode(
+        block, substep, opening=opening, last_answer=last_answer, cfg=cfg, state=state
+    )
+    from app.kc_loop import model_ready_counts
+
+    return model_ready_counts(mode, last_answer)
+
+
+def _explanation_capped(substep: str, state: dict | None) -> bool:
+    from app.kc_loop import explanation_topic_capped
+
+    return explanation_topic_capped(substep, state)
 
 
 def _summary_elaboration(block: dict, substep: str, last_answer: str) -> bool:
@@ -1281,7 +1361,7 @@ def _prompts_side_question(
         last_answer=last_answer,
         cfg=cfg,
         state=state,
-    ) in {"explain", "deepen", "clarify", "aside"}:
+    ) in _GOAL_START_HOLDS | {"cap"}:
         return False
     from app.kc_loop import learner_side_question
 
@@ -1571,6 +1651,7 @@ def _this_turn(
     last_answer: str = "",
     cfg: dict | None = None,
     worked_close: str = "",
+    early_answer: bool = False,
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -1613,11 +1694,26 @@ def _this_turn(
         lines.append(_GOAL_START_CLARIFY)
     elif goal_start == "ask":
         lines.append(_GOAL_START_ASK)
+    elif goal_start == "cap":
+        lines.append(_GOAL_START_CAP)
+    if early_answer:
+        lines.append(_GOAL_EARLY_ANSWER)
+    if _ready_check(
+        block,
+        substep,
+        opening=opening,
+        last_answer=last_answer,
+        cfg=cfg,
+        state=active_block_state,
+    ):
+        lines.append(_GOAL_START_READY)
+    if goal_start in _GOAL_START_HOLDS:
+        lines.append(_GOAL_START_NO_TURN)
     from app.kc_loop import stay_on_course_enabled
 
     side = _typed_side_request(block, substep, last_answer, active_block_state, cfg)
     stay_on = stay_on_course_enabled(cfg)
-    if goal_start == "aside":
+    if goal_start in {"aside", "cap"}:
         pass
     elif side and goal_start in {"explain", "deepen"}:
         lines.append(_SIDE_EXPLAIN)
@@ -1729,7 +1825,7 @@ def _this_turn(
         and str(block.get("type")) == "topic_goal"
         and not (unit_complete or course_complete)
         and not _ready_to_move_on(last_answer)
-        and goal_start not in {"explain", "deepen", "clarify", "aside"}
+        and goal_start not in _GOAL_START_HOLDS | {"cap"}
         and not side
         and not side_question
     ):
@@ -1777,6 +1873,8 @@ def _this_turn(
                     "That completing reply is a brief affirmation only. Do not ask whether they have any final questions, and do not open the next block. "
                     "Do not quiz."
                 )
+        elif _explanation_capped(substep, active_block_state):
+            lines.append(_EXPLANATION_CAP)
         else:
             lines.append(
                 "The learner has replied on the current topic. If they have a question or want elaboration, stay on this topic and answer. "
@@ -1904,14 +2002,21 @@ def _explanation_teach_lines(
             "Do not start a later topic yet."
         )
         return lines
-    lines.append(
-        "If the learner asks a question or wants elaboration, set substep_passed=false, stay on this topic, "
-        "answer with a fresh angle, and check in again. Do not move on while they still have questions."
-    )
+    if _explanation_capped(substep, state):
+        proceed = "The learner has used the two extra turns on this topic. Set substep_passed=true"
+    else:
+        lines.append(
+            "If the learner asks a question or wants elaboration, set substep_passed=false, stay on this topic, "
+            "answer with a fresh angle, and check in again. Do not move on while they still have questions."
+        )
+        proceed = (
+            "If the learner is good to proceed, for example What's next?, ok, I get it, or let's go, "
+            "set substep_passed=true"
+        )
     if topics and index < len(topics) - 1:
         nxt = topics[index + 1]
         lines.append(
-            "If the learner is good to proceed, set substep_passed=true and, in this same reply, explain the next topic: "
+            f"{proceed} and, in this same reply, explain the next topic: "
             f"Topic {index + 2} of {total}: {nxt['title'] or 'the next topic'}. {_finish(nxt['explanation'])}"
         )
         if nxt["key_points"]:
@@ -1922,7 +2027,7 @@ def _explanation_teach_lines(
         return lines
     takeaway = str(data.get("summary_takeaway") or "").strip()
     lines.append(
-        "This is the last topic. If the learner is good to proceed, set substep_passed=true and, in this same reply, "
+        f"This is the last topic. {proceed} and, in this same reply, "
         "summarize every topic in the block and ask if they have any final questions. Do not quiz."
     )
     if takeaway:
@@ -1972,7 +2077,7 @@ def _what_to_teach(
             cfg=cfg,
             state=active_state if active_state is not None else active_block_state,
         )
-        if phase == "ask":
+        if phase in {"ask", "cap"}:
             lines.append("Ask the opening question for this goal now. Do not give the answer.")
         elif phase == "aside":
             lines.append(
@@ -2642,6 +2747,7 @@ def _how_to_teach(
     last_answer: str = "",
     opening: bool = False,
     worked_close: str = "",
+    active_block_state: dict | None = None,
 ) -> list[str]:
     over = cfg.get("overarching") or {}
     orient_mode = str(over.get("orient_framing") or "elaborate_outline")
@@ -2660,14 +2766,14 @@ def _how_to_teach(
     if _summary_elaboration(block, substep, last_answer):
         lines = [line for line in lines if not line.startswith("You are on the summary step.")]
     goal_start = _goal_start_mode(
-        block, substep, opening=opening, last_answer=last_answer, cfg=cfg
+        block, substep, opening=opening, last_answer=last_answer, cfg=cfg, state=active_block_state
     )
     from app.kc_loop import stay_on_course_enabled
 
-    side = _typed_side_request(block, substep, last_answer, None, cfg)
+    side = _typed_side_request(block, substep, last_answer, active_block_state, cfg)
     stay_on = stay_on_course_enabled(cfg)
     side_question = _prompts_side_question(
-        block, substep, last_answer, opening=opening, cfg=cfg
+        block, substep, last_answer, opening=opening, cfg=cfg, state=active_block_state
     )
     move_on_close = str(block.get("type") or "") == "topic_goal" and substep == "main" and _ready_to_move_on(last_answer)
     if move_on_close or side or side_question:
@@ -2680,8 +2786,7 @@ def _how_to_teach(
     if goal_start == "aside":
         lines.append(
             "On this goal-start turn, answer the side remark in one or two sentences, then one line back to the lesson. "
-            "Do not start a new explanation. "
-            "Do not ask a question applies to your lesson text, not to the student."
+            "Do not start a new explanation."
         )
     elif worked_close in {"affirm", "continue"}:
         lines.append("On this worked-example close the stance does not ask. Do not add a guiding question.")
@@ -2726,7 +2831,7 @@ def _how_to_teach(
             "and advance immediately when the block passes." + budget
         )
 
-    if goal_start == "aside":
+    if goal_start in {"aside", "cap"}:
         pass
     elif side and not stay_on:
         lines.append(_SIDE_FOLLOW)
@@ -2854,7 +2959,6 @@ def _how_to_teach(
             lines.append(
                 "Answer the side remark in one or two sentences, then one line back to the active lesson. "
                 "Do not start a new explanation of this block. "
-                "Do not ask a question applies to your lesson text, not to the student. "
                 "The goal question waits until the learner moves on."
             )
         elif goal_start in {"explain", "deepen"}:
@@ -2863,7 +2967,7 @@ def _how_to_teach(
             lines.append(
                 "Answer the learner's question before teaching onward. The goal question waits until the learner moves on."
             )
-        elif goal_start == "ask":
+        elif goal_start in {"ask", "cap"}:
             lines.append(
                 "Ask the opening question for this goal. One question, and it comes last. Do not answer it."
             )
@@ -3019,6 +3123,7 @@ def _what_to_return(
     clarify_help: bool = False,
     side_hold: bool = False,
     side_follow: bool = False,
+    explanation_capped: bool = False,
 ) -> list[str]:
     if presenting_dynamic_mcq:
         reply_line = (
@@ -3048,6 +3153,11 @@ def _what_to_return(
             lines.append(
                 "On this summary turn, set substep_passed=false and block_complete=false. "
                 "Elaborate on the recap. Do not set block_complete=true."
+            )
+        elif explanation_capped:
+            lines.append(
+                "On this turn set substep_passed=true. The two extra turns on this topic are used, so the lesson moves on. "
+                "Set block_complete=false. Never quiz."
             )
         else:
             lines.append(
@@ -3288,6 +3398,21 @@ def build_kc_prompt(
     state_dict = dict(active_block_state or {})
     substep = str(state_dict.get("substep") or default_substep_for_block(active_block, cfg))
     state_dict["substep"] = substep
+    ready_check = _ready_check(
+        active_block, substep, opening=opening, last_answer=last_answer or "", cfg=cfg, state=state_dict
+    )
+    early_answer = (
+        not opening
+        and _goal_start_mode(
+            active_block, substep, opening=opening, last_answer=last_answer or "", cfg=cfg, state=state_dict
+        )
+        == "attempt"
+    )
+    if early_answer:
+        # The loop scores this answer as the first try on the goal, so the prompt is the goal-question prompt.
+        substep = "main"
+        state_dict["substep"] = substep
+        fragment = False
     substeps = substeps_for_block(active_block, cfg)
     is_last_block = index >= len(blocks) - 1
     is_last_substep = substep == substeps[-1] if substeps else True
@@ -3429,6 +3554,7 @@ def build_kc_prompt(
                     last_answer=last_answer,
                     cfg=cfg,
                     worked_close=worked_close,
+                    early_answer=early_answer,
                 ),
             ),
             (
@@ -3479,6 +3605,7 @@ def build_kc_prompt(
                     last_answer=last_answer,
                     opening=opening,
                     worked_close=worked_close,
+                    active_block_state=state_dict,
                 ),
             ),
             ("How to sound", _how_to_sound(profile=profile, student=student, turn_kind=turn_kind)),
@@ -3514,6 +3641,7 @@ def build_kc_prompt(
                     clarify_help=clarify_help or aside_help,
                     side_hold=(side_request and course_stay) or aside_help,
                     side_follow=side_request and not course_stay,
+                    explanation_capped=btype == "explanation" and _explanation_capped(substep, state_dict),
                 ),
             ),
         ]
@@ -3523,6 +3651,7 @@ def build_kc_prompt(
         "response_schema": turn_response_schema(
             presenting_dynamic_mcq=presenting_dynamic_mcq,
             needs_dynamic_mcq=needs_dynamic_mcq,
+            ready_check=ready_check,
         ),
         "temperature": TEMPERATURE,
     }
