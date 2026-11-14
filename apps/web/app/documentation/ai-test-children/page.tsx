@@ -101,8 +101,8 @@ export default function AiTestChildrenDocsPage() {
         </ul>
         <p>
           If you close the tab, the run pauses. Resume picks up queued chats. Turns inside one chat stay in order.
-          Several chats run side by side. The default is 3. While a chat is running, the Runs tab and the chat view show
-          each tutor message and each child reply as they happen.
+          Several chats run side by side. The default is 3. While a chat is running, the Runs tab shows it at the top.
+          Each tutor message and each child reply appears there as it happens. You do not have to open the chat.
         </p>
 
         <h2>New run settings</h2>
