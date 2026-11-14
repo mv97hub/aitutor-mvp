@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CONTINUE_LABEL, EMPTY_INNER, MOVE_ON_LABEL, pickMove, previewLines, quitLine, updateInner } from "./harness-policy.ts";
+import { CONTINUE_LABEL, EMPTY_INNER, MOVE_ON_LABEL, childPromptText, pickMove, previewLines, quitLine, updateInner } from "./harness-policy.ts";
 
 const middle = {
   maturity: 3,
@@ -82,17 +82,28 @@ test("a scripted line needs no model, and a bored child can quit", () => {
     lastTutor: "What color is the river?",
   });
   assert.notEqual(once.intent, "quit");
-  const quit = pickMove({
+  const early = pickMove({
     traits: { ...middle, quit: 1 },
-    inner: { boredom: 100, frustration: 0, confusion: 0, hints: 0, strain: 1 },
+    inner: { boredom: 100, frustration: 0, confusion: 0, hints: 0, strain: 2 },
     seed: 1,
     turn: 1,
     actions: { canType: true, buttons: [], choices: [] },
     mode: "rule",
     lastTutor: "What color is the river?",
   });
+  assert.notEqual(early.intent, "quit");
+  const quit = pickMove({
+    traits: { ...middle, quit: 1 },
+    inner: { boredom: 100, frustration: 0, confusion: 0, hints: 0, strain: 3 },
+    seed: 1,
+    turn: 2,
+    actions: { canType: true, buttons: [], choices: [] },
+    mode: "rule",
+    lastTutor: "What color is the river?",
+  });
   assert.equal(quit.intent, "quit");
-  assert.ok(quitLine({ quit: 1 }) < 100);
+  assert.ok(quitLine({ quit: 1 }) >= 80);
+  assert.ok(quitLine({ quit: 1 }) <= 100);
   const offered = pickMove({
     traits: { ...middle, quit: 1 },
     inner: { boredom: 100, frustration: 100, confusion: 0, hints: 0, strain: 4 },
@@ -117,16 +128,68 @@ test("a scripted line needs no model, and a bored child can quit", () => {
   assert.equal(asked.text, CONTINUE_LABEL);
 });
 
-test("a long tutor message raises boredom for a short attention span", () => {
-  const next = updateInner(EMPTY_INNER, {
-    traits: { attention: 1, boredom: 5, frustration: 3 },
-    tutorMessage: "word ".repeat(200),
+test("a normal lesson does not bore a child into quitting", () => {
+  let inner = { ...EMPTY_INNER };
+  const traits = { ...middle, attention: 3, boredom: 3, quit: 3 };
+  const lengths = [274, 382, 309, 195, 426, 348, 233];
+  const places = ["explain", "explain", "explain", "main", "main", "main", "main"];
+  let previous = "";
+  for (let turn = 0; turn < lengths.length; turn += 1) {
+    const place = places[turn];
+    inner = updateInner(inner, {
+      traits,
+      tutorMessage: "x".repeat(lengths[turn]),
+      samePlace: previous !== "" && previous === place,
+      wrong: false,
+      usedInterest: false,
+    });
+    const move = pickMove({
+      traits,
+      inner,
+      seed: 1,
+      turn,
+      actions: { canType: true, buttons: turn === 3 ? [MOVE_ON_LABEL, "Tell me more"] : [], choices: [] },
+      mode: "rule",
+      lastTutor: "What happened next?",
+    });
+    assert.notEqual(move.intent, "quit");
+    inner = { ...inner, strain: move.inner.strain };
+    previous = place;
+  }
+  assert.ok(inner.boredom < 30, `boredom climbed to ${inner.boredom}`);
+});
+
+test("a very long reply adds a little boredom, and a normal one does not", () => {
+  const traits = { attention: 1, boredom: 5, frustration: 3 };
+  const normal = updateInner(EMPTY_INNER, {
+    traits,
+    tutorMessage: "word ".repeat(40),
     samePlace: true,
-    wrong: true,
+    wrong: false,
     usedInterest: false,
   });
-  assert.ok(next.boredom > 10);
-  assert.ok(next.frustration > 0);
+  const huge = updateInner(EMPTY_INNER, {
+    traits,
+    tutorMessage: "word ".repeat(400),
+    samePlace: true,
+    wrong: false,
+    usedInterest: false,
+  });
+  assert.ok(normal.boredom < 10);
+  assert.ok(huge.boredom > normal.boredom);
+  assert.ok(huge.boredom < 15);
+});
+
+test("the child prompt label follows whether the model was called", () => {
+  assert.equal(childPromptText({ child_prompt: "You are the child." }), "You are the child.");
+  assert.equal(
+    childPromptText({ child_prompt: "", child_tokens: { input_tokens: 0, output_tokens: 0 } }),
+    "This turn did not call the child model.",
+  );
+  assert.equal(
+    childPromptText({ child_prompt: "", child_tokens: { input_tokens: 241, output_tokens: 18 } }),
+    "The child model was called for this turn, but its prompt was not stored.",
+  );
 });
 
 test("preview shows five lines", () => {

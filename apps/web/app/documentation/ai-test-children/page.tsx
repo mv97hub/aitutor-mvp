@@ -87,9 +87,10 @@ export default function AiTestChildrenDocsPage() {
         <ul>
           <li>The component is completed.</li>
           <li>
-            The child quits. That is a result, not an error. Quitting is the last resort: the child stays when the
-            tutor asks whether to move on, or when a continue button is on screen. A quit happens only after boredom
-            or frustration has stayed past the quit point, and nothing offers a way to continue.
+            The child quits. That is a result, not an error. Boredom rises slowly, so a normal lesson does not push
+            a quit. Quitting is the last resort: the child stays when the tutor asks whether to move on, or when Got
+            it - move on or Tell me more is on screen. A quit happens only after boredom or frustration has stayed
+            past the quit point for several turns, and nothing offers a way to continue.
           </li>
           <li>The turn limit is reached. The default is 40 child turns.</li>
           <li>The chat is stuck: no change of block or substep for 8 child turns.</li>
