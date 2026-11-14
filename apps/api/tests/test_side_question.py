@@ -162,4 +162,6 @@ def test_a_real_attempt_and_a_move_on_keep_today_behavior() -> None:
 
     text = _prompt("Pompey led the senate's armies.", "main")
     assert "Side question:" not in text
-    assert "ask whether the learner wants to continue discussing" in _section(text, "This turn")
+    turn = _section(text, "This turn")
+    assert "Congratulate the learner for finishing this block and say they are ready to move on." in turn
+    assert "spend more time with further questions" in turn

@@ -1230,10 +1230,23 @@ _GOAL_START_ASK = (
     "Goal question: The learner moved on. Ask the opening question for this goal. "
     "One question, and it comes last. Do not answer it."
 )
+_SUMMARY_CONGRATULATE = (
+    "Congratulate the learner for finishing this block and say they are ready to move on."
+)
+_SUMMARY_CHOICE = (
+    "Then ask whether they want to move on or spend more time with further questions."
+)
+_SUMMARY_REMINDER = (
+    "If they ask a further question, answer it and end that answer by reminding them they are ready to move on to the next unit."
+)
+_SUMMARY_MOVE_ON = (
+    "If they choose to move on, set block_complete=true. Ask no question and do not open the next block."
+)
 _SUMMARY_ELABORATE = (
     "The learner asked to elaborate on the recap. Elaborate on the summary in this reply. "
     "Set substep_passed=false and block_complete=false. Do not complete the block and do not advance. "
     "Do not close with a brief affirmation. Do not open the next block. "
+    "End that answer by reminding them they are ready to move on to the next unit. "
     "Only an explicit move-on, such as got it - move on, no final questions, or let's continue, "
     "may complete the block."
 )
@@ -1393,6 +1406,11 @@ def _summary_close_lines(
             lines.append(
                 "Then ask the goal again. Do not summarize the block, do not offer to move on, and do not offer another example."
             )
+        elif phase == "check" and not revealed:
+            lines.append(
+                "This further question does not complete the block. "
+                f"{_SUMMARY_REMINDER} Do not open the next block."
+            )
         lines.append(_SUMMARY_NO_PRAISE)
         return lines
     if phase == "task":
@@ -1407,8 +1425,7 @@ def _summary_close_lines(
             [
                 (
                     "Summary close: If this answer satisfies the substep, set substep_passed=true and block_complete=false. "
-                    "Give a short summary of what this block covered and ask whether the learner wants to continue discussing "
-                    "or ask any questions, or close and move on. Do not open the next block."
+                    f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} Do not open the next block."
                 ),
                 (
                     "Summary close on the attempt limit: If this is the last allowed try and the answer still misses the goal, "
@@ -1435,8 +1452,8 @@ def _summary_close_lines(
     else:
         lines = [
             (
-                "Summary close: The learner completed this block. Give a short summary of what this block covered "
-                "and ask whether the learner wants to continue discussing or ask any questions, or close and move on."
+                "Summary close: The learner completed this block. "
+                f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE}"
             )
         ]
     if opening:
@@ -1445,16 +1462,16 @@ def _summary_close_lines(
     lines.append(
         "Summary reply: If the learner had not completed the block and this reply now demonstrates the goal, "
         "set substep_passed=true and block_complete=false, affirm that they have now completed the block, "
-        "and ask if they are ready to move on."
+        f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE}"
     )
     lines.append(
-        "Summary reply: If they ask a question or want more discussion without completing it yet, "
-        "set substep_passed=false and block_complete=false, answer helpfully, and ask again whether they want "
-        "to keep discussing or trying, or move on."
+        "Summary reply: If they ask a further question, "
+        "set substep_passed=false and block_complete=false. "
+        f"{_SUMMARY_REMINDER} Do not open the next block."
     )
     closing = (
         "Summary reply: If they choose to close and move on, set block_complete=true and reply with a brief "
-        "closing statement only. Do not ask a new question and do not open the next block."
+        "closing statement only. Ask no question and do not open the next block."
     )
     if revealed:
         closing += " If the block is still incomplete, do not say congratulations."
@@ -1868,10 +1885,8 @@ def _this_turn(
                 lines.append(_SUMMARY_ELABORATE)
             else:
                 lines.append(
-                    "The learner is on the block summary. If they ask a final question, answer it and ask whether they have any other final questions about this block. "
-                    "If they have no final questions or are ready to continue, complete the block. "
-                    "That completing reply is a brief affirmation only. Do not ask whether they have any final questions, and do not open the next block. "
-                    "Do not quiz."
+                    "The learner is on the block summary. When this block's work is done, "
+                    f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} {_SUMMARY_REMINDER} {_SUMMARY_MOVE_ON} Do not quiz."
                 )
         elif _explanation_capped(substep, active_block_state):
             lines.append(_EXPLANATION_CAP)
@@ -1961,10 +1976,10 @@ def _explanation_teach_lines(
             lines.append("No stored summary takeaway. Synthesize across the topic titles and explanations.")
         if opening:
             lines.append(
-                "Give a cohesive summary of every topic discussed in this block, then ask if the learner has any final questions. "
-                "If they ask a final question, set substep_passed=false, answer it, and ask again. "
-                "If they have no final questions or are ready to continue, set substep_passed=true and block_complete=true. "
-                "That completing reply is a brief affirmation only. Do not ask whether they have any final questions, and do not open the next block."
+                "Give a cohesive summary of every topic discussed in this block. "
+                f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} "
+                "If they ask a further question, set substep_passed=false and block_complete=false. "
+                f"{_SUMMARY_REMINDER} {_SUMMARY_MOVE_ON}"
             )
         else:
             if _summary_elaboration(block, substep, last_answer):
@@ -1972,11 +1987,8 @@ def _explanation_teach_lines(
             else:
                 lines.append(
                     "The learner has responded on the summary. "
-                    "If they ask a final question, set substep_passed=false and block_complete=false, answer it, "
-                    "and you may ask whether they have any other questions about this block. "
-                    "If they have no final questions or are ready to continue, set substep_passed=true and block_complete=true. "
-                    "That completing reply is a brief affirmation and the takeaway only. "
-                    "Do not ask whether they have any final questions. Do not ask any question. Do not open or mention the next block."
+                    "If they ask a further question, set substep_passed=false and block_complete=false. "
+                    f"{_SUMMARY_REMINDER} {_SUMMARY_MOVE_ON} Do not mention the next block."
                 )
         return lines
     topic = topics[index] if topics else {
@@ -2028,7 +2040,8 @@ def _explanation_teach_lines(
     takeaway = str(data.get("summary_takeaway") or "").strip()
     lines.append(
         f"This is the last topic. {proceed} and, in this same reply, "
-        "summarize every topic in the block and ask if they have any final questions. Do not quiz."
+        "summarize every topic in the block. "
+        f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} Do not quiz. Do not open the next block."
     )
     if takeaway:
         lines.append(f"Summary takeaway: {_finish(takeaway)}")
@@ -2641,9 +2654,9 @@ def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> l
         if substep == "summary_check":
             lines.append(
                 "You are on the summary step. "
-                "Ask whether they have any final questions only when you are staying on this block. "
-                "If block_complete=true, the reply is a brief affirmation and the takeaway only. "
-                "Do not ask if there are any final questions, do not ask any question, and do not open the next block."
+                f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} {_SUMMARY_REMINDER} "
+                "If they choose to move on, the reply is a brief affirmation and the takeaway only. "
+                "Ask no question and do not open the next block."
             )
         if counts:
             lines.append(
@@ -2938,18 +2951,28 @@ def _how_to_teach(
         lines.append(
             "Explanatory block override: do not quiz, score, or reveal an answer. "
             "While the block is still open, the only questions you ask are whether the learner has questions, wants elaboration, or is ready to continue. "
-            "When block_complete=true, ask no question, including no check-in about final questions, and do not open the next block."
+            "On the summary, when the block's work is done, "
+            f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} {_SUMMARY_REMINDER} {_SUMMARY_MOVE_ON}"
         )
         if _summary_elaboration(block, substep, last_answer):
             lines.append(_SUMMARY_ELABORATE)
     elif worked_close in {"affirm", "continue"}:
         lines.append("This worked-example turn closes the block. Ask no question.")
     elif close_block_only and not choice_on_screen and not presenting_dynamic_mcq:
-        lines.append(
-            "If block_complete=true, close this block with a brief affirmation only. "
-            "Ask no question, and do not open the next block. "
-            "If block_complete=false, end with one question that stays on this block."
+        revealed_summary = substep == "summary_check" and bool(
+            (active_block_state or {}).get("revealed_substep")
         )
+        if substep == "summary_check" and not revealed_summary:
+            lines.append(
+                "On this summary, when the block's work is done, "
+                f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} {_SUMMARY_REMINDER} {_SUMMARY_MOVE_ON}"
+            )
+        else:
+            lines.append(
+                "If block_complete=true, close this block with a brief affirmation only. "
+                "Ask no question, and do not open the next block. "
+                "If block_complete=false, end with one question that stays on this block."
+            )
     elif not choice_on_screen and not presenting_dynamic_mcq:
         if move_on_close:
             lines.append(
@@ -3124,6 +3147,7 @@ def _what_to_return(
     side_hold: bool = False,
     side_follow: bool = False,
     explanation_capped: bool = False,
+    summary_done: bool = False,
 ) -> list[str]:
     if presenting_dynamic_mcq:
         reply_line = (
@@ -3163,9 +3187,22 @@ def _what_to_return(
             lines.append(
                 "On an explanation block, set substep_passed=false when the learner asks a question or wants elaboration, "
                 "and substep_passed=true when they are ready to proceed. "
-                "Set block_complete=true only on the summary check when they have no final questions. "
-                "When block_complete=true, reply is a brief affirmation only, with no question. Never quiz."
+                "On the summary, when the block's work is done, "
+                f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} "
+                "If they ask a further question, set block_complete=false. "
+                f"{_SUMMARY_REMINDER} "
+                "Set block_complete=true only when they choose to move on. "
+                "Ask no question and do not open the next block. Never quiz."
             )
+    elif summary_done:
+        lines.append(
+            "On this summary, when the block's work is done, "
+            f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} "
+            "If they ask a further question, set block_complete=false. "
+            f"{_SUMMARY_REMINDER} "
+            "Set block_complete=true only when they choose to move on. "
+            "Ask no question and do not open the next block."
+        )
     if clarify_help:
         lines.append("Set help_requested=true. The learner asked a question.")
     if side_hold:
@@ -3283,10 +3320,7 @@ def _fit_prompt_sections(
             if _line_starts(line, _MISS_LADDER_PREFIXES):
                 continue
             if line.startswith("Explanatory block override:") and "do not open the next block" not in line.lower():
-                line = (
-                    f"{line.rstrip()} When block_complete=true, ask no question, "
-                    "including no check-in about final questions, and do not open the next block."
-                )
+                line = f"{line.rstrip()} {_SUMMARY_MOVE_ON}"
             kept_teach.append(line)
         by_title["How to teach"] = kept_teach
 
@@ -3642,6 +3676,12 @@ def build_kc_prompt(
                     side_hold=(side_request and course_stay) or aside_help,
                     side_follow=side_request and not course_stay,
                     explanation_capped=btype == "explanation" and _explanation_capped(substep, state_dict),
+                    summary_done=(
+                        btype != "explanation"
+                        and substep == "summary_check"
+                        and not state_dict.get("revealed_substep")
+                        and worked_close not in {"affirm", "continue"}
+                    ),
                 ),
             ),
         ]
