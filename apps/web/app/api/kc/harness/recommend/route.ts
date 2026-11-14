@@ -2,13 +2,14 @@ import { generateText, jsonSchema, Output } from "ai";
 
 import {
   applyModelReplacements,
-  draftPromptCards,
   drafterPrompt,
+  findingsOf,
+  prepareDraft,
   recommendationMarkdown,
-  writeRecommendationDoc,
   type DraftMaterials,
   type ModelDraft,
 } from "@/lib/harness-draft";
+import { writeRecommendationDoc } from "@/lib/harness-draft-doc";
 import { isKcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { languageModel } from "@/lib/language-model";
 import { readModelUsage } from "@/lib/model-usage";
@@ -50,13 +51,24 @@ export async function POST(req: Request) {
   const requested = modelForCall(body.model || "");
   const modelName = requested || "gpt-6.1-sol";
   if (!isKcModel(modelName)) return new Response("That model is not allowed.", { status: 422 });
-  const grounded = draftPromptCards(body);
+  const prepared = prepareDraft(body);
+  const grounded = prepared.cards;
+  const materials = prepared.materials;
   if (grounded.length === 0) {
-    const findings = Array.isArray(body.findings) ? body.findings : body.findings?.findings;
-    if (!findings || findings.length === 0) {
-      return new Response("This run has no findings, so there is nothing to draft.", { status: 422 });
+    const findings = findingsOf(materials);
+    const several = (materials.run_id || "").includes(",");
+    if (findings.length === 0) {
+      return new Response(
+        several ? "The selected runs have no findings, so there is nothing to draft." : "This run has no findings, so there is nothing to draft.",
+        { status: 422 },
+      );
     }
-    return new Response("This run has no stored tutor prompt to quote, so no card was drafted.", { status: 422 });
+    return new Response(
+      several
+        ? "The selected runs have no stored tutor prompt to quote, so no card was drafted."
+        : "This run has no stored tutor prompt to quote, so no card was drafted.",
+      { status: 422 },
+    );
   }
   let cards = grounded;
   let drafter = "prompt-builder";
@@ -66,7 +78,7 @@ export async function POST(req: Request) {
     try {
       const result = await generateText({
         model: languageModel(modelName),
-        prompt: drafterPrompt(body, grounded),
+        prompt: drafterPrompt(materials, grounded),
         temperature: 0.2,
         output: Output.object({ schema: jsonSchema(schema) }),
       });
@@ -79,7 +91,7 @@ export async function POST(req: Request) {
       drafter = "prompt-builder";
     }
   }
-  const runId = String(body.run_id || "");
+  const runId = String(materials.run_id || body.run_id || "");
   const wrote = writeRecommendationDoc(recommendationMarkdown(runId, cards));
   return Response.json({
     cards,

@@ -149,13 +149,16 @@ export default function AiTestChildrenDocsPage() {
 
         <h2>Recommendations</h2>
         <p>
-          Findings name the block type the issue happened on. Cards are not created when a run finishes. They appear
-          after you press Draft cards from this run on the Recommendations tab. The tab uses the run you are viewing,
-          or the newest run when none is selected, and the button shows Drafting cards… while the request runs. A card
-          names the prompt-builder section and function, quotes the current sentences from the stored tutor prompt, and
-          gives a replacement plus a shorter or removed line. It also shows the block type, the cause, whether the
-          prompt gets shorter or longer, the risk, and a status. Statuses are new, accepted, rejected, on trial,
-          shipped, verified, and regressed. Drafting does not change the live tutor and does not edit the prompt builder.
+          Findings name the block type the issue happened on. Cards are not created when a run finishes. Recommendations
+          lists recent runs, newest first, each with a checkbox. The newest few start selected. Press Draft from selected
+          to run the drafter once over every checked run. The button shows Drafting cards… while that request runs. If a
+          run cannot be read, its name stays in the error and the other checked runs are still drafted. The result is one
+          set of cards: findings are grouped into a few themes, and each theme is one prompt-builder recommendation. A
+          card names the prompt-builder section and function, quotes the current sentences from the stored tutor prompt,
+          and gives a shorter replacement. Evidence names the block type, the run, and the turn, and includes the stuck
+          nudges when a selected run closed as stuck. It also shows the cause, whether the prompt gets shorter or longer,
+          the risk, and a status. Statuses are new, accepted, rejected, on trial, shipped, verified, and regressed.
+          Drafting does not change the live tutor and does not edit the prompt builder. Accept does not change the live tutor.
         </p>
         <p>
           The drafter looks for a line to cut or shorten before it looks for a line to add. A batch that only proposes

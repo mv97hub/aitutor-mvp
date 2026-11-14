@@ -6807,6 +6807,20 @@ button.progress-card {
   font-weight: 700;
 }
 
+.harness-run-picks {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.harness-run-picks label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .harness-json {
   overflow: auto;
   padding: 8px;
