@@ -1230,25 +1230,39 @@ _GOAL_START_ASK = (
     "Goal question: The learner moved on. Ask the opening question for this goal. "
     "One question, and it comes last. Do not answer it."
 )
-_SUMMARY_CONGRATULATE = (
-    "Congratulate the learner for finishing this block and say they are ready to move on."
-)
+_SUMMARY_CONGRATULATE = "Congratulate the learner once for finishing this block."
 _SUMMARY_CHOICE = (
-    "Then ask whether they want to move on or spend more time with further questions."
+    "Do not offer one more example. Do not ask the goal again. "
+    "Ask one question only: move on, or ask one more question."
 )
 _SUMMARY_REMINDER = (
-    "If they ask a further question, answer it and end that answer by reminding them they are ready to move on to the next unit."
+    "If they ask one further question, answer it, then ask the same single choice: "
+    "move on, or ask one more question. "
+    "Do not return to the goal, the explain step, or another summary."
 )
 _SUMMARY_MOVE_ON = (
     "If they choose to move on, set block_complete=true. Ask no question and do not open the next block."
+)
+_SUMMARY_BEGIN = (
+    "The block is finished. Congratulate the learner once. "
+    "The reply is that congratulations plus the first line of the next block, not a second goodbye. "
+    "Begin the next block in this same reply. "
+    "Do not ask the goal again. Do not offer one more example. Set block_complete=true."
+)
+_SUMMARY_BEGIN_LAST = (
+    "The block is finished. Congratulate the learner once. "
+    "This was the last block. Ask no question. Do not say goodbye. "
+    "Do not ask the goal again. Do not offer one more example. Set block_complete=true. "
+    "Do not open the next block."
 )
 _SUMMARY_ELABORATE = (
     "The learner asked to elaborate on the recap. Elaborate on the summary in this reply. "
     "Set substep_passed=false and block_complete=false. Do not complete the block and do not advance. "
     "Do not close with a brief affirmation. Do not open the next block. "
-    "End that answer by reminding them they are ready to move on to the next unit. "
-    "Only an explicit move-on, such as got it - move on, no final questions, or let's continue, "
-    "may complete the block."
+    "Then ask the same single choice: move on, or ask one more question. "
+    "Do not return to the goal, the explain step, or another summary. "
+    "Only an explicit move-on, such as got it - move on, no final questions, let's continue, "
+    "let's go, move on, next, or yes, may complete the block."
 )
 
 
@@ -1367,6 +1381,10 @@ def _prompts_side_question(
     """
     if str(block.get("type") or "") == "explanation":
         return False
+    from app.kc_loop import summary_ready_signal
+
+    if str(substep or "") == "summary_check" and summary_ready_signal(last_answer):
+        return False
     if _goal_start_mode(
         block,
         substep,
@@ -1389,8 +1407,24 @@ def _summary_close_lines(
     block_type: str = "",
     last_answer: str = "",
     side_question: bool = False,
+    moving_on: bool = False,
+    has_next: bool = False,
 ) -> list[str]:
     """How to speak on the summary check, and how to answer a learner who is already there."""
+    if phase == "check" and moving_on:
+        if revealed:
+            begun = (
+                "The learner chose to move on. Do not congratulate. "
+                "Begin the next block with its first line in this same reply. "
+                "Do not ask the goal again. Set block_complete=true."
+                if has_next
+                else (
+                    "The learner chose to move on. Do not congratulate. "
+                    "Ask no question. Do not ask the goal again. Set block_complete=true."
+                )
+            )
+            return [begun]
+        return [_SUMMARY_BEGIN if has_next else _SUMMARY_BEGIN_LAST]
     if phase == "task" and block_type == "topic_goal" and _ready_to_move_on(last_answer):
         return [
             (
@@ -1401,15 +1435,26 @@ def _summary_close_lines(
             _SUMMARY_NO_PRAISE,
         ]
     if side_question and phase in {"task", "check"}:
+        if phase == "check" and not revealed:
+            asked = " ".join((last_answer or "").split())
+            return [
+                (
+                    "The block is already finished. "
+                    f"Their question: {asked}. "
+                    "Do not score this message. Set help_requested=true, substep_passed=false, and block_complete=false. "
+                    "Answer that question in one or two sentences. "
+                    "If they ask what something is or who someone is, define it. "
+                    f"{_SUMMARY_REMINDER} "
+                    "Do not repeat the goal question. "
+                    "Do not say the reply was partial, close, or a good start. "
+                    "Do not open the next block."
+                ),
+                _SUMMARY_NO_PRAISE,
+            ]
         lines = [_side_question_reply(last_answer)]
         if phase == "task" and block_type == "topic_goal":
             lines.append(
                 "Then ask the goal again. Do not summarize the block, do not offer to move on, and do not offer another example."
-            )
-        elif phase == "check" and not revealed:
-            lines.append(
-                "This further question does not complete the block. "
-                f"{_SUMMARY_REMINDER} Do not open the next block."
             )
         lines.append(_SUMMARY_NO_PRAISE)
         return lines
@@ -1495,7 +1540,8 @@ def _ending(
     if summary_stay and side_question and not unit_complete and not course_complete:
         return (
             "Close Contract: This question does not complete the block and does not end the unit. "
-            "Do not ask whether the learner wants to move on."
+            "Answer it, then ask the same single choice: move on, or ask one more question. "
+            "Do not return to the goal."
         )
     if summary_stay and not unit_complete and not course_complete:
         length = _close_summary_sentence(close_depth, kind)
@@ -1503,7 +1549,7 @@ def _ending(
         return " ".join(
             (
                 "Close Contract: If block_complete=true on this summary, include the unit close and ask no new question. "
-                "If block_complete=false, ask whether the learner wants to keep discussing or move on.",
+                "If block_complete=false, ask one question only: move on, or ask one more question.",
                 length,
                 _close_body(),
                 outro,
@@ -1669,6 +1715,8 @@ def _this_turn(
     cfg: dict | None = None,
     worked_close: str = "",
     early_answer: bool = False,
+    summary_begin: bool = False,
+    has_next: bool = False,
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -1734,9 +1782,9 @@ def _this_turn(
         pass
     elif side and goal_start in {"explain", "deepen"}:
         lines.append(_SIDE_EXPLAIN)
-    elif side and stay_on and goal_start != "clarify":
+    elif side and stay_on and goal_start != "clarify" and substep != "summary_check":
         lines.append(_SIDE_STAY)
-    elif side and not stay_on:
+    elif side and not stay_on and substep != "summary_check":
         lines.append(_SIDE_FOLLOW)
     if not goal_start and opening and step_index == 0:
         if presenting:
@@ -1842,6 +1890,7 @@ def _this_turn(
         and str(block.get("type")) == "topic_goal"
         and not (unit_complete or course_complete)
         and not _ready_to_move_on(last_answer)
+        and not summary_begin
         and goal_start not in _GOAL_START_HOLDS | {"cap"}
         and not side
         and not side_question
@@ -1868,7 +1917,7 @@ def _this_turn(
         )
     )
     elaborating = _summary_elaboration(block, substep, last_answer)
-    if close_block_only and not elaborating:
+    if close_block_only and not elaborating and not summary_begin:
         lines.append(
             "If block_complete=true, this reply only affirms and closes the active block. "
             "Ask no question. Do not open the next block. "
@@ -1883,6 +1932,9 @@ def _this_turn(
         elif substep == "summary_check":
             if elaborating:
                 lines.append(_SUMMARY_ELABORATE)
+            elif summary_begin:
+                lines.append(_SUMMARY_BEGIN if has_next else _SUMMARY_BEGIN_LAST)
+                lines.append("Do not quiz.")
             else:
                 lines.append(
                     "The learner is on the block summary. When this block's work is done, "
@@ -1902,11 +1954,12 @@ def _this_turn(
         lines.append(_WORKED_CONTINUE)
         lines.append(_SUMMARY_NO_PRAISE)
     elif str(block.get("type") or "") != "explanation":
-        if worked_close == "bare_yes":
+        if worked_close == "bare_yes" and not summary_begin:
             lines.append(_WORKED_BARE_YES)
         force_side_question = side_question and stay_on
         # A side story stays via _SIDE_STAY. Stay off does not force a return.
-        if not (side and (not stay_on or not side_question)):
+        # A passed summary does not use that line: it would ask the goal again.
+        if not (side and (not stay_on or not side_question)) or summary_begin or substep == "summary_check":
             lines.extend(
                 _summary_close_lines(
                     phase=summary_phase,
@@ -1914,7 +1967,9 @@ def _this_turn(
                     opening=opening,
                     block_type=str(block.get("type") or ""),
                     last_answer=last_answer,
-                    side_question=force_side_question,
+                    side_question=force_side_question and not summary_begin,
+                    moving_on=summary_begin,
+                    has_next=has_next,
                 )
             )
         if force_side_question and summary_phase not in {"task", "check"}:
@@ -1943,6 +1998,8 @@ def _explanation_teach_lines(
     *,
     opening: bool,
     last_answer: str = "",
+    summary_begin: bool = False,
+    has_next: bool = False,
 ) -> list[str]:
     data = block.get("data") if isinstance(block.get("data"), dict) else {}
     topics = explanation_topics(block)
@@ -1984,6 +2041,8 @@ def _explanation_teach_lines(
         else:
             if _summary_elaboration(block, substep, last_answer):
                 lines.append(_SUMMARY_ELABORATE)
+            elif summary_begin:
+                lines.append(_SUMMARY_BEGIN if has_next else _SUMMARY_BEGIN_LAST)
             else:
                 lines.append(
                     "The learner has responded on the summary. "
@@ -2052,6 +2111,52 @@ def _explanation_teach_lines(
     return lines
 
 
+def _next_block_opening(block: dict) -> list[str]:
+    """The first spoken line of the block that opens in this same reply."""
+    btype = str(block.get("type") or "topic_goal").strip()
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    label = BLOCK_LABELS.get(btype, btype)
+    lines = [
+        f"Next block to begin now: {label}.",
+        "After the one congratulations, write the first line of this next block in the same reply.",
+    ]
+    if btype == "topic_goal":
+        topic = str(data.get("topic") or "").strip() or "this topic"
+        lines.append(
+            f"First line: explain what {topic} is and why it matters. Do not ask its goal question yet."
+        )
+    elif btype == "mcq":
+        stem = str(data.get("question_stem") or data.get("target_skill") or "the question").strip()
+        lines.append(f"First line: a short lead-in, then the question: {_finish(stem)}")
+    elif btype == "case_study":
+        opener = str(data.get("case_a") or data.get("prediction_prompt") or "the case").strip()
+        lines.append(f"First line: introduce the case: {_finish(opener)}")
+    elif btype == "socratic":
+        lines.append(f"First line: frame the dilemma: {_finish(str(data.get('central_dilemma') or 'the dilemma'))}")
+    elif btype == "curiosity":
+        lines.append(f"First line: the hook: {_finish(str(data.get('phenomenon_hook') or 'the mystery'))}")
+    elif btype == "worked_example":
+        lines.append(f"First line: the worked problem: {_finish(str(data.get('problem_statement') or 'the problem'))}")
+    elif btype == "spot_the_flaw":
+        lines.append(f"First line: show the flawed work: {_finish(str(data.get('rookie_work') or 'the claim'))}")
+    elif btype == "teach_back":
+        lines.append(
+            f"First line: the confused peer: {_finish(str(data.get('peer_persona_prompt') or 'a friend'))}"
+        )
+    elif btype == "retrieval_check":
+        lines.append(f"First line: the recall question: {_finish(str(data.get('recall_prompt') or 'recall the fact'))}")
+    elif btype == "explanation":
+        topics = explanation_topics(block)
+        title = topics[0]["title"] if topics else str(data.get("block_title") or "the topic")
+        lines.append(f"First line: start explaining {title}. Do not quiz.")
+    elif btype == "passage_ela":
+        title = str(data.get("passage_title") or "the passage").strip()
+        lines.append(f"First line: name {title} and ask its opening question.")
+    else:
+        lines.append("First line: open this block the way its first step begins.")
+    return lines
+
+
 def _what_to_teach(
     *,
     node: KcNode,
@@ -2065,6 +2170,8 @@ def _what_to_teach(
     worked_close: str = "",
     cfg: dict | None = None,
     active_state: dict | None = None,
+    summary_begin: bool = False,
+    has_next: bool = False,
 ) -> list[str]:
     """Strict block isolation: injects ONLY the currently active block and its active substep."""
     btype = str(block.get("type") or "topic_goal").strip()
@@ -2304,6 +2411,8 @@ def _what_to_teach(
                 active_block_state,
                 opening=opening,
                 last_answer=last_answer,
+                summary_begin=summary_begin,
+                has_next=has_next,
             )
         )
 
@@ -2322,6 +2431,8 @@ def _what_to_teach(
                 "This reply is a short affirmation of the correct answer and no question. "
                 "Do not summarize the block. Do not mention the next block and do not open it."
             )
+        elif summary_begin and has_next:
+            lines.extend(_next_block_opening(next_block))
         else:
             lines.append(
                 f"If the learner's response completes Block {step_index + 1} (block_complete=true), "
@@ -2761,6 +2872,8 @@ def _how_to_teach(
     opening: bool = False,
     worked_close: str = "",
     active_block_state: dict | None = None,
+    summary_begin: bool = False,
+    has_next: bool = False,
 ) -> list[str]:
     over = cfg.get("overarching") or {}
     orient_mode = str(over.get("orient_framing") or "elaborate_outline")
@@ -2776,6 +2889,22 @@ def _how_to_teach(
     challenge_appetite = str(cp.get("challenge_appetite") or "steady")
 
     lines = _block_config_rules(block, substep, cfg, goal)
+    steps = substeps_for_block(block, cfg)
+    on_summary_step = bool(steps) and steps[-1] == "summary_check" and (
+        substep == "summary_check"
+        or (len(steps) >= 2 and substep == steps[-2])
+        or (str(block.get("type") or "") == "mcq" and substep == "awaiting_why")
+    )
+    if on_summary_step:
+        lines = [line for line in lines if "one extra example" not in line.lower()]
+    if summary_begin:
+        lines = [
+            line
+            for line in lines
+            if "do not open the next block" not in line.lower()
+            and "any congratulation on those turns" not in line
+            and "one extra example" not in line.lower()
+        ]
     if _summary_elaboration(block, substep, last_answer):
         lines = [line for line in lines if not line.startswith("You are on the summary step.")]
     goal_start = _goal_start_mode(
@@ -2944,20 +3073,29 @@ def _how_to_teach(
                 + reassurance_note
             )
 
-        if str(block.get("type") or "") == "topic_goal":
+        if str(block.get("type") or "") == "topic_goal" and not summary_begin:
             lines.append(_topic_goal_earned_praise(praise_style))
 
+    begun = _SUMMARY_BEGIN if has_next else _SUMMARY_BEGIN_LAST
     if str(block.get("type") or "") == "explanation":
-        lines.append(
-            "Explanatory block override: do not quiz, score, or reveal an answer. "
-            "While the block is still open, the only questions you ask are whether the learner has questions, wants elaboration, or is ready to continue. "
-            "On the summary, when the block's work is done, "
-            f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} {_SUMMARY_REMINDER} {_SUMMARY_MOVE_ON}"
-        )
+        if summary_begin:
+            lines.append(
+                "Explanatory block override: do not quiz, score, or reveal an answer. "
+                f"{begun}"
+            )
+        else:
+            lines.append(
+                "Explanatory block override: do not quiz, score, or reveal an answer. "
+                "While the block is still open, the only questions you ask are whether the learner has questions, wants elaboration, or is ready to continue. "
+                "On the summary, when the block's work is done, "
+                f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} {_SUMMARY_REMINDER} {_SUMMARY_MOVE_ON}"
+            )
         if _summary_elaboration(block, substep, last_answer):
             lines.append(_SUMMARY_ELABORATE)
     elif worked_close in {"affirm", "continue"}:
         lines.append("This worked-example turn closes the block. Ask no question.")
+    elif summary_begin:
+        lines.append(begun)
     elif close_block_only and not choice_on_screen and not presenting_dynamic_mcq:
         revealed_summary = substep == "summary_check" and bool(
             (active_block_state or {}).get("revealed_substep")
@@ -3032,6 +3170,11 @@ def _worked_close_kind(
     prior = _previous_tutor_text(last_messages, last_answer)
     if tutor_asked_to_continue(prior) and worked_continue_answer(last_answer):
         return "continue"
+    if substep == "summary_check":
+        from app.kc_loop import summary_ready_signal
+
+        if summary_ready_signal(last_answer):
+            return ""
     if substep == "solo_solve" and answer_addresses_substep(
         block, substep, last_answer, active_block_state, cfg
     ):
@@ -3148,6 +3291,8 @@ def _what_to_return(
     side_follow: bool = False,
     explanation_capped: bool = False,
     summary_done: bool = False,
+    summary_begin: bool = False,
+    has_next: bool = False,
 ) -> list[str]:
     if presenting_dynamic_mcq:
         reply_line = (
@@ -3172,12 +3317,15 @@ def _what_to_return(
         "On unit close, populate score_justification, what_was_strong, and what_to_work_on; otherwise return empty strings for those three fields.",
         "You do not set the block order, the edges, or the final mastery score.",
     ]
+    begun = _SUMMARY_BEGIN if has_next else _SUMMARY_BEGIN_LAST
     if block_type == "explanation":
         if summary_elaborate:
             lines.append(
                 "On this summary turn, set substep_passed=false and block_complete=false. "
                 "Elaborate on the recap. Do not set block_complete=true."
             )
+        elif summary_begin:
+            lines.append(begun)
         elif explanation_capped:
             lines.append(
                 "On this turn set substep_passed=true. The two extra turns on this topic are used, so the lesson moves on. "
@@ -3194,6 +3342,8 @@ def _what_to_return(
                 "Set block_complete=true only when they choose to move on. "
                 "Ask no question and do not open the next block. Never quiz."
             )
+    elif summary_begin:
+        lines.append(begun)
     elif summary_done:
         lines.append(
             "On this summary, when the block's work is done, "
@@ -3211,7 +3361,7 @@ def _what_to_return(
         )
     elif side_follow:
         lines.append("A tangent is not the score. The score still comes only from this step.")
-    if close_block_only and not summary_elaborate:
+    if close_block_only and not summary_elaborate and not summary_begin:
         lines.append(
             "When block_complete=true, reply affirms this block only and asks no question. "
             "Do not describe the next block. Set generated_mcq to null."
@@ -3319,7 +3469,11 @@ def _fit_prompt_sections(
         for line in by_title.get("How to teach", []):
             if _line_starts(line, _MISS_LADDER_PREFIXES):
                 continue
-            if line.startswith("Explanatory block override:") and "do not open the next block" not in line.lower():
+            if (
+                line.startswith("Explanatory block override:")
+                and "do not open the next block" not in line.lower()
+                and "begin the next block" not in line.lower()
+            ):
                 line = f"{line.rstrip()} {_SUMMARY_MOVE_ON}"
             kept_teach.append(line)
         by_title["How to teach"] = kept_teach
@@ -3339,7 +3493,11 @@ def _fit_prompt_sections(
                     )
                 if line.startswith("For Block") and "populate generated_mcq" in line:
                     continue
-                if line.startswith("Give a cohesive summary") and "do not open the next block" not in line.lower():
+                if (
+                    line.startswith("Give a cohesive summary")
+                    and "do not open the next block" not in line.lower()
+                    and "begin the next block" not in line.lower()
+                ):
                     line = f"{line.rstrip()} {_COMPLETING_REPLY}"
                 kept.append(line)
             by_title[title] = kept
@@ -3514,12 +3672,31 @@ def build_kc_prompt(
     if worked_close in {"affirm", "continue"} and is_last_block:
         is_final_block_and_substep = True
         include_close = True
-    from app.kc_loop import learner_asks_clarification, stay_on_course_enabled, unanswered_side_turn
+    from app.kc_loop import (
+        learner_asks_clarification,
+        stay_on_course_enabled,
+        summary_ready_signal,
+        unanswered_side_turn,
+    )
 
     clarify_help = bool(
         btype == "topic_goal" and substep == "explain" and learner_asks_clarification(last_answer or "")
     )
     summary_elaborate = _summary_elaboration(active_block, substep, last_answer or "")
+    has_next = index + 1 < len(blocks)
+    summary_begin = (
+        not opening
+        and substep == "summary_check"
+        and not state_dict.get("revealed_substep")
+        and not summary_elaborate
+        and worked_close not in {"affirm", "continue"}
+        and summary_ready_signal(last_answer or "")
+    )
+    if summary_begin and has_next:
+        nxt = blocks[index + 1]
+        nxt_data = nxt.get("data") if isinstance(nxt.get("data"), dict) else {}
+        if str(nxt.get("type") or "") == "mcq" and str(nxt_data.get("mode") or "static") == "dynamic":
+            needs_dynamic_mcq = True
     side_request = _typed_side_request(active_block, substep, last_answer or "", state_dict, cfg)
     course_stay = stay_on_course_enabled(cfg)
     aside_help = bool(
@@ -3589,6 +3766,8 @@ def build_kc_prompt(
                     cfg=cfg,
                     worked_close=worked_close,
                     early_answer=early_answer,
+                    summary_begin=summary_begin,
+                    has_next=has_next,
                 ),
             ),
             (
@@ -3599,12 +3778,14 @@ def build_kc_prompt(
                 step_index=index,
                 substep=substep,
                 active_block_state=state_dict,
-                next_block=blocks[index + 1] if close_block_only else None,
+                next_block=blocks[index + 1] if (close_block_only or summary_begin) and has_next else None,
                 opening=opening,
                 last_answer=last_answer,
                 worked_close=worked_close,
                 cfg=cfg,
                 active_state=state_dict,
+                summary_begin=summary_begin,
+                has_next=has_next,
             ),
             ),
             (
@@ -3640,6 +3821,8 @@ def build_kc_prompt(
                     opening=opening,
                     worked_close=worked_close,
                     active_block_state=state_dict,
+                    summary_begin=summary_begin,
+                    has_next=has_next,
                 ),
             ),
             ("How to sound", _how_to_sound(profile=profile, student=student, turn_kind=turn_kind)),
@@ -3681,7 +3864,10 @@ def build_kc_prompt(
                         and substep == "summary_check"
                         and not state_dict.get("revealed_substep")
                         and worked_close not in {"affirm", "continue"}
+                        and not summary_begin
                     ),
+                    summary_begin=summary_begin,
+                    has_next=has_next,
                 ),
             ),
         ]
