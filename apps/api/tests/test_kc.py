@@ -4516,3 +4516,77 @@ def test_an_answer_during_the_opening_explanation_is_scored_over_http() -> None:
         assert scored["unit_complete"] is False
     finally:
         _wipe_zz()
+
+
+def test_a_further_question_on_the_summary_stays_and_move_on_completes() -> None:
+    from app.kc_loop import resolve_block_turn, summary_further_question
+    from app.models import default_kc_tutor_config
+
+    assert summary_further_question("Why does that work?")
+    assert summary_further_question("tell me more")
+    assert not summary_further_question("move on")
+
+    topic = {
+        "id": "topic",
+        "type": "topic_goal",
+        "data": {"topic": "River color", "goal": "The river is blue.", "acceptance_criteria": "The river is blue."},
+    }
+    explanation = {
+        "id": "explain",
+        "type": "explanation",
+        "data": {
+            "block_title": "Fractions",
+            "topics": [{"id": "top_1", "title": "Denominator", "explanation": "The bottom number."}],
+        },
+    }
+    nxt = {"id": "next", "type": "topic_goal", "data": {"topic": "Next", "goal": "Explain the next idea."}}
+    cfg = default_kc_tutor_config()
+
+    def run(block: dict, answer: str, *, block_complete: bool = False):
+        return resolve_block_turn(
+            decision="complete" if block_complete else "stay",
+            substep_passed=block_complete,
+            block_complete=block_complete,
+            rubric_met=[],
+            stored_rubric=[],
+            matched_wrong="",
+            blocks=[block, nxt],
+            step=0,
+            active_block_state={
+                "substep": "summary_check",
+                "last_task_substep": "main",
+                "revealed_substep": False,
+                "topic_index": 0,
+                "dialogue_turns": 3,
+                "elaboration_turns": 0,
+                "block_attempts": 1,
+            },
+            block_results=[],
+            move_attempts=0,
+            hint_tier="nudge",
+            reveals=0,
+            enrichment_turns=0,
+            cfg=cfg,
+            goal=None,
+            last_misconception="",
+            answer=answer,
+        )
+
+    for block, question in (
+        (topic, "tell me more"),
+        (topic, "Why does that work?"),
+        (explanation, "Why is the denominator the bottom number?"),
+        (explanation, "can you please elaborate?"),
+    ):
+        stayed = run(block, question, block_complete=True)
+        assert stayed.advance_block is False, question
+        assert stayed.next_step == 0, question
+        assert stayed.next_block_id == block["id"], question
+        assert stayed.next_block_state["substep"] == "summary_check", question
+        assert stayed.block_results == [], question
+
+    for block, phrase in ((topic, "move on"), (explanation, "let's continue")):
+        closed = run(block, phrase, block_complete=False)
+        assert closed.advance_block is True, phrase
+        assert closed.next_step == 1, phrase
+        assert closed.next_block_id == "next", phrase

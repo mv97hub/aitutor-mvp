@@ -374,13 +374,25 @@ def learner_wants_recap_elaboration(answer: str) -> bool:
     return text == "tell me more" or text.startswith("tell me more")
 
 
+def summary_further_question(answer: str) -> bool:
+    """A further question on a finished block stays. It does not complete the block.
+
+    Model flags do not turn that question into a move-on. An explicit move-on
+    still completes the block the way it does today.
+    """
+    if learner_wants_recap_elaboration(answer):
+        return True
+    return learner_asks_question_or_background(answer)
+
+
 def learner_may_complete_explanation_summary(answer: str) -> bool:
     """Only an explicit move-on closes an explanatory summary. Model flags do not.
 
     "got it - move on", "no final questions", and "let's continue" may complete.
     "elaborate", "can you please elaborate?", and "tell me more" never do.
+    A further question stays on the summary.
     """
-    if learner_wants_recap_elaboration(answer):
+    if summary_further_question(answer):
         return False
     return learner_ready_to_proceed(answer, False)
 
@@ -1047,8 +1059,8 @@ def _resolve_explanation_turn(
     state["substep"] = substep
     state["topic_index"] = topic_index
     if substep == "summary_check":
-        # The model cannot close this check by setting the flags. Elaborate and
-        # tell-me-more stay. Only an explicit move-on completes the block.
+        # The model cannot close this check by setting the flags. A further
+        # question stays. Only an explicit move-on completes the block.
         ready = learner_may_complete_explanation_summary(answer)
     else:
         flagged = bool(substep_passed) or bool(block_complete) or bool(learner_ready)
@@ -1494,6 +1506,10 @@ def resolve_block_turn(
         return stay(0, "nudge")
 
     def _resolve_summary_check() -> BlockResolution:
+        # A further question stays on this summary even if the model set
+        # block_complete. Choosing to move on still completes the block below.
+        if summary_further_question(answer):
+            return stay(move_attempts, "nudge")
         stored_task = str(state.get("last_task_substep") or "").strip()
         task_substep = stored_task or (substeps[-2] if len(substeps) >= 2 else substep)
         demonstrated = model_accepts_substep(

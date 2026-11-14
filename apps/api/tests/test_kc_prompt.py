@@ -824,7 +824,10 @@ def test_a_finished_block_closes_without_opening_the_next_one() -> None:
     assert "open Block 2" not in teach
     assert "Name the river color" not in text
     assert "Ask no question. Do not open the next block." in turn
-    assert "close this block with a brief affirmation only" in how
+    assert "Congratulate the learner for finishing this block and say they are ready to move on." in how
+    assert "spend more time with further questions" in how
+    assert "ready to move on to the next unit" in how
+    assert "do not open the next block" in how.lower()
     assert "End a teaching or probing turn with a single clear question." not in how
     assert "Do not describe the next block." in returned
 
@@ -885,7 +888,8 @@ def test_summary_check_prompt_distinguishes_a_completed_block_from_an_incomplete
     )
     entering = _text(node=node, opening=False, active_block_state={"substep": "main"})
     assert "Summary close:" in entering
-    assert "continue discussing" in entering
+    assert "Congratulate the learner for finishing this block and say they are ready to move on." in entering
+    assert "spend more time with further questions" in entering
     assert "did not fully complete this block yet" in entering
     assert "Never say congratulations" in entering
 
@@ -1025,5 +1029,119 @@ def test_praise_only_when_the_reply_meets_the_goal() -> None:
     assert "When the reply meets the goal, name the specific reasoning move the learner made." in teach
     assert "names a real step toward it" not in text
     assert "Asking a question, asking for background, or asking to move on is not noteworthy work." in teach
-    assert "ask whether the learner wants to continue discussing" in _section(text, "This turn")
+    turn = _section(text, "This turn")
+    assert "Congratulate the learner for finishing this block and say they are ready to move on." in turn
+    assert "spend more time with further questions" in turn
+
+
+_CONGRATULATE = "Congratulate the learner for finishing this block and say they are ready to move on."
+_CHOICE = "Then ask whether they want to move on or spend more time with further questions."
+_REMINDER = "end that answer by reminding them they are ready to move on to the next unit."
+
+
+def _summary_block(block_type: str) -> dict:
+    samples = {
+        "topic_goal": {"topic": "River color", "goal": "The river is blue.", "acceptance_criteria": "The river is blue."},
+        "mcq": {
+            "mode": "static",
+            "question_stem": "Which color?",
+            "choices": [
+                {"id": "a", "text": "Blue water", "is_correct": True},
+                {"id": "b", "text": "Red water"},
+            ],
+        },
+        "case_study": {"invariant_principle": "Blue water reflects the sky.", "case_a": "Morning", "case_b": "Evening"},
+        "socratic": {"central_dilemma": "Is the river blue?", "target_synthesis": "The river is blue."},
+        "curiosity": {"phenomenon_hook": "Why is the river blue?", "prediction_question": "Guess."},
+        "worked_example": {
+            "problem_statement": "Name the color.",
+            "steps": [{"step_text": "Look at the water."}],
+            "solo_expected_answer": "The river is blue.",
+        },
+        "spot_the_flaw": {"flaw_description": "The river is red.", "corrected_version": "The river is blue."},
+        "teach_back": {"peer_persona_prompt": "A friend", "required_concepts": ["blue water"]},
+        "retrieval_check": {
+            "recall_prompt": "What color?",
+            "expected_fact": "The river is blue.",
+            "expected_why_rationale": "It reflects the sky.",
+        },
+        "explanation": {
+            "block_title": "River color",
+            "topics": [
+                {"id": "top_1", "title": "Color", "explanation": "The river is blue.", "key_points": "Blue."},
+            ],
+            "summary_takeaway": "The river is blue.",
+        },
+        "passage_ela": {
+            "passage_title": "The Blue River",
+            "passage_text": "The river is blue.\n\nIt reflects the sky.",
+            "central_idea_question": "What is the central idea?",
+            "expected_central_idea": "The river is blue.",
+            "evidence_prompt": "Quote a line about the river.",
+            "verbatim_evidence_quotes": ["The river is blue."],
+            "analysis_question": "Why is the river blue?",
+            "expected_analysis": "It reflects the sky.",
+        },
+    }
+    return {"id": block_type, "type": block_type, "data": samples[block_type]}
+
+
+def test_every_summary_block_congratulates_offers_a_choice_and_reminds_after_a_question() -> None:
+    from app.kc_prompt import substeps_for_block
+    from app.models import ALL_BLOCK_TYPES
+
+    changed: list[str] = []
+    for block_type in ALL_BLOCK_TYPES:
+        block = _summary_block(block_type)
+        steps = substeps_for_block(block)
+        if not steps or steps[-1] != "summary_check":
+            text = _text(
+                node=_node(blocks=[block]),
+                opening=False,
+                last_answer="Why does that work?",
+                active_block_state={"substep": steps[-1] if steps else "main"},
+            )
+            assert _CONGRATULATE not in text, block_type
+            continue
+        changed.append(block_type)
+        node = _node(
+            blocks=[
+                block,
+                {"id": "next", "type": "topic_goal", "data": {"topic": "Next", "goal": "Explain the next idea."}},
+            ]
+        )
+        asked = _text(
+            node=node,
+            opening=False,
+            last_answer="Why does that work?",
+            active_block_state={
+                "substep": "summary_check",
+                "revealed_substep": False,
+                "last_task_substep": steps[-2],
+                "topic_index": 0,
+                "dialogue_turns": 2,
+                "elaboration_turns": 0,
+            },
+        )
+        assert "any other final questions" not in asked, block_type
+        assert _CONGRATULATE in asked, block_type
+        assert _CHOICE in asked, block_type
+        assert _REMINDER in asked, block_type
+        assert "do not open the next block" in asked.lower(), block_type
+        assert "You do not set the block order" in asked, block_type
+        returned = _section(asked, "What to return")
+        assert "Set block_complete=true only when they choose to move on." in returned, block_type
+    assert changed == [
+        "topic_goal",
+        "mcq",
+        "case_study",
+        "socratic",
+        "curiosity",
+        "worked_example",
+        "spot_the_flaw",
+        "teach_back",
+        "retrieval_check",
+        "explanation",
+    ]
+    assert "passage_ela" not in changed
 
