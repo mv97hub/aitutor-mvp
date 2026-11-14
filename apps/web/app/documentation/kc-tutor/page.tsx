@@ -8,7 +8,7 @@ export const metadata = { title: "KC Tutor · Documentation · AI Tutor" };
 const LEARNER: { type: keyof typeof BLOCK_CONFIG_TITLES; text: string }[] = [
   {
     type: "topic_goal",
-    text: "The tutor explains the topic first, with no question. Tell me more keeps that explanation going. Got it - move on, or a typed reply that means move on, is what asks the learner to say the goal. A thin fragment can be asked again as a full sentence.",
+    text: "The tutor explains the topic first, with no question. Tell me more explains the same topic again from a fresh angle, and a question or a side remark is answered before the tutor returns to the lesson. The goal question is asked when the learner presses Got it - move on, types a reply that means they are ready such as What's next?, or has had two of those extra turns. An on-topic answer typed during the explanation is scored as the first try at the goal. A thin fragment can be asked again as a full sentence.",
   },
   {
     type: "mcq",
@@ -44,7 +44,7 @@ const LEARNER: { type: keyof typeof BLOCK_CONFIG_TITLES; text: string }[] = [
   },
   {
     type: "explanation",
-    text: "The tutor explains one topic, then offers chips to move on or ask for an example. Questions stay on that topic. After the last topic the tutor summarizes every topic. The walkthrough does not quiz, and it does not mark the component fragile unless counts toward mastery is on.",
+    text: "The tutor explains one topic, then offers chips to move on or ask for an example. Questions stay on that topic, and after two extra turns on a topic the tutor moves to the next one. After the last topic the tutor summarizes every topic. The walkthrough does not quiz, and it does not mark the component fragile unless counts toward mastery is on.",
   },
 ];
 

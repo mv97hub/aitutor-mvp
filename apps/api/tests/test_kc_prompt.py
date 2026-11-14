@@ -1,6 +1,6 @@
 """The KC model prompt states each setting once, as the behavior it asks for."""
 
-from app.kc_prompt import RESPONSE_SCHEMA, TEMPERATURE, build_kc_prompt, moves_for, turn_response_schema
+from app.kc_prompt import READY_FIELD, RESPONSE_SCHEMA, TEMPERATURE, build_kc_prompt, moves_for, turn_response_schema
 from app.models import KcGoal, KcNode, Student, TutorProfile
 
 HEADINGS = (
@@ -136,6 +136,7 @@ def _bundle(**overrides: object) -> dict:
         assert schema == turn_response_schema(
             presenting_dynamic_mcq=presenting,
             needs_dynamic_mcq=include and not presenting,
+            ready_check=READY_FIELD in schema.get("properties", {}),
         )
     return bundle
 

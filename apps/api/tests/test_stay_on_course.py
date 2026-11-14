@@ -139,7 +139,8 @@ def test_do_not_ask_still_blocks_a_quiz_and_a_student_question_is_answered() -> 
     text = _prompt(asked, substep="explain")
     turn = _section(text, "This turn")
     teach = _section(text, "How to teach")
-    assert "Answer that question first, in a sentence or two" in turn
+    assert turn.count("then one line back to the active lesson") == 1
+    assert "Answer that question first" not in text
     assert "Do not ask the goal question." in turn
     assert "does not mean ignore the question they typed" in turn
     assert "End a teaching or probing turn with a single clear question." not in teach

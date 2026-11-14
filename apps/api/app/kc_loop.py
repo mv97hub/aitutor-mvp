@@ -763,6 +763,121 @@ def unanswered_side_turn(
     )
 
 
+EXPLAIN_EXTRA_TURN_CAP = 2
+
+# Words a goal sentence carries that do not show a reply is about the topic.
+_FILLER_ANCHORS = {
+    "about",
+    "also",
+    "because",
+    "been",
+    "does",
+    "each",
+    "explain",
+    "from",
+    "have",
+    "into",
+    "more",
+    "most",
+    "some",
+    "than",
+    "that",
+    "their",
+    "them",
+    "then",
+    "there",
+    "they",
+    "this",
+    "very",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "will",
+    "with",
+    "your",
+}
+
+
+def explain_extra_turns(state: dict | None) -> int:
+    """Side remarks and Tell me more turns already spent on this explanation."""
+    stored = state if isinstance(state, dict) else {}
+    return int(stored.get("elaboration_turns") or 0) + int(stored.get("side_turns") or 0)
+
+
+def explanation_topic_capped(substep: str, state: dict | None) -> bool:
+    """An explanatory topic has used its two extra turns, so the tutor moves on."""
+    stored = state if isinstance(state, dict) else {}
+    return (
+        str(substep or "") == "explain_topic"
+        and int(stored.get("elaboration_turns") or 0) >= EXPLAIN_EXTRA_TURN_CAP
+    )
+
+
+def answers_during_explanation(
+    block: dict,
+    answer: str,
+    state: dict | None,
+    cfg: dict | None,
+) -> bool:
+    """An on-topic try at the goal, typed before the goal question was asked.
+
+    A question, a move-on, Tell me more, a give-up, a side story, and a short
+    remark that shares none of the lesson's words are not a try.
+    """
+    raw = answer or ""
+    if not raw.strip():
+        return False
+    if learner_done_with_explanation(raw) or learner_wants_deeper_explanation(raw):
+        return False
+    if not learner_gave_real_attempt(block, "main", raw, cfg):
+        return False
+    if unscored_side_request(block, "explain", raw, state, cfg):
+        return False
+    if answer_addresses_substep(block, "main", raw, state, cfg):
+        return True
+    anchors = _anchor_words(block) - _FILLER_ANCHORS
+    have = {word for word in _words(raw) if len(word) > 3}
+    return bool(anchors & have)
+
+
+def explain_step_turn(
+    block: dict,
+    answer: str,
+    state: dict | None,
+    cfg: dict | None,
+) -> str:
+    """What the opening explanation does with this message. The prompt and the loop both read it.
+
+    ask: Got it - move on, or a typed move-on. The goal question opens.
+    attempt: an on-topic answer. The goal question opens and the answer is scored as a try.
+    cap: two extra turns are already spent. The tutor asks the goal question itself.
+    aside, clarify, and deepen stay on the explanation, unless the model's
+    decision says the learner is ready.
+    """
+    raw = answer or ""
+    side = stay_on_course_enabled(cfg) and unanswered_side_turn(block, "explain", raw, state, cfg)
+    clarifying = learner_asks_clarification(raw)
+    if not side:
+        if learner_done_with_explanation(raw) and not clarifying:
+            return "ask"
+        if answers_during_explanation(block, raw, state, cfg):
+            return "attempt"
+    if explain_extra_turns(state) >= EXPLAIN_EXTRA_TURN_CAP:
+        return "cap"
+    if side:
+        return "aside"
+    if clarifying:
+        return "clarify"
+    return "deepen"
+
+
+def model_ready_counts(kind: str, answer: str) -> bool:
+    """The model's ready flag is read only on a turn that would otherwise stay. Tell me more always deepens."""
+    return kind in {"aside", "clarify", "deepen"} and not learner_wants_deeper_explanation(answer)
+
+
 def model_accepts_substep(
     block: dict,
     index: int,
@@ -919,8 +1034,12 @@ def _resolve_explanation_turn(
     strong_text: str,
     work_text: str,
     enrichment_turns: int = 0,
+    learner_ready: bool = False,
 ) -> BlockResolution:
-    """Walk topics, then the summary. Questions stay. Ready moves on. Never quizzes."""
+    """Walk topics, then the summary. Questions stay. Ready moves on. Never quizzes.
+
+    A topic allows two extra turns. The next reply moves to the next topic or the summary.
+    """
     topics = explanation_topics(block)
     topic_index = explanation_topic_index(block, state)
     if substep not in {"explain_topic", "summary_check"}:
@@ -932,7 +1051,8 @@ def _resolve_explanation_turn(
         # tell-me-more stay. Only an explicit move-on completes the block.
         ready = learner_may_complete_explanation_summary(answer)
     else:
-        ready = learner_ready_to_proceed(answer, bool(substep_passed) or bool(block_complete))
+        flagged = bool(substep_passed) or bool(block_complete) or bool(learner_ready)
+        ready = learner_ready_to_proceed(answer, flagged) or explanation_topic_capped(substep, state)
     if not ready:
         state["elaboration_turns"] = int(state.get("elaboration_turns") or 0) + 1
         return _explanation_stay(
@@ -1058,6 +1178,7 @@ def resolve_block_turn(
     strong: str = "",
     work_on: str = "",
     prior_tutor: str = "",
+    learner_ready: bool = False,
 ) -> BlockResolution:
     tier = hint_tier if hint_tier in HINTS else "nudge"
     fresh = _clean_ids(list(rubric_met))
@@ -1109,54 +1230,77 @@ def resolve_block_turn(
             strong_text=(strong or "").strip(),
             work_text=(work_on or "").strip(),
             enrichment_turns=enrichment_turns,
+            learner_ready=learner_ready,
         )
-    # Same side-turn check on the opening explanation and on later steps.
-    # A question or a short aside is not a deeper lesson and is not a score.
-    side_turn = stay_on_course_enabled(cfg) and unanswered_side_turn(
-        block, substep, answer, state, cfg
-    )
+    early_answer = False
     if btype == "topic_goal" and substep == "explain":
-        if side_turn:
+        kind = explain_step_turn(block, answer, state, cfg)
+        ready = bool(learner_ready) and model_ready_counts(kind, answer)
+        stored_only = _clean_ids(list(stored_rubric))
+
+        def explain_result(rubric: list[str]) -> BlockResolution:
+            return BlockResolution(
+                decision="stay",
+                hint_tier="nudge",
+                move_attempts=0,
+                reveals=reveals,
+                enrichment_turns=enrichment_turns,
+                rubric_met=rubric,
+                misconception="",
+                next_step=index,
+                next_block_id=bid,
+                next_block_state=state,
+                block_results=results,
+                mark_known=False,
+                mark_fragile=False,
+                redirect=False,
+                unit_complete=False,
+                advance_block=False,
+                passed=False,
+            )
+
+        if kind in {"ask", "attempt", "cap"} or ready:
+            # The goal question opens. Block order does not change, and the goal still has to be passed.
+            state["substep"] = "main"
+            state["elaboration_turns"] = 0
+            state["side_turns"] = 0
+            # A short reply during the explanation is not the goal answer.
+            state["fragment_prompted"] = True
+            if kind == "attempt":
+                # The answer came before the question. It is scored below as the first try.
+                early_answer = True
+                substep = "main"
+                move_attempts = 0
+                tier = "nudge"
+            elif kind == "ask":
+                return explain_result(met)
+            else:
+                # The ready flag and the cap score nothing.
+                return explain_result(stored_only)
+        elif kind == "aside":
+            # A question or a short aside is answered. It is not a deeper lesson and is not a score.
+            state["side_turns"] = int(state.get("side_turns") or 0) + 1
             return _unscored_stay(
                 hint=tier,
                 move_attempts=move_attempts,
                 reveals=reveals,
                 enrichment_turns=enrichment_turns,
-                rubric=_clean_ids(list(stored_rubric)),
+                rubric=stored_only,
                 index=index,
                 bid=bid,
                 state=state,
                 results=results,
             )
-        # The goal question waits. Tell me more deepens this explanation.
-        # Only an explicit move-on leaves it. A real attempt stays here.
-        clarifying = learner_asks_clarification(answer)
-        if learner_done_with_explanation(answer) and not clarifying:
-            state["substep"] = "main"
-            state["elaboration_turns"] = 0
-            # A short reply during the explanation is not the goal answer.
-            state["fragment_prompted"] = True
         else:
+            # Tell me more deepens this explanation. The goal question waits.
             state["elaboration_turns"] = int(state.get("elaboration_turns") or 0) + 1
-        return BlockResolution(
-            decision="stay",
-            hint_tier="nudge",
-            move_attempts=0,
-            reveals=reveals,
-            enrichment_turns=enrichment_turns,
-            rubric_met=met,
-            misconception="",
-            next_step=index,
-            next_block_id=bid,
-            next_block_state=state,
-            block_results=results,
-            mark_known=False,
-            mark_fragile=False,
-            redirect=False,
-            unit_complete=False,
-            advance_block=False,
-            passed=False,
-        )
+            return explain_result(met)
+    # Same side-turn check on later steps. An early answer was already checked above.
+    side_turn = (
+        not early_answer
+        and stay_on_course_enabled(cfg)
+        and unanswered_side_turn(block, substep, answer, state, cfg)
+    )
     if side_turn:
         # Unscored help. Same block, same substep, same attempt count.
         return _unscored_stay(

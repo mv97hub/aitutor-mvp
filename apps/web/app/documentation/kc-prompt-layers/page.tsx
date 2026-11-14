@@ -413,8 +413,9 @@ export default function KcPromptLayersPage() {
           <h3>What to return</h3>
           <p>
             A structured decision: reply, decision, substep_passed, block_complete, generated_mcq when the next block is
-            a dynamic multiple choice, misconception, hint_tier, affect, and confidence. The unit close also returns
-            score_justification, what_was_strong, and what_to_work_on.
+            a dynamic multiple choice, misconception, hint_tier, affect, and confidence. On the opening explanation of
+            a Topic / Goal block it also returns ready_to_move_on. The unit close also returns score_justification,
+            what_was_strong, and what_to_work_on.
           </p>
         </section>
       </article>

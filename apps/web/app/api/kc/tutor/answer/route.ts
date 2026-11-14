@@ -29,6 +29,7 @@ type Decision = {
   hint_tier: string;
   help_requested: boolean;
   off_course: boolean;
+  ready_to_move_on: boolean;
   affect: string;
   confidence: string;
   score_justification: string;
@@ -62,6 +63,7 @@ function asDecision(value: unknown): Decision | null {
     hint_tier: typeof row.hint_tier === "string" ? row.hint_tier : "nudge",
     help_requested: Boolean(row.help_requested),
     off_course: Boolean(row.off_course),
+    ready_to_move_on: row.ready_to_move_on === true,
     affect: typeof row.affect === "string" ? row.affect : "engaged",
     confidence: typeof row.confidence === "string" ? row.confidence : "ok",
     score_justification: typeof row.score_justification === "string" ? row.score_justification : "",
