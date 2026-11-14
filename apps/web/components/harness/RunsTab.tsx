@@ -3,8 +3,22 @@
 import { useEffect, useState } from "react";
 
 import { api } from "@/lib/api";
+import { transcriptForChat } from "@/lib/harness-live";
 import type { ClaimedChat, HarnessTransport, LiveLine, SessionSnap } from "@/lib/harness-runner";
 import { driveRun } from "@/lib/harness-runner";
+
+type ChatRow = {
+  id: string;
+  status: string;
+  ended_how: string;
+  session_id?: string | null;
+  child?: { name?: string };
+  tutor_model: string;
+  cost_usd: string | null;
+  luna_tokens: number;
+};
+
+type SessionMessage = { role?: string; content?: string };
 
 type RunRow = {
   id: string;
@@ -109,7 +123,8 @@ export function RunsTab({
   onOpenChat: (runId: string, chatId: string) => void;
 }) {
   const [runs, setRuns] = useState<RunRow[]>([]);
-  const [detail, setDetail] = useState<{ id: string; chat_rows?: { id: string; status: string; ended_how: string; child?: { name?: string }; tutor_model: string; cost_usd: string | null; luna_tokens: number }[] } | null>(null);
+  const [detail, setDetail] = useState<{ id: string; chat_rows?: ChatRow[] } | null>(null);
+  const [sessions, setSessions] = useState<Record<string, SessionMessage[]>>({});
   const [error, setError] = useState("");
   const [driving, setDriving] = useState("");
   const [live, setLive] = useState<LiveLine[]>([]);
@@ -135,7 +150,28 @@ export function RunsTab({
       return;
     }
     try {
-      setDetail(await api(`/kc/harness/runs/${id}`));
+      const loaded = await api<{ id: string; chat_rows?: ChatRow[] }>(`/kc/harness/runs/${id}`);
+      setDetail(loaded);
+      const active = (loaded.chat_rows || []).filter(
+        (chat) => (chat.status === "running" || chat.status === "queued") && chat.session_id,
+      );
+      const found = await Promise.all(
+        active.map(async (chat) => {
+          try {
+            const session = await api<{ messages?: SessionMessage[] }>(`/kc/tutor/sessions/${chat.session_id}`);
+            return [chat.id, session.messages || []] as const;
+          } catch {
+            return [chat.id, null] as const;
+          }
+        }),
+      );
+      setSessions((current) => {
+        const copy = { ...current };
+        for (const [chatId, messages] of found) {
+          if (messages) copy[chatId] = messages;
+        }
+        return copy;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load this run.");
     }
@@ -208,10 +244,61 @@ export function RunsTab({
     }
   }
 
+  const rows = detail?.chat_rows || [];
+  const active = rows.filter((chat) => chat.status === "running" || chat.status === "queued");
+  const known = new Set(active.map((chat) => chat.id));
+  const pendingOnly = [...new Set(live.map((line) => line.chatId))].filter((chatId) => !known.has(chatId));
+  const showLive = active.length > 0 || pendingOnly.length > 0;
+
   return (
     <section className="harness-panel">
       <h2>Runs</h2>
       {error ? <p className="banner">{error}</p> : null}
+      {showLive ? (
+        <div className="harness-live">
+          <h3>In progress</h3>
+          {active.map((chat) => {
+            const lines = transcriptForChat(chat.id, sessions[chat.id], live);
+            return (
+              <article key={chat.id}>
+                <p>
+                  <button type="button" onClick={() => onOpenChat(detail?.id || "", chat.id)}>
+                    {chat.child?.name || "Test child"} · {chat.status}
+                  </button>
+                </p>
+                {lines.length > 0 ? (
+                  <ol className="harness-transcript">
+                    {lines.map((line, index) => (
+                      <li key={`${chat.id}-${index}`}>
+                        <strong>{line.role === "tutor" ? "Tutor" : "Child"}:</strong> {line.text}
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="help">
+                    {chat.session_id ? "Waiting for the first tutor message." : "Queued. Press Resume to start this chat."}
+                  </p>
+                )}
+              </article>
+            );
+          })}
+          {pendingOnly.map((chatId) => {
+            const lines = transcriptForChat(chatId, [], live);
+            return (
+              <article key={chatId}>
+                <p>Running chat</p>
+                <ol className="harness-transcript">
+                  {lines.map((line, index) => (
+                    <li key={`${chatId}-${index}`}>
+                      <strong>{line.role === "tutor" ? "Tutor" : "Child"}:</strong> {line.text}
+                    </li>
+                  ))}
+                </ol>
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
       <table className="harness-table">
         <thead>
           <tr>
@@ -258,18 +345,6 @@ export function RunsTab({
       <p className="help">
         Trim keeps prompts for the baseline and the newest run of each suite. Older runs keep the transcript, scores, intents, and recommendations.
       </p>
-      {live.length > 0 ? (
-        <>
-          <h3>Live transcript</h3>
-          <ol className="harness-transcript">
-            {live.map((line, index) => (
-              <li key={`${line.chatId}-${index}`}>
-                <strong>{line.role === "tutor" ? "Tutor" : "Child"}:</strong> {line.text}
-              </li>
-            ))}
-          </ol>
-        </>
-      ) : null}
       <ul>
         {(detail?.chat_rows || []).map((chat) => (
           <li key={chat.id}>
