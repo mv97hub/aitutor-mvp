@@ -1,7 +1,7 @@
 /** One chat in the open tab. Turns are one after another. Several chats can run side by side. */
 
 import { availableActions } from "./harness-actions.ts";
-import { EMPTY_INNER, holdQuit, nudgeTurn, pickMove, updateInner, type InnerState, type Traits } from "./harness-policy.ts";
+import { EMPTY_INNER, holdQuit, nudgeAllowed, nudgeTurn, pickMove, updateInner, type InnerState, type Traits } from "./harness-policy.ts";
 
 export type RunStatus = { status: string };
 
@@ -31,11 +31,13 @@ export type ClaimedChat = {
   script?: string[];
   child: { description?: string; traits?: Traits; child_profile?: { interests?: string } };
   pending_nudges?: number;
+  stuck_answers?: number;
 };
 
 export type TurnRecord = {
   stop: string;
   pending_nudges?: number;
+  stuck_answers?: number;
   cost_usd: string | null;
   luna_tokens: number;
 };
@@ -118,6 +120,7 @@ export async function playChat(
   let turn = 0;
   let previousPlace = "";
   let nudgesLeft = Math.max(0, Number(chat.pending_nudges) || 0);
+  let stuckAnswers = Math.max(0, Number(chat.stuck_answers) || 0);
   const traits = chat.child.traits ?? {};
   while (!signal?.aborted) {
     const run = await transport.runStatus();
@@ -150,7 +153,12 @@ export async function playChat(
       }));
     }
     const tutor = lastTutor(session);
-    const nudging = nudgesLeft > 0;
+    const nudging = nudgeAllowed({
+      pending: nudgesLeft,
+      answersGiven: stuckAnswers,
+      tutor,
+      choices: actions.choices.length,
+    });
     const move = nudging
       ? { ...nudgeTurn(nudgesLeft), inner }
       : pickMove({
@@ -239,6 +247,7 @@ export async function playChat(
     });
     turn += 1;
     if (typeof recorded.pending_nudges === "number") nudgesLeft = Math.max(0, recorded.pending_nudges);
+    if (typeof recorded.stuck_answers === "number") stuckAnswers = Math.max(0, recorded.stuck_answers);
     if (recorded.stop) return "done";
     session = afterSession;
     if (errors >= 2) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CONTINUE_LABEL, EMPTY_INNER, MOVE_ON_LABEL, childPromptText, holdQuit, nudgeTurn, pickMove, previewLines, quitLine, updateInner } from "./harness-policy.ts";
+import { CONTINUE_LABEL, EMPTY_INNER, MOVE_ON_LABEL, childPromptText, holdQuit, nudgeAllowed, nudgeTurn, pickMove, previewLines, quitLine, tutorAsksForWork, updateInner } from "./harness-policy.ts";
 
 const middle = {
   maturity: 3,
@@ -213,4 +213,20 @@ test("a stuck nudge is a short line and never a quit", () => {
   });
   assert.equal(held.intent, "nudge");
   assert.equal(held.text, "What's next?");
+});
+
+test("a Cuba recall question and a next-move explanation are answered before a nudge", () => {
+  const cuba = "What do you remember about why Cuba ended up in the middle?";
+  const origins = "The next move is your own short explanation of the origins.";
+  assert.equal(tutorAsksForWork(cuba), true);
+  assert.equal(tutorAsksForWork(origins), true);
+  assert.equal(tutorAsksForWork("Choose the reason Cuba ended up in the middle."), true);
+  assert.equal(tutorAsksForWork("Still on explain after the river is blue"), false);
+  assert.equal(tutorAsksForWork("Let's keep going."), false);
+  assert.equal(nudgeAllowed({ pending: 2, answersGiven: 0, tutor: cuba }), false);
+  assert.equal(nudgeAllowed({ pending: 2, answersGiven: 1, tutor: origins }), false);
+  assert.equal(nudgeAllowed({ pending: 2, answersGiven: 2, tutor: origins }), true);
+  assert.equal(nudgeAllowed({ pending: 2, answersGiven: 0, tutor: "Let's keep going." }), true);
+  assert.equal(nudgeAllowed({ pending: 0, answersGiven: 0, tutor: cuba }), false);
+  assert.equal(nudgeAllowed({ pending: 2, answersGiven: 0, tutor: "Tell me more.", choices: 2 }), false);
 });

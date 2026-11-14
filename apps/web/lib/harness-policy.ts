@@ -143,6 +143,32 @@ export function preferStay(buttons: string[], tutor: string): { intent: Intent; 
 }
 
 export const STUCK_NUDGE_LINES = ["What's next?", "What should we do next?"] as const;
+export const STUCK_ANSWERS_BEFORE_NUDGE = 2;
+
+/**
+ * The tutor's last line asks the child to recall, choose, or explain.
+ * A continue check is not one of those asks.
+ */
+export function tutorAsksForWork(text: string): boolean {
+  const line = text.replace(/\s+/g, " ").trim();
+  if (!line) return false;
+  if (/\b(remember|recall)\b/i.test(line)) return true;
+  if (/\b(choose|pick one|which one|which of these|which option)\b/i.test(line)) return true;
+  if (/\byour own\b/i.test(line) && /\b(explain|explanation|words)\b/i.test(line)) return true;
+  if (/\b(short explanation|in your own words)\b/i.test(line)) return true;
+  if (/\bnext move\b/i.test(line) && /\b(your|you|explanation|explain)\b/i.test(line)) return true;
+  if (/\b(can you explain|please explain|explain why|explain how|explain what|tell me why|why did|why was|why were)\b/i.test(line)) return true;
+  if (/\bwhy\b[^?]{0,120}\?/i.test(line)) return true;
+  return false;
+}
+
+/** A nudge is allowed when no recall, choice, or explanation is waiting, or two answers already failed to move the block. */
+export function nudgeAllowed(input: { pending: number; answersGiven: number; tutor: string; choices?: number }): boolean {
+  if (input.pending <= 0) return false;
+  if (input.answersGiven >= STUCK_ANSWERS_BEFORE_NUDGE) return true;
+  if ((input.choices ?? 0) > 0) return false;
+  return !tutorAsksForWork(input.tutor);
+}
 
 /** The next short nudge. pending 2 is the first line; pending 1 is the second. A nudge is never a quit. */
 export function nudgeTurn(pending: number): { intent: Intent; text: string; needsModel: false } {

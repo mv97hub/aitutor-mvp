@@ -227,3 +227,52 @@ test("a refresh resumes the remaining nudge instead of repeating the first", asy
   await playChat(resumed, transport);
   assert.deepEqual(childLines, ["What should we do next?"]);
 });
+
+test("a Cuba recall and a next-move explanation are answered before either nudge", async () => {
+  const cuba = "What do you remember about why Cuba ended up in the middle?";
+  const origins = "The next move is your own short explanation of the origins.";
+  const tutors = [cuba, origins, origins, "Still on this step."];
+  let step = 0;
+  const childLines: string[] = [];
+  const intents: string[] = [];
+  const asked = chat();
+  asked.pending_nudges = 2;
+  asked.stuck_answers = 0;
+  asked.script = ["Spain lost the island", "sugar and empire pulled it into the fight", "ok"];
+  const transport: HarnessTransport = {
+    runStatus: async () => ({ status: "running" }),
+    session: async () => session({ messages: [{ role: "assistant", content: cuba }] }),
+    speak: async () => session(),
+    answer: async () => {
+      step += 1;
+      return session({
+        block_id: "b1",
+        active_substep: "explain",
+        active_block_type: "topic_goal",
+        messages: [{ role: "assistant", content: tutors[Math.min(step, tutors.length - 1)] }],
+      });
+    },
+    answerKey: async () => ({ block_id: "b1", block_type: "topic_goal", move_attempts: 0 }),
+    childText: async () => {
+      throw new Error("these answers are scripted");
+    },
+    recordTurn: async (_id, body) => {
+      childLines.push(String(body.child_text));
+      intents.push(String(body.intent));
+      const turn = childLines.length;
+      if (turn === 1) return { stop: "", pending_nudges: 2, stuck_answers: 1, cost_usd: "0", luna_tokens: 0 };
+      if (turn === 2) return { stop: "", pending_nudges: 2, stuck_answers: 2, cost_usd: "0", luna_tokens: 0 };
+      if (turn === 3) return { stop: "", pending_nudges: 1, stuck_answers: 2, cost_usd: "0", luna_tokens: 0 };
+      return { stop: "stuck", pending_nudges: 0, stuck_answers: 0, cost_usd: "0", luna_tokens: 0 };
+    },
+    finish: async () => undefined,
+  };
+  await playChat(asked, transport);
+  assert.deepEqual(childLines, [
+    "Spain lost the island",
+    "sugar and empire pulled it into the fight",
+    "What's next?",
+    "What should we do next?",
+  ]);
+  assert.deepEqual(intents, ["script", "script", "nudge", "nudge"]);
+});

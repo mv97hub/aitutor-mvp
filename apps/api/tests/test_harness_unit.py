@@ -178,13 +178,15 @@ def test_stored_prompt_sections_and_example_turns() -> None:
 
 
 def test_stuck_waits_for_two_nudges_and_a_move_resets() -> None:
-    assert stuck_after_turn(reason="stuck", same_place_turns=8, stuck_limit=8, pending_nudges=0) == ("", 2)
-    assert stuck_after_turn(reason="stuck", same_place_turns=9, stuck_limit=8, pending_nudges=2) == ("", 1)
-    assert stuck_after_turn(reason="stuck", same_place_turns=10, stuck_limit=8, pending_nudges=1) == ("stuck", 0)
-    assert stuck_after_turn(reason="", same_place_turns=1, stuck_limit=8, pending_nudges=2) == ("", 0)
-    assert stuck_after_turn(reason="quit", same_place_turns=9, stuck_limit=8, pending_nudges=2) == ("quit", 2)
-    assert stuck_after_turn(reason="turn_limit", same_place_turns=9, stuck_limit=8, pending_nudges=1) == ("turn_limit", 1)
-    assert stuck_after_turn(reason="cap", same_place_turns=9, stuck_limit=8, pending_nudges=2) == ("cap", 2)
+    assert stuck_after_turn(reason="stuck", same_place_turns=8, stuck_limit=8, pending_nudges=0, intent="answer_right") == ("", 2, 0)
+    assert stuck_after_turn(reason="stuck", same_place_turns=9, stuck_limit=8, pending_nudges=2, intent="nudge") == ("", 1, 0)
+    assert stuck_after_turn(reason="stuck", same_place_turns=10, stuck_limit=8, pending_nudges=1, stuck_answers=2, intent="nudge") == ("stuck", 0, 0)
+    assert stuck_after_turn(reason="stuck", same_place_turns=9, stuck_limit=8, pending_nudges=2, stuck_answers=0, intent="script") == ("", 2, 1)
+    assert stuck_after_turn(reason="stuck", same_place_turns=10, stuck_limit=8, pending_nudges=2, stuck_answers=1, intent="answer_right") == ("", 2, 2)
+    assert stuck_after_turn(reason="", same_place_turns=1, stuck_limit=8, pending_nudges=2, stuck_answers=1) == ("", 0, 0)
+    assert stuck_after_turn(reason="quit", same_place_turns=9, stuck_limit=8, pending_nudges=2, stuck_answers=1, intent="quit") == ("quit", 2, 1)
+    assert stuck_after_turn(reason="turn_limit", same_place_turns=9, stuck_limit=8, pending_nudges=1, intent="nudge") == ("turn_limit", 1, 0)
+    assert stuck_after_turn(reason="cap", same_place_turns=9, stuck_limit=8, pending_nudges=2, stuck_answers=1, intent="answer_right") == ("cap", 2, 1)
     assert (
         stop_reason(
             session_status="in_progress",

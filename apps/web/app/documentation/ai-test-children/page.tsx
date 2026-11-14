@@ -94,9 +94,12 @@ export default function AiTestChildrenDocsPage() {
           </li>
           <li>The turn limit is reached. The default is 40 child turns.</li>
           <li>
-            The chat is stuck: no change of block or substep for 8 child turns. The child then sends two short nudges,
-            such as What&apos;s next?. The chat closes as stuck only if the block and substep are still unchanged after
-            both. A nudge is not a quit. The turn limit and the spending cap still close the chat on their own.
+            The chat is stuck: no change of block or substep for 8 child turns. If the tutor&apos;s last line asks the
+            child to recall, choose, or explain, the child answers that question. After two such answers with no change
+            of block or substep, the child sends two short nudges, such as What&apos;s next?. If the tutor is not asking
+            for that work, the nudges start right away. The chat closes as stuck only if the block and substep are still
+            unchanged after both nudges. A nudge is not a quit, and a nudge never replaces an answer to a tutor question.
+            The turn limit and the spending cap still close the chat on their own.
           </li>
           <li>The chat reaches its spending cap. The default is 40 cents. That chat ends and its tutor session is closed. Other chats in the run continue.</li>
           <li>A run-wide cap, if you filled one in. That field starts blank.</li>

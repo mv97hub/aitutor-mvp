@@ -478,6 +478,7 @@ def chat_out(chat: HarnessChat) -> dict:
         "luna_tokens": chat.luna_tokens,
         "turn_count": chat.turn_count,
         "pending_nudges": int(chat.pending_nudges or 0),
+        "stuck_answers": int(chat.stuck_answers or 0),
         "created_at": chat.created_at,
         "updated_at": chat.updated_at,
     }
@@ -873,13 +874,16 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
         turn_limit=int(plan.get("turn_limit") or DEFAULT_TURN_LIMIT),
         stuck_limit=stuck_limit,
     )
-    reason, pending = stuck_after_turn(
+    reason, pending, answers = stuck_after_turn(
         reason=reason,
         same_place_turns=same_place,
         stuck_limit=stuck_limit,
         pending_nudges=int(chat.pending_nudges or 0),
+        stuck_answers=int(chat.stuck_answers or 0),
+        intent=turn.intent,
     )
     chat.pending_nudges = pending
+    chat.stuck_answers = answers
     if reason:
         _finish(db, chat, reason)
     elif run is not None:
@@ -889,6 +893,7 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
         "turn": seq,
         "stop": reason,
         "pending_nudges": pending,
+        "stuck_answers": answers,
         "cost_usd": chat.cost_usd,
         "luna_tokens": chat.luna_tokens,
         "chat": chat_out(chat),
