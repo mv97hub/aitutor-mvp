@@ -3,6 +3,7 @@
 from app.harness import fixture_document
 from app.harness_checks import automatic_checks, stop_reason
 from app.harness_personas import BOUNDARY_PROBES, starter_children
+from app.harness_prompt_source import block_label_from_prompt, prompt_builder_excerpts, prompt_sections, select_turns
 from app.harness_report import compare_runs, findings, kept_run_ids, rollup
 from app.models import ALL_BLOCK_TYPES
 from app.token_usage import MODEL_TOKEN_PRICES, _model_cost
@@ -140,3 +141,36 @@ def test_small_score_gap_is_no_clear_difference() -> None:
     hard = compare_runs([chat(3)], [dict(chat(3), ended_how="stuck", checks={"stuck_spans": 1})])
     assert hard["verdict"] == "worse"
     assert hard["new_hard_stops"]
+
+
+def test_prompt_builder_excerpts_name_the_section_and_function() -> None:
+    rows = prompt_builder_excerpts()
+    aside = next(row for row in rows if row["symbol"] == "_GOAL_START_ASIDE")
+    assert aside["section"] == "This turn"
+    assert aside["function"] == "_this_turn"
+    assert "side remark" in aside["source"]
+    assert any("side remark" in line for line in aside["literals"])
+    teach = next(row for row in rows if row["symbol"] == "_how_to_teach")
+    assert teach["section"] == "How to teach"
+    assert teach["function"] == "_how_to_teach"
+    ladder = next(row for row in rows if row["symbol"] == "_block_config_rules")
+    assert any("nudge" in line for line in ladder["literals"])
+
+
+def test_stored_prompt_sections_and_example_turns() -> None:
+    prompt = (
+        "Safety\nBe kind.\n\nThis turn\n"
+        "Active step: Block 1 of 6: Topic / Goal. The child will type.\n"
+        "Goal start: Explain what this topic is.\n\n"
+        "How to teach\nWhen the learner is stuck, start with a nudge.\n"
+    )
+    sections = prompt_sections(prompt)
+    assert "Explain what this topic is." in sections["This turn"]
+    assert "nudge" in sections["How to teach"]
+    assert block_label_from_prompt(prompt) == "Topic / Goal"
+    turns = [{"seq": index + 1} for index in range(8)]
+    chosen = select_turns(turns, {4, 7, 8})
+    seqs = [turn["seq"] for turn in chosen]
+    assert seqs[0] == 1
+    assert 8 in seqs
+    assert 4 in seqs or 5 in seqs

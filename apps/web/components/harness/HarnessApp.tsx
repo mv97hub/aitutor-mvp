@@ -65,6 +65,7 @@ export function HarnessApp({
         {tab === "Runs" ? (
           <RunsTab
             selected={runId}
+            onSelect={setRunId}
             onOpenChat={(nextRun, nextChat) => {
               setRunId(nextRun);
               setChatId(nextChat);
@@ -74,7 +75,7 @@ export function HarnessApp({
         ) : null}
         {tab === "Chat" ? <ChatTab chatId={chatId} /> : null}
         {tab === "Results" ? <ResultsTab runId={runId} /> : null}
-        {tab === "Recommendations" ? <RecommendationsTab runId={runId} /> : null}
+        {tab === "Recommendations" ? <RecommendationsTab runId={runId} onSelectRun={setRunId} /> : null}
       </main>
     </>
   );

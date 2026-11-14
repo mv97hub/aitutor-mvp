@@ -146,10 +146,12 @@ export default function AiTestChildrenDocsPage() {
         <h2>Recommendations</h2>
         <p>
           Findings name the block type the issue happened on. Cards are not created when a run finishes. They appear
-          after you press Draft cards from this run on the Recommendations tab. A card has a plain title, the block
-          type, the evidence, the cause (a setting, a prompt section, a loop rule, or the course content), the proposed
-          change, whether the prompt gets shorter or longer, the risk, and a status. Statuses are new, accepted,
-          rejected, on trial, shipped, verified, and regressed. Drafting does not change the live tutor.
+          after you press Draft cards from this run on the Recommendations tab. The tab uses the run you are viewing,
+          or the newest run when none is selected, and the button shows Drafting cards… while the request runs. A card
+          names the prompt-builder section and function, quotes the current sentences from the stored tutor prompt, and
+          gives a replacement plus a shorter or removed line. It also shows the block type, the cause, whether the
+          prompt gets shorter or longer, the risk, and a status. Statuses are new, accepted, rejected, on trial,
+          shipped, verified, and regressed. Drafting does not change the live tutor and does not edit the prompt builder.
         </p>
         <p>
           The drafter looks for a line to cut or shorten before it looks for a line to add. A batch that only proposes
