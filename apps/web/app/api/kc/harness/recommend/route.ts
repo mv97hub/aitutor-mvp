@@ -1,12 +1,22 @@
 import { generateText, jsonSchema, Output } from "ai";
 
-import { ensureSimplification, type RecommendationCard } from "@/lib/harness";
+import {
+  applyModelReplacements,
+  draftPromptCards,
+  drafterPrompt,
+  recommendationMarkdown,
+  writeRecommendationDoc,
+  type DraftMaterials,
+  type ModelDraft,
+} from "@/lib/harness-draft";
 import { isKcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { languageModel } from "@/lib/language-model";
 import { readModelUsage } from "@/lib/model-usage";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+const RECOMMENDATION_DOC_FLAG = "docs/harness-prompt-recommendations.md";
 
 const schema = {
   type: "object",
@@ -18,93 +28,64 @@ const schema = {
         type: "object",
         additionalProperties: false,
         properties: {
-          title: { type: "string" },
-          cause_class: { type: "string" },
-          place: { type: "string" },
-          kind: { type: "string", enum: ["setting", "reword", "remove", "add"] },
-          prompt_direction: { type: "string", enum: ["shorter", "longer", "same"] },
-          proposed_text: { type: "string" },
-          risk: { type: "string" },
-          confidence: { type: "string" },
+          current_quote: { type: "string" },
+          replacement: { type: "string" },
+          shorter: { type: "string" },
           evidence_summary: { type: "string" },
         },
-        required: ["title", "cause_class", "place", "kind", "prompt_direction", "proposed_text", "risk", "confidence", "evidence_summary"],
+        required: ["current_quote", "replacement", "shorter", "evidence_summary"],
       },
     },
   },
   required: ["cards"],
 };
 
-function blockNames(findings: unknown): string {
-  const labels: string[] = [];
-  if (Array.isArray(findings)) {
-    for (const finding of findings) {
-      if (!finding || typeof finding !== "object") continue;
-      const label = String((finding as { block_label?: string }).block_label || "").trim();
-      if (label && !labels.includes(label)) labels.push(label);
-    }
-  }
-  return labels.join(", ") || "an unknown block";
-}
-
-function stampBlockType(cards: RecommendationCard[], findings: unknown): RecommendationCard[] {
-  const named = blockNames(findings);
-  return cards.map((card) => {
-    const evidence = { ...(card.evidence || {}), block_type: named };
-    const blob = `${card.title} ${card.place} ${evidence.summary || ""}`;
-    const already = named.split(", ").every((label) => blob.includes(label));
-    return {
-      ...card,
-      block_type: named,
-      title: already ? card.title : `${card.title} on ${named}`,
-      place: already ? card.place : `${card.place} Block type: ${named}.`,
-      evidence,
-    };
-  });
-}
-
 export async function POST(req: Request) {
-  let body: { model?: string; findings?: unknown };
+  let body: DraftMaterials & { model?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return new Response("Expected JSON.", { status: 400 });
   }
-  const modelName = modelForCall(body.model || "");
+  const requested = modelForCall(body.model || "");
+  const modelName = requested || "gpt-6.1-sol";
   if (!isKcModel(modelName)) return new Response("That model is not allowed.", { status: 422 });
-  const missing = missingKeyMessage(modelName);
-  if (missing) return new Response(missing, { status: 503 });
-  const prompt = [
-    "Draft recommendation cards for a tutoring prompt. A person will review every card. Nothing is applied automatically.",
-    "Look for a line to cut or shorten before you look for a line to add. A batch that only proposes additions is incomplete.",
-    "kind is setting, reword, remove, or add. prompt_direction is shorter, longer, or same.",
-    "Say whether the prompt gets shorter or longer. Adding text has to beat the shorter option.",
-    "Every card title and place must name the finding's block_label, the block type the issue happened on.",
-    `Findings:\n${JSON.stringify(body.findings ?? [], null, 2)}`,
-  ].join("\n\n");
-  try {
-    const result = await generateText({
-      model: languageModel(modelName),
-      prompt,
-      temperature: 0.2,
-      output: Output.object({ schema: jsonSchema(schema) }),
-    });
-    const output = result.output as { cards?: RecommendationCard[] };
-    const drafted = (output.cards ?? []).map((card) => ({
-      title: card.title,
-      cause_class: card.cause_class,
-      place: card.place,
-      kind: card.kind,
-      prompt_direction: card.prompt_direction,
-      proposed: { text: (card as { proposed_text?: string }).proposed_text || "" },
-      risk: card.risk,
-      confidence: card.confidence,
-      evidence: { summary: (card as { evidence_summary?: string }).evidence_summary || "" },
-    }));
-    const cards = stampBlockType(ensureSimplification(drafted), body.findings);
-    return Response.json({ cards, usage: readModelUsage(result.usage), judge_model: modelName });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "The drafter failed.";
-    return new Response(message, { status: 502 });
+  const grounded = draftPromptCards(body);
+  if (grounded.length === 0) {
+    const findings = Array.isArray(body.findings) ? body.findings : body.findings?.findings;
+    if (!findings || findings.length === 0) {
+      return new Response("This run has no findings, so there is nothing to draft.", { status: 422 });
+    }
+    return new Response("This run has no stored tutor prompt to quote, so no card was drafted.", { status: 422 });
   }
+  let cards = grounded;
+  let drafter = "prompt-builder";
+  let usage = readModelUsage(undefined);
+  const missing = missingKeyMessage(modelName);
+  if (!missing) {
+    try {
+      const result = await generateText({
+        model: languageModel(modelName),
+        prompt: drafterPrompt(body, grounded),
+        temperature: 0.2,
+        output: Output.object({ schema: jsonSchema(schema) }),
+      });
+      const output = result.output as { cards?: ModelDraft[] };
+      cards = applyModelReplacements(grounded, output.cards ?? []);
+      usage = readModelUsage(result.usage);
+      drafter = modelName;
+    } catch {
+      cards = grounded;
+      drafter = "prompt-builder";
+    }
+  }
+  const runId = String(body.run_id || "");
+  const wrote = writeRecommendationDoc(recommendationMarkdown(runId, cards));
+  return Response.json({
+    cards,
+    usage,
+    judge_model: modelName,
+    drafter,
+    recommendations_doc: wrote ? RECOMMENDATION_DOC_FLAG : "",
+  });
 }

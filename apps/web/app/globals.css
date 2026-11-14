@@ -6711,6 +6711,14 @@ button.progress-card {
   background: #f8fafc;
 }
 
+.harness-card blockquote {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid #9bb0c3;
+  background: #fff;
+  white-space: pre-wrap;
+}
+
 .harness-child-list button,
 .harness-actions button,
 .harness-panel button,

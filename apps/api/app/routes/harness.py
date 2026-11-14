@@ -41,6 +41,7 @@ from app.harness import (
     update_persona,
     update_recommendation,
 )
+from app.harness_prompt_source import draft_context
 
 router = APIRouter()
 
@@ -139,6 +140,11 @@ def get_report(run_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
 @router.get("/kc/harness/runs/{run_id}/findings")
 def get_findings(run_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return findings_for_run(db, run_id)
+
+
+@router.get("/kc/harness/runs/{run_id}/draft-context")
+def get_draft_context(run_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    return draft_context(db, run_id)
 
 
 @router.post("/kc/harness/compare")

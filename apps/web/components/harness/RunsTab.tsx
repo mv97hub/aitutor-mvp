@@ -118,9 +118,11 @@ async function judgeChat(chatId: string, model: string) {
 export function RunsTab({
   selected,
   onOpenChat,
+  onSelect,
 }: {
   selected: string;
   onOpenChat: (runId: string, chatId: string) => void;
+  onSelect?: (runId: string) => void;
 }) {
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [detail, setDetail] = useState<{ id: string; chat_rows?: ChatRow[] } | null>(null);
@@ -145,6 +147,7 @@ export function RunsTab({
       return;
     }
     const id = selected || next[0]?.id;
+    if (id && id !== selected) onSelect?.(id);
     if (!id) {
       setDetail(null);
       return;
