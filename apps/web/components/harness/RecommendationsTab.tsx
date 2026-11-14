@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { HARNESS_MODELS } from "@/lib/harness";
+import { defaultSelectedRunIds, skippedRunMessage, type DraftMaterials } from "@/lib/harness-draft";
 import { kcModelLabel } from "@/lib/kc-models";
 import { api } from "@/lib/api";
 
@@ -25,7 +26,8 @@ type Card = {
     current?: string;
     replacement?: string;
     shorter?: string;
-    nudges?: { turn?: number; asked?: string; answered?: string; block_type?: string; block_id?: string; substep?: string }[];
+    nudges?: { turn?: number; asked?: string; answered?: string; block_type?: string; block_id?: string; substep?: string; run_id?: string }[];
+    sources?: { run_id?: string; turn?: number; block_type?: string }[];
   };
   proposed: { text?: string; shorter?: string };
   trial_profile_id?: string | null;
@@ -42,12 +44,15 @@ export function RecommendationsTab({
 }) {
   const [cards, setCards] = useState<Card[]>([]);
   const [runs, setRuns] = useState<RunRow[]>([]);
+  const [picked, setPicked] = useState<string[] | null>(null);
+  const [viewId, setViewId] = useState("");
   const [model, setModel] = useState("gpt-6.1-sol");
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
-  const listed = runs.some((run) => run.id === runId);
-  const activeId = (listed ? runId : "") || runs[0]?.id || "";
+  const recent = runs.slice(0, 8);
+  const chosen = (picked ?? defaultSelectedRunIds(recent.map((run) => run.id))).filter((id) => recent.some((run) => run.id === id));
+  const activeId = viewId || recent[0]?.id || "";
 
   async function load(id = activeId) {
     if (!id) {
@@ -64,10 +69,7 @@ export function RecommendationsTab({
     void api<unknown>("/kc/harness/runs")
       .then((body) => {
         if (stop || !Array.isArray(body)) return;
-        const next = body as RunRow[];
-        setRuns(next);
-        const ids = next.map((run) => run.id);
-        if (next[0]?.id && (!runId || !ids.includes(runId))) onSelectRun(next[0].id);
+        setRuns(body as RunRow[]);
       })
       .catch((err) => {
         if (!stop) setError(err instanceof Error ? err.message : "Could not load runs.");
@@ -75,35 +77,68 @@ export function RecommendationsTab({
     return () => {
       stop = true;
     };
-  }, [runId, onSelectRun]);
+  }, []);
+
+  useEffect(() => {
+    const first = runs[0]?.id;
+    if (!first || viewId) return;
+    setViewId(first);
+    if (!runId || !runs.some((run) => run.id === runId)) onSelectRun(first);
+  }, [runs, viewId, runId, onSelectRun]);
 
   useEffect(() => {
     void load().catch((err) => setError(err instanceof Error ? err.message : "Could not load recommendations."));
   }, [activeId]);
 
+  function toggleRun(id: string) {
+    const current = picked ?? defaultSelectedRunIds(recent.map((run) => run.id));
+    setPicked(current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  }
+
   async function draft() {
-    if (!activeId || busy) return;
+    if (chosen.length === 0 || busy) return;
     setBusy(true);
     setError("");
     setNote("");
+    const contexts: DraftMaterials[] = [];
+    const failures: { runId: string; message: string }[] = [];
     try {
-      const context = await api<Record<string, unknown>>(`/kc/harness/runs/${activeId}/draft-context`);
+      for (const id of chosen) {
+        try {
+          const context = await api<DraftMaterials>(`/kc/harness/runs/${id}/draft-context`);
+          contexts.push({ ...context, run_id: context.run_id || id });
+        } catch (err) {
+          failures.push({ runId: id, message: err instanceof Error ? err.message : "Could not read this run." });
+        }
+      }
+      if (contexts.length === 0) {
+        throw new Error(skippedRunMessage(failures) || "Select a run to draft.");
+      }
       const response = await fetch("/api/kc/harness/recommend", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model, run_id: activeId, ...context }),
+        body: JSON.stringify({ model, runs: contexts }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) {
+        const text = (await response.text()) || "Could not draft cards.";
+        const named = skippedRunMessage(failures);
+        throw new Error(named ? `${text} ${named}` : text);
+      }
       const drafted = await response.json();
+      const saveId = String(contexts[0]?.run_id || chosen[0]);
       await api("/kc/harness/recommendations", {
         method: "POST",
-        body: JSON.stringify({ run_id: activeId, cards: drafted.cards }),
+        body: JSON.stringify({ run_id: saveId, cards: drafted.cards }),
       });
-      await load(activeId);
+      setViewId(saveId);
+      onSelectRun(saveId);
+      await load(saveId);
+      const named = skippedRunMessage(failures);
+      if (named) setError(named);
       setNote(
         drafted.drafter && drafted.drafter !== "prompt-builder"
-          ? "Drafted from the stored prompt and the prompt builder. The model rewrote the shorter lines."
-          : "Drafted from the stored prompt and the prompt builder.",
+          ? "Drafted one set of cards from the selected runs. The model rewrote the shorter lines."
+          : "Drafted one set of cards from the selected runs.",
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not draft cards.");
@@ -150,22 +185,6 @@ export function RecommendationsTab({
       <header className="harness-panel-head">
         <h2>Recommendations</h2>
         <div className="harness-actions">
-          <select
-            aria-label="Run"
-            value={activeId}
-            onChange={(event) => onSelectRun(event.target.value)}
-            disabled={runs.length === 0 && !activeId}
-          >
-            {!activeId ? <option value="">No runs yet</option> : null}
-            {activeId && !runs.some((run) => run.id === activeId) ? (
-              <option value={activeId}>selected · {activeId.slice(0, 8)}</option>
-            ) : null}
-            {runs.map((run) => (
-              <option key={run.id} value={run.id}>
-                {run.status || "run"} · {(run.created_at || "").slice(0, 16).replace("T", " ")} · {run.id.slice(0, 8)}
-              </option>
-            ))}
-          </select>
           <select aria-label="Drafter model" value={model} onChange={(event) => setModel(event.target.value)}>
             {HARNESS_MODELS.map((item) => (
               <option key={item} value={item}>
@@ -173,8 +192,8 @@ export function RecommendationsTab({
               </option>
             ))}
           </select>
-          <button type="button" className="harness-draft" disabled={!activeId || busy} onClick={() => void draft()}>
-            {busy ? "Drafting cards…" : "Draft cards from this run"}
+          <button type="button" className="harness-draft" disabled={chosen.length === 0 || busy} onClick={() => void draft()}>
+            {busy ? "Drafting cards…" : "Draft from selected"}
           </button>
           <button type="button" disabled={!activeId || busy} onClick={() => void saveSuite()}>
             Save as suite
@@ -184,19 +203,40 @@ export function RecommendationsTab({
           </button>
         </div>
       </header>
+      {recent.length > 0 ? (
+        <fieldset>
+          <legend>Recent runs</legend>
+          <ul className="harness-run-picks">
+            {recent.map((run) => (
+              <li key={run.id}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={chosen.includes(run.id)}
+                    onChange={() => toggleRun(run.id)}
+                  />
+                  <span>
+                    {run.status || "run"} · {(run.created_at || "").slice(0, 16).replace("T", " ")} · {run.id}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </fieldset>
+      ) : null}
       <p className="help">
         Nothing here changes the live prompt. Each card names the prompt-builder section and function, quotes the current sentences from the stored tutor prompt, and gives a replacement, including a shorter or removed line. Accepting a setting does not apply it. Try it copies the tutor profile into a hidden trial profile and queues the same slice. You start that run yourself.
       </p>
       {error ? <p className="banner">{error}</p> : null}
       {note ? <p className="help">{note}</p> : null}
-      {!activeId ? (
-        <p className="harness-empty">No runs yet. Start a run, then draft cards for it.</p>
+      {recent.length === 0 ? (
+        <p className="harness-empty">No runs yet. Start a run, then draft cards from the runs you check.</p>
       ) : cards.length === 0 ? (
         <p className="harness-empty">
-          No cards yet for this run. Press Draft cards from this run. The button stays on the newest run when you open this tab, and it shows Drafting cards… while the request runs. Finishing a run does not create cards. Drafting does not change the live tutor.
+          No cards yet. The newest runs start checked. Press Draft from selected. The button shows Drafting cards… while the request runs. One set of cards covers every checked run. Finishing a run does not create cards. Drafting does not change the live tutor.
         </p>
       ) : (
-        <p className="help">These cards are saved on this run. Accept does not change the live tutor.</p>
+        <p className="help">These cards are one set for the selected runs. Accept does not change the live tutor.</p>
       )}
       {cards.map((card) => {
         const evidence = card.evidence || {};
@@ -206,6 +246,15 @@ export function RecommendationsTab({
           <article key={card.id} className="harness-card">
             <h3>{card.title}</h3>
             <p>Block type: {evidence.block_type || "an unknown block"}</p>
+            {evidence.sources && evidence.sources.length > 0 ? (
+              <ul>
+                {evidence.sources.map((source, index) => (
+                  <li key={`${source.run_id ?? "run"}-${source.turn ?? index}`}>
+                    Run {source.run_id || "unknown"} · turn {source.turn ?? "—"} · {source.block_type || evidence.block_type || "an unknown block"}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
             <p>
               Section: {evidence.section || "—"}. Function: {evidence.function || "—"}
               {evidence.symbol && evidence.symbol !== evidence.function ? ` (${evidence.symbol})` : ""}
@@ -218,7 +267,7 @@ export function RecommendationsTab({
               <ul>
                 {evidence.nudges.map((nudge, index) => (
                   <li key={`${nudge.turn ?? index}`}>
-                    Turn {nudge.turn} on {nudge.block_type || evidence.block_type || "an unknown block"}
+                    {nudge.run_id ? `Run ${nudge.run_id}. ` : ""}Turn {nudge.turn} on {nudge.block_type || evidence.block_type || "an unknown block"}
                     {nudge.block_id || nudge.substep ? ` (${[nudge.block_id, nudge.substep].filter(Boolean).join(" / ")})` : ""}: the child asked “{nudge.asked}”. The tutor answered “{nudge.answered}”. The block did not move.
                   </li>
                 ))}

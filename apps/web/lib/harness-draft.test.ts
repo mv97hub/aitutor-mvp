@@ -3,8 +3,11 @@ import test from "node:test";
 
 import {
   applyModelReplacements,
+  defaultSelectedRunIds,
   draftPromptCards,
   drafterPrompt,
+  recommendationMarkdown,
+  skippedRunMessage,
   type DraftMaterials,
 } from "./harness-draft.ts";
 
@@ -128,4 +131,73 @@ test("a model replacement is kept only when it quotes the stored sentence and is
   assert.ok(other);
   const keptOther = kept.find((card) => card.title === other?.title);
   assert.equal(keptOther?.evidence.replacement, other?.evidence.replacement);
+});
+
+test("the newest few runs start selected", () => {
+  assert.deepEqual(defaultSelectedRunIds(["a", "b", "c", "d"]), ["a", "b", "c"]);
+  assert.deepEqual(defaultSelectedRunIds(["a"]), ["a"]);
+});
+
+test("a failed run is named and the other runs still draft one card per theme", () => {
+  const named = skippedRunMessage([
+    { runId: "11111111-1111-1111-1111-111111111111", message: "Load failed" },
+  ]);
+  assert.match(named, /11111111-1111-1111-1111-111111111111/);
+  assert.match(named, /Load failed/);
+  assert.match(named, /other selected runs were still drafted/);
+  const quiet: DraftMaterials = {
+    run_id: "run-quiet",
+    findings: [
+      {
+        title: "quiet finding",
+        tag: "quiet_only",
+        block_label: "Topic / Goal",
+        examples: [{ chat_id: "quiet", turn: 3, block: "Topic / Goal" }],
+      },
+    ],
+    examples: [{ chat_id: "quiet", turn: 3, run_id: "run-quiet", tutor_prompt: "No builder sentence is in this prompt.", block_label: "Topic / Goal" }],
+    builder: materials.builder,
+  };
+  const second: DraftMaterials = {
+    run_id: "run-b",
+    findings: [
+      {
+        title: "AI_Child2 got stuck",
+        tag: "stuck",
+        block_label: "Topic / Goal",
+        cause_class: "prompt",
+        examples: [{ chat_id: "chat-2", turn: 11, block: "Topic / Goal" }],
+        nudges: [
+          { turn: 11, asked: "And then?", answered: "Same step.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
+          { turn: 12, asked: "Now what?", answered: "Still explain.", block_type: "Topic / Goal", block_id: "b1", substep: "explain" },
+        ],
+      },
+    ],
+    examples: (materials.examples || []).map((example) => ({ ...example, chat_id: "chat-2", run_id: "run-b" })),
+    builder: materials.builder,
+  };
+  const cards = draftPromptCards({ runs: [{ ...materials, run_id: "run-a" }, second, quiet] });
+  const stuckCards = cards.filter((card) => card.evidence.summary?.includes("got stuck"));
+  assert.equal(stuckCards.length, 1);
+  const stuck = stuckCards[0];
+  assert.equal(stuck.evidence.block_type, "Topic / Goal");
+  assert.equal(stuck.evidence.section, "This turn");
+  assert.equal(stuck.evidence.function, "_this_turn");
+  assert.match(stuck.evidence.current || "", /more deeply/);
+  assert.ok(stuck.evidence.replacement);
+  assert.ok((stuck.evidence.replacement || "").length < (stuck.evidence.current || "").length);
+  const sources = stuck.evidence.sources || [];
+  assert.ok(sources.some((source) => source.run_id === "run-a"));
+  assert.ok(sources.some((source) => source.run_id === "run-b" && source.turn === 11 && source.block_type === "Topic / Goal"));
+  assert.match(stuck.evidence.summary || "", /What's next\?/);
+  assert.match(stuck.evidence.summary || "", /Let's keep going/);
+  assert.match(stuck.evidence.summary || "", /And then\?/);
+  assert.match(stuck.evidence.summary || "", /Same step/);
+  assert.match(stuck.evidence.summary || "", /did not move/);
+  assert.equal(stuck.evidence.nudges?.length, 4);
+  assert.equal(cards.some((card) => card.evidence.summary?.includes("quiet finding")), false);
+  const markdown = recommendationMarkdown("run-a,run-b", cards);
+  assert.match(markdown, /run-a/);
+  assert.match(markdown, /run-b/);
+  assert.match(markdown, /turn 11/);
 });

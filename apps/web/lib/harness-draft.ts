@@ -5,9 +5,6 @@ the prompt-builder section and function that wrote them. Nothing here edits
 kc_prompt.py or applies a setting.
 */
 
-import fs from "node:fs";
-import path from "node:path";
-
 import { type RecommendationCard } from "./harness.ts";
 
 export const RECOMMENDATION_DOC =
@@ -20,7 +17,8 @@ export type DraftFinding = {
   count?: number;
   cause_class?: string;
   place?: string;
-  examples?: { chat_id?: string; turn?: number; block?: string; child?: string }[];
+  run_id?: string;
+  examples?: { chat_id?: string; turn?: number; block?: string; child?: string; run_id?: string }[];
   nudges?: StuckNudge[];
 };
 
@@ -32,6 +30,14 @@ export type StuckNudge = {
   block_id?: string;
   substep?: string;
   child?: string;
+  run_id?: string;
+};
+
+export type DraftSource = {
+  run_id?: string;
+  turn?: number;
+  block_type?: string;
+  chat_id?: string;
 };
 
 export type BuilderExcerpt = {
@@ -50,6 +56,7 @@ export type ExampleTurn = {
   block_label?: string;
   tutor_prompt?: string;
   sections?: Record<string, string>;
+  run_id?: string;
 };
 
 export type DraftMaterials = {
@@ -57,6 +64,7 @@ export type DraftMaterials = {
   findings?: DraftFinding[] | { findings?: DraftFinding[] };
   examples?: ExampleTurn[];
   builder?: BuilderExcerpt[];
+  runs?: DraftMaterials[];
 };
 
 export type DraftEvidence = {
@@ -69,6 +77,7 @@ export type DraftEvidence = {
   replacement?: string;
   shorter?: string;
   nudges?: StuckNudge[];
+  sources?: DraftSource[];
 };
 
 export type DraftCard = RecommendationCard & {
@@ -117,6 +126,73 @@ export function findingsOf(materials: DraftMaterials): DraftFinding[] {
   if (Array.isArray(raw)) return raw.filter((item) => item && typeof item === "object");
   if (raw && Array.isArray(raw.findings)) return raw.findings.filter((item) => item && typeof item === "object");
   return [];
+}
+
+export const RECENT_RUN_PICKS = 3;
+
+export function defaultSelectedRunIds(runIds: string[], count = RECENT_RUN_PICKS): string[] {
+  return runIds.filter(Boolean).slice(0, count);
+}
+
+export function skippedRunMessage(failures: { runId: string; message: string }[]): string {
+  const named = failures
+    .filter((item) => item.runId)
+    .map((item) => `${item.runId}: ${item.message || "Could not read this run."}`);
+  if (named.length === 0) return "";
+  return `Could not read ${named.join("; ")}. The other selected runs were still drafted.`;
+}
+
+export function materialsFromRuns(runs: DraftMaterials[]): DraftMaterials {
+  const findings: DraftFinding[] = [];
+  const examples: ExampleTurn[] = [];
+  let builder: BuilderExcerpt[] = [];
+  const ids: string[] = [];
+  for (const run of runs) {
+    const runId = String(run.run_id || "");
+    if (runId) ids.push(runId);
+    if (builder.length === 0 && run.builder && run.builder.length > 0) builder = run.builder;
+    for (const finding of findingsOf(run)) {
+      findings.push({
+        ...finding,
+        run_id: finding.run_id || runId,
+        nudges: (finding.nudges || []).map((nudge) => ({ ...nudge, run_id: nudge.run_id || runId })),
+        examples: (finding.examples || []).map((example) => ({ ...example, run_id: example.run_id || runId })),
+      });
+    }
+    for (const example of run.examples || []) {
+      examples.push({ ...example, run_id: example.run_id || runId });
+    }
+  }
+  return { run_id: ids.join(","), findings, examples, builder };
+}
+
+export function flattenMaterials(materials: DraftMaterials): DraftMaterials {
+  if (materials.runs && materials.runs.length > 0) return materialsFromRuns(materials.runs);
+  return materialsFromRuns([materials]);
+}
+
+function namedBlock(value?: string): string {
+  const text = (value || "").trim();
+  if (!text || text === "an unknown block") return "";
+  return text;
+}
+
+function uniqueText(values: string[]): string[] {
+  const seen: string[] = [];
+  for (const value of values) {
+    const text = value.trim();
+    if (text && !seen.includes(text)) seen.push(text);
+  }
+  return seen;
+}
+
+export function sourceSentences(sources: DraftSource[]): string[] {
+  return sources.map((source) => {
+    const run = source.run_id || "an unknown run";
+    const turn = source.turn === undefined || source.turn === null ? "" : ` turn ${source.turn}`;
+    const block = source.block_type || "an unknown block";
+    return `Run ${run}${turn}, ${block}.`;
+  });
 }
 
 function sentences(text: string): string[] {
@@ -296,6 +372,7 @@ function cardFrom(input: {
   shorter: string;
   kind: DraftCard["kind"];
   title: string;
+  sources?: DraftSource[];
 }): DraftCard {
   const place = `${input.excerpt.section} — ${input.excerpt.function}${
     input.excerpt.symbol !== input.excerpt.function ? ` (${input.excerpt.symbol})` : ""
@@ -303,10 +380,12 @@ function cardFrom(input: {
   const findingTitle = input.finding.title || input.finding.tag || "Finding";
   const nudges = input.finding.tag === "stuck" ? input.finding.nudges || [] : [];
   const nudgeLines = nudgeSentences(nudges, input.block);
+  const sources = input.sources || [];
   const summary = [
     findingTitle.endsWith(".") ? findingTitle : `${findingTitle}.`,
     `${input.excerpt.section} is written by ${input.excerpt.function} in kc_prompt.py.`,
     input.excerpt.symbol !== input.excerpt.function ? `The sentence is ${input.excerpt.symbol}.` : "",
+    ...sourceSentences(sources),
     "The current sentences are quoted from the stored tutor prompt. The replacement is shorter. Nothing here changes the live tutor.",
     ...nudgeLines,
   ]
@@ -332,40 +411,99 @@ function cardFrom(input: {
       replacement: input.replacement,
       shorter: input.shorter,
       nudges: nudgeLines.length ? nudges : undefined,
+      sources: sources.length ? sources : undefined,
     },
   };
 }
 
-export function draftPromptCards(materials: DraftMaterials): DraftCard[] {
+function examplesForFinding(finding: DraftFinding, examples: ExampleTurn[]): ExampleTurn[] {
+  const runId = finding.run_id || "";
+  if (!runId) return examples;
+  const scoped = examples.filter((item) => !item.run_id || item.run_id === runId);
+  return scoped.length > 0 ? scoped : examples;
+}
+
+function sourcesFor(finding: DraftFinding, examples: ExampleTurn[], quote: string): DraftSource[] {
+  const runId = finding.run_id || "";
+  const listed = finding.examples || [];
+  if (listed.length > 0) {
+    return listed.map((item) => ({
+      run_id: item.run_id || runId,
+      turn: item.turn,
+      block_type: namedBlock(item.block) || namedBlock(finding.block_label) || "",
+      chat_id: item.chat_id,
+    }));
+  }
+  const scoped = examples.filter((item) => (item.run_id || "") === runId && item.tutor_prompt);
+  const matched = scoped.find((item) => item.tutor_prompt && appearsIn(item.tutor_prompt, quote)) || scoped[0];
+  return [
+    {
+      run_id: runId || matched?.run_id,
+      turn: matched?.turn,
+      block_type: namedBlock(finding.block_label) || namedBlock(matched?.block_label) || "",
+      chat_id: matched?.chat_id,
+    },
+  ];
+}
+
+function themeBlock(sources: DraftSource[], finding: DraftFinding, prompts: string[]): string {
+  const blocks = uniqueText(sources.map((source) => source.block_type || ""));
+  if (blocks.length === 1) return blocks[0];
+  if (blocks.length > 1) return blocks.join(", ");
+  return findingBlock(finding, prompts);
+}
+
+function draftFlatCards(materials: DraftMaterials): DraftCard[] {
   const findings = findingsOf(materials);
   const examples = materials.examples || [];
   const builder = materials.builder || [];
-  const cards: DraftCard[] = [];
+  const groups = new Map<string, DraftFinding[]>();
   for (const finding of findings) {
-    const prompts = promptsFor(finding, examples);
-    const picked = pickQuote(String(finding.tag || ""), builder, prompts);
+    const key = String(finding.tag || finding.title || "finding");
+    const group = groups.get(key) || [];
+    group.push(finding);
+    groups.set(key, group);
+  }
+  const cards: DraftCard[] = [];
+  for (const [tag, group] of groups) {
+    const prompts = uniqueText(group.flatMap((finding) => promptsFor(finding, examplesForFinding(finding, examples))));
+    const picked = pickQuote(tag, builder, prompts);
     if (!picked) continue;
-    const block = findingBlock(finding, prompts);
-    const next = propose(String(finding.tag || ""), picked.current);
+    const sources = group.flatMap((finding) => sourcesFor(finding, examples, picked.current));
+    const block = themeBlock(sources, group[0], prompts);
+    const next = propose(tag, picked.current);
     const verb = next.kind === "remove" ? "Remove a line in" : "Shorten";
-    const label = String(finding.tag || "finding").replaceAll("_", " ");
+    const label = tag.replaceAll("_", " ");
+    const titles = uniqueText(group.map((finding) => finding.title || ""));
+    const nudges = group.flatMap((finding) => (finding.tag === "stuck" ? finding.nudges || [] : []));
     cards.push(
       cardFrom({
         block,
-        finding,
+        finding: {
+          ...group[0],
+          title: titles.join(" "),
+          tag,
+          nudges,
+          examples: group.flatMap((finding) => finding.examples || []),
+        },
         excerpt: picked.excerpt,
         current: picked.current,
         replacement: next.replacement,
         shorter: next.shorter,
         kind: next.kind,
         title: `${block}: ${verb} ${picked.excerpt.section} for ${label} (${picked.excerpt.function})`,
+        sources,
       }),
     );
   }
   const duplicate = duplicateSentence(examples);
   const teach = builder.find((item) => item.function === "_how_to_teach" && item.section === "How to teach");
   if (duplicate && teach && duplicate.sentence) {
-    const block = examples.map((item) => item.block_label).find((label) => label && label !== "an unknown block") || findingBlock({}, [duplicate.prompt]);
+    const matched = examples.find((item) => (item.tutor_prompt || item.sections?.["How to teach"] || "").includes(duplicate.sentence));
+    const block =
+      namedBlock(matched?.block_label) ||
+      examples.map((item) => item.block_label).find((label) => namedBlock(label)) ||
+      findingBlock({}, [duplicate.prompt]);
     cards.push(
       cardFrom({
         block,
@@ -380,10 +518,27 @@ export function draftPromptCards(materials: DraftMaterials): DraftCard[] {
         shorter: "Remove this sentence.",
         kind: "remove",
         title: `${block}: Remove the repeated line in How to teach (_how_to_teach)`,
+        sources: [
+          {
+            run_id: matched?.run_id,
+            turn: matched?.turn,
+            block_type: block,
+            chat_id: matched?.chat_id,
+          },
+        ],
       }),
     );
   }
   return cards;
+}
+
+export function draftPromptCards(materials: DraftMaterials): DraftCard[] {
+  return draftFlatCards(flattenMaterials(materials));
+}
+
+export function prepareDraft(materials: DraftMaterials): { materials: DraftMaterials; cards: DraftCard[] } {
+  const flat = flattenMaterials(materials);
+  return { materials: flat, cards: draftFlatCards(flat) };
 }
 
 export function applyModelReplacements(cards: DraftCard[], modelCards: ModelDraft[]): DraftCard[] {
@@ -442,11 +597,17 @@ export function drafterPrompt(materials: DraftMaterials, cards: DraftCard[]): st
   ].join("\n\n");
 }
 
+function runList(runId: string): string {
+  const ids = (runId || "").split(",").map((id) => id.trim()).filter(Boolean);
+  if (ids.length === 0) return "`unknown`";
+  return ids.map((id) => "`" + id + "`").join(", ");
+}
+
 export function recommendationMarkdown(runId: string, cards: DraftCard[]): string {
   const lines = [
     "# Harness prompt recommendations",
     "",
-    `Run: \`${runId || "unknown"}\``,
+    "Runs: " + runList(runId),
     "",
     "These cards are prompt-tuning instructions for a later Cursor run. Drafting does not change the live tutor and does not edit `apps/api/app/kc_prompt.py`. Apply a card only when a person asks.",
     "",
@@ -455,6 +616,9 @@ export function recommendationMarkdown(runId: string, cards: DraftCard[]): strin
     lines.push(`## ${index + 1}. ${card.title}`);
     lines.push("");
     lines.push(`- Block type: ${card.evidence.block_type || "an unknown block"}`);
+    for (const source of card.evidence.sources || []) {
+      lines.push(`- Run \`${source.run_id || ""}\`, turn ${source.turn ?? ""}, ${source.block_type || card.evidence.block_type || "an unknown block"}`);
+    }
     lines.push(`- Section: ${card.evidence.section || ""}`);
     lines.push(`- Function: \`${card.evidence.function || ""}\`${card.evidence.symbol && card.evidence.symbol !== card.evidence.function ? ` (\`${card.evidence.symbol}\`)` : ""}`);
     lines.push(`- Kind: ${card.kind}, prompt gets ${card.prompt_direction}`);
@@ -486,13 +650,3 @@ export function recommendationMarkdown(runId: string, cards: DraftCard[]): strin
   return lines.join("\n");
 }
 
-export function writeRecommendationDoc(markdown: string): boolean {
-  try {
-    const dir = path.dirname(RECOMMENDATION_DOC);
-    if (!fs.existsSync(dir)) return false;
-    fs.writeFileSync(RECOMMENDATION_DOC, markdown);
-    return true;
-  } catch {
-    return false;
-  }
-}
