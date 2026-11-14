@@ -97,7 +97,9 @@ def test_what_is_a_province_stays_on_the_summary_and_the_prompt_defines_it() -> 
     assert "Their question: what is a province." in turn
     assert "define it" in turn
     assert "Answer that question in one or two sentences." in turn
-    assert "repeat the active question unchanged" in turn
+    assert "same single choice" in turn
+    assert "Do not return to the goal" in turn
+    assert "ask the goal again" not in turn
     assert "help_requested=true" in turn
     assert "substep_passed=false" in turn
     assert "block_complete=false" in turn
@@ -163,5 +165,5 @@ def test_a_real_attempt_and_a_move_on_keep_today_behavior() -> None:
     text = _prompt("Pompey led the senate's armies.", "main")
     assert "Side question:" not in text
     turn = _section(text, "This turn")
-    assert "Congratulate the learner for finishing this block and say they are ready to move on." in turn
-    assert "spend more time with further questions" in turn
+    assert "Congratulate the learner once for finishing this block." in turn
+    assert "Ask one question only: move on, or ask one more question." in turn

@@ -285,8 +285,10 @@ def test_a_time_box_sends_the_effective_limits_only() -> None:
         _once(text, phrase)
     assert "after two tries" not in text
     assert "after three tries" not in text
-    for hidden in ("long", "offer", "wide", "on_request", "minimum", "Struggle window"):
+    for hidden in ("long", "wide", "on_request", "minimum", "Struggle window"):
         assert hidden not in text
+    # "offer" is the enrichment setting name. The close may say "Do not offer one more example."
+    assert "offer" not in text.replace("Do not offer one more example.", "")
 
 
 def test_curiosity_is_the_extra_why_and_not_a_kind_label() -> None:
@@ -824,9 +826,9 @@ def test_a_finished_block_closes_without_opening_the_next_one() -> None:
     assert "open Block 2" not in teach
     assert "Name the river color" not in text
     assert "Ask no question. Do not open the next block." in turn
-    assert "Congratulate the learner for finishing this block and say they are ready to move on." in how
-    assert "spend more time with further questions" in how
-    assert "ready to move on to the next unit" in how
+    assert "Congratulate the learner once for finishing this block." in how
+    assert "Ask one question only: move on, or ask one more question." in how
+    assert "Do not offer one more example." in how
     assert "do not open the next block" in how.lower()
     assert "End a teaching or probing turn with a single clear question." not in how
     assert "Do not describe the next block." in returned
@@ -888,8 +890,9 @@ def test_summary_check_prompt_distinguishes_a_completed_block_from_an_incomplete
     )
     entering = _text(node=node, opening=False, active_block_state={"substep": "main"})
     assert "Summary close:" in entering
-    assert "Congratulate the learner for finishing this block and say they are ready to move on." in entering
-    assert "spend more time with further questions" in entering
+    assert "Congratulate the learner once for finishing this block." in entering
+    assert "Ask one question only: move on, or ask one more question." in entering
+    assert "Do not offer one more example." in entering
     assert "did not fully complete this block yet" in entering
     assert "Never say congratulations" in entering
 
@@ -1030,13 +1033,14 @@ def test_praise_only_when_the_reply_meets_the_goal() -> None:
     assert "names a real step toward it" not in text
     assert "Asking a question, asking for background, or asking to move on is not noteworthy work." in teach
     turn = _section(text, "This turn")
-    assert "Congratulate the learner for finishing this block and say they are ready to move on." in turn
-    assert "spend more time with further questions" in turn
+    assert "Congratulate the learner once for finishing this block." in turn
+    assert "Ask one question only: move on, or ask one more question." in turn
+    assert "Do not offer one more example." in turn
 
 
-_CONGRATULATE = "Congratulate the learner for finishing this block and say they are ready to move on."
-_CHOICE = "Then ask whether they want to move on or spend more time with further questions."
-_REMINDER = "end that answer by reminding them they are ready to move on to the next unit."
+_CONGRATULATE = "Congratulate the learner once for finishing this block."
+_CHOICE = "Ask one question only: move on, or ask one more question."
+_REMINDER = "then ask the same single choice: move on, or ask one more question."
 
 
 def _summary_block(block_type: str) -> dict:
@@ -1144,4 +1148,158 @@ def test_every_summary_block_congratulates_offers_a_choice_and_reminds_after_a_q
         "explanation",
     ]
     assert "passage_ela" not in changed
+
+
+def _passed_summary_turn(answer: str, *, state: dict | None = None, substep_passed: bool = False):
+    from app.kc_loop import resolve_block_turn
+    from app.models import default_kc_tutor_config
+
+    topic = {
+        "id": "topic",
+        "type": "topic_goal",
+        "data": {
+            "topic": "Scarcity",
+            "goal": "Explain why scarcity is the central problem.",
+            "acceptance_criteria": "Scarcity is the central problem because wants exceed resources.",
+        },
+    }
+    nxt = {"id": "next", "type": "topic_goal", "data": {"topic": "Next", "goal": "Explain the next idea."}}
+    active = {
+        "substep": "summary_check",
+        "last_task_substep": "main",
+        "revealed_substep": False,
+        "block_attempts": 1,
+        "dialogue_turns": 4,
+        "fragment_prompted": True,
+    }
+    if state:
+        active.update(state)
+    return resolve_block_turn(
+        decision="stay",
+        substep_passed=substep_passed,
+        block_complete=False,
+        rubric_met=[],
+        stored_rubric=[],
+        matched_wrong="",
+        blocks=[topic, nxt],
+        step=0,
+        active_block_state=active,
+        block_results=[],
+        move_attempts=0,
+        hint_tier="nudge",
+        reveals=0,
+        enrichment_turns=0,
+        cfg=default_kc_tutor_config(),
+        goal=None,
+        last_misconception="",
+        answer=answer,
+        fragment=True,
+    )
+
+
+def test_lets_go_after_a_passed_goal_opens_the_next_block() -> None:
+    from app.kc_loop import resolve_block_turn, summary_ready_signal, unanswered_side_turn
+    from app.models import default_kc_tutor_config
+
+    topic = {
+        "id": "topic",
+        "type": "topic_goal",
+        "data": {
+            "topic": "Scarcity",
+            "goal": "Explain why scarcity is the central problem.",
+            "acceptance_criteria": "Scarcity is the central problem because wants exceed resources.",
+        },
+    }
+    nxt = {"id": "next", "type": "topic_goal", "data": {"topic": "Next", "goal": "Explain the next idea."}}
+    passed = resolve_block_turn(
+        decision="stay",
+        substep_passed=True,
+        block_complete=False,
+        rubric_met=[],
+        stored_rubric=[],
+        matched_wrong="",
+        blocks=[topic, nxt],
+        step=0,
+        active_block_state={"substep": "main", "dialogue_turns": 2, "fragment_prompted": True},
+        block_results=[],
+        move_attempts=0,
+        hint_tier="nudge",
+        reveals=0,
+        enrichment_turns=0,
+        cfg=default_kc_tutor_config(),
+        goal=None,
+        last_misconception="",
+        answer="Scarcity is the central problem because wants exceed resources.",
+    )
+    assert passed.advance_block is False
+    assert passed.next_block_state["substep"] == "summary_check"
+
+    phrase = "lets go to the next block"
+    assert summary_ready_signal(phrase)
+    assert not unanswered_side_turn(topic, "summary_check", phrase, passed.next_block_state, default_kc_tutor_config())
+    closed = _passed_summary_turn(phrase)
+    assert closed.advance_block is True
+    assert closed.next_step == 1
+    assert closed.next_block_id == "next"
+    assert str(closed.next_block_state.get("substep") or "") != "summary_check"
+
+    node = _node(blocks=[topic, nxt], misconceptions=[])
+    text = _text(
+        node=node,
+        opening=False,
+        last_answer=phrase,
+        active_block_state={"substep": "summary_check", "last_task_substep": "main", "revealed_substep": False},
+    )
+    assert "Stay on course: this is not an attempt at the goal." not in text
+    assert "and ask the goal again." not in text
+    assert "The block is finished. Congratulate the learner once." in text
+    assert "The reply is that congratulations plus the first line of the next block, not a second goodbye." in text
+    assert "Begin the next block in this same reply." in text
+    assert "Do not offer one more example." in text
+    teach = _section(text, "What to teach")
+    assert "First line: explain what Next is and why it matters." in teach
+
+
+def test_move_on_question_does_not_reask_the_goal() -> None:
+    phrase = "move on?"
+    closed = _passed_summary_turn(phrase)
+    assert closed.advance_block is True
+    assert closed.next_step == 1
+    text = _text(
+        node=_topic_node(),
+        opening=False,
+        last_answer=phrase,
+        active_block_state={"substep": "summary_check", "last_task_substep": "main", "revealed_substep": False},
+    )
+    assert "Stay on course: this is not an attempt at the goal." not in text
+    assert "and ask the goal again." not in text
+    assert "The block is finished. Congratulate the learner once." in text
+    assert "Begin the next block in this same reply." in text
+    for ready in ("yes", "next", "let's go"):
+        moved = _passed_summary_turn(ready)
+        assert moved.advance_block is True, ready
+        assert moved.next_step == 1, ready
+
+
+def test_one_follow_up_then_a_second_move_on_advances() -> None:
+    question = "Why is scarcity the central problem?"
+    stayed = _passed_summary_turn(question, substep_passed=True)
+    assert stayed.advance_block is False
+    assert stayed.next_block_state["substep"] == "summary_check"
+    assert stayed.block_results == []
+    asked = _text(
+        node=_topic_node(),
+        opening=False,
+        last_answer=question,
+        active_block_state={"substep": "summary_check", "last_task_substep": "main", "revealed_substep": False},
+    )
+    assert "and ask the goal again." not in _section(asked, "This turn")
+    assert "Stay on course: this is not an attempt at the goal." not in asked
+    assert "Do not return to the goal, the explain step, or another summary." in asked
+    assert "then ask the same single choice: move on, or ask one more question." in asked
+    assert "do not open the next block" in asked.lower()
+    closed = _passed_summary_turn("move on")
+    assert closed.advance_block is True
+    assert closed.next_step == 1
+    assert closed.next_block_state.get("substep") != "summary_check"
 

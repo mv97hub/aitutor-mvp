@@ -374,12 +374,43 @@ def learner_wants_recap_elaboration(answer: str) -> bool:
     return text == "tell me more" or text.startswith("tell me more")
 
 
+def summary_ready_signal(answer: str) -> bool:
+    """Let's go, move on, next, or yes. These close a passed summary.
+
+    A question mark does not turn "move on?" into another question.
+    A real question that only happens to contain one of these words does not close.
+    """
+    raw = answer or ""
+    if "elaborat" in raw.lower():
+        return False
+    text = _proceed_text(raw)
+    if not text:
+        return False
+    words = text.split()
+    if any(token in words for token in ("not", "dont", "wrong", "confused")):
+        return False
+    if words[0] in {"what", "why", "how", "when", "where", "who", "can", "could", "would", "explain", "tell"}:
+        return False
+    if text in {"yes", "next"}:
+        return True
+    if len(words) > 12:
+        return False
+    if "lets go" in text or "move on" in text:
+        return True
+    if "next block" in text or "next part" in text or text.startswith("next "):
+        return True
+    return False
+
+
 def summary_further_question(answer: str) -> bool:
     """A further question on a finished block stays. It does not complete the block.
 
-    Model flags do not turn that question into a move-on. An explicit move-on
-    still completes the block the way it does today.
+    Model flags do not turn that question into a move-on. An explicit move-on,
+    including let's go, move on, next, and yes, still completes the block.
+    "move on?" is that move-on, not a new question.
     """
+    if summary_ready_signal(answer):
+        return False
     if learner_wants_recap_elaboration(answer):
         return True
     return learner_asks_question_or_background(answer)
@@ -388,10 +419,13 @@ def summary_further_question(answer: str) -> bool:
 def learner_may_complete_explanation_summary(answer: str) -> bool:
     """Only an explicit move-on closes an explanatory summary. Model flags do not.
 
-    "got it - move on", "no final questions", and "let's continue" may complete.
+    "got it - move on", "no final questions", "let's continue", "let's go",
+    "move on", "next", and "yes" may complete.
     "elaborate", "can you please elaborate?", and "tell me more" never do.
     A further question stays on the summary.
     """
+    if summary_ready_signal(answer):
+        return True
     if summary_further_question(answer):
         return False
     return learner_ready_to_proceed(answer, False)
@@ -727,6 +761,9 @@ def unscored_side_request(
     raw = answer or ""
     if not raw.strip():
         return False
+    # A passed summary's move-on is not "ask the goal again."
+    if str(substep or "") == "summary_check" and summary_ready_signal(raw):
+        return False
     if learner_ready_to_proceed(raw, False) or learner_done_with_explanation(raw):
         return False
     if learner_wants_deeper_explanation(raw):
@@ -764,6 +801,8 @@ def unanswered_side_turn(
     no side topic still deepens. A real attempt and an explicit move-on do not.
     """
     raw = answer or ""
+    if str(substep or "") == "summary_check" and summary_ready_signal(raw):
+        return False
     if str(substep or "") == "explain" and learner_wants_deeper_explanation(raw):
         return False
     return learner_side_question(raw, block) or unscored_side_request(
@@ -1481,6 +1520,7 @@ def resolve_block_turn(
         and not state.get("fragment_prompted")
         and not unscored_side_request(block, substep, answer, state, cfg)
         and not learner_side_question(answer, block)
+        and not (substep == "summary_check" and summary_ready_signal(answer))
     ):
         state["fragment_prompted"] = True
         return stay(move_attempts, tier)
@@ -1506,6 +1546,11 @@ def resolve_block_turn(
         return stay(0, "nudge")
 
     def _resolve_summary_check() -> BlockResolution:
+        # Let's go, move on, next, and yes close a passed summary in this turn.
+        # That reply is not "not an attempt, ask the goal again."
+        if summary_ready_signal(answer):
+            tries = int(state.get("block_attempts") or 0) or 1
+            return finish(_summary_outcome(), tries, reveals)
         # A further question stays on this summary even if the model set
         # block_complete. Choosing to move on still completes the block below.
         if summary_further_question(answer):
