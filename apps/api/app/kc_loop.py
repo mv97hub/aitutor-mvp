@@ -556,6 +556,8 @@ def last_topic_closes_block(block: dict, state: dict | None, answer: str) -> boo
     """
     if not explanation_on_last_topic(block, state):
         return False
+    if not explanation_topic_taught(state):
+        return False
     if explanation_topic_capped("explain_topic", state):
         return True
     if summary_ready_signal(answer):
@@ -770,33 +772,6 @@ _STORY_CUES = (
     "story about",
 )
 
-_GOAL_ANCHOR_KEYS = (
-    "topic",
-    "goal",
-    "acceptance_criteria",
-    "block_title",
-    "question_stem",
-    "recall_prompt",
-    "expected_fact",
-    "problem_statement",
-    "solo_problem",
-    "solo_expected_answer",
-    "central_dilemma",
-    "target_synthesis",
-    "phenomenon_hook",
-    "prediction_question",
-    "invariant_principle",
-    "flaw_description",
-    "corrected_version",
-    "peer_persona_prompt",
-    "evidence_prompt",
-    "central_idea_question",
-    "expected_central_idea",
-    "analysis_question",
-    "expected_analysis",
-)
-
-
 def stay_on_course_enabled(cfg: dict | None) -> bool:
     """True unless Stay on course is exploratory. The default setting stays on."""
     over = (cfg or {}).get("overarching") or {}
@@ -807,19 +782,31 @@ def stay_on_course_enabled(cfg: dict | None) -> bool:
     return text not in {"exploratory", "no", "false", "off"}
 
 
-def _anchor_words(block: dict) -> set[str]:
-    data = _data(block)
-    chunks: list[str] = []
-    for key in _GOAL_ANCHOR_KEYS:
-        value = data.get(key)
-        if isinstance(value, str) and value.strip():
+def _collect_anchor_text(value: object, chunks: list[str]) -> None:
+    if isinstance(value, str):
+        if value.strip():
             chunks.append(value)
-    topics = data.get("topics")
-    if isinstance(topics, list):
-        for topic in topics:
-            if isinstance(topic, dict):
-                chunks.append(str(topic.get("title") or ""))
-    return {word for word in _words(" ".join(chunks)) if len(word) > 3}
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_anchor_text(item, chunks)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _collect_anchor_text(item, chunks)
+
+
+def _content_word_set(text: str) -> set[str]:
+    """Lesson words, plus a trailing s folded off so "want" meets "wants"."""
+    words = {word for word in _words(text) if len(word) > 3}
+    stems = {word[:-1] for word in words if word.endswith("s") and len(word) > 4}
+    return words | stems
+
+
+def _anchor_words(block: dict) -> set[str]:
+    chunks: list[str] = []
+    _collect_anchor_text(_data(block), chunks)
+    return _content_word_set(" ".join(chunks))
 
 
 def ancillary_story(answer: str, block: dict) -> bool:
@@ -832,9 +819,6 @@ def ancillary_story(answer: str, block: dict) -> bool:
     if anchors and (have & anchors):
         return False
     return True
-
-
-_SHORT_REMARK_WORDS = 8
 
 
 def _matches_mcq_choice(block: dict, answer: str, state: dict | None) -> bool:
@@ -852,28 +836,177 @@ def _short_off_topic_remark(
     state: dict | None,
     cfg: dict | None,
 ) -> bool:
-    """A brief aside that does not use the lesson's words, such as "arsenal are great".
+    """An aside that does not use the lesson's words, such as "arsenal are great".
 
-    On a topic or goal, sharing none of those words means it is not an attempt.
-    On every other block, a substantive try still counts, even when the words miss.
+    Sharing none of those words means it is not an attempt, at any length.
+    A wrong answer that uses the lesson's words still counts.
     """
     words = _proceed_text(answer).split()
-    # One word can be a real try. "arsenal are great" is a short aside.
-    if len(words) < 2 or len(words) > _SHORT_REMARK_WORDS:
+    # One word can be a real try. An off-topic line of any longer length is not.
+    if len(words) < 2:
         return False
     if _matches_mcq_choice(block, answer, state):
         return False
     anchors = _anchor_words(block)
     if not anchors:
         return False
-    have = {word for word in _words(answer) if len(word) > 3}
-    if have & anchors:
-        return False
-    if str(block.get("type") or "") != "topic_goal" and learner_gave_real_attempt(
-        block, substep, answer, cfg
-    ):
+    if _content_word_set(answer) & anchors:
         return False
     return True
+
+
+_ACK_WORDS = {
+    "k",
+    "kk",
+    "ok",
+    "okay",
+    "yeah",
+    "yep",
+    "yup",
+    "yea",
+    "ya",
+    "sure",
+    "mhm",
+    "mm",
+    "uh",
+    "um",
+    "hmm",
+    "thanks",
+    "thx",
+    "fine",
+    "cool",
+    "lol",
+    "haha",
+}
+
+_COMPLAINT_PHRASES = (
+    "this is boring",
+    "so boring",
+    "im bored",
+    "i am bored",
+    "this sucks",
+    "i hate this",
+    "i dont care",
+    "this is dumb",
+    "so dumb",
+)
+
+_BOUNDARY_PHRASES = (
+    "ignore the lesson",
+    "ignore your",
+    "tell me a joke",
+    "say a joke",
+    "forget the lesson",
+    "forget your instructions",
+    "you dont have to be a tutor",
+    "just chat with me",
+    "blah blah",
+)
+
+
+def _echoes_tutor(answer: str, prior_tutor: str) -> bool:
+    """The line is mostly the tutor's words, not a new try."""
+    prior = _proceed_text(prior_tutor)
+    if not prior:
+        return False
+    text = _proceed_text(answer)
+    if text.startswith("yes "):
+        text = text[4:].strip()
+    words = [word for word in text.split() if len(word) > 2]
+    if len(words) < 4:
+        return False
+    tutor_words = set(prior.split())
+    hits = sum(1 for word in words if word in tutor_words)
+    return hits >= max(4, (len(words) * 4 + 4) // 5)
+
+
+def learner_non_answer(
+    block: dict,
+    substep: str,
+    answer: str,
+    state: dict | None,
+    cfg: dict | None,
+    *,
+    prior_tutor: str = "",
+    covered: bool = False,
+) -> bool:
+    """A line that stays on the step and does not spend a try.
+
+    yes, a one-word k, a complaint, an echo of the tutor, an off-topic line,
+    and a boundary probe. idk is a miss. A line that addresses the step is a try.
+    A passed summary and a continue question keep their own close.
+    """
+    raw = answer or ""
+    if not raw.strip() or _gives_up(raw):
+        return False
+    if str(substep or "") == "summary_check":
+        return False
+    if learner_ready_to_proceed(raw, False) or learner_done_with_explanation(raw):
+        return False
+    if _matches_mcq_choice(block, raw, state):
+        return False
+    if answer_addresses_substep(block, substep, raw, state, cfg):
+        return False
+    text = _proceed_text(raw)
+    if not text:
+        return False
+    if text == "yes":
+        if covered or tutor_asked_to_continue(prior_tutor):
+            return False
+        return True
+    if text in _ACK_WORDS:
+        return True
+    if text in {"boring", "whatever", "dumb", "sucks"} or any(phrase in text for phrase in _COMPLAINT_PHRASES):
+        return True
+    if any(phrase in text for phrase in _BOUNDARY_PHRASES):
+        return True
+    if _echoes_tutor(raw, prior_tutor):
+        return True
+    return _short_off_topic_remark(raw, block, substep, state, cfg)
+
+
+def _statement_before_question(answer: str) -> bool:
+    """True when a question mark is only checking a statement the learner already made."""
+    text = _proceed_text(answer)
+    for tail in ("is that right", "is that correct", "isnt it", "right", "correct"):
+        marker = " " + tail
+        if text.endswith(marker):
+            text = text[: -len(marker)].strip()
+            break
+    words = text.split()
+    if len(words) < 4 or _opens_as_question(words):
+        return False
+    return True
+
+
+def answer_grades_with_question_mark(
+    block: dict,
+    index: int,
+    substep: str,
+    answer: str,
+    state: dict | None,
+    cfg: dict | None,
+    *,
+    substep_passed: bool,
+    rubric_met: list[str],
+) -> bool:
+    """Grade a line that answers the step, question mark included.
+
+    A real question, one the step check and the model's pass flag both miss, stays unscored.
+    """
+    raw = answer or ""
+    if not raw.strip() or _gives_up(raw) or not learner_asks_question_or_background(raw):
+        return False
+    # "who is Pompey?" and "why did Caesar cross?" stay. "..., right?" does not.
+    if _opens_as_question(_proceed_text(raw).split()) and not _statement_before_question(raw):
+        return False
+    if answer_addresses_substep(block, substep, raw, state, cfg):
+        return True
+    if not _statement_before_question(raw):
+        return False
+    if substep_passed:
+        return True
+    return rubric_covers_substep(block, index, substep, rubric_met)
 
 
 def unscored_side_request(
@@ -1011,12 +1144,27 @@ def _reply_content_words(answer: str) -> list[str]:
     return [word for word in _words(answer) if len(word) > 3 and word not in _FILLER_ANCHORS]
 
 
+def explanation_topic_taught(state: dict | None) -> bool:
+    """True once this topic's body has been spoken.
+
+    A missing mark means the topic is already open, including the block opening.
+    An explicit false mark means the topic was only named.
+    """
+    stored = state if isinstance(state, dict) else {}
+    if "topic_taught" not in stored:
+        return True
+    return bool(stored.get("topic_taught"))
+
+
 def explanation_restates_topic(block: dict, state: dict | None, answer: str) -> bool:
     """The reply already says this explanatory topic's point, so the lesson moves on.
 
     A question, a side story, and Tell me more do not. This is a local word check.
+    A topic that was only named has not been restated.
     """
     if str(block.get("type") or "") != "explanation":
+        return False
+    if not explanation_topic_taught(state):
         return False
     raw = answer or ""
     if not raw.strip():
@@ -1049,6 +1197,8 @@ def explanation_move_on_reply(block: dict, state: dict | None, answer: str) -> b
     if str(block.get("type") or "") != "explanation":
         return False
     stored = state if isinstance(state, dict) else {}
+    if not explanation_topic_taught(stored):
+        return False
     if str(stored.get("substep") or "explain_topic") == "summary_check":
         return False
     if explanation_on_last_topic(block, stored):
@@ -1067,6 +1217,30 @@ def explanation_move_on_reply(block: dict, state: dict | None, answer: str) -> b
     if learner_ready_to_proceed(raw, False):
         return True
     return _is_proceed_question(_proceed_text(raw))
+
+
+def move_on_before_topic_taught(block: dict, state: dict | None, answer: str) -> bool:
+    """A move-on while this topic was only named. The reply teaches it first."""
+    if explanation_topic_taught(state):
+        return False
+    stored = state if isinstance(state, dict) else {}
+    if str(stored.get("substep") or "explain_topic") != "explain_topic":
+        return False
+    raw = answer or ""
+    if not raw.strip():
+        return False
+    if learner_wants_deeper_explanation(raw) or learner_wants_recap_elaboration(raw):
+        return False
+    if explanation_side_remark(block, raw, stored, None):
+        return False
+    text = _proceed_text(raw)
+    if learner_asks_question_or_background(raw) and not _is_proceed_question(text):
+        return False
+    if explanation_topic_capped("explain_topic", stored):
+        return True
+    if learner_ready_to_proceed(raw, False) or _is_proceed_question(text):
+        return True
+    return explanation_on_last_topic(block, stored) and summary_ready_signal(raw)
 
 
 def explanation_side_remark(
@@ -1098,6 +1272,9 @@ def explanation_side_remark(
         or _is_proceed_question(_proceed_text(raw))
         or explanation_restates_topic(block, stored, raw)
     ):
+        return False
+    # "I get it" and "let's go" are ready signals. The model flag decides whether they move.
+    if _proceed_text(raw) in {"ok", "okay", "i get it", "lets go"}:
         return False
     # A real question on a topic that is not finished. The last topic has its own close.
     # Elaborate and tell me more stay on the longer path. One or two sentences, then one line back.
@@ -1348,6 +1525,19 @@ def _resolve_explanation_turn(
     state["substep"] = substep
     state["topic_index"] = topic_index
     on_last = substep == "explain_topic" and bool(topics) and topic_index >= len(topics) - 1
+    if move_on_before_topic_taught(block, state, answer):
+        # The topic was only named. This reply teaches it. The index does not move.
+        state["topic_taught"] = True
+        return _explanation_stay(
+            state=state,
+            index=index,
+            bid=bid,
+            results=results,
+            met=met,
+            reveals=reveals,
+            move_attempts=move_attempts,
+            enrichment_turns=enrichment_turns,
+        )
     if substep == "summary_check":
         # The model cannot close this check by setting the flags. A further
         # question stays. A reply that is not a question completes the block.
@@ -1388,6 +1578,8 @@ def _resolve_explanation_turn(
     if substep == "explain_topic" and topics and topic_index < len(topics) - 1:
         state["topic_index"] = topic_index + 1
         state["substep"] = "explain_topic"
+        # This reply teaches the topic it opens.
+        state["topic_taught"] = True
         return _explanation_stay(
             state=state,
             index=index,
@@ -1601,12 +1793,59 @@ def resolve_block_turn(
             state["elaboration_turns"] = int(state.get("elaboration_turns") or 0) + 1
             return explain_result(met)
     # Same side-turn check on later steps. An early answer was already checked above.
+    # A question mark does not hide a line that answers the step. Check that, and the
+    # model's pass flag, before the unscored stay. A real question still stays.
+    grade_question = answer_grades_with_question_mark(
+        block,
+        index,
+        substep,
+        answer,
+        state,
+        cfg,
+        substep_passed=bool(substep_passed),
+        rubric_met=fresh,
+    )
+    gave_up = _gives_up(answer)
+    covered_step = rubric_covers_substep(block, index, substep, met)
     side_turn = (
         not early_answer
+        and not gave_up
+        and not grade_question
         and stay_on_course_enabled(cfg)
         and unanswered_side_turn(block, substep, answer, state, cfg)
     )
-    if side_turn:
+    # yes, k, a complaint, an echo, an off-topic line, or a boundary probe.
+    # Same step, same count. idk is not one of these.
+    non_answer = (
+        not early_answer
+        and not gave_up
+        and not grade_question
+        and stay_on_course_enabled(cfg)
+        and learner_non_answer(
+            block,
+            substep,
+            answer,
+            state,
+            cfg,
+            prior_tutor=prior_tutor,
+            covered=covered_step,
+        )
+    )
+    # The model already scored this line. An off-topic word check does not drop it.
+    # A question is not that line: "who is Pompey?" stays even when the flag is set.
+    scored_try = (
+        not learner_asks_question_or_background(answer)
+        and not ancillary_story(answer, block)
+        and (
+            rubric_covers_substep(block, index, substep, fresh)
+            or (bool(substep_passed) and learner_gave_real_attempt(block, substep, answer, cfg))
+        )
+    )
+    if scored_try:
+        side_turn = False
+        non_answer = False
+    # A tagged misconception is a real try. Off-topic wording does not drop it.
+    if not matched_wrong and (side_turn or non_answer):
         # Unscored help. Same block, same substep, same attempt count.
         return _unscored_stay(
             hint=tier,
@@ -1621,41 +1860,34 @@ def resolve_block_turn(
         )
     max_retries = max_retries_for_block(block, cfg, goal)
 
-    # Misconception handling
-    if matched_wrong:
+    # A choice is removed in the multiple-choice branch below, whatever the model tags.
+    # A repeated tag reveals this block and continues. It does not end the unit.
+    if matched_wrong and not (btype == "mcq" and substep == "choice"):
         should_redirect = misc_policy == "immediate_redirect" or last_misconception == matched_wrong
         if should_redirect:
+            tries = int(state.get("block_attempts") or 0) + 1
+            state["block_attempts"] = tries
             results.append(
                 {
                     "id": bid,
                     "block_id": bid,
                     "block_type": btype,
                     "title": _block_title(block, index),
-                    "attempts": move_attempts + 1,
+                    "attempts": tries,
                     "outcome": "revealed",
                     "strong": "",
                     "work_on": matched_wrong,
-                    "summary": f"Redirected on misconception: {matched_wrong}",
+                    "summary": f"Revealed after a repeated misconception: {matched_wrong}",
                 }
             )
-            return BlockResolution(
-                decision="redirect",
-                hint_tier=tier,
-                move_attempts=move_attempts + 1,
-                reveals=reveals,
-                enrichment_turns=enrichment_turns,
-                rubric_met=met,
+            return _advance_or_close_component(
+                blocks=blocks,
+                index=index,
+                results=results,
+                met=met,
+                reveals=reveals + 1,
+                cfg=cfg,
                 misconception=matched_wrong,
-                next_step=index,
-                next_block_id=bid,
-                next_block_state=state,
-                block_results=results,
-                mark_known=False,
-                mark_fragile=True,
-                redirect=True,
-                unit_complete=True,
-                advance_block=False,
-                passed=False,
             )
         attempts = move_attempts + 1
         bumped = _next_tier(tier)
@@ -1693,6 +1925,11 @@ def resolve_block_turn(
         substep_passed=bool(substep_passed),
         rubric_met=met,
     )
+    # A question mark kept the real-attempt check false. The model still passed this line.
+    if not model_pass and grade_question and (
+        bool(substep_passed) or rubric_covers_substep(block, index, substep, fresh)
+    ):
+        model_pass = True
     # Keyword overlap is only the fallback. A model pass on a real answer stands.
     addressed = model_pass or literal
 
@@ -1926,7 +2163,10 @@ def resolve_block_turn(
         btype == "topic_goal"
         and substep == "main"
         and literal
-        and learner_gave_real_attempt(block, substep, answer, cfg)
+        and (
+            learner_gave_real_attempt(block, substep, answer, cfg)
+            or (grade_question and _substantive(answer, _minimum_words(block, substep, cfg)))
+        )
     )
     satisfied = model_pass or (literal and bool(substep_passed)) or chain_on_main
     if on_last_task and satisfied:
@@ -1967,6 +2207,11 @@ def resolve_block_turn(
             state["substep"] = "solo_solve"
             state["revealed_substep"] = True
             return stay(0, "reveal", reveals_now=reveals + 1)
+        if btype == "retrieval_check" and substep == "recall" and "elaborate_why" in substeps:
+            # The fact is shown. The why question still has to be asked. The unit stays open.
+            state["substep"] = "elaborate_why"
+            state["recall_revealed"] = True
+            return stay(0, "nudge", reveals_now=reveals + 1)
         if on_last_task:
             return _enter_summary(revealed=True)
         return finish("revealed", tries, reveals + 1)
@@ -1998,6 +2243,7 @@ def _advance_or_close_component(
     met: list[str],
     reveals: int,
     cfg: dict,
+    misconception: str = "",
 ) -> BlockResolution:
     if index < len(blocks) - 1:
         next_idx = index + 1
@@ -2010,7 +2256,7 @@ def _advance_or_close_component(
             reveals=reveals,
             enrichment_turns=0,
             rubric_met=met,
-            misconception="",
+            misconception=misconception,
             next_step=next_idx,
             next_block_id=next_id,
             next_block_state=initial_block_state(next_blk, cfg),
@@ -2047,7 +2293,7 @@ def _advance_or_close_component(
         reveals=reveals,
         enrichment_turns=0,
         rubric_met=met,
-        misconception="",
+        misconception=misconception,
         next_step=index,
         next_block_id=str(blocks[index].get("id") or f"blk_{index + 1}").strip(),
         next_block_state={"substep": "done", "dialogue_turns": 0},

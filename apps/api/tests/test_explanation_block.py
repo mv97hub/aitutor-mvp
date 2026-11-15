@@ -324,12 +324,12 @@ def test_an_explanatory_restatement_moves_to_the_next_topic() -> None:
     assert "Do not re-teach the whole topic." in teaching
     assert "Explain this topic from:" not in teaching
     assert "Topic point, already said, for the one-sentence gap only:" in teaching
-    assert "write the first line of the next topic only" in teaching.lower()
-    assert "Do not teach that topic." in teaching
-    assert "Do not ask a question." in teaching
+    assert "teach the next topic in full" in teaching.lower()
+    assert "Do not teach that topic." not in teaching
+    assert "Do not only name the title." in teaching
     assert "ask if they have questions or want elaboration" not in teaching.lower()
     assert "Causes" in teaching
-    assert "Spending, jobs, and confidence push the cycle from one phase to the next." not in teaching
+    assert "Spending, jobs, and confidence push the cycle from one phase to the next." in teaching
     held = _cycle_turn("Why are there four phases?")
     assert held.next_block_state["topic_index"] == 0
 
@@ -563,11 +563,11 @@ def test_a_ruhr_style_advance_is_short_and_does_not_teach_the_next_topic() -> No
     teaching = text.split("What to teach", 1)[-1].split("Who you are talking to", 1)[0]
     lowered = text.lower()
     assert "one sentence" in lowered or "one or two sentences" in lowered
-    assert "write the first line of the next topic only" in teaching.lower()
+    assert "teach the next topic in full" in teaching.lower()
     assert "Topic 2 of 2: Passive Resistance." in teaching
-    assert "Do not teach that topic." in teaching
-    assert "Do not ask a question." in teaching
-    assert PASSIVE_EXPLANATION not in text
+    assert "Do not teach that topic." not in teaching
+    assert "Do not only name the title." in teaching
+    assert PASSIVE_EXPLANATION in text
     assert "A strike against the occupation." not in text
     assert "ask if they have questions or want elaboration" not in lowered
     assert "would you like me to elaborate" not in lowered
@@ -591,7 +591,7 @@ def test_a_question_on_an_unfinished_topic_stays_short() -> None:
 
 
 def test_got_it_move_on_on_the_last_topic_opens_the_next_block() -> None:
-    """The transcript: Got it - move on closes the walkthrough in this same turn."""
+    """Got it - move on closes the walkthrough. The next block arrives in its own message."""
     closed = _lags_turn("Got it - move on", substep_passed=True, block_complete=True)
     assert closed.advance_block is True
     assert closed.next_step == 1
@@ -603,8 +603,9 @@ def test_got_it_move_on_on_the_last_topic_opens_the_next_block() -> None:
     assert "The close is one or two sentences: what the block was, and that they are done." in text
     assert "Do not restate each topic." in text
     assert "Do not ask whether to move on." in text
-    assert "Begin the next block in this same reply." in text
-    assert "First line: the worked problem: A government cuts taxes during a recession." in text
+    assert "Begin the next block in this same reply." not in text
+    assert "The next block arrives in its own message." in text
+    assert "First line:" not in text
     lowered = text.lower()
     assert "summarize every topic" not in lowered
     assert "topics to include in that summary" not in lowered
