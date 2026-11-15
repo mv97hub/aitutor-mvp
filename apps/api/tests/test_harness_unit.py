@@ -14,7 +14,7 @@ from app.harness import (
     save_recommendations,
 )
 from app.harness_download import render_download
-from app.harness_checks import automatic_checks, place_key, stop_reason, stuck_after_turn
+from app.harness_checks import automatic_checks, graded_step, line_matches_key, place_key, stop_reason, stuck_after_turn
 from app.harness_report import chat_is_stuck, stuck_nudge_rows
 from app.harness_personas import BOUNDARY_PROBES, starter_children
 from app.kc import loop_result_label, loop_turn_result
@@ -151,6 +151,95 @@ def test_false_pass_and_prompt_trim_set() -> None:
         ]
     )
     assert kept == {"base", "newest", "only"}
+
+
+def test_answer_key_matcher_grades_the_words_not_the_intent() -> None:
+    """A paraphrase is a pass. A negation, or a miss that only shares words, is not."""
+    assert line_matches_key("The river is green.", "The river is blue.") is False
+    assert line_matches_key("The river is not blue.", "The river is blue.") is False
+    assert line_matches_key("The river is blue.", "The river is blue.") is True
+    assert line_matches_key("42", "42") is True
+    assert line_matches_key("43", "42") is False
+
+    goal = (
+        "Explain the difference between anticipated and unanticipated inflation "
+        "and why unanticipated inflation is generally more harmful."
+    )
+    paraphrase = (
+        "When prices rise as expected, people can save money, but if prices surprise "
+        "and go up, people can't plan."
+    )
+    assert line_matches_key(paraphrase, goal) is True
+    assert line_matches_key("Expected inflation hurts more than a surprise.", goal) is False
+
+    step = "Determine who benefits from the unexpected inflation."
+    assert line_matches_key("The borrower benefits from the inflation.", step) is True
+
+    solo = "The borrower benefits because the money paid back is worth less."
+    assert line_matches_key("The person who borrowed the money benfits and pays back fewer treats.", solo) is True
+
+    fact = "A menu cost is the expense a business pays to change its prices due to inflation."
+    assert line_matches_key("cuz they have to change prices all teh time.", fact) is True
+    menu_question = "Is menu cost like when stores have to change prices on stuff cause of inflation?"
+    assert line_matches_key(menu_question, fact) is True
+
+    wage = "The worker's real wage decreases because the raise is less than inflation."
+    wage_paraphrase = "The worker's raise is less than inflation so they lose money and the boss wins."
+    moves_up = "The worker's real wage moves up because the 3% raise still gives more money."
+    more_than = "The worker's real wage decreases because the raise is more than inflation."
+    assert line_matches_key(wage_paraphrase, wage) is True
+    assert line_matches_key(moves_up, wage) is False
+    assert line_matches_key(more_than, wage) is False
+
+    opposite = "Inflation does not help all people the same."
+    helps = "inflation helps all people"
+    assert line_matches_key(helps, opposite) is False
+    assert line_matches_key("Inflation hurts some people more than others.", opposite) is True
+    shared = (
+        "Menu cost is like when inflation helps all people the same, "
+        "so restaurants don't need to change prices much."
+    )
+    assert line_matches_key(shared, fact) is False
+
+    accepted = {"closed": "passed", "advanced": False, "stayed": False}
+    stayed = {"closed": "", "advanced": False, "stayed": True}
+
+    def turn(child: str, expected: str, loop: dict, intent: str, substep: str = "ask") -> dict:
+        return {
+            "intent": intent,
+            "child_text": child,
+            "expected": expected,
+            "tutor_reply": "Next.",
+            "prompt": "",
+            "loop_result": loop,
+            "attempt_before": 0,
+            "attempt_after": 0,
+            "block_id": "blk",
+            "block_before": "blk",
+            "substep": substep,
+            "substep_before": substep,
+        }
+
+    explain = turn(paraphrase, goal, accepted, "answer_right", "explain_topic")
+    summary = turn(paraphrase, goal, accepted, "answer_right", "summary_check")
+    assert graded_step(explain) is False
+    assert graded_step(summary) is False
+    checks = automatic_checks(
+        [
+            turn(paraphrase, goal, accepted, "guess"),
+            turn(menu_question, fact, stayed, "on_topic_question"),
+            turn(moves_up, wage, stayed, "answer_right"),
+            turn(shared, fact, stayed, "answer_wrong"),
+            turn(more_than, wage, stayed, "answer_wrong"),
+            explain,
+            summary,
+            turn(helps, opposite, accepted, "answer_right"),
+        ],
+        ended_how="completed",
+        response_length="balanced",
+    )
+    assert checks["false_passes"] == [7]
+    assert checks["false_fails"] == [1]
 
 
 def test_small_score_gap_is_no_clear_difference() -> None:
