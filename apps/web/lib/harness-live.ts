@@ -1,11 +1,11 @@
 import type { LiveLine } from "./harness-runner.ts";
 
-export type TranscriptLine = { role: "tutor" | "child"; text: string };
+export type TranscriptLine = { role: "tutor" | "child"; text: string; seq?: number };
 
-/** Session messages are the record. Lines the open tab has already spoken are added until the session stores them. */
+/** Session messages are the record. A stored seq is the turn number, not a renumbered list index. */
 export function transcriptForChat(
   chatId: string,
-  messages: { role?: string; content?: string }[] | undefined,
+  messages: { role?: string; content?: string; seq?: number }[] | undefined,
   pending: LiveLine[],
 ): TranscriptLine[] {
   const lines: TranscriptLine[] = [];
@@ -14,10 +14,11 @@ export function transcriptForChat(
     const text = (message.content || "").trim();
     if (!text) continue;
     const role = message.role === "assistant" ? "tutor" : "child";
-    const key = `${role}:${text}`;
+    const seq = typeof message.seq === "number" ? message.seq : undefined;
+    const key = seq === undefined ? `${role}:${text}` : `seq:${seq}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    lines.push({ role, text });
+    lines.push(seq === undefined ? { role, text } : { role, text, seq });
   }
   for (const line of pending) {
     if (line.chatId !== chatId) continue;

@@ -23,6 +23,23 @@ test("a running session is the transcript, and a pending child line is added onc
   ]);
 });
 
+test("line numbers stay the session turn sequence", () => {
+  const lines = transcriptForChat(
+    "chat-1",
+    [
+      { role: "assistant", content: "Hello", seq: 4 },
+      { role: "user", content: "blue", seq: 5 },
+      { role: "assistant", content: "Hello", seq: 6 },
+    ],
+    [],
+  );
+  assert.deepEqual(lines, [
+    { role: "tutor", text: "Hello", seq: 4 },
+    { role: "child", text: "blue", seq: 5 },
+    { role: "tutor", text: "Hello", seq: 6 },
+  ]);
+});
+
 test("an empty session stays empty until a line arrives", () => {
   assert.deepEqual(transcriptForChat("chat-1", [], []), []);
   assert.deepEqual(transcriptForChat("chat-1", undefined, [{ chatId: "chat-1", role: "tutor", text: "Hello" }]), [

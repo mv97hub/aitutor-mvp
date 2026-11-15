@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -18,6 +19,8 @@ from app.harness import (
     create_run,
     create_suite,
     delete_run,
+    download_chat,
+    download_run,
     ensure_fixture,
     findings_for_run,
     finish_chat,
@@ -132,6 +135,24 @@ def post_trim_all(db: Session = Depends(get_db)) -> dict:
 def post_claim(run_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     claimed = claim_chat(db, run_id)
     return {"chat": claimed}
+
+
+def _markdown(text: str, filename: str) -> Response:
+    return Response(
+        content=text,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/kc/harness/runs/{run_id}/download")
+def get_run_download(run_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    return _markdown(download_run(db, run_id), f"harness-run-{run_id}.md")
+
+
+@router.get("/kc/harness/chats/{chat_id}/download")
+def get_chat_download(chat_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    return _markdown(download_chat(db, chat_id), f"harness-chat-{chat_id}.md")
 
 
 @router.get("/kc/harness/runs/{run_id}/report")

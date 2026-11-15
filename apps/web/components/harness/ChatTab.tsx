@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import { api } from "@/lib/api";
+import { downloadHarnessFile } from "@/lib/harness-file";
 import { blockMarks } from "@/lib/harness-blocks";
 import { agreementLabel, DIMENSIONS } from "@/lib/harness-judge";
 import { childPromptText } from "@/lib/harness-policy";
@@ -19,7 +20,7 @@ type Turn = {
   loop_decision?: string;
 };
 
-type LiveMessage = { role: string; content: string };
+type LiveMessage = { role: string; content: string; seq?: number };
 
 type Score = { dimension: string; score: number; quote: string; turn: number };
 
@@ -149,14 +150,14 @@ export function ChatTab({ chatId }: { chatId: string }) {
   const handByDimension = new Map((hand?.scores || []).map((score) => [score.dimension, score.score]));
   const marks = blockMarks(chat?.turns || []);
 
-  function download() {
-    const blob = new Blob([JSON.stringify(chat, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${chat?.child?.name || "chat"}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
+  async function download() {
+    if (!chat) return;
+    setError("");
+    try {
+      await downloadHarnessFile(`/api/kc/harness/chats/${chat.id}/download`, `harness-chat-${chat.id}.md`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not download the chat.");
+    }
   }
 
   return (
@@ -183,8 +184,8 @@ export function ChatTab({ chatId }: { chatId: string }) {
             <h2>
               {chat.child?.name} · {chat.ended_how || "in progress"}
             </h2>
-            <button type="button" onClick={download}>
-              Download JSON
+            <button type="button" onClick={() => void download()}>
+              Download
             </button>
           </header>
           <p className="help">
@@ -199,8 +200,12 @@ export function ChatTab({ chatId }: { chatId: string }) {
               <h3>Live transcript</h3>
               <ol className="harness-transcript">
                 {live.map((message, index) => (
-                  <li key={`${index}-${message.role}`}>
-                    <strong>{message.role === "assistant" ? "Tutor" : "Child"}:</strong> {message.content}
+                  <li key={`${message.seq ?? index}-${message.role}`}>
+                    <strong>
+                      {typeof message.seq === "number" ? `${message.seq}. ` : ""}
+                      {message.role === "assistant" ? "Tutor" : "Child"}:
+                    </strong>{" "}
+                    {message.content}
                   </li>
                 ))}
               </ol>

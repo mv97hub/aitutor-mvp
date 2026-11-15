@@ -123,6 +123,10 @@ export function NewRunTab({
           stop_on_safety: plan.stop_on_safety,
         }),
       });
+      const started = await fetch(`/api/kc/harness/runs/${created.id}/start`, { method: "POST" });
+      if (!started.ok) {
+        setError((await started.text()) || "The run was saved, but it did not start.");
+      }
       onStarted(created.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start the run.");
@@ -303,7 +307,7 @@ export function NewRunTab({
         </label>
       ) : null}
       <button type="button" disabled={busy || count < 1} onClick={() => void start()}>
-        {busy ? "Creating…" : `Create ${count} chats`}
+        {busy ? "Starting…" : `Start ${count} chats`}
       </button>
     </section>
   );

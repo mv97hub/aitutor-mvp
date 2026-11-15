@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 
 import { api } from "@/lib/api";
 import { RunSummary } from "@/components/harness/RunSummary";
+import { downloadHarnessFile } from "@/lib/harness-file";
+import { runStatusLine } from "@/lib/harness-background";
 import { transcriptForChat } from "@/lib/harness-live";
-import type { ClaimedChat, HarnessTransport, LiveLine, SessionSnap } from "@/lib/harness-runner";
-import { driveRun } from "@/lib/harness-runner";
 
 type ChatRow = {
   id: string;
@@ -19,7 +19,7 @@ type ChatRow = {
   luna_tokens: number;
 };
 
-type SessionMessage = { role?: string; content?: string };
+type SessionMessage = { role?: string; content?: string; seq?: number };
 
 type RunRow = {
   id: string;
@@ -29,96 +29,6 @@ type RunRow = {
   totals: { priced_cents?: number; luna_tokens?: number; cost_usd?: string | null };
   plan: { concurrency?: number; child_model?: string; judge_model?: string };
 };
-
-async function readSnap(sessionId: string): Promise<SessionSnap> {
-  const session = await api<SessionSnap>(`/kc/tutor/sessions/${sessionId}`);
-  let prompt = "";
-  let safety = "none";
-  let loop: SessionSnap["loop_result"] = session.loop_result ?? null;
-  let loopDecision = session.loop_decision || "";
-  try {
-    const detail = await api<{
-      prompts?: {
-        system_prompt?: string;
-        decision?: {
-          safety_flag?: string;
-          loop_result?: SessionSnap["loop_result"];
-          loop_decision?: string;
-        };
-      }[];
-    }>(`/kc/sessions/${sessionId}`);
-    const latest = detail.prompts?.[detail.prompts.length - 1];
-    prompt = latest?.system_prompt || "";
-    safety = latest?.decision?.safety_flag || "none";
-    if (latest?.decision?.loop_result) loop = latest.decision.loop_result;
-    if (latest?.decision?.loop_decision) loopDecision = latest.decision.loop_decision;
-  } catch {
-    prompt = "";
-  }
-  const accepted = Boolean(loop && loop.closed !== "revealed" && (loop.closed === "passed" || loop.advanced));
-  return {
-    ...session,
-    id: sessionId,
-    prompt,
-    safety_flag: safety,
-    passed: accepted,
-    loop_result: loop,
-    loop_decision: loopDecision,
-    messages: session.messages || [],
-  };
-}
-
-function transport(runId: string): HarnessTransport {
-  return {
-    runStatus: () => api(`/kc/harness/runs/${runId}`),
-    session: readSnap,
-    speak: async (sessionId, model) => {
-      const response = await fetch("/api/kc/tutor/speak", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId, model }),
-      });
-      if (!response.ok) throw new Error(await response.text());
-      return readSnap(sessionId);
-    },
-    answer: async (sessionId, text, model) => {
-      const response = await fetch("/api/kc/tutor/answer", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId, answer: text, model }),
-      });
-      if (!response.ok) throw new Error(await response.text());
-      return readSnap(sessionId);
-    },
-    answerKey: (chatId) => api(`/kc/harness/chats/${chatId}/answer-key`),
-    childText: async (input) => {
-      const response = await fetch("/api/kc/harness/child", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...input, needsModel: true }),
-      });
-      if (!response.ok) throw new Error(await response.text());
-      return response.json();
-    },
-    recordTurn: async (chatId, body) => {
-      const response = await fetch("/api/kc/harness/turn", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chatId, turn: body }),
-      });
-      if (!response.ok) throw new Error(await response.text());
-      return response.json();
-    },
-    finish: async (chatId, reason) => {
-      const response = await fetch("/api/kc/harness/finish", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chatId, reason }),
-      });
-      if (!response.ok) throw new Error(await response.text());
-    },
-  };
-}
 
 export function RunsTab({
   selected,
@@ -134,7 +44,6 @@ export function RunsTab({
   const [sessions, setSessions] = useState<Record<string, SessionMessage[]>>({});
   const [error, setError] = useState("");
   const [driving, setDriving] = useState("");
-  const [live, setLive] = useState<LiveLine[]>([]);
 
   async function refresh() {
     let next: RunRow[] = [];
@@ -212,51 +121,60 @@ export function RunsTab({
   async function start(run: RunRow) {
     setDriving(run.id);
     setError("");
-    const gate = { aborted: false };
     try {
-      await api(`/kc/harness/runs/${run.id}/resume`, { method: "POST" });
-      const client = transport(run.id);
-      await driveRun(
-        run.id,
-        async () => {
-          const claimed = await api<{ chat: ClaimedChat | null }>(`/kc/harness/runs/${run.id}/claim`, { method: "POST" });
-          return claimed.chat;
-        },
-        client,
-        run.plan?.concurrency || 3,
-        gate,
-        (line) => {
-          setLive((current) => {
-            const last = current[current.length - 1];
-            if (last && last.role === line.role && last.text === line.text && last.chatId === line.chatId) return current;
-            return [...current, line].slice(-40);
-          });
-        },
-      );
+      const response = await fetch(`/api/kc/harness/runs/${run.id}/start`, { method: "POST" });
+      if (!response.ok) throw new Error((await response.text()) || "Could not start the run.");
+      await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The run stopped.");
+      setError(err instanceof Error ? err.message : "Could not start the run.");
     } finally {
       setDriving("");
+    }
+  }
+
+  async function stop(runId: string) {
+    setError("");
+    try {
+      const response = await fetch(`/api/kc/harness/runs/${runId}/stop`, { method: "POST" });
+      if (!response.ok) throw new Error((await response.text()) || "Could not stop the run.");
       await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not stop the run.");
+    }
+  }
+
+  async function downloadRun(runId: string) {
+    setError("");
+    try {
+      await downloadHarnessFile(`/api/kc/harness/runs/${runId}/download`, `harness-run-${runId}.md`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not download the run.");
+    }
+  }
+
+  async function downloadChat(chatId: string) {
+    setError("");
+    try {
+      await downloadHarnessFile(`/api/kc/harness/chats/${chatId}/download`, `harness-chat-${chatId}.md`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not download the chat.");
     }
   }
 
   const rows = detail?.chat_rows || [];
   const active = rows.filter((chat) => chat.status === "running" || chat.status === "queued");
-  const known = new Set(active.map((chat) => chat.id));
-  const pendingOnly = [...new Set(live.map((line) => line.chatId))].filter((chatId) => !known.has(chatId));
-  const showLive = active.length > 0 || pendingOnly.length > 0;
 
   return (
     <section className="harness-panel">
       <h2>Runs</h2>
       {detail?.id ? <RunSummary runId={detail.id} /> : null}
+      {rows.length > 0 ? <p className="help">{runStatusLine(rows)}</p> : null}
       {error ? <p className="banner">{error}</p> : null}
-      {showLive ? (
+      {active.length > 0 ? (
         <div className="harness-live">
           <h3>In progress</h3>
           {active.map((chat) => {
-            const lines = transcriptForChat(chat.id, sessions[chat.id], live);
+            const lines = transcriptForChat(chat.id, sessions[chat.id], []);
             return (
               <article key={chat.id}>
                 <p>
@@ -267,31 +185,20 @@ export function RunsTab({
                 {lines.length > 0 ? (
                   <ol className="harness-transcript">
                     {lines.map((line, index) => (
-                      <li key={`${chat.id}-${index}`}>
-                        <strong>{line.role === "tutor" ? "Tutor" : "Child"}:</strong> {line.text}
+                      <li key={`${chat.id}-${line.seq ?? index}`}>
+                        <strong>
+                          {typeof line.seq === "number" ? `${line.seq}. ` : ""}
+                          {line.role === "tutor" ? "Tutor" : "Child"}:
+                        </strong>{" "}
+                        {line.text}
                       </li>
                     ))}
                   </ol>
                 ) : (
                   <p className="help">
-                    {chat.session_id ? "Waiting for the first tutor message." : "Queued. Press Resume to start this chat."}
+                    {chat.session_id ? "Waiting for the first tutor message." : "Queued. Press Start to run this chat on the server."}
                   </p>
                 )}
-              </article>
-            );
-          })}
-          {pendingOnly.map((chatId) => {
-            const lines = transcriptForChat(chatId, [], live);
-            return (
-              <article key={chatId}>
-                <p>Running chat</p>
-                <ol className="harness-transcript">
-                  {lines.map((line, index) => (
-                    <li key={`${chatId}-${index}`}>
-                      <strong>{line.role === "tutor" ? "Tutor" : "Child"}:</strong> {line.text}
-                    </li>
-                  ))}
-                </ol>
               </article>
             );
           })}
@@ -318,13 +225,16 @@ export function RunsTab({
               <td>{run.totals?.luna_tokens ?? 0}</td>
               <td className="harness-actions">
                 <button type="button" disabled={driving === run.id} onClick={() => void start(run)}>
-                  {driving === run.id ? "Running" : "Resume"}
+                  {driving === run.id ? "Starting" : "Start"}
                 </button>
                 <button type="button" onClick={() => void act(`/kc/harness/runs/${run.id}/pause`)}>
                   Pause
                 </button>
-                <button type="button" onClick={() => void act(`/kc/harness/runs/${run.id}/cancel`)}>
-                  Cancel
+                <button type="button" onClick={() => void stop(run.id)}>
+                  Stop
+                </button>
+                <button type="button" onClick={() => void downloadRun(run.id)}>
+                  Download
                 </button>
                 <button type="button" onClick={() => void act(`/kc/harness/runs/${run.id}/again`)}>
                   Run again
@@ -341,6 +251,9 @@ export function RunsTab({
         </tbody>
       </table>
       <p className="help">
+        Start runs the chats on the server. Closing this tab does not stop them. Stop keeps the chats already stored. Start again continues the same chat.
+      </p>
+      <p className="help">
         Trim keeps prompts for the baseline and the newest run of each suite. Older runs keep the transcript, scores, intents, and recommendations.
       </p>
       <ul>
@@ -348,6 +261,9 @@ export function RunsTab({
           <li key={chat.id}>
             <button type="button" onClick={() => onOpenChat(detail?.id || "", chat.id)}>
               {chat.child?.name} · {chat.tutor_model} · {chat.status} {chat.ended_how} · cost {chat.cost_usd ?? "blank"} · luna {chat.luna_tokens}
+            </button>
+            <button type="button" onClick={() => void downloadChat(chat.id)}>
+              Download
             </button>
           </li>
         ))}
