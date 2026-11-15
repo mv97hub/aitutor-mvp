@@ -4518,7 +4518,7 @@ def test_an_answer_during_the_opening_explanation_is_scored_over_http() -> None:
         _wipe_zz()
 
 
-def test_a_further_question_on_the_summary_stays_and_move_on_completes() -> None:
+def test_one_further_question_closes_the_summary_and_elaborate_stays() -> None:
     from app.kc_loop import resolve_block_turn, summary_further_question
     from app.models import default_kc_tutor_config
 
@@ -4574,8 +4574,6 @@ def test_a_further_question_on_the_summary_stays_and_move_on_completes() -> None
 
     for block, question in (
         (topic, "tell me more"),
-        (topic, "Why does that work?"),
-        (explanation, "Why is the denominator the bottom number?"),
         (explanation, "can you please elaborate?"),
     ):
         stayed = run(block, question, block_complete=True)
@@ -4584,6 +4582,15 @@ def test_a_further_question_on_the_summary_stays_and_move_on_completes() -> None
         assert stayed.next_block_id == block["id"], question
         assert stayed.next_block_state["substep"] == "summary_check", question
         assert stayed.block_results == [], question
+
+    for block, question in (
+        (topic, "Why does that work?"),
+        (explanation, "Why is the denominator the bottom number?"),
+    ):
+        closed_question = run(block, question, block_complete=True)
+        assert closed_question.advance_block is True, question
+        assert closed_question.next_step == 1, question
+        assert closed_question.next_block_id == "next", question
 
     for block, phrase in ((topic, "move on"), (explanation, "let's continue")):
         closed = run(block, phrase, block_complete=False)

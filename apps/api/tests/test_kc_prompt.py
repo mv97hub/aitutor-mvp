@@ -1044,7 +1044,7 @@ def test_praise_only_when_the_reply_meets_the_goal() -> None:
 
 _CONGRATULATE = "Congratulate the learner once for finishing this block."
 _CHOICE = "Ask one question only: move on, or ask one more question."
-_REMINDER = "then ask the same single choice: move on, or ask one more question."
+_REMINDER = "If they ask one further question, answer it, then close."
 
 
 def _summary_block(block_type: str) -> dict:
@@ -1138,7 +1138,8 @@ def test_every_summary_block_congratulates_offers_a_choice_and_reminds_after_a_q
         assert "do not open the next block" in asked.lower(), block_type
         assert "You do not set the block order" in asked, block_type
         returned = _section(asked, "What to return")
-        assert "Set block_complete=true only when they choose to move on." in returned, block_type
+        assert "A move-on also sets block_complete=true." in returned, block_type
+        assert "answer it, then close" in returned.lower(), block_type
     assert changed == [
         "topic_goal",
         "mcq",
@@ -1285,27 +1286,49 @@ def test_move_on_question_does_not_reask_the_goal() -> None:
         assert moved.next_step == 1, ready
 
 
-def test_one_follow_up_then_a_second_move_on_advances() -> None:
+def test_one_further_question_then_closes() -> None:
+    """The check-in was the previous turn. One further question is answered, then the block closes."""
     question = "Why is scarcity the central problem?"
-    stayed = _passed_summary_turn(question, substep_passed=True)
-    assert stayed.advance_block is False
-    assert stayed.next_block_state["substep"] == "summary_check"
-    assert stayed.block_results == []
+    closed = _passed_summary_turn(question, substep_passed=True)
+    assert closed.advance_block is True
+    assert closed.next_step == 1
+    assert closed.next_block_state.get("substep") != "summary_check"
+    assert closed.block_results
     asked = _text(
         node=_topic_node(),
         opening=False,
         last_answer=question,
         active_block_state={"substep": "summary_check", "last_task_substep": "main", "revealed_substep": False},
     )
-    assert "and ask the goal again." not in _section(asked, "This turn")
+    turn = _section(asked, "This turn")
+    assert "and ask the goal again." not in turn
     assert "Stay on course: this is not an attempt at the goal." not in asked
-    assert "Do not return to the goal, the explain step, or another summary." in asked
-    assert "then ask the same single choice: move on, or ask one more question." in asked
+    assert "Answer that question in one or two sentences." in turn
+    assert "Do not ask move on, or one more question, again." in turn
+    assert "then ask the same single choice" not in turn.lower()
+    assert "Set block_complete=true." in turn
     assert "do not open the next block" in asked.lower()
-    closed = _passed_summary_turn("move on")
-    assert closed.advance_block is True
-    assert closed.next_step == 1
-    assert closed.next_block_state.get("substep") != "summary_check"
+
+
+def test_can_we_keep_going_advances_a_passed_summary() -> None:
+    """can we keep going and can we go on are move-ons, the same as what's next and move on."""
+    from app.kc_loop import summary_closes_after_question, summary_ready_signal
+
+    for phrase in ("Can we keep going?", "can we go on", "can we go on now?"):
+        assert summary_ready_signal(phrase), phrase
+        assert not summary_closes_after_question(phrase), phrase
+        closed = _passed_summary_turn(phrase)
+        assert closed.advance_block is True, phrase
+        assert closed.next_step == 1, phrase
+        assert closed.next_block_state.get("substep") != "summary_check", phrase
+        text = _text(
+            node=_topic_node(),
+            opening=False,
+            last_answer=phrase,
+            active_block_state={"substep": "summary_check", "last_task_substep": "main", "revealed_substep": False},
+        )
+        assert "The block is finished. Close in one sentence." in text, phrase
+        assert "Stay on course: this is not an attempt at the goal." not in text, phrase
 
 
 def test_a_non_question_on_a_passed_summary_opens_the_next_block() -> None:
@@ -1324,19 +1347,10 @@ def test_a_non_question_on_a_passed_summary_opens_the_next_block() -> None:
         assert "Close in one sentence." in text, phrase
 
 
-def test_a_question_on_a_passed_summary_does_not_advance() -> None:
-    question = "Why is scarcity the central problem?"
-    stayed = _passed_summary_turn(question, substep_passed=True)
+def test_elaborate_on_a_passed_summary_still_stays() -> None:
+    """Tell me more is not the one further question. It still holds the summary."""
+    stayed = _passed_summary_turn("tell me more", substep_passed=True)
     assert stayed.advance_block is False
     assert stayed.next_block_state["substep"] == "summary_check"
     assert stayed.block_results == []
-    asked = _text(
-        node=_topic_node(),
-        opening=False,
-        last_answer=question,
-        active_block_state={"substep": "summary_check", "last_task_substep": "main", "revealed_substep": False},
-    )
-    assert "Begin the next block in this same reply." not in asked
-    assert "and ask the goal again." not in _section(asked, "This turn")
-    assert "then ask the same single choice: move on, or ask one more question." in asked
 

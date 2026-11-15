@@ -147,8 +147,8 @@ def test_only_an_explicit_move_on_completes_the_explanatory_summary() -> None:
         block_complete=True,
         decision="complete",
     )
-    assert asked.advance_block is False
-    assert asked.next_block_state["substep"] == "summary_check"
+    assert asked.advance_block is True
+    assert asked.next_step == 1
 
 
 def _summary_prompt(answer: str) -> str:

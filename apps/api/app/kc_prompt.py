@@ -1283,8 +1283,9 @@ _SUMMARY_CHOICE = (
     "Ask one question only: move on, or ask one more question."
 )
 _SUMMARY_REMINDER = (
-    "If they ask one further question, answer it, then ask the same single choice: "
-    "move on, or ask one more question. "
+    "If they ask one further question, answer it, then close. "
+    "Do not ask move on, or one more question, again. "
+    "Set block_complete=true. Ask no question. "
     "Do not return to the goal, the explain step, or another summary."
 )
 _SUMMARY_MOVE_ON = (
@@ -1490,17 +1491,34 @@ def _summary_close_lines(
         ]
     if side_question and phase in {"task", "check"}:
         if phase == "check" and not revealed:
+            from app.kc_loop import learner_wants_recap_elaboration
+
             asked = " ".join((last_answer or "").split())
+            if learner_wants_recap_elaboration(last_answer):
+                return [
+                    (
+                        "The block is already finished. "
+                        f"Their question: {asked}. "
+                        "Do not score this message. Set help_requested=true, substep_passed=false, and block_complete=false. "
+                        "Answer that question in one or two sentences. "
+                        "If they ask what something is or who someone is, define it. "
+                        "Then ask the same single choice: move on, or ask one more question. "
+                        "Do not return to the goal, the explain step, or another summary. "
+                        "Do not repeat the goal question. "
+                        "Do not say the reply was partial, close, or a good start. "
+                        "Do not open the next block."
+                    ),
+                    _SUMMARY_NO_PRAISE,
+                ]
             return [
                 (
                     "The block is already finished. "
                     f"Their question: {asked}. "
-                    "Do not score this message. Set help_requested=true, substep_passed=false, and block_complete=false. "
                     "Answer that question in one or two sentences. "
                     "If they ask what something is or who someone is, define it. "
-                    f"{_SUMMARY_REMINDER} "
+                    "Then close. Do not ask move on, or one more question, again. "
+                    "Set block_complete=true. Ask no question. "
                     "Do not repeat the goal question. "
-                    "Do not say the reply was partial, close, or a good start. "
                     "Do not open the next block."
                 ),
                 _SUMMARY_NO_PRAISE,
@@ -1571,11 +1589,7 @@ def _summary_close_lines(
         "set substep_passed=true and block_complete=false, affirm that they have now completed the block, "
         f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE}"
     )
-    lines.append(
-        "Summary reply: If they ask a further question, "
-        "set substep_passed=false and block_complete=false. "
-        f"{_SUMMARY_REMINDER} Do not open the next block."
-    )
+    lines.append(f"Summary reply: {_SUMMARY_REMINDER} Do not open the next block.")
     closing = (
         "Summary reply: If they choose to close and move on, set block_complete=true and reply with a brief "
         "closing statement only. Ask no question and do not open the next block."
@@ -1601,9 +1615,9 @@ def _ending(
 ) -> str:
     if summary_stay and side_question and not unit_complete and not course_complete:
         return (
-            "Close Contract: This question does not complete the block and does not end the unit. "
-            "Answer it, then ask the same single choice: move on, or ask one more question. "
-            "Do not return to the goal."
+            "Close Contract: Answer this one further question, then close the block. "
+            "Do not ask move on, or one more question, again. "
+            "Set block_complete=true. Ask no question. Do not return to the goal."
         )
     if summary_stay and not unit_complete and not course_complete:
         length = _close_summary_sentence(close_depth, kind)
@@ -1984,6 +1998,8 @@ def _this_turn(
         if is_final_block_and_substep or unit_complete or course_complete:
             pick += " A unit close or course outro asks no new question."
         lines.append(pick)
+    from app.kc_loop import learner_wants_recap_elaboration
+
     lines.append(
         _ending(
             close_depth=close_depth,
@@ -1994,7 +2010,9 @@ def _this_turn(
             course_title=course_title,
             is_final_block_and_substep=is_final_block_and_substep,
             summary_stay=summary_stay,
-            side_question=side_question and stay_on,
+            side_question=(
+                side_question and stay_on and not learner_wants_recap_elaboration(last_answer)
+            ),
         )
     )
     elaborating = _summary_elaboration(block, substep, last_answer)
@@ -2340,7 +2358,6 @@ def _explanation_teach_lines(
             lines.append(
                 "Give a cohesive summary of every topic discussed in this block. "
                 f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} "
-                "If they ask a further question, set substep_passed=false and block_complete=false. "
                 f"{_SUMMARY_REMINDER} {_SUMMARY_MOVE_ON}"
             )
         else:
@@ -2351,7 +2368,6 @@ def _explanation_teach_lines(
             else:
                 lines.append(
                     "The learner has responded on the summary. "
-                    "If they ask a further question, set substep_passed=false and block_complete=false. "
                     f"{_SUMMARY_REMINDER} {_SUMMARY_MOVE_ON} Do not mention the next block."
                 )
         return lines
@@ -3750,10 +3766,9 @@ def _what_to_return(
                 "and substep_passed=true when they are ready to proceed. "
                 "On the summary, when the block's work is done, "
                 f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} "
-                "If they ask a further question, set block_complete=false. "
                 f"{_SUMMARY_REMINDER} "
-                "Set block_complete=true only when they choose to move on. "
-                "Ask no question and do not open the next block. Never quiz."
+                "A move-on also sets block_complete=true. "
+                "Ask no question on that close and do not open the next block. Never quiz."
             )
     elif summary_begin:
         lines.append(begun)
@@ -3761,10 +3776,9 @@ def _what_to_return(
         lines.append(
             "On this summary, when the block's work is done, "
             f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} "
-            "If they ask a further question, set block_complete=false. "
             f"{_SUMMARY_REMINDER} "
-            "Set block_complete=true only when they choose to move on. "
-            "Ask no question and do not open the next block."
+            "A move-on also sets block_complete=true. "
+            "Ask no question on that close and do not open the next block."
         )
     if clarify_help:
         lines.append("Set help_requested=true. The learner asked a question.")
