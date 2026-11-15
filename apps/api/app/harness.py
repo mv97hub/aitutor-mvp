@@ -1370,12 +1370,6 @@ def save_recommendations(db: Session, body: dict) -> list[dict]:
     cards = body.get("cards") if isinstance(body.get("cards"), list) else []
     if not cards:
         raise HTTPException(status_code=422, detail="A review needs at least one card.")
-    kinds = {str(card.get("kind") or "") for card in cards if isinstance(card, dict)}
-    if not body.get("observations") and "remove" not in kinds and "reword" not in kinds:
-        raise HTTPException(
-            status_code=422,
-            detail="A batch that only proposes additions is incomplete. Include a removal or a shorter wording.",
-        )
     if body.get("replace") and run_id is not None:
         db.execute(delete(HarnessRecommendation).where(HarnessRecommendation.run_id == run_id))
     saved = []
