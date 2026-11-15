@@ -482,9 +482,9 @@ def test_an_explanatory_topic_moves_on_after_two_extra_turns() -> None:
     assert third.next_block_state["elaboration_turns"] == 0
     assert third.unit_complete is False
     last = _explanatory_turn("what about pizza", {**third.next_block_state, "elaboration_turns": 2})
-    assert last.next_block_state["substep"] == "summary_check"
-    assert last.unit_complete is False
-    assert last.block_results == []
+    assert last.unit_complete is True
+    assert last.next_block_state.get("substep") != "summary_check"
+    assert last.block_results[-1]["outcome"] == "engaged"
 
 
 def test_an_explanatory_topic_moves_on_when_the_model_flags_ready() -> None:
