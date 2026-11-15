@@ -7,6 +7,7 @@ This module stores the plan, the child's intent, and the reviews.
 from __future__ import annotations
 
 import copy
+import os
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.ai_safety import read_ai_safety
 from app.flow import unique_student_slug
+from app.harness_download import render_download
 from app.harness_checks import (
     DEFAULT_CHAT_CAP_CENTS,
     DEFAULT_LUNA_TOKEN_CEILING,
@@ -66,6 +68,22 @@ from app.token_usage import _model_cost, session_token_usage
 from app.tutor_profile import create_tutor_profile, effective_kc_tutor_config, get_profile_by_id_or_slug, load_profile
 
 HARNESS_CODE_VERSION = "harness-1"
+
+
+def deployed_commit() -> str:
+    """The build that served this process. Empty when the host did not set one."""
+    for key in ("RENDER_GIT_COMMIT", "GIT_COMMIT", "SOURCE_VERSION"):
+        value = os.environ.get(key, "").strip().split()
+        if value:
+            return value[0][:40]
+    return ""
+
+
+def run_code_version() -> str:
+    commit = deployed_commit()
+    if not commit:
+        return HARNESS_CODE_VERSION
+    return f"{HARNESS_CODE_VERSION} {commit}"[:80]
 FIXTURE_CODE = "harness-every-block"
 LUNA_MODEL = "gpt-6-luna"
 _UNGRADED_STEPS = {"explain", "explain_topic", "summary_check"}
@@ -386,7 +404,7 @@ def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, see
         status="queued",
         plan=plan,
         totals={"chats": 0, "priced_cents": 0, "luna_tokens": 0},
-        code_version=HARNESS_CODE_VERSION,
+        code_version=run_code_version(),
         suite_id=suite_id,
     )
     db.add(run)
@@ -536,7 +554,7 @@ def replaced_session_id(previous: object, new: object) -> object | None:
 
 def resume_run(db: Session, run_id: uuid.UUID) -> dict:
     run = _run_or_404(db, run_id)
-    if run.status in {"paused", "queued"}:
+    if run.status in {"paused", "queued", "running"}:
         run.status = "running"
         run.updated_at = _now()
         running = db.scalars(
@@ -1295,6 +1313,65 @@ def get_chat(db: Session, chat_id: uuid.UUID) -> dict:
     if chat is None:
         raise HTTPException(status_code=404, detail="That chat was not found.")
     return chat_detail(db, chat)
+
+
+def _llm_calls(db: Session, chat: HarnessChat) -> list[dict]:
+    prompts: list[KcModelPrompt] = []
+    usage: list[dict] = []
+    if chat.session_id is not None:
+        prompts = list(
+            db.scalars(
+                select(KcModelPrompt).where(KcModelPrompt.session_id == chat.session_id).order_by(KcModelPrompt.seq)
+            ).all()
+        )
+        usage = list(session_token_usage(db, chat.session_id).get("turns") or [])
+    calls = []
+    count = max(len(prompts), len(usage))
+    for index in range(count):
+        prompt = prompts[index] if index < len(prompts) else None
+        row = usage[index] if index < len(usage) else {}
+        model = (prompt.model if prompt is not None else "") or str(row.get("model") or "") or chat.tutor_model
+        incoming = int(row.get("input_tokens") or 0)
+        outgoing = int(row.get("output_tokens") or 0)
+        cached = int(row.get("cached_tokens") or 0)
+        billed = min(cached, incoming)
+        cost = _model_cost(model, incoming - billed, billed, outgoing) if row else None
+        calls.append(
+            {
+                "model": model,
+                "system_prompt": prompt.system_prompt if prompt is not None else "",
+                "kind": str(row.get("kind") or ""),
+                "input_tokens": incoming if row else None,
+                "output_tokens": outgoing if row else None,
+                "cached_tokens": cached if row else None,
+                "cost_usd": cost,
+            }
+        )
+    return calls
+
+
+def _download_payload(db: Session, chat: HarnessChat) -> dict:
+    body = chat_detail(db, chat)
+    body["llm_calls"] = _llm_calls(db, chat)
+    return body
+
+
+def _run_stamp(run: HarnessRun) -> dict:
+    return {"id": str(run.id), "status": run.status, "code_version": run.code_version}
+
+
+def download_chat(db: Session, chat_id: uuid.UUID) -> str:
+    chat = db.get(HarnessChat, chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="That chat was not found.")
+    run = _run_or_404(db, chat.run_id)
+    return render_download(_run_stamp(run), [_download_payload(db, chat)])
+
+
+def download_run(db: Session, run_id: uuid.UUID) -> str:
+    run = _run_or_404(db, run_id)
+    chats = db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id).order_by(HarnessChat.created_at)).all()
+    return render_download(_run_stamp(run), [_download_payload(db, chat) for chat in chats])
 
 
 def _block_score(db: Session, chat: HarnessChat) -> tuple[int | None, list[dict]]:

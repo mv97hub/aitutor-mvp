@@ -14,7 +14,7 @@ function assignSeq(preferred: number | undefined, used: Set<number>, maxSeq: num
   return { seq, maxSeq: seq };
 }
 
-/** Session messages are the record. Lines the open tab has already spoken are added until the session stores them. */
+/** Session messages are the record. A stored seq is the turn number, not a renumbered list index. */
 export function transcriptForChat(
   chatId: string,
   messages: { role?: string; content?: string; seq?: number }[] | undefined,
@@ -28,7 +28,8 @@ export function transcriptForChat(
     const text = (message.content || "").trim();
     if (!text) continue;
     const role = message.role === "assistant" ? "tutor" : "child";
-    const key = `${role}:${text}`;
+    const seq = typeof message.seq === "number" ? message.seq : undefined;
+    const key = seq === undefined ? `${role}:${text}` : `seq:${seq}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const assigned = assignSeq(message.seq, used, maxSeq);

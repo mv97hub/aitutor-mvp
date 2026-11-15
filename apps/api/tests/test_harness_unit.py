@@ -10,8 +10,10 @@ from app.harness import (
     fixture_document,
     next_claim_generation,
     replaced_session_id,
+    run_code_version,
     save_recommendations,
 )
+from app.harness_download import render_download
 from app.harness_checks import automatic_checks, place_key, stop_reason, stuck_after_turn
 from app.harness_report import chat_is_stuck, stuck_nudge_rows
 from app.harness_personas import BOUNDARY_PROBES, starter_children
@@ -826,3 +828,132 @@ def test_a_missing_judge_is_not_judged_and_outcomes_sit_beside_the_score() -> No
     )
     assert "withheld" in withheld["text"]
     assert "not judged" not in withheld["text"]
+
+
+def test_run_is_stamped_with_the_deployed_commit(monkeypatch) -> None:
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+    monkeypatch.delenv("SOURCE_VERSION", raising=False)
+    assert run_code_version() == "harness-1"
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "abcdef123 extra")
+    assert run_code_version() == "harness-1 abcdef123"
+
+
+def test_download_keeps_turns_checks_scores_and_a_failed_call() -> None:
+    text = render_download(
+        {"id": "run-1", "status": "completed", "code_version": "harness-1 abcdef123"},
+        [
+            {
+                "id": "chat-1",
+                "status": "completed",
+                "ended_how": "stuck",
+                "child": {"name": "AI_Child1"},
+                "tutor_model": "gpt-4.1",
+                "child_model": "gpt-4.1-mini",
+                "cost_usd": "0.02",
+                "luna_tokens": 12,
+                "turns": [
+                    {
+                        "seq": 1,
+                        "intent": "answer_wrong",
+                        "child_text": "The river is green.",
+                        "child_prompt": "You are a test child.",
+                        "tutor_prompt": "Ask one question.",
+                        "child_tokens": {"input_tokens": 10, "output_tokens": 4},
+                        "session_after": {
+                            "block_id": "b1",
+                            "block_type": "topic_goal",
+                            "block_title": "Rivers",
+                            "tutor_reply": "",
+                            "error": "The tutor did not write a new reply.",
+                            "loop_result": {"stayed": True, "advanced": False, "closed": ""},
+                            "loop_decision": "stay",
+                        },
+                    },
+                    {
+                        "seq": 2,
+                        "intent": "answer_right",
+                        "child_text": "The river is blue.",
+                        "child_prompt": "",
+                        "tutor_prompt": "Ask one question.",
+                        "child_tokens": {"input_tokens": 8, "output_tokens": 3},
+                        "session_after": {
+                            "block_id": "b2",
+                            "block_type": "mcq",
+                            "block_title": "Color",
+                            "tutor_reply": "Yes.",
+                            "loop_result": {"stayed": False, "advanced": True, "closed": "passed"},
+                            "loop_decision": "advance",
+                        },
+                    },
+                ],
+                "evaluations": [
+                    {"kind": "automatic", "checks": {"false_passes": [0]}, "scores": [], "error": ""},
+                    {"kind": "judged", "checks": {}, "scores": [{"dimension": "teaching_quality", "score": 2}], "error": ""},
+                ],
+                "block_outcomes": [
+                    {"title": "Rivers", "outcome": "passed"},
+                    {"title": "Color", "outcome": "revealed"},
+                    {"title": "Hook", "outcome": "engaged"},
+                ],
+                "llm_calls": [
+                    {
+                        "model": "gpt-4.1",
+                        "system_prompt": "Say the opening.",
+                        "kind": "speak",
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "cost_usd": "0.001",
+                    },
+                    {
+                        "model": "gpt-4.1",
+                        "system_prompt": "Ask one question.",
+                        "kind": "answer",
+                        "input_tokens": 120,
+                        "output_tokens": 30,
+                        "cost_usd": "0.002",
+                    },
+                    {
+                        "model": "gpt-4.1",
+                        "system_prompt": "Ask one question.",
+                        "kind": "answer",
+                        "input_tokens": 140,
+                        "output_tokens": 10,
+                        "cost_usd": "0.003",
+                    },
+                ],
+            },
+            {
+                "id": "chat-2",
+                "status": "completed",
+                "ended_how": "completed",
+                "child": {"name": "AI_Child2"},
+                "tutor_model": "gpt-4.1-mini",
+                "turns": [],
+                "evaluations": [],
+                "block_outcomes": [],
+                "llm_calls": [],
+            },
+        ],
+    )
+    assert "Commit: harness-1 abcdef123" in text
+    assert "AI_Child1" in text and "AI_Child2" in text
+    assert "The river is green." in text
+    assert "The tutor did not write a new reply." in text
+    assert "Start of block: Topic / Goal — Rivers" in text
+    assert "End of block: Topic / Goal — Rivers" in text
+    assert "Start of block: Multiple Choice Question — Color" in text
+    assert "The river is blue." in text
+    assert "Tutor: Yes." in text
+    assert '"stayed": true' in text
+    assert "teaching_quality: 2" in text
+    assert "false_passes" in text
+    assert "Rivers: passed" in text
+    assert "Color: revealed" in text
+    assert "Hook: engaged" in text
+    assert "You are a test child." in text
+    assert "Say the opening." in text
+    assert "Ask one question." in text
+    assert "120 in, 30 out" in text
+    assert "Cost: 0.002" in text
+    assert "Cost: 0.02\n" in text
