@@ -637,10 +637,12 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
         run.status = "completed"
         run.updated_at = _now()
         return None
+    # LIMIT 1 so each parallel claim locks a different queued chat.
     chat = db.scalar(
         select(HarnessChat)
         .where(HarnessChat.run_id == run.id, HarnessChat.status == "queued")
         .order_by(HarnessChat.created_at)
+        .limit(1)
         .with_for_update(skip_locked=True)
     )
     if chat is None:

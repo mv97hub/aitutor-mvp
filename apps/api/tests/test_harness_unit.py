@@ -1,10 +1,13 @@
 """Harness checks that do not need a database."""
 
-from fastapi import HTTPException
-
+import uuid
 from types import SimpleNamespace
 
+from fastapi import HTTPException
+from sqlalchemy.dialects import postgresql
+
 from app.harness import (
+    claim_chat,
     claim_opens_session,
     expected_for_step,
     fixture_document,
@@ -76,6 +79,40 @@ def test_a_second_claim_keeps_the_session_and_closes_a_replaced_one() -> None:
     assert replaced_session_id(None, "session-2") is None
     assert replaced_session_id("session-1", "session-1") is None
     assert replaced_session_id("session-1", "session-2") == "session-1"
+
+
+def test_claim_locks_one_queued_chat() -> None:
+    """Each claim locks one queued chat so the next claim can take another row.
+
+    The statement is LIMIT 1 FOR UPDATE SKIP LOCKED on queued chats only.
+    """
+    run = SimpleNamespace(id=uuid.uuid4(), status="running", plan={}, totals={}, updated_at=None)
+    captured: list = []
+
+    class RecordingSession:
+        def get(self, model, key):
+            return run
+
+        def scalar(self, statement):
+            captured.append(statement)
+            return None
+
+    assert claim_chat(RecordingSession(), run.id) is None
+    locked = [
+        statement
+        for statement in captured
+        if getattr(statement, "_for_update_arg", None) is not None
+        and statement._for_update_arg.skip_locked
+    ]
+    assert len(locked) == 1
+    claim = locked[0]
+    assert claim._limit_clause.value == 1
+    compiled = claim.compile(dialect=postgresql.dialect())
+    sql = " ".join(str(compiled).split())
+    assert "LIMIT %(param_1)s::INTEGER FOR UPDATE SKIP LOCKED" in sql
+    assert compiled.params["param_1"] == 1
+    assert compiled.params["status_1"] == "queued"
+    assert "harness_chats.status = %(status_1)s" in sql
 
 
 def test_stop_on_cap_and_luna_ceiling() -> None:
