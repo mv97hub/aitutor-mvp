@@ -135,9 +135,16 @@ def explanation_length_override(
     reading_level: str,
     explanation_style: str,
     active_block_state: dict | None = None,
+    last_answer: str = "",
 ) -> str:
     """The cross-layer length sentence, or empty when this turn keeps response_length."""
     if str(block.get("type") or "").strip() != "explanation":
+        return ""
+    from app.kc_loop import explanation_restates_topic, explanation_side_remark
+
+    if explanation_side_remark(block, last_answer, active_block_state, cfg) or explanation_restates_topic(
+        block, active_block_state, last_answer
+    ):
         return ""
     bcfg = ((cfg or {}).get("blocks") or {}).get("explanation") or {}
     if not bool(bcfg.get("allow_depth_override_student_length", True)):
@@ -970,6 +977,7 @@ def _who_you_are_talking_to(
     cfg: dict | None = None,
     active_block_state: dict | None = None,
     passage_reprint: bool = False,
+    last_answer: str = "",
 ) -> list[str]:
     cp = effective_child_profile(student)
     parts = [f"Speak to {student.display_name}."]
@@ -1010,7 +1018,13 @@ def _who_you_are_talking_to(
         reading_level=str(cp["reading_level"]),
         explanation_style=str(cp["explanation_style"]),
         active_block_state=active_block_state,
+        last_answer=last_answer,
     )
+    from app.kc_loop import explanation_restates_topic, explanation_side_remark
+
+    short_explanation_turn = explanation_side_remark(
+        block, last_answer, active_block_state, cfg
+    ) or explanation_restates_topic(block, active_block_state, last_answer)
     if length_override:
         parts.append(length_override)
     elif passage_reprint:
@@ -1024,6 +1038,7 @@ def _who_you_are_talking_to(
         if (
             str(block.get("type") or "").strip() == "explanation"
             and bool(bcfg.get("allow_depth_override_student_length", True))
+            and not short_explanation_turn
         ):
             parts.append(
                 "If the learner asks to elaborate, do NOT truncate that elaboration to fit "
@@ -1943,11 +1958,25 @@ def _this_turn(
         elif _explanation_capped(substep, active_block_state):
             lines.append(_EXPLANATION_CAP)
         else:
-            lines.append(
-                "The learner has replied on the current topic. If they have a question or want elaboration, stay on this topic and answer. "
-                "If they are ready, follow the move-on instruction in What to teach and explain the next topic, or summarize when this was the last topic. "
-                "Do not quiz."
-            )
+            from app.kc_loop import explanation_restates_topic, explanation_side_remark
+
+            if explanation_side_remark(block, last_answer, active_block_state, cfg):
+                lines.append(
+                    "Answer the side remark in one or two sentences, then one line back to the active lesson. "
+                    "Do not start a new explanation of this block. Do not quiz."
+                )
+            elif explanation_restates_topic(block, active_block_state, last_answer):
+                lines.append(
+                    "The learner already restated this point. Name anything missed in one sentence. "
+                    "Do not re-teach the whole topic. Then follow the move-on instruction in What to teach "
+                    "and explain the next topic, or summarize when this was the last topic. Do not quiz."
+                )
+            else:
+                lines.append(
+                    "The learner has replied on the current topic. If they have a question or want elaboration, stay on this topic and answer. "
+                    "If they are ready, follow the move-on instruction in What to teach and explain the next topic, or summarize when this was the last topic. "
+                    "Do not quiz."
+                )
     if worked_close == "affirm":
         lines.append(_WORKED_AFFIRM)
     elif worked_close == "continue":
@@ -2007,8 +2036,15 @@ def _explanation_teach_lines(
     index = explanation_topic_index(block, state)
     lines = [
         "Do NOT quiz or test the learner on this block. Never ask them to solve, recall for a grade, or prove they know it.",
-        "Explain the topic clearly, then ask if they have any questions or would like you to elaborate.",
     ]
+    from app.kc_loop import explanation_restates_topic, explanation_side_remark
+
+    aside = (not opening) and explanation_side_remark(block, last_answer, state, None)
+    restated = (not opening) and (not aside) and explanation_restates_topic(block, state, last_answer)
+    if not aside and not restated:
+        lines.append(
+            "Explain the topic clearly, then ask if they have any questions or would like you to elaborate."
+        )
     title = str(data.get("block_title") or "").strip()
     if title:
         lines.append(f"Block title: {_finish(title)}")
@@ -2061,20 +2097,39 @@ def _explanation_teach_lines(
     )
     if covered:
         lines.append("Already covered topic titles: " + "; ".join(covered) + ".")
-    if topic["explanation"]:
-        lines.append(f"Explain this topic from: {_finish(topic['explanation'])}")
-    if topic["key_points"]:
-        lines.append(f"Key points to weave in: {_finish(topic['key_points'])}")
-    if topic["examples_or_analogies"]:
-        lines.append(f"Example or analogy to use: {_finish(topic['examples_or_analogies'])}")
-    if opening:
+    if aside:
         lines.append(
-            "This is the opening turn. Explain only this topic at the configured depth, then ask if they have questions or want elaboration. "
-            "Do not start a later topic yet."
+            "Answer the side remark in one or two sentences, then one line back to the active lesson. "
+            "Do not start a new explanation of this block."
         )
         return lines
+    if restated:
+        lines.append(
+            "The learner already restated this point. Name anything missed in one sentence. "
+            "Do not re-teach the whole topic."
+        )
+        if topic["explanation"]:
+            lines.append(
+                "Topic point, already said, for the one-sentence gap only: "
+                f"{_finish(topic['explanation'])}"
+            )
+    else:
+        if topic["explanation"]:
+            lines.append(f"Explain this topic from: {_finish(topic['explanation'])}")
+        if topic["key_points"]:
+            lines.append(f"Key points to weave in: {_finish(topic['key_points'])}")
+        if topic["examples_or_analogies"]:
+            lines.append(f"Example or analogy to use: {_finish(topic['examples_or_analogies'])}")
+        if opening:
+            lines.append(
+                "This is the opening turn. Explain only this topic at the configured depth, then ask if they have questions or want elaboration. "
+                "Do not start a later topic yet."
+            )
+            return lines
     if _explanation_capped(substep, state):
         proceed = "The learner has used the two extra turns on this topic. Set substep_passed=true"
+    elif restated:
+        proceed = "Set substep_passed=true"
     else:
         lines.append(
             "If the learner asks a question or wants elaboration, set substep_passed=false, stay on this topic, "
@@ -2910,10 +2965,27 @@ def _how_to_teach(
     goal_start = _goal_start_mode(
         block, substep, opening=opening, last_answer=last_answer, cfg=cfg, state=active_block_state
     )
-    from app.kc_loop import stay_on_course_enabled
+    from app.kc_loop import explanation_restates_topic, explanation_side_remark, stay_on_course_enabled
 
     side = _typed_side_request(block, substep, last_answer, active_block_state, cfg)
     stay_on = stay_on_course_enabled(cfg)
+    aside = explanation_side_remark(block, last_answer, active_block_state, cfg)
+    restated = explanation_restates_topic(block, active_block_state, last_answer)
+    if aside or restated:
+        lecture_bits = (
+            "explanation depth",
+            "when the learner asks a question or wants elaboration",
+            "length override is on",
+            "an elaboration request may run longer",
+            "unless they ask you to elaborate",
+            "do not cut the explanation",
+            "as many sentences",
+            "comprehensive deep dive",
+            "detailed multi-angle",
+        )
+        lines = [line for line in lines if not any(bit in line.lower() for bit in lecture_bits)]
+    if aside:
+        lines = [line for line in lines if not line.lower().startswith("close each topic")]
     side_question = _prompts_side_question(
         block, substep, last_answer, opening=opening, cfg=cfg, state=active_block_state
     )
@@ -2929,6 +3001,16 @@ def _how_to_teach(
         lines.append(
             "On this goal-start turn, answer the side remark in one or two sentences, then one line back to the lesson. "
             "Do not start a new explanation."
+        )
+    elif aside:
+        lines.append(
+            "Answer the side remark in one or two sentences, then one line back to the active lesson. "
+            "Do not start a new explanation of this block."
+        )
+    elif restated:
+        lines.append(
+            "The learner already restated this point. Name anything missed in one sentence. "
+            "Do not re-teach the whole topic."
         )
     elif worked_close in {"affirm", "continue"}:
         lines.append("On this worked-example close the stance does not ask. Do not add a guiding question.")
@@ -2952,7 +3034,7 @@ def _how_to_teach(
             "Set help_requested=true."
         )
 
-    if not side_question:
+    if not side_question and not aside and not restated:
         if escalation == "socratic_probing":
             lines.append(
                 "Scaffolding escalation (socratic_probing): on misses, ask targeted diagnostic questions to help the learner spot the gap themselves."
@@ -2973,7 +3055,7 @@ def _how_to_teach(
             "and advance immediately when the block passes." + budget
         )
 
-    if goal_start in {"aside", "cap"}:
+    if goal_start in {"aside", "cap"} or aside:
         pass
     elif side and not stay_on:
         lines.append(_SIDE_FOLLOW)
@@ -3078,7 +3160,18 @@ def _how_to_teach(
 
     begun = _SUMMARY_BEGIN if has_next else _SUMMARY_BEGIN_LAST
     if str(block.get("type") or "") == "explanation":
-        if summary_begin:
+        if aside:
+            lines.append(
+                "Explanatory block override: do not quiz, score, or reveal an answer. "
+                "Answer the side remark in one or two sentences, then one line back to the lesson. "
+                "Do not re-teach this topic."
+            )
+        elif restated:
+            lines.append(
+                "Explanatory block override: do not quiz, score, or reveal an answer. "
+                "Name anything missed in one sentence. Do not re-teach the whole topic."
+            )
+        elif summary_begin:
             lines.append(
                 "Explanatory block override: do not quiz, score, or reveal an answer. "
                 f"{begun}"
@@ -3798,6 +3891,7 @@ def build_kc_prompt(
                     cfg,
                     state_dict,
                     passage_reprint=passage_reprint,
+                    last_answer=last_answer or "",
                 ),
             ),
             (

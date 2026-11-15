@@ -194,3 +194,139 @@ def test_ready_moves_to_the_next_topic_then_the_summary() -> None:
     assert done.mark_known is True
     assert done.block_results[-1]["outcome"] == "engaged"
     assert done.reveals == 0
+
+
+CYCLE = {
+    "id": "blk_cycle",
+    "type": "explanation",
+    "data": {
+        "block_title": "The business cycle",
+        "topics": [
+            {
+                "id": "top_cycle",
+                "title": "The business cycle",
+                "explanation": (
+                    "The business cycle is the up and down movement of the economy. "
+                    "The four phases are expansion, peak, contraction, and trough. "
+                    "GDP rises in an expansion and falls in a contraction. "
+                    "The Great Recession was a deep contraction."
+                ),
+                "key_points": "Up and down. Four phases. GDP. The Great Recession.",
+                "examples_or_analogies": "A roller coaster.",
+            },
+            {
+                "id": "top_causes",
+                "title": "Causes",
+                "explanation": "Spending, jobs, and confidence push the cycle from one phase to the next.",
+                "key_points": "Spending. Jobs. Confidence.",
+                "examples_or_analogies": "",
+            },
+        ],
+        "summary_takeaway": "The economy rises and falls.",
+    },
+}
+
+
+def _cycle_prompt(answer: str) -> str:
+    student = _student(
+        child_profile={
+            "response_length": "bite_sized",
+            "reading_level": "on_grade",
+            "explanation_style": "concrete_examples",
+        }
+    )
+    return build_kc_prompt(
+        student=student,
+        profile=_profile_for(5),
+        node=_node(blocks=[deepcopy(CYCLE), deepcopy(BLOCK)]),
+        goal=_goal(),
+        step=0,
+        opening=False,
+        choice_on_screen=False,
+        prerequisite_status="",
+        support_band="ready",
+        course_position="1 of 1",
+        unit_complete=False,
+        course_complete=False,
+        attempts=0,
+        hint_tier="nudge",
+        reveals=0,
+        off_course_count=0,
+        affect="",
+        enrichment_turns=0,
+        help_requested=False,
+        minutes_used=0,
+        component_status="unknown",
+        stability="0",
+        last_answer=answer,
+        last_misconception="",
+        last_messages="",
+        rubric_met=[],
+        redirect_pending=False,
+        fragment=False,
+        others_known=False,
+        active_block_state={"substep": "explain_topic", "topic_index": 0, "dialogue_turns": 1, "elaboration_turns": 0},
+    )["system_prompt"]
+
+
+def _cycle_turn(answer: str):
+    return resolve_block_turn(
+        decision="stay",
+        substep_passed=False,
+        block_complete=False,
+        rubric_met=[],
+        stored_rubric=[],
+        matched_wrong="",
+        blocks=[deepcopy(CYCLE), deepcopy(BLOCK)],
+        step=0,
+        active_block_state={"substep": "explain_topic", "topic_index": 0, "dialogue_turns": 1, "elaboration_turns": 0},
+        block_results=[],
+        move_attempts=0,
+        hint_tier="nudge",
+        reveals=0,
+        enrichment_turns=0,
+        cfg=_cfg(5),
+        goal=None,
+        last_misconception="",
+        answer=answer,
+    )
+
+
+def test_a_side_remark_on_an_explanatory_topic_stays_one_or_two_sentences() -> None:
+    dog = "Why does my dog bark at the mail?"
+    text = _cycle_prompt(dog)
+    teaching = text.split("What to teach", 1)[-1].split("Who you are talking to", 1)[0]
+    how = text.split("How to teach", 1)[-1].split("How to sound", 1)[0]
+    assert "one or two sentences" in text
+    assert "one line back to the active lesson" in teaching
+    assert "Do not start a new explanation of this block." in teaching
+    assert "Explain this topic from:" not in teaching
+    assert "The Great Recession was a deep contraction." not in text
+    assert "CROSS-LAYER LENGTH OVERRIDE" not in text
+    assert "Explanation depth" not in how
+    assert "break the topic into a new step-by-step" not in text
+    assert "as many sentences" not in text.lower()
+    assert "Do not re-teach this topic." in how
+    stayed = _cycle_turn(dog)
+    assert stayed.next_block_state["topic_index"] == 0
+    assert stayed.next_block_state["substep"] == "explain_topic"
+    assert stayed.advance_block is False
+
+
+def test_an_explanatory_restatement_moves_to_the_next_topic() -> None:
+    said = "The economy moves up and down. That is the business cycle."
+    moved = _cycle_turn(said)
+    assert moved.next_block_state["topic_index"] == 1
+    assert moved.next_block_state["substep"] == "explain_topic"
+    assert moved.advance_block is False
+    assert moved.block_results == []
+    text = _cycle_prompt(said)
+    teaching = text.split("What to teach", 1)[-1].split("Who you are talking to", 1)[0]
+    assert "Name anything missed in one sentence." in teaching
+    assert "Do not re-teach the whole topic." in teaching
+    assert "Explain this topic from:" not in teaching
+    assert "Topic point, already said, for the one-sentence gap only:" in teaching
+    assert "explain the next topic" in teaching.lower()
+    assert "Causes" in teaching
+    held = _cycle_turn("Why are there four phases?")
+    assert held.next_block_state["topic_index"] == 0
