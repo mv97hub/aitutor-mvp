@@ -23,6 +23,7 @@ from app.harness import (
     finish_chat,
     get_chat,
     get_run,
+    list_chats,
     list_personas,
     list_recommendations,
     list_runs,
@@ -34,6 +35,7 @@ from app.harness import (
     run_again,
     run_report,
     save_evaluation,
+    save_hand_scores,
     save_recommendations,
     set_baseline,
     trial_profile,
@@ -152,6 +154,11 @@ def post_compare(body: dict, db: Session = Depends(get_db)) -> dict:
     return compare(db, uuid.UUID(str(body.get("left"))), uuid.UUID(str(body.get("right"))))
 
 
+@router.get("/kc/harness/chats")
+def get_chats(db: Session = Depends(get_db)) -> list[dict]:
+    return list_chats(db)
+
+
 @router.get("/kc/harness/chats/{chat_id}")
 def get_one_chat(chat_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return get_chat(db, chat_id)
@@ -175,6 +182,11 @@ def post_finish(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -
 @router.post("/kc/harness/chats/{chat_id}/evaluations")
 def post_evaluation(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
     return save_evaluation(db, chat_id, body)
+
+
+@router.post("/kc/harness/chats/{chat_id}/hand-scores")
+def post_hand_scores(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
+    return save_hand_scores(db, chat_id, body)
 
 
 @router.get("/kc/harness/suites")

@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 
+import { RunSummary } from "@/components/harness/RunSummary";
 import { api } from "@/lib/api";
+
+type DimensionDelta = { dimension: string; before: number | null; after: number | null; delta: number | null; clear: boolean };
 
 type Report = {
   chats: number;
@@ -13,13 +16,33 @@ type Report = {
   top_problems: { tag: string; count: number }[];
   grid: { child: string; block: string; score: number | null }[];
   findings: { title: string; count: number; place: string; block_label?: string }[];
-  baseline?: { verdict: string; band: string; mean_score_delta: number | null };
+  summary?: { text?: string };
+  baseline?: {
+    verdict: string;
+    band: string;
+    mean_score_delta: number | null;
+    dimension_deltas?: DimensionDelta[];
+    new_false_passes?: { child?: string }[];
+    new_empty_replies?: { child?: string }[];
+    new_hard_stops?: { kind?: string }[];
+  };
+};
+
+type Comparison = {
+  verdict: string;
+  band: string;
+  matched: number;
+  mean_score_delta: number | null;
+  dimension_deltas?: DimensionDelta[];
+  new_false_passes?: { child?: string }[];
+  new_empty_replies?: { child?: string }[];
+  new_hard_stops?: { kind?: string }[];
 };
 
 export function ResultsTab({ runId }: { runId: string }) {
   const [report, setReport] = useState<Report | null>(null);
   const [other, setOther] = useState("");
-  const [comparison, setComparison] = useState<{ verdict: string; band: string; matched: number; mean_score_delta: number | null } | null>(null);
+  const [comparison, setComparison] = useState<Comparison | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -44,10 +67,12 @@ export function ResultsTab({ runId }: { runId: string }) {
   return (
     <section className="harness-panel">
       <h2>Results</h2>
+      {report.summary?.text ? <RunSummary text={report.summary.text} /> : null}
       <p className="help">
         {report.usable_chats} of {report.chats} chats are in the roll-up. Low child-realism chats are left out.
-        {report.baseline ? ` Baseline: ${report.baseline.band}, ${report.baseline.verdict}.` : ""}
+        {report.baseline ? ` Baseline: ${report.baseline.band}, ${report.baseline.verdict}. Score change ${report.baseline.mean_score_delta ?? "—"}.` : ""}
       </p>
+      {report.baseline?.dimension_deltas?.length ? <DeltaList rows={report.baseline.dimension_deltas} /> : null}
       <ScoreTable title="By child" rows={report.by_child} />
       <ScoreTable title="By block type" rows={report.by_block_type} />
       <ScoreTable title="By tutor model" rows={report.by_model} />
@@ -83,11 +108,31 @@ export function ResultsTab({ runId }: { runId: string }) {
         Compare
       </button>
       {comparison ? (
-        <p>
-          {comparison.verdict} ({comparison.band}). Matched {comparison.matched}. Score change {comparison.mean_score_delta ?? "—"}.
-        </p>
+        <div>
+          <p>
+            {comparison.verdict} ({comparison.band}). Matched {comparison.matched}. Score change {comparison.mean_score_delta ?? "—"}.
+          </p>
+          <DeltaList rows={comparison.dimension_deltas || []} />
+          {comparison.new_hard_stops?.length ? <p>New hard stop: {comparison.new_hard_stops.map((row) => row.kind).filter(Boolean).join(", ")}.</p> : null}
+          {comparison.new_false_passes?.length ? <p>New false pass: {comparison.new_false_passes.length}.</p> : null}
+          {comparison.new_empty_replies?.length ? <p>New empty reply: {comparison.new_empty_replies.length}.</p> : null}
+        </div>
       ) : null}
     </section>
+  );
+}
+
+function DeltaList({ rows }: { rows: DimensionDelta[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <ul className="harness-deltas">
+      {rows.map((row) => (
+        <li key={row.dimension}>
+          {row.dimension.replaceAll("_", " ")}: {row.delta ?? "—"}
+          {row.clear ? "" : " (no clear difference)"}
+        </li>
+      ))}
+    </ul>
   );
 }
 

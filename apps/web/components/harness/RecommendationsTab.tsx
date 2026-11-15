@@ -271,6 +271,7 @@ export function RecommendationsTab({
             <p>Block title: {evidence.block_title || "not stored"}</p>
             <p>Substep: {evidence.substep || "not stored"}</p>
             <p>Turn: {turn ?? "unknown"}</p>
+            <p>Check: {evidence.findings?.[0]?.tag || "not stored"}</p>
             <p>Child: {evidence.child_text || "not stored"}</p>
             <p>Tutor: {evidence.tutor_reply || "not stored"}</p>
             <p>What was suboptimal: {evidence.fault || evidence.summary || "The stored turn was marked."}</p>

@@ -7,7 +7,7 @@ from app.harness_checks import automatic_checks, stop_reason, stuck_after_turn
 from app.harness_report import stuck_nudge_rows
 from app.harness_personas import BOUNDARY_PROBES, starter_children
 from app.harness_prompt_source import block_label_from_prompt, example_from_turn, prompt_builder_excerpts, prompt_sections, select_turns
-from app.harness_report import compare_runs, findings, kept_run_ids, rollup
+from app.harness_report import compare_runs, findings, kept_run_ids, rollup, run_summary
 from app.models import ALL_BLOCK_TYPES
 from app.token_usage import MODEL_TOKEN_PRICES, _model_cost
 
@@ -348,3 +348,341 @@ def test_additions_only_or_observations_only_batch_drafts() -> None:
     assert "replacement" not in observations[0]["evidence"]
     assert flagged[0]["proposed"]["shorter"] == ""
     assert flagged[0]["proposed"]["text"] == ""
+
+
+def _tone(name: str, natural: int, engagement: int, age: int, pacing: int, feedback: int, realism: int | None = 5) -> dict:
+    scores = [
+        {"dimension": "natural_conversation", "score": natural},
+        {"dimension": "engagement", "score": engagement},
+        {"dimension": "age_fit", "score": age},
+        {"dimension": "pacing", "score": pacing},
+        {"dimension": "feedback", "score": feedback},
+    ]
+    body: dict = {"scores": scores}
+    if realism is not None:
+        body["child_realism"] = realism
+    body["persona_name"] = name
+    return body
+
+
+def test_run_summary_groups_checks_and_leaves_out_whats_next_on_an_open_goal() -> None:
+    chats = [
+        {
+            "id": "wrong",
+            "persona_name": "AI_Child1",
+            "tutor_model": "gpt-4.1",
+            "ended_how": "completed",
+            "checks": {},
+            "turns": [
+                {
+                    "intent": "on_topic_question",
+                    "child_text": "Did steve jobs have a favorite animal?",
+                    "tutor_reply": "I don't know a favorite animal.",
+                    "block_type": "explanation",
+                    "block_id": "b1",
+                    "block_before": "b1",
+                    "substep": "explain_topic",
+                    "substep_before": "explain_topic",
+                },
+                {
+                    "intent": "on_topic_question",
+                    "child_text": "Wait, how did they sell the computers if they started in a garage?",
+                    "tutor_reply": "Steve Jobs liked soccer and design.",
+                    "block_type": "explanation",
+                    "block_id": "b1",
+                    "block_before": "b1",
+                    "substep": "explain_topic",
+                    "substep_before": "explain_topic",
+                },
+            ],
+            **_tone("AI_Child1", 2, 2, 3, 4, 5),
+        },
+        {
+            "id": "praised",
+            "persona_name": "AI_Child3",
+            "tutor_model": "gpt-4.1",
+            "ended_how": "completed",
+            "checks": {"false_passes": [], "false_fails": []},
+            "turns": [
+                {
+                    "intent": "answer_right",
+                    "child_text": "When the government borrows more money, interest rates go up, so a business holds off on a tractor.",
+                    "tutor_reply": "Yes, that's the chain. Now put it in your own words: what happens to interest rates?",
+                    "block_type": "topic_goal",
+                    "block_id": "g",
+                    "block_before": "g",
+                    "substep": "main",
+                    "substep_before": "main",
+                    "passed": False,
+                }
+            ],
+            **_tone("AI_Child3", 5, 4, 5, 5, 4),
+        },
+        {
+            "id": "same",
+            "persona_name": "AI_Child7",
+            "tutor_model": "gpt-4.1",
+            "ended_how": "completed",
+            "checks": {},
+            "turns": [
+                {
+                    "intent": "guess",
+                    "child_text": "I am guessing.",
+                    "tutor_reply": "Bad computers and no money are the two problems.",
+                    "block_type": "mcq",
+                    "block_id": "m",
+                    "block_before": "m",
+                    "substep": "choice",
+                    "substep_before": "choice",
+                },
+                {
+                    "intent": "guess",
+                    "child_text": "Was one problem bad computers and the other like no money?",
+                    "tutor_reply": "Bad computers and no money are the two problems.",
+                    "block_type": "mcq",
+                    "block_id": "m",
+                    "block_before": "m",
+                    "substep": "choice",
+                    "substep_before": "choice",
+                },
+            ],
+            **_tone("AI_Child7", 4, 5, 2, 2, 2),
+        },
+        {
+            "id": "empty",
+            "persona_name": "AI_Child1",
+            "tutor_model": "gpt-4.1",
+            "ended_how": "completed",
+            "checks": {"empty_replies": [1], "false_passes": [], "false_fails": []},
+            "turns": [
+                {
+                    "intent": "answer_right",
+                    "child_text": "Blue.",
+                    "tutor_reply": "The river is blue.",
+                    "block_type": "worked_example",
+                    "block_id": "w",
+                    "block_before": "w",
+                    "substep": "step",
+                    "substep_before": "step",
+                },
+                {
+                    "intent": "answer_right",
+                    "child_text": "I said blue.",
+                    "tutor_reply": "",
+                    "error": "The tutor did not write a new reply.",
+                    "block_type": "worked_example",
+                    "block_id": "w",
+                    "block_before": "w",
+                    "substep": "step",
+                    "substep_before": "step",
+                },
+            ],
+        },
+        {
+            "id": "checks",
+            "persona_name": "AI_Child1",
+            "tutor_model": "gpt-4.1",
+            "ended_how": "completed",
+            "checks": {"false_passes": [0], "false_fails": [1]},
+            "turns": [
+                {
+                    "intent": "answer_wrong",
+                    "child_text": "The river is green.",
+                    "tutor_reply": "Yes, that is right.",
+                    "passed": True,
+                    "block_type": "worked_example",
+                    "block_id": "w2",
+                    "block_before": "w2",
+                    "substep": "step",
+                    "substep_before": "step",
+                },
+                {
+                    "intent": "answer_right",
+                    "child_text": "The river is blue.",
+                    "tutor_reply": "Not quite.",
+                    "passed": False,
+                    "block_type": "spot_the_flaw",
+                    "block_id": "s",
+                    "block_before": "s",
+                    "substep": "main",
+                    "substep_before": "main",
+                },
+            ],
+        },
+        {
+            "id": "stuck",
+            "persona_name": "AI_Child3",
+            "tutor_model": "deepseek-flash",
+            "ended_how": "stuck",
+            "checks": {"stuck_spans": 1},
+            "turns": [
+                {
+                    "intent": "answer_wrong",
+                    "child_text": "I already said the chain about interest rates and the tractor.",
+                    "tutor_reply": "Add the interest rates.",
+                    "block_type": "topic_goal",
+                    "block_id": "g2",
+                    "block_before": "g2",
+                    "substep": "main",
+                    "substep_before": "main",
+                    "passed": False,
+                },
+                {
+                    "intent": "nudge",
+                    "child_text": "What's next?",
+                    "tutor_reply": "We are still on the goal.",
+                    "block_type": "topic_goal",
+                    "block_id": "g2",
+                    "block_before": "g2",
+                    "substep": "main",
+                    "substep_before": "main",
+                },
+            ],
+        },
+        {
+            "id": "open-goal",
+            "persona_name": "AI_Child7",
+            "tutor_model": "gpt-4.1",
+            "ended_how": "completed",
+            "checks": {"false_passes": [0]},
+            "turns": [
+                {
+                    "intent": "nudge",
+                    "child_text": "What's next?",
+                    "tutor_reply": "Yes, that's the chain. What happens next?",
+                    "passed": True,
+                    "block_type": "topic_goal",
+                    "block_id": "g3",
+                    "block_before": "g3",
+                    "substep": "main",
+                    "substep_before": "main",
+                }
+            ],
+        },
+        {
+            "id": "low",
+            "persona_name": "AI_Child12",
+            "tutor_model": "gpt-4.1",
+            "ended_how": "completed",
+            "child_realism": 2,
+            "checks": {"false_passes": [0]},
+            "turns": [
+                {
+                    "intent": "answer_wrong",
+                    "child_text": "Jobs cause the cycle.",
+                    "tutor_reply": "Yes, that is the whole story.",
+                    "passed": True,
+                    "block_type": "socratic",
+                    "block_id": "so",
+                    "block_before": "so",
+                    "substep": "ask",
+                    "substep_before": "ask",
+                }
+            ],
+            "scores": [{"dimension": "natural_conversation", "score": 1}],
+        },
+    ]
+    # _tone() also sets persona_name, so the explicit name above is overwritten by the spread
+    # when **_tone comes last. The calls above put **_tone last, which is what we want.
+    summary = run_summary(chats)
+    groups = {(row["id"], row["block_type"]): row for row in summary["groups"]}
+    assert summary["chats"] == 8
+    assert summary["stuck"] == 1
+    assert summary["tutor_models"] == ["deepseek-flash", "gpt-4.1"]
+    assert groups[("wrong_line", "Explanatory Walkthrough")]["count"] == 1
+    assert "garage" in groups[("wrong_line", "Explanatory Walkthrough")]["child"]
+    assert "soccer" in groups[("wrong_line", "Explanatory Walkthrough")]["tutor"]
+    assert groups[("praised_again", "Topic / Goal")]["count"] == 1
+    assert "tractor" in groups[("praised_again", "Topic / Goal")]["child"]
+    assert groups[("unchanged_reply", "Multiple Choice Question")]["count"] == 1
+    assert groups[("unchanged_reply", "Worked Example + Faded Step")]["tutor"] == ""
+    assert groups[("false_pass", "Worked Example + Faded Step")]["child"] == "The river is green."
+    assert groups[("false_fail", "Spot the Flaw / Buggy Rule")]["count"] == 1
+    assert groups[("false_pass", "Socratic Discussion")]["count"] == 1
+    assert groups[("stuck", "Topic / Goal")]["child"] == "I already said the chain about interest rates and the tractor."
+    assert "What's next?" not in summary["text"]
+    assert "scoring fairness" not in summary["text"].lower()
+    assert "getting stuck" not in summary["text"].lower()
+    natural = summary["tone"][0]
+    assert natural["dimension"] == "natural_conversation"
+    assert natural["mean"] == 3.67
+    assert [item["child"] for item in natural["lowest"]] == ["AI_Child1", "AI_Child7", "AI_Child3"]
+    assert all(item["child"] != "AI_Child12" for row in summary["tone"] for item in row["lowest"])
+    assert "Answered the wrong line — 1 chat — Explanatory Walkthrough" in summary["text"]
+    assert "Tone" in summary["text"]
+    assert summary["text"].startswith("Run: 8 chats,")
+
+
+def test_per_dimension_delta_and_a_new_failure_beats_a_rising_mean() -> None:
+    def chat(teaching: float, engagement: float, **extra: object) -> dict:
+        persona = extra.pop("persona_name", "AI_Child1")
+        seed = extra.pop("seed", 1)
+        body = {
+            "persona_name": persona,
+            "component_id": "c",
+            "component_title": "Rivers",
+            "tutor_model": "gpt-4.1",
+            "seed": seed,
+            "iteration": 1,
+            "ended_how": "completed",
+            "scores": [
+                {"dimension": "teaching_quality", "score": teaching},
+                {"dimension": "engagement", "score": engagement},
+            ],
+            "checks": {},
+            "block_types": ["topic_goal"],
+            "tags": [],
+        }
+        body.update(extra)
+        return body
+
+    left = [chat(3, 4, seed=index, persona_name=f"AI_Child{index}") for index in (1, 3, 7)]
+    right = [chat(4, 4.1, seed=index, persona_name=f"AI_Child{index}") for index in (1, 3, 7)]
+    report = compare_runs(left, right)
+    by_dimension = {row["dimension"]: row for row in report["dimension_deltas"]}
+    assert by_dimension["teaching_quality"]["delta"] == 1.0
+    assert by_dimension["teaching_quality"]["clear"] is True
+    assert by_dimension["engagement"]["delta"] == 0.1
+    assert by_dimension["engagement"]["clear"] is False
+    assert report["verdict"] == "better"
+    assert report["mean_score_delta"] is not None
+    assert abs(report["mean_score_delta"]) >= 0.3
+
+    raised = compare_runs(
+        [chat(3, 3, seed=index, persona_name=f"AI_Child{index}") for index in (1, 3, 7)],
+        [
+            chat(4, 4, seed=index, persona_name=f"AI_Child{index}", checks={"false_passes": [0] if index == 1 else []})
+            for index in (1, 3, 7)
+        ],
+    )
+    assert raised["mean_score_delta"] is not None and raised["mean_score_delta"] > 0.3
+    assert raised["verdict"] == "worse"
+    assert raised["new_false_passes"]
+
+    empty = compare_runs(
+        [chat(3, 3, seed=index, persona_name=f"AI_Child{index}") for index in (1, 3, 7)],
+        [
+            chat(4, 4, seed=index, persona_name=f"AI_Child{index}", checks={"empty_replies": [1] if index == 1 else []})
+            for index in (1, 3, 7)
+        ],
+    )
+    assert empty["verdict"] == "worse"
+    assert empty["new_empty_replies"]
+
+    stuck = compare_runs(
+        [chat(3, 3, seed=index, persona_name=f"AI_Child{index}") for index in (1, 3, 7)],
+        [
+            chat(4, 4, seed=index, persona_name=f"AI_Child{index}", ended_how="stuck" if index == 1 else "completed")
+            for index in (1, 3, 7)
+        ],
+    )
+    assert stuck["mean_score_delta"] is not None and stuck["mean_score_delta"] > 0
+    assert stuck["verdict"] == "worse"
+
+    quiet = compare_runs(
+        [chat(2, 2, child_realism=1), chat(3, 3, seed=2, persona_name="AI_Child3")],
+        [chat(5, 5, child_realism=1), chat(3, 3, seed=2, persona_name="AI_Child3")],
+    )
+    quiet_dims = {row["dimension"]: row for row in quiet["dimension_deltas"]}
+    assert quiet_dims["teaching_quality"]["delta"] == 0.0
+    assert quiet_dims["teaching_quality"]["clear"] is False
