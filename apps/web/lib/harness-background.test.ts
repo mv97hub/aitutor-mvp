@@ -9,7 +9,7 @@ import {
   runStatusLine,
   stopBackgroundRun,
 } from "./harness-background.ts";
-import type { ClaimedChat, HarnessTransport, SessionSnap } from "./harness-runner.ts";
+import { driveRun, type ClaimedChat, type HarnessTransport, type SessionSnap } from "./harness-runner.ts";
 
 function session(overrides: Partial<SessionSnap> = {}): SessionSnap {
   return {
@@ -150,4 +150,79 @@ test("stop ends the loop before another chat is claimed", async () => {
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(claims, 1);
   assert.equal(answers, 0);
+});
+
+function flightTransport(onTurn: (id: string) => Promise<void>): HarnessTransport {
+  return {
+    runStatus: async () => ({ status: "running" }),
+    session: async () => session(),
+    speak: async () => session(),
+    answer: async () => session({ messages: [{ role: "assistant", content: "Next.", seq: 3 }] }),
+    answerKey: async () => ({ block_id: "b1", block_type: "topic_goal" }),
+    childText: async () => ({ text: "no", input_tokens: 0, output_tokens: 0, model: "gpt-4.1-mini" }),
+    recordTurn: async (id) => {
+      await onTurn(id);
+      return { stop: "completed", cost_usd: "0", luna_tokens: 0 };
+    },
+    finish: async () => undefined,
+  };
+}
+
+test("a claim that fails once still fills the requested concurrency", async () => {
+  const want = 4;
+  let failures = 0;
+  let inFlight = 0;
+  let peak = 0;
+  const played: string[] = [];
+  const queue = ["chat-a", "chat-b", "chat-c", "chat-d"].map((id) => chat(id));
+  await driveRun(
+    "run-retry",
+    async () => {
+      if (failures < 1) {
+        failures += 1;
+        throw new Error("The tutor service is not reachable.");
+      }
+      return queue.shift() ?? null;
+    },
+    flightTransport(async (id) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      inFlight -= 1;
+      played.push(id);
+    }),
+    want,
+  );
+  assert.equal(failures, 1);
+  assert.equal(peak, want);
+  assert.deepEqual(played.sort(), ["chat-a", "chat-b", "chat-c", "chat-d"]);
+});
+
+test("a dropped worker is replaced and the run still fills the requested concurrency", async () => {
+  const want = 4;
+  let inFlight = 0;
+  let peak = 0;
+  let dropped = false;
+  const played: string[] = [];
+  const queue = ["chat-a", "chat-b", "chat-c", "chat-d", "chat-e"].map((id) => chat(id));
+  await driveRun(
+    "run-replace",
+    async () => queue.shift() ?? null,
+    flightTransport(async (id) => {
+      if (!dropped) {
+        dropped = true;
+        throw new Error("The turn call failed.");
+      }
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      inFlight -= 1;
+      played.push(id);
+    }),
+    want,
+  );
+  assert.equal(dropped, true);
+  assert.equal(queue.length, 0);
+  assert.equal(peak, want);
+  assert.equal(played.length, want);
 });

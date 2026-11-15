@@ -331,6 +331,13 @@ export async function playChat(
   return "paused";
 }
 
+/** A failed claim waits this long, then tries again. The 20s API abort is the long wait. */
+const CLAIM_RETRY_MS = 50;
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function driveRun(
   runId: string,
   claim: () => Promise<ClaimedChat | null>,
@@ -339,14 +346,59 @@ export async function driveRun(
   signal?: { aborted: boolean },
   onLive?: (line: LiveLine) => void,
 ): Promise<void> {
-  const workers = Array.from({ length: Math.max(1, concurrency) }, async () => {
-    while (!signal?.aborted) {
-      const run = await transport.runStatus();
-      if (run.status === "paused" || run.status === "cancelled" || run.status === "completed") return;
-      const chat = await claim();
-      if (!chat) return;
-      await playChat(chat, transport, signal, onLive);
+  const slots = Math.max(1, concurrency);
+
+  /** One slot. A failed status check or claim retries. A throw while playing drops the slot so another worker replaces it. */
+  async function worker(): Promise<"done" | "dropped"> {
+    try {
+      while (!signal?.aborted) {
+        let run;
+        try {
+          run = await transport.runStatus();
+        } catch {
+          if (signal?.aborted) return "done";
+          await pause(CLAIM_RETRY_MS);
+          continue;
+        }
+        if (run.status === "paused" || run.status === "cancelled" || run.status === "completed") return "done";
+        let chat: ClaimedChat | null;
+        try {
+          chat = await claim();
+        } catch {
+          if (signal?.aborted) return "done";
+          await pause(CLAIM_RETRY_MS);
+          continue;
+        }
+        if (!chat) return "done";
+        await playChat(chat, transport, signal, onLive);
+      }
+      return "done";
+    } catch {
+      return "dropped";
     }
+  }
+
+  let running = 0;
+  await new Promise<void>((resolve) => {
+    let closed = false;
+    const close = () => {
+      if (closed || running > 0) return;
+      closed = true;
+      resolve();
+    };
+    const start = () => {
+      if (closed || signal?.aborted) {
+        close();
+        return;
+      }
+      running += 1;
+      void worker().then((result) => {
+        running -= 1;
+        if (result === "dropped" && !signal?.aborted && !closed) start();
+        close();
+      });
+    };
+    for (let slot = 0; slot < slots; slot += 1) start();
+    if (running === 0) close();
   });
-  await Promise.all(workers);
 }
