@@ -1235,7 +1235,7 @@ _GOAL_EARLY_ANSWER = (
 _EXPLANATION_CAP = (
     "The learner has had two extra turns on this topic, so the lesson moves on now. "
     "If their last message was a question or a remark, answer it in one sentence first. "
-    "Then follow the move-on instruction in What to teach in this same reply: the first line of the next topic, "
+    "Then follow the move-on instruction in What to teach in this same reply: teach the next topic, "
     "or close the block when this was the last topic. Do not quiz."
 )
 _LAST_TOPIC_CLOSE = (
@@ -1247,7 +1247,10 @@ _LAST_TOPIC_ANSWER = (
     "The close is one or two sentences: what the block was, and that they are done. "
     "Do not restate each topic. Do not ask whether to move on."
 )
-_LAST_TOPIC_NEXT = "Begin the next block in this same reply. Set block_complete=true."
+_LAST_TOPIC_NEXT = (
+    "Ask no question. Do not open the next block. "
+    "The next block arrives in its own message. Set block_complete=true."
+)
 _LAST_TOPIC_END = (
     "This was the last block. Ask no question. Set block_complete=true. Do not open the next block."
 )
@@ -1288,16 +1291,23 @@ _SUMMARY_MOVE_ON = (
     "If they choose to move on, set block_complete=true. Ask no question and do not open the next block."
 )
 _SUMMARY_BEGIN = (
-    "The block is finished. Congratulate the learner once. "
-    "The reply is that congratulations plus the first line of the next block, not a second goodbye. "
-    "Begin the next block in this same reply. "
-    "Do not ask the goal again. Do not offer one more example. Set block_complete=true."
+    "The block is finished. Close in one sentence. Ask no question. "
+    "Do not praise the block again. Do not open the next block. "
+    "The next block arrives in its own message. Set block_complete=true."
 )
 _SUMMARY_BEGIN_LAST = (
-    "The block is finished. Congratulate the learner once. "
-    "This was the last block. Ask no question. Do not say goodbye. "
-    "Do not ask the goal again. Do not offer one more example. Set block_complete=true. "
-    "Do not open the next block."
+    "The block is finished. Close in one sentence. Ask no question. "
+    "Do not praise the block again. This was the last block. "
+    "Do not open the next block. Set block_complete=true."
+)
+_OPENING_ASK = (
+    "Opening message: This is the only message that opens this block. "
+    "Ask this block's question and nothing else. Give no cue and no example before the first try. "
+    "Do not praise the previous block."
+)
+_OPENING_HOLD = (
+    "Opening message: This is the only message that opens this block. "
+    "Do not praise the previous block. Give no cue before the first try."
 )
 _SUMMARY_ELABORATE = (
     "The learner asked to elaborate on the recap. Elaborate on the summary in this reply. "
@@ -1459,8 +1469,8 @@ def _summary_close_lines(
         if revealed:
             begun = (
                 "The learner chose to move on. Do not congratulate. "
-                "Begin the next block with its first line in this same reply. "
-                "Do not ask the goal again. Set block_complete=true."
+                "Close in one sentence. Ask no question. Do not open the next block. "
+                "The next block arrives in its own message. Set block_complete=true."
                 if has_next
                 else (
                     "The learner chose to move on. Do not congratulate. "
@@ -1868,12 +1878,18 @@ def _this_turn(
         prev_type = BLOCK_LABELS.get(str(transition_from_block.get("type") or ""), "previous block")
         lines.append(
             f"Block Transition: The learner just completed Block {step_index} ({prev_type}). "
-            f"This reply opens {label} only. Do not ask a question about the finished block."
+            f"This reply opens {label} only. Do not praise that finished block. "
+            "Do not ask a question about the finished block."
         )
     if presenting and turn_kind in {"orient", "ask"}:
         lines.append(
             "Turn Stance: Give a short lead-in for the choice card. Do not ask the multiple-choice question in the reply."
         )
+    elif opening and not presenting:
+        if str(block.get("type") or "") in {"retrieval_check", "mcq"}:
+            lines.append(_OPENING_ASK)
+        elif str(block.get("type") or "") != "explanation":
+            lines.append(_OPENING_HOLD)
     elif turn_kind in {"orient", "ask"} and goal_start not in {"explain", "deepen", "clarify", "aside"}:
         if instructional_stance == "direct_instruction_first":
             lines.append(
@@ -1912,7 +1928,12 @@ def _this_turn(
     topic_feedback_here = (
         str(block.get("type") or "") == "topic_goal" and turn_kind in {"ask", "nudge", "scaffold"}
     )
-    if not side_question and not topic_feedback_here and turn_kind in {"pass", "nudge", "scaffold"}:
+    if (
+        not opening
+        and not side_question
+        and not topic_feedback_here
+        and turn_kind in {"pass", "nudge", "scaffold"}
+    ):
         if encouragement_style == "matter_of_fact_confirm":
             lines.append(
                 "Turn Feedback (matter_of_fact_confirm): Confirm clearly and warmly without extra fanfare."
@@ -1983,10 +2004,11 @@ def _this_turn(
         )
     if str(block.get("type") or "") == "explanation":
         if opening:
-            lines.append(
-                "This is the opening of the explanatory block. Explain only the current topic in detail, "
-                "then ask if the learner has questions or wants you to elaborate. Do not quiz, and do not start the next topic yet."
-            )
+                lines.append(
+                    "This is the opening of the explanatory block. Explain only the current topic in detail, "
+                    "then ask if the learner has questions or wants you to elaborate. Do not quiz, and do not start the next topic yet. "
+                    "Do not praise a previous block."
+                )
         elif substep == "summary_check":
             if elaborating:
                 lines.append(_SUMMARY_ELABORATE)
@@ -2019,7 +2041,7 @@ def _this_turn(
                 lines.append(
                     "The learner already restated this point. Name anything missed in one sentence. "
                     "Do not re-teach the whole topic. Then follow the move-on instruction in What to teach "
-                    "and write the first line of the next topic, or close the block in one or two sentences when this was the last topic. "
+                    "and teach the next topic, or close the block in one or two sentences when this was the last topic. "
                     "Do not restate each topic and do not ask whether to move on. Do not quiz."
                 )
             elif explanation_on_last_topic(block, active_block_state) and learner_wants_recap_elaboration(last_answer):
@@ -2030,7 +2052,7 @@ def _this_turn(
             else:
                 lines.append(
                     "The learner has replied on the current topic. If they have a question or want elaboration, stay on this topic and answer. "
-                    "If they are ready, follow the move-on instruction in What to teach and write the first line of the next topic, "
+                    "If they are ready, follow the move-on instruction in What to teach and teach the next topic, "
                     "or close the block in one or two sentences when this was the last topic. "
                     "Do not restate each topic and do not ask whether to move on. Do not quiz."
                 )
@@ -2114,6 +2136,7 @@ def _explanation_teach_lines(
         explanation_move_on_reply,
         explanation_restates_topic,
         explanation_side_remark,
+        explanation_topic_taught,
         last_topic_question_close,
     )
 
@@ -2234,64 +2257,31 @@ def _explanation_teach_lines(
             "If the learner is good to proceed, for example What's next?, ok, I get it, or let's go, "
             "set substep_passed=true"
         )
+    if not explanation_topic_taught(state):
+        lines.append(
+            "This topic has not been taught yet. Teach it in this reply from the text above. "
+            "A request to move on does not skip it. Do not only name the title. Do not quiz."
+        )
+        return lines
     if topics and index < len(topics) - 1:
         nxt = topics[index + 1]
+        body = str(nxt.get("explanation") or "").strip()
+        points = str(nxt.get("key_points") or "").strip()
+        taught = body
+        if points:
+            taught = f"{body} Key points: {points}." if body else f"Key points: {points}."
+        lesson = _finish(taught) if taught else "what the title means"
         lines.append(
-            f"{proceed} and, in this same reply, write the first line of the next topic only: "
+            f"{proceed} and, in this same reply, teach the next topic in full: "
             f"Topic {index + 2} of {total}: {nxt['title'] or 'the next topic'}. "
-            "Do not teach that topic. Do not ask a question. Do not quiz."
+            f"Teach it from: {lesson}. "
+            "Do not only name the title. Do not quiz."
         )
         return lines
     lines.append(
         "This is the last topic. Stay on this topic. "
         "Do not restate the other topics. Do not summarize the block. Do not close the block."
     )
-    return lines
-
-
-def _next_block_opening(block: dict, *, lead: str | None = None) -> list[str]:
-    """The first spoken line of the block that opens in this same reply."""
-    btype = str(block.get("type") or "topic_goal").strip()
-    data = block.get("data") if isinstance(block.get("data"), dict) else {}
-    label = BLOCK_LABELS.get(btype, btype)
-    lines = [
-        f"Next block to begin now: {label}.",
-        lead or "After the one congratulations, write the first line of this next block in the same reply.",
-    ]
-    if btype == "topic_goal":
-        topic = str(data.get("topic") or "").strip() or "this topic"
-        lines.append(
-            f"First line: explain what {topic} is and why it matters. Do not ask its goal question yet."
-        )
-    elif btype == "mcq":
-        stem = str(data.get("question_stem") or data.get("target_skill") or "the question").strip()
-        lines.append(f"First line: a short lead-in, then the question: {_finish(stem)}")
-    elif btype == "case_study":
-        opener = str(data.get("case_a") or data.get("prediction_prompt") or "the case").strip()
-        lines.append(f"First line: introduce the case: {_finish(opener)}")
-    elif btype == "socratic":
-        lines.append(f"First line: frame the dilemma: {_finish(str(data.get('central_dilemma') or 'the dilemma'))}")
-    elif btype == "curiosity":
-        lines.append(f"First line: the hook: {_finish(str(data.get('phenomenon_hook') or 'the mystery'))}")
-    elif btype == "worked_example":
-        lines.append(f"First line: the worked problem: {_finish(str(data.get('problem_statement') or 'the problem'))}")
-    elif btype == "spot_the_flaw":
-        lines.append(f"First line: show the flawed work: {_finish(str(data.get('rookie_work') or 'the claim'))}")
-    elif btype == "teach_back":
-        lines.append(
-            f"First line: the confused peer: {_finish(str(data.get('peer_persona_prompt') or 'a friend'))}"
-        )
-    elif btype == "retrieval_check":
-        lines.append(f"First line: the recall question: {_finish(str(data.get('recall_prompt') or 'recall the fact'))}")
-    elif btype == "explanation":
-        topics = explanation_topics(block)
-        title = topics[0]["title"] if topics else str(data.get("block_title") or "the topic")
-        lines.append(f"First line: start explaining {title}. Do not quiz.")
-    elif btype == "passage_ela":
-        title = str(data.get("passage_title") or "the passage").strip()
-        lines.append(f"First line: name {title} and ask its opening question.")
-    else:
-        lines.append("First line: open this block the way its first step begins.")
     return lines
 
 
@@ -2533,9 +2523,15 @@ def _what_to_teach(
             lines.append(f"Active substep (elaborate_why): Ask elaborative why prompt: {_finish(why_p)}")
             lines.append(f"Expected why rationale (withhold until pass or reveal): {_finish(why_rat)}")
         else:
-            lines.append(f"Active substep (recall): Ask cued-recall question: {_finish(recall_p)}")
+            if opening:
+                lines.append(
+                    f"Active substep (recall): Ask only this question: {_finish(recall_p)} "
+                    "Do not give a cue, an example, or a second question."
+                )
+            else:
+                lines.append(f"Active substep (recall): Ask cued-recall question: {_finish(recall_p)}")
             lines.append(f"Expected fact (withhold until pass or reveal): {_finish(exp_fact)}")
-            if why_p:
+            if why_p and not opening:
                 lines.append(
                     f"When the learner recalls the fact (substep_passed=true) and elaborative why is enabled, "
                     f"affirm the fact and ask: {_finish(why_p)}"
@@ -2565,18 +2561,19 @@ def _what_to_teach(
                 "Do not restate the summary. Do not mention the next block and do not open it."
             )
         elif worked_close == "affirm" and has_next and isinstance(next_block, dict):
-            lines.extend(_next_block_opening(next_block))
+            lines.append(
+                "This reply closes the block in one sentence and asks no question. "
+                "The next block arrives in its own message. Do not open it here."
+            )
         elif summary_begin and has_next:
-            lines.extend(_next_block_opening(next_block))
+            lines.append(
+                "This reply closes the block in one sentence and asks no question. "
+                "The next block arrives in its own message. Do not open it here."
+            )
         elif _last_topic_close_now(block, active_block_state, last_answer) and has_next:
-            lines.extend(
-                _next_block_opening(
-                    next_block,
-                    lead=(
-                        "After that one-or-two-sentence close, write the first line of this next block "
-                        "in the same reply."
-                    ),
-                )
+            lines.append(
+                "This reply closes the block in one sentence and asks no question. "
+                "The next block arrives in its own message. Do not open it here."
             )
         else:
             lines.append(
