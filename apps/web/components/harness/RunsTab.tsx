@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "@/lib/api";
+import { RunSummary } from "@/components/harness/RunSummary";
 import { transcriptForChat } from "@/lib/harness-live";
 import type { ClaimedChat, HarnessTransport, LiveLine, SessionSnap } from "@/lib/harness-runner";
 import { driveRun } from "@/lib/harness-runner";
@@ -91,14 +92,20 @@ async function judgeChat(chatId: string, model: string) {
   const detail = await api<{
     child?: { description?: string };
     turns?: { seq: number; intent: string; child_text: string; session_after?: { tutor_reply?: string } }[];
+    evaluations?: { kind: string; checks?: { side?: { turn?: number; answered?: boolean }[] } }[];
   }>(`/kc/harness/chats/${chatId}`);
-  const transcript = (detail.turns || [])
-    .map((turn) => `${turn.seq}. child (${turn.intent}): ${turn.child_text}\ntutor: ${turn.session_after?.tutor_reply || ""}`)
-    .join("\n");
+  const turns = (detail.turns || []).map((turn) => ({
+    seq: turn.seq,
+    intent: turn.intent,
+    child_text: turn.child_text,
+    tutor_reply: turn.session_after?.tutor_reply || "",
+  }));
+  const transcript = turns.map((turn) => `${turn.seq}. intent: ${turn.intent}\nchild: ${turn.child_text}\ntutor: ${turn.tutor_reply}`).join("\n");
+  const checks = detail.evaluations?.find((item) => item.kind === "automatic")?.checks;
   const response = await fetch("/api/kc/harness/judge", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model, transcript, child: detail.child?.description || "" }),
+    body: JSON.stringify({ model, transcript, child: detail.child?.description || "", turns, checks }),
   });
   if (!response.ok) return;
   const judged = await response.json();
@@ -256,6 +263,7 @@ export function RunsTab({
   return (
     <section className="harness-panel">
       <h2>Runs</h2>
+      {detail?.id ? <RunSummary runId={detail.id} /> : null}
       {error ? <p className="banner">{error}</p> : null}
       {showLive ? (
         <div className="harness-live">

@@ -6860,3 +6860,53 @@ button.progress-card {
   display: grid;
   gap: 4px;
 }
+
+.harness-block-mark {
+  margin: 0;
+  padding: 6px 8px;
+  border-left: 3px solid #8aa0b8;
+  background: #eef3f8;
+  font-weight: 700;
+}
+
+.harness-saved-chats {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.harness-saved-chats button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid #d2dce6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.harness-saved-chats button.is-active {
+  border-color: #8aa0b8;
+  background: #e8eef5;
+}
+
+.harness-hand {
+  display: grid;
+  gap: 6px;
+}
+
+.harness-hand label {
+  display: grid;
+  grid-template-columns: minmax(10em, 16em) 6em;
+  gap: 8px;
+  align-items: center;
+}
+
+.harness-deltas {
+  margin: 0;
+  padding-left: 1.2em;
+}

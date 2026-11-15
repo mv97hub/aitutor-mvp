@@ -1515,7 +1515,7 @@ class HarnessTurn(Base):
 class HarnessEvaluation(Base):
     __tablename__ = "harness_evaluations"
     __table_args__ = (
-        CheckConstraint("kind IN ('automatic', 'judged')", name="ck_harness_evaluations_kind"),
+        CheckConstraint("kind IN ('automatic', 'judged', 'hand')", name="ck_harness_evaluations_kind"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

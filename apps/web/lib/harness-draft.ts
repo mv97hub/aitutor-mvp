@@ -626,6 +626,7 @@ export function recommendationPageSummary(cards: SummaryCard[]): string {
     lines.push(`Block title: ${shown(evidence.block_title, "not stored")}`);
     lines.push(`Substep: ${shown(evidence.substep, "not stored")}`);
     lines.push(`Turn: ${turn === undefined || turn === null ? "unknown" : String(turn)}`);
+    lines.push(`Check: ${evidence.findings?.[0]?.tag || "not stored"}`);
     lines.push(`Child: ${shown(evidence.child_text, "not stored")}`);
     lines.push(`Tutor: ${shown(evidence.tutor_reply, "not stored")}`);
     lines.push(`What was suboptimal: ${evidence.fault || evidence.summary || "The stored turn was marked."}`);

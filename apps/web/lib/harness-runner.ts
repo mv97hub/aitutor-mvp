@@ -19,6 +19,7 @@ export type SessionSnap = {
   prompt?: string;
   safety_flag?: string;
   passed?: boolean;
+  loop_decision?: string;
 };
 
 export type ClaimedChat = {
@@ -55,6 +56,7 @@ export type HarnessTransport = {
     choices?: { id: string; text: string; correct?: boolean }[];
     block_id?: string;
     block_type?: string;
+    block_title?: string;
     move_attempts?: number;
   }>;
   childText: (input: {
@@ -91,18 +93,20 @@ function newTutorReply(before: SessionSnap, after: SessionSnap): string | null {
 
 function placeOf(
   session: SessionSnap,
-  key?: { block_id?: string; block_type?: string; move_attempts?: number },
+  key?: { block_id?: string; block_type?: string; block_title?: string; move_attempts?: number },
 ): Record<string, unknown> {
   return {
     status: session.status,
     block_id: key?.block_id || session.block_id || String(session.active_block_index ?? ""),
     block_type: key?.block_type || session.active_block_type || "",
+    block_title: key?.block_title || "",
     substep: session.active_substep || "",
     move_attempts: key?.move_attempts ?? session.move_attempts ?? 0,
     tutor_reply: lastTutor(session),
     prompt: session.prompt || "",
     safety_flag: session.safety_flag || "none",
     passed: Boolean(session.passed) || session.status === "completed",
+    loop_decision: session.loop_decision || "",
   };
 }
 

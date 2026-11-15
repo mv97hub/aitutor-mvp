@@ -29,12 +29,14 @@ from app.harness_checks import (
 )
 from app.harness_personas import TRAIT_KEYS, starter_children
 from app.harness_report import (
+    JUDGE_DIMENSIONS,
     block_label,
     compare_runs,
     findings,
     kept_run_ids,
     regression_band,
     rollup,
+    run_summary,
     stuck_nudge_rows,
 )
 from app.kc import course_out, load_targets, mark_ready, open_session
@@ -484,6 +486,12 @@ def chat_out(chat: HarnessChat) -> dict:
     }
 
 
+def list_chats(db: Session) -> list[dict]:
+    """Every stored test chat, newest first. Not only the latest run."""
+    chats = db.scalars(select(HarnessChat).order_by(HarnessChat.created_at.desc())).all()
+    return [chat_out(chat) for chat in chats]
+
+
 def list_runs(db: Session) -> list[dict]:
     runs = db.scalars(select(HarnessRun).order_by(HarnessRun.created_at.desc())).all()
     rows = []
@@ -651,6 +659,23 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
     return body
 
 
+def _stored_block_title(data: dict) -> str:
+    """Title already stored on the block. Empty when the block has no title."""
+    titled = str(data.get("block_title") or "").strip()
+    if titled:
+        return titled
+    topics = data.get("topics")
+    if isinstance(topics, list) and topics and isinstance(topics[0], dict):
+        topic = str(topics[0].get("title") or "").strip()
+        if topic:
+            return topic
+    for key in ("topic", "passage_title", "question_stem"):
+        text = str(data.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def _expected(data: dict) -> str:
     for key in _EXPECTED_FIELDS:
         text = str(data.get(key) or "").strip()
@@ -694,6 +719,7 @@ def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
         "block_index": index,
         "block_id": str(block.get("id") or "") if isinstance(block, dict) else "",
         "block_type": str(block.get("type") or "") if isinstance(block, dict) else "",
+        "block_title": _stored_block_title(data),
         "substep": str(state.get("substep") or ""),
         "expected": _expected(data),
         "correct_choice_id": correct,
@@ -1005,6 +1031,50 @@ def save_evaluation(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     return chat_detail(db, chat)
 
 
+def save_hand_scores(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
+    """Store a person's 1-to-5 on the judge dimensions. Empty until they enter one."""
+    chat = db.get(HarnessChat, chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="That chat was not found.")
+    items = []
+    seen: set[str] = set()
+    for row in body.get("scores") or []:
+        if not isinstance(row, dict):
+            continue
+        dimension = str(row.get("dimension") or "")
+        if dimension not in JUDGE_DIMENSIONS or dimension in seen:
+            continue
+        try:
+            score = int(row.get("score"))
+        except (TypeError, ValueError):
+            continue
+        if score < 1 or score > 5:
+            continue
+        seen.add(dimension)
+        items.append({"dimension": dimension, "score": score})
+    db.execute(
+        delete(HarnessEvaluation).where(
+            HarnessEvaluation.chat_id == chat.id,
+            HarnessEvaluation.kind == "hand",
+        )
+    )
+    if items:
+        db.add(
+            HarnessEvaluation(
+                chat_id=chat.id,
+                kind="hand",
+                checks={},
+                scores={"items": items},
+                tags=[],
+                rubric_version="2",
+                judge_model="",
+                child_realism=None,
+            )
+        )
+    db.flush()
+    return chat_detail(db, chat)
+
+
 def _evaluation_out(row: HarnessEvaluation) -> dict:
     scores = row.scores if isinstance(row.scores, dict) else {}
     items = scores.get("items") if isinstance(scores, dict) else row.scores
@@ -1056,6 +1126,7 @@ def chat_detail(db: Session, chat: HarnessChat) -> dict:
             "session_after": turn.session_after if isinstance(turn.session_after, dict) else {},
             "child_tokens": turn.child_tokens if isinstance(turn.child_tokens, dict) else {},
             "elapsed_ms": turn.elapsed_ms,
+            "loop_decision": _loop_decision(turn, prompts),
         }
         for turn in turns
     ]
@@ -1063,6 +1134,34 @@ def chat_detail(db: Session, chat: HarnessChat) -> dict:
     body["safety_flags"] = flags
     body["settings_copy"] = dict(chat.settings_copy or {})
     return body
+
+
+_LOOP_DECISIONS = {"stay", "advance", "complete", "redirect"}
+
+
+def _loop_decision(turn: HarnessTurn, prompts: list[KcModelPrompt]) -> str:
+    """The loop decision stored on the turn, or on the prompt log for that reply."""
+    after = turn.session_after if isinstance(turn.session_after, dict) else {}
+    stored = str(after.get("loop_decision") or "").strip()
+    if stored in _LOOP_DECISIONS:
+        return stored
+    reply = str(after.get("tutor_reply") or "").strip()
+    child = str(turn.child_text or "").strip()
+    for row in prompts:
+        decision = row.decision if isinstance(row.decision, dict) else None
+        if not decision:
+            continue
+        name = str(decision.get("decision") or "").strip()
+        if name not in _LOOP_DECISIONS:
+            continue
+        spoken = str(decision.get("reply") or "").strip()
+        if reply and spoken == reply:
+            return name
+        messages = row.messages if isinstance(row.messages, list) else []
+        for message in messages:
+            if isinstance(message, dict) and child and str(message.get("content") or "").strip() == child:
+                return name
+    return ""
 
 
 def _tutor_prompt(turn: HarnessTurn, prompts: list[KcModelPrompt]) -> str:
@@ -1168,6 +1267,29 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
             label = turn_label(turns[index])
             if label:
                 tag_blocks[str(tag.get("tag") or "")] = label
+    report_turns = []
+    for turn in turns:
+        after = turn.session_after if isinstance(turn.session_after, dict) else {}
+        before = turn.session_before if isinstance(turn.session_before, dict) else {}
+        typed = str(after.get("block_type") or "")
+        if not typed:
+            typed = blocks_by_id.get(str(after.get("block_id") or ""), "")
+        report_turns.append(
+            {
+                "seq": turn.seq,
+                "intent": turn.intent,
+                "child_text": turn.child_text,
+                "tutor_reply": str(after.get("tutor_reply") or ""),
+                "block_type": typed,
+                "block_label": block_label(typed),
+                "block_id": str(after.get("block_id") or ""),
+                "block_before": str(before.get("block_id") or ""),
+                "substep": str(after.get("substep") or ""),
+                "substep_before": str(before.get("substep") or ""),
+                "passed": bool(after.get("passed")),
+                "error": str(after.get("error") or ""),
+            }
+        )
     goal = db.get(KcGoal, chat.course_id) if chat.course_id else None
     node = db.get(KcNode, chat.component_id) if chat.component_id else None
     return {
@@ -1194,6 +1316,7 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
         "seed": chat.seed,
         "iteration": chat.iteration,
         "turn_intents": [turn.intent for turn in turns],
+        "report_turns": report_turns,
     }
 
 
@@ -1201,7 +1324,10 @@ def run_report(db: Session, run_id: uuid.UUID) -> dict:
     run = _run_or_404(db, run_id)
     chats = db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id)).all()
     rows = [_chat_for_report(db, chat) for chat in chats if chat.status in {"completed", "failed", "cancelled"}]
-    report = rollup(rows)
+    summary = run_summary(rows)
+    slim = [{key: value for key, value in row.items() if key != "report_turns"} for row in rows]
+    report = rollup(slim)
+    report["summary"] = summary
     report["run_id"] = str(run.id)
     report["findings"] = findings(report)
     report["code_version"] = run.code_version
@@ -1220,7 +1346,10 @@ def run_report(db: Session, run_id: uuid.UUID) -> dict:
                     "verdict": comparison["verdict"],
                     "band": regression_band(comparison),
                     "new_hard_stops": comparison["new_hard_stops"],
+                    "new_false_passes": comparison["new_false_passes"],
+                    "new_empty_replies": comparison["new_empty_replies"],
                     "mean_score_delta": comparison["mean_score_delta"],
+                    "dimension_deltas": comparison["dimension_deltas"],
                 }
     return report
 

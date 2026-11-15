@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 
-RUBRIC_VERSION = "1"
+from app.harness_checks import SIDE_INTENTS, WRONG_INTENTS
+
+RUBRIC_VERSION = "2"
+CLEAR_DELTA = 0.3
 JUDGE_DIMENSIONS = (
     "teaching_quality",
     "correctness",
@@ -437,13 +441,40 @@ def _chat_score(chat: dict) -> float | None:
     )
 
 
+def _dimension_scores(chat: dict) -> dict[str, float]:
+    """Tutor dimensions for one usable chat. Low child realism stays out of the roll-up."""
+    if not _usable(chat):
+        return {}
+    found: dict[str, float] = {}
+    for item in chat.get("scores") or []:
+        if not isinstance(item, dict):
+            continue
+        dimension = str(item.get("dimension") or "")
+        if not dimension or dimension == "child_realism":
+            continue
+        found[dimension] = _num(item.get("score"))
+    return found
+
+
+def _check_count(chat: dict, key: str) -> int:
+    checks = chat.get("checks") if isinstance(chat.get("checks"), dict) else {}
+    rows = checks.get(key) or []
+    return len(rows) if isinstance(rows, list) else 0
+
+
 def compare_runs(left: list[dict], right: list[dict]) -> dict:
-    """Match chats. A small gap on a few chats is no clear difference."""
+    """Match chats. A small gap on a few chats is no clear difference.
+
+    A new stuck chat, false pass, or empty reply is a failure even when the mean rises.
+    """
     right_by = {_match_key(chat): chat for chat in right}
     matched = []
     flips_good = []
     flips_bad = []
     new_hard = []
+    new_false = []
+    new_empty = []
+    dim_pairs: dict[str, list[tuple[float, float]]] = defaultdict(list)
     for chat in left:
         other = right_by.get(_match_key(chat))
         if other is None:
@@ -476,16 +507,44 @@ def compare_runs(left: list[dict], right: list[dict]) -> dict:
             after_hit = _hard(other, kind)
             if after_hit and not before_hit:
                 new_hard.append({"kind": kind, "child": chat.get("persona_name"), "chat_id": other.get("id")})
+        if _check_count(other, "false_passes") > _check_count(chat, "false_passes"):
+            new_false.append({"child": chat.get("persona_name"), "chat_id": other.get("id")})
+        if _check_count(other, "empty_replies") > _check_count(chat, "empty_replies"):
+            new_empty.append({"child": chat.get("persona_name"), "chat_id": other.get("id")})
+        left_dims = _dimension_scores(chat)
+        right_dims = _dimension_scores(other)
+        for dimension in JUDGE_DIMENSIONS:
+            if dimension == "child_realism":
+                continue
+            if dimension in left_dims and dimension in right_dims:
+                dim_pairs[dimension].append((left_dims[dimension], right_dims[dimension]))
     deltas = [
         (row["score_after"] - row["score_before"])
         for row in matched
         if row["score_before"] is not None and row["score_after"] is not None
     ]
     mean_delta = _mean(deltas)
+    dimension_deltas = []
+    for dimension in JUDGE_DIMENSIONS:
+        if dimension == "child_realism" or dimension not in dim_pairs:
+            continue
+        pairs = dim_pairs[dimension]
+        before_mean = _mean([item[0] for item in pairs])
+        after_mean = _mean([item[1] for item in pairs])
+        delta = None if before_mean is None or after_mean is None else round(after_mean - before_mean, 2)
+        dimension_deltas.append(
+            {
+                "dimension": dimension,
+                "before": before_mean,
+                "after": after_mean,
+                "delta": delta,
+                "clear": delta is not None and abs(delta) >= CLEAR_DELTA,
+            }
+        )
     verdict = "no clear difference"
-    if new_hard:
+    if new_hard or new_false or new_empty:
         verdict = "worse"
-    elif mean_delta is None or len(matched) < 3 or abs(mean_delta) < 0.3:
+    elif mean_delta is None or len(matched) < 3 or abs(mean_delta) < CLEAR_DELTA:
         verdict = "no clear difference"
     elif mean_delta > 0 and len(flips_bad) <= len(flips_good):
         verdict = "better"
@@ -494,9 +553,12 @@ def compare_runs(left: list[dict], right: list[dict]) -> dict:
     return {
         "matched": len(matched),
         "mean_score_delta": mean_delta,
+        "dimension_deltas": dimension_deltas,
         "flipped_to_completed": flips_good,
         "flipped_to_incomplete": flips_bad,
         "new_hard_stops": new_hard,
+        "new_false_passes": new_false,
+        "new_empty_replies": new_empty,
         "rows": matched,
         "verdict": verdict,
     }
@@ -527,7 +589,7 @@ def kept_run_ids(suites: list[dict]) -> set[str]:
 
 
 def regression_band(comparison: dict) -> str:
-    if comparison.get("new_hard_stops"):
+    if comparison.get("new_hard_stops") or comparison.get("new_false_passes") or comparison.get("new_empty_replies"):
         return "red"
     verdict = comparison.get("verdict")
     if verdict == "worse":
@@ -535,3 +597,333 @@ def regression_band(comparison: dict) -> str:
     if verdict == "better":
         return "green"
     return "amber"
+
+
+TONE_DIMENSIONS = (
+    ("natural_conversation", "Natural conversation"),
+    ("engagement", "Engagement"),
+    ("age_fit", "Age fit"),
+    ("pacing", "Pacing"),
+    ("feedback", "Feedback"),
+)
+
+GROUP_LABELS = {
+    "wrong_line": "Answered the wrong line",
+    "praised_again": "Praised a complete answer and asked again",
+    "unchanged_reply": "Stored a reply that did not change",
+    "false_pass": "False pass",
+    "false_fail": "False fail",
+    "stuck": "Stuck",
+}
+GROUP_ORDER = (
+    "wrong_line",
+    "praised_again",
+    "unchanged_reply",
+    "false_pass",
+    "false_fail",
+    "stuck",
+)
+
+_WHATS_NEXT = {
+    "what's next",
+    "whats next",
+    "what is next",
+    "what should we do next",
+    "what next",
+}
+_PRAISE = re.compile(
+    r"\b(yes|great|nice|good|awesome|excellent|well done|that's right|that is right|that's the chain|that is the chain)\b",
+    re.I,
+)
+_STOPS = {
+    "that",
+    "this",
+    "with",
+    "from",
+    "have",
+    "they",
+    "them",
+    "what",
+    "when",
+    "where",
+    "your",
+    "about",
+    "just",
+    "like",
+    "then",
+    "does",
+    "did",
+    "was",
+    "were",
+    "been",
+    "into",
+    "over",
+    "more",
+    "some",
+    "than",
+    "their",
+    "there",
+    "would",
+    "could",
+    "should",
+    "because",
+    "while",
+    "which",
+    "these",
+    "those",
+    "being",
+    "know",
+    "dont",
+    "don't",
+}
+_SKIP_PRAISE = SIDE_INTENTS | WRONG_INTENTS | {
+    "nudge",
+    "quit",
+    "move_on",
+    "tell_me_more",
+    "idk",
+    "guess",
+    "echo",
+    "say_yes",
+}
+
+
+def _chat_turns(chat: dict) -> list[dict]:
+    rows = chat.get("report_turns")
+    if not isinstance(rows, list) or not rows:
+        rows = chat.get("turns")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _turn_block(turn: dict) -> str:
+    label = str(turn.get("block_label") or "").strip()
+    if label:
+        return label
+    named = block_label(turn.get("block_type"))
+    return named or "an unknown block"
+
+
+def _ask(text: object) -> str:
+    cleaned = re.sub(r"[^a-z'\s]", "", str(text or "").lower())
+    return " ".join(cleaned.split())
+
+
+def leave_out_turn(turn: dict) -> bool:
+    """What's next? is not a failure while the goal question is still the open ask."""
+    if _ask(turn.get("child_text")) not in _WHATS_NEXT:
+        return False
+    substep = str(turn.get("substep") or turn.get("substep_before") or "").strip()
+    if substep != "main":
+        return False
+    kind = str(turn.get("block_type") or turn.get("block_label") or "").strip().lower()
+    kind = " ".join(re.sub(r"[/_]+", " ", kind).split())
+    if not kind:
+        return True
+    return kind == "topic goal"
+
+
+def _content_words(text: object) -> set[str]:
+    found = set()
+    for word in re.findall(r"[a-z']+", str(text or "").lower()):
+        if len(word) >= 4 and word not in _STOPS:
+            found.add(word)
+    return found
+
+
+def _same_reply(left: object, right: object) -> bool:
+    a = " ".join(str(left or "").split())
+    b = " ".join(str(right or "").split())
+    return bool(a) and a == b
+
+
+def _stayed(turn: dict) -> bool:
+    before_block = str(turn.get("block_before") or "")
+    before_sub = str(turn.get("substep_before") or "")
+    if before_block and before_block != str(turn.get("block_id") or ""):
+        return False
+    if before_sub and before_sub != str(turn.get("substep") or ""):
+        return False
+    return True
+
+
+def _wrong_line(turn: dict, previous: dict | None) -> bool:
+    if previous is None or leave_out_turn(turn):
+        return False
+    reply_words = _content_words(turn.get("tutor_reply"))
+    previous_words = _content_words(previous.get("child_text"))
+    current_words = _content_words(turn.get("child_text"))
+    if len(current_words) < 2 or not previous_words or not reply_words:
+        return False
+    if current_words == previous_words:
+        return False
+    return bool(previous_words & reply_words) and not (current_words & reply_words)
+
+
+def _praised_again(turn: dict) -> bool:
+    if leave_out_turn(turn):
+        return False
+    intent = str(turn.get("intent") or "")
+    if intent in _SKIP_PRAISE:
+        return False
+    child = str(turn.get("child_text") or "").strip()
+    if "?" in child:
+        return False
+    if intent != "answer_right" and len(child.split()) < 8:
+        return False
+    reply = str(turn.get("tutor_reply") or "")
+    if "?" not in reply or not _PRAISE.search(reply):
+        return False
+    return _stayed(turn)
+
+
+def _unchanged_reply(turn: dict, previous: dict | None) -> bool:
+    if previous is None or leave_out_turn(turn):
+        return False
+    reply = str(turn.get("tutor_reply") or "")
+    previous_reply = str(previous.get("tutor_reply") or "")
+    if _same_reply(reply, previous_reply):
+        return True
+    return not reply.strip() and bool(previous_reply.strip()) and bool(str(turn.get("error") or "").strip())
+
+
+def _moved(turn: dict) -> bool:
+    return not _stayed(turn)
+
+
+def chat_failures(chat: dict) -> dict[str, list[dict]]:
+    turns = _chat_turns(chat)
+    checks = chat.get("checks") if isinstance(chat.get("checks"), dict) else {}
+    found = {key: [] for key in GROUP_ORDER}
+    for index, turn in enumerate(turns):
+        previous = turns[index - 1] if index else None
+        if _wrong_line(turn, previous):
+            found["wrong_line"].append(turn)
+        if _praised_again(turn):
+            found["praised_again"].append(turn)
+        if _unchanged_reply(turn, previous):
+            found["unchanged_reply"].append(turn)
+    if "false_passes" in checks or "false_fails" in checks:
+        for index in checks.get("false_passes") or []:
+            if isinstance(index, int) and 0 <= index < len(turns) and not leave_out_turn(turns[index]):
+                found["false_pass"].append(turns[index])
+        for index in checks.get("false_fails") or []:
+            if isinstance(index, int) and 0 <= index < len(turns) and not leave_out_turn(turns[index]):
+                found["false_fail"].append(turns[index])
+    else:
+        for turn in turns:
+            if leave_out_turn(turn):
+                continue
+            intent = str(turn.get("intent") or "")
+            if intent in WRONG_INTENTS and bool(turn.get("passed")):
+                found["false_pass"].append(turn)
+            if intent == "answer_right" and not bool(turn.get("passed")) and not _moved(turn):
+                found["false_fail"].append(turn)
+    stuck = str(chat.get("ended_how") or "") == "stuck" or bool(checks.get("stuck_spans"))
+    if stuck and turns:
+        example = next((turn for turn in reversed(turns) if not leave_out_turn(turn)), turns[-1])
+        found["stuck"].append(example)
+    return found
+
+
+def failure_groups(chats: list[dict]) -> list[dict]:
+    buckets: dict[tuple[str, str], dict] = {}
+    for chat in chats:
+        for key, turns in chat_failures(chat).items():
+            seen: set[str] = set()
+            for turn in turns:
+                block = _turn_block(turn)
+                if block in seen:
+                    continue
+                seen.add(block)
+                slot = buckets.setdefault((key, block), {"count": 0, "turn": turn})
+                slot["count"] += 1
+    rows = []
+    for (key, block), slot in buckets.items():
+        turn = slot["turn"]
+        rows.append(
+            {
+                "id": key,
+                "label": GROUP_LABELS[key],
+                "count": slot["count"],
+                "block_type": block,
+                "child": str(turn.get("child_text") or ""),
+                "tutor": str(turn.get("tutor_reply") or ""),
+            }
+        )
+    order = {name: index for index, name in enumerate(GROUP_ORDER)}
+    rows.sort(key=lambda row: (order[row["id"]], row["block_type"]))
+    return rows
+
+
+def tone_rows(chats: list[dict]) -> list[dict]:
+    usable = [chat for chat in chats if _usable(chat)]
+    rows = []
+    for key, label in TONE_DIMENSIONS:
+        scored = []
+        for chat in usable:
+            for item in chat.get("scores") or []:
+                if isinstance(item, dict) and str(item.get("dimension") or "") == key:
+                    scored.append((chat, _num(item.get("score"))))
+                    break
+        lowest = sorted(
+            scored,
+            key=lambda pair: (pair[1], str(pair[0].get("persona_name") or ""), str(pair[0].get("id") or "")),
+        )[:3]
+        rows.append(
+            {
+                "dimension": key,
+                "label": label,
+                "mean": _mean([score for _, score in scored]),
+                "lowest": [
+                    {"chat_id": chat.get("id"), "child": str(chat.get("persona_name") or ""), "score": score}
+                    for chat, score in lowest
+                ],
+            }
+        )
+    return rows
+
+
+def _shown_score(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _summary_text(chats: int, completed: int, stuck: int, models: list[str], groups: list[dict], tone: list[dict]) -> str:
+    tutors = ", ".join(models) if models else "none"
+    lines = [f"Run: {chats} chats, {completed} completed, {stuck} stuck. Tutors: {tutors}.", ""]
+    if not groups:
+        lines.append("Automatic checks: none of these failures.")
+        lines.append("")
+    for group in groups:
+        noun = "chat" if group["count"] == 1 else "chats"
+        lines.append(f"{group['label']} — {group['count']} {noun} — {group['block_type']}")
+        lines.append(f"Child: {group['child']}")
+        lines.append(f"Tutor: {group['tutor']}")
+        lines.append("")
+    lines.append("Tone")
+    for row in tone:
+        mean = "—" if row["mean"] is None else row["mean"]
+        lowest = ", ".join(f"{item['child']} {_shown_score(item['score'])}" for item in row["lowest"]) or "none"
+        lines.append(f"{row['label']}: mean {mean}. Lowest: {lowest}.")
+    return "\n".join(lines).strip()
+
+
+def run_summary(chats: list[dict]) -> dict:
+    """A short, copyable account of how the run ended and which checks failed."""
+    models = sorted({str(chat.get("tutor_model") or "") for chat in chats if str(chat.get("tutor_model") or "").strip()})
+    completed = sum(1 for chat in chats if chat.get("ended_how") == "completed")
+    stuck = sum(1 for chat in chats if chat.get("ended_how") == "stuck")
+    groups = failure_groups(chats)
+    tone = tone_rows(chats)
+    return {
+        "chats": len(chats),
+        "completed": completed,
+        "stuck": stuck,
+        "tutor_models": models,
+        "groups": groups,
+        "tone": tone,
+        "text": _summary_text(len(chats), completed, stuck, models, groups, tone),
+    }

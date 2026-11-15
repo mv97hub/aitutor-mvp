@@ -203,5 +203,5 @@ export async function POST(req: Request) {
     const message = error instanceof Error ? error.message : "Could not store the prompt.";
     return new Response(message, { status: 502 });
   }
-  return Response.json(session);
+  return Response.json({ ...session, loop_decision: decision.decision });
 }
