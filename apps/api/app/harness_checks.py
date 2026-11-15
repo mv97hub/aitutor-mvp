@@ -137,28 +137,389 @@ def turn_place(turn: dict) -> str:
 # A summary close and an explanation have nothing to grade.
 _UNGRADED_SUBSTEPS = {"explain", "explain_topic", "summary_check"}
 
+# Task verbs and frame words are how the key is asked, not words the child says.
+_TASK = frozenset({
+    "explain", "determine", "describe", "identify", "state", "name", "compare",
+    "list", "tell", "give", "show",
+})
+_FRAME = frozenset({"difference", "generally", "between"})
+_FUNCTION = frozenset({
+    "a", "an", "the", "and", "or", "of", "to", "in", "on", "for", "with", "from",
+    "by", "at", "as", "is", "are", "was", "were", "be", "been", "being",
+    "it", "its", "their", "they", "them", "this", "that", "these", "those",
+    "who", "what", "which", "when", "where", "how", "why", "than", "then",
+    "into", "about", "because", "also", "just", "like", "very", "do", "does",
+    "did", "can", "could", "would", "should", "will", "your", "you", "our",
+    "his", "her", "there", "here", "if", "so", "but", "have", "has", "had",
+    "we", "i", "me", "my", "even", "still", "much", "many", "some", "any",
+    "each", "both", "other", "such", "same", "over", "out", "off", "too",
+    "due",
+})
+_NEGATORS = frozenset({
+    "not", "no", "never", "without", "neither", "nor", "cannot", "nobody", "nothing", "none",
+})
+_UP_WORDS = frozenset({
+    "up", "increase", "increases", "increased", "rise", "rises", "rising", "rose", "higher",
+})
+_DOWN_WORDS = frozenset({
+    "down", "decrease", "decreases", "decreased", "fall", "falls", "falling", "fell", "lower",
+    "drop", "drops", "dropped",
+})
+_TOPICS = frozenset({
+    "wage", "price", "inflation", "raise", "money", "cost", "rate", "worker", "borrower", "menu", "move",
+})
+_COMPARE_NOUNS = frozenset({"raise", "wage", "inflation", "price", "money", "cost", "rate"})
+_OPPOSITE = {"help": "harm", "harm": "help", "benefit": "harm", "up": "down", "down": "up"}
+_CANON = {
+    "anticipated": "expected",
+    "anticipate": "expected",
+    "anticipates": "expected",
+    "unanticipated": "surprise",
+    "unexpected": "surprise",
+    "surprised": "surprise",
+    "surprises": "surprise",
+    "harmful": "harm",
+    "hurts": "harm",
+    "hurt": "harm",
+    "messes": "harm",
+    "messed": "harm",
+    "benefits": "benefit",
+    "benfits": "benefit",
+    "gains": "benefit",
+    "gain": "benefit",
+    "borrowed": "borrower",
+    "borrowing": "borrower",
+    "borrows": "borrower",
+    "helps": "help",
+    "helped": "help",
+    "everyone": "people",
+    "everybody": "people",
+    "changing": "change",
+    "changed": "change",
+    "changes": "change",
+    "costs": "cost",
+    "expense": "cost",
+    "expenses": "cost",
+    "prices": "price",
+    "wages": "wage",
+    "decreases": "down",
+    "decreased": "down",
+    "decrease": "down",
+    "falls": "down",
+    "falling": "down",
+    "fell": "down",
+    "fall": "down",
+    "drops": "down",
+    "dropped": "down",
+    "drop": "down",
+    "lower": "down",
+    "increases": "up",
+    "increased": "up",
+    "increase": "up",
+    "rises": "up",
+    "rising": "up",
+    "rose": "up",
+    "rise": "up",
+    "higher": "up",
+    "pays": "pay",
+    "paid": "pay",
+    "workers": "worker",
+    "loses": "lose",
+    "lost": "lose",
+    "fewer": "less",
+    "smaller": "less",
+}
+_CONTRACTIONS = (
+    ("won't", "will not"),
+    ("can't", "can not"),
+    ("don't", "do not"),
+    ("doesn't", "does not"),
+    ("isn't", "is not"),
+    ("aren't", "are not"),
+    ("wasn't", "was not"),
+    ("weren't", "were not"),
+    ("didn't", "did not"),
+    ("haven't", "have not"),
+    ("hasn't", "has not"),
+    ("wouldn't", "would not"),
+    ("shouldn't", "should not"),
+    ("couldn't", "could not"),
+    ("it's", "it is"),
+    ("that's", "that is"),
+)
+_PURPOSE_RE = re.compile(
+    r"\b(?:to|when\s+(?:they|firms|businesses|stores|people|you))\s+"
+    r"([a-z]+)\s+(?:(?:its|their|the|a|an|those)\s+)?([a-z]+)"
+)
+_HARM_RE = re.compile(
+    r"\b(?:harm\w*|hurt\w*|worse|mess(?:es|ed)?\s+up|can not plan|cannot plan|no time to)\b"
+)
+_SURPRISE_RE = re.compile(r"\b(?:surprises?|surprised|unanticipated|unexpected)\b")
+_EXPECTED_RE = re.compile(r"\b(?:expected|anticipated|anticipate|anticipates)\b")
+
+
+def _normalize(text: str) -> str:
+    raw = _text(text).lower().replace("\u2019", "'")
+    for src, dst in _CONTRACTIONS:
+        raw = raw.replace(src, dst)
+    raw = re.sub(r"[^a-z0-9]+", " ", raw)
+    raw = re.sub(r"\bteh\b", "the", raw)
+    return " ".join(raw.split())
+
+
+def _canon(word: str) -> str:
+    if word in _CANON:
+        return _CANON[word]
+    if len(word) > 4 and word.endswith("s") and not word.endswith("ss"):
+        base = word[:-1]
+        return _CANON.get(base, base)
+    return word
+
+
+def _keep(word: str) -> bool:
+    return word.isdigit() or word in {"up", "down"} or len(word) > 3
+
+
+def _negation_spans(tokens: list[str]) -> tuple[set[int], set[str]]:
+    """Tokens inside a negation, and the concept the negation is aimed at."""
+    blocked: set[int] = set()
+    heads: set[str] = set()
+    for index, token in enumerate(tokens):
+        if token not in _NEGATORS:
+            continue
+        for cursor in range(index + 1, min(len(tokens), index + 5)):
+            blocked.add(cursor)
+        for cursor in range(index + 1, min(len(tokens), index + 5)):
+            if tokens[cursor] in _FUNCTION or tokens[cursor] in _NEGATORS:
+                continue
+            heads.add(_canon(tokens[cursor]))
+            break
+    return blocked, heads
+
+
+def _polarity(tokens: list[str]) -> tuple[dict[str, bool], set[int], set[str]]:
+    blocked, heads = _negation_spans(tokens)
+    affirmed: set[str] = set()
+    denied: set[str] = set()
+    for index, token in enumerate(tokens):
+        if token in _FUNCTION or token in _NEGATORS:
+            continue
+        canon = _canon(token)
+        if not _keep(canon):
+            continue
+        if index in blocked:
+            denied.add(canon)
+        else:
+            affirmed.add(canon)
+    polarity = {word: True for word in affirmed}
+    for word in denied | heads:
+        if word not in affirmed and _keep(word):
+            polarity[word] = False
+    return polarity, blocked, heads
+
+
+def _phrase_concepts(text: str) -> set[str]:
+    found: set[str] = set()
+    if re.search(r"\bprices?\s+(?:rise|rises|rose|go up|went up|increase|increases|increased)\b", text):
+        found.add("inflation")
+    if re.search(r"\b(?:rising|higher)\s+prices\b", text):
+        found.add("inflation")
+    if re.search(r"\b(?:can not|cannot)\s+plan\b", text) or re.search(r"\bmess(?:es|ed)?\s+up\b", text):
+        found.add("harm")
+    if re.search(r"\bno time to\b", text):
+        found.add("harm")
+    return found
+
+
+def _affirmed(tokens: list[str], text: str) -> set[str]:
+    blocked, _heads = _negation_spans(tokens)
+    found: set[str] = set()
+    for index, token in enumerate(tokens):
+        if index in blocked or token in _FUNCTION or token in _NEGATORS:
+            continue
+        canon = _canon(token)
+        if _keep(canon):
+            found.add(canon)
+    return found | _phrase_concepts(text)
+
+
+def _dir_kind(token: str) -> str | None:
+    if token in _UP_WORDS or _canon(token) == "up":
+        return "up"
+    if token in _DOWN_WORDS or _canon(token) == "down":
+        return "down"
+    return None
+
+
+def _directions(tokens: list[str], blocked: set[int]) -> set[str]:
+    found: set[str] = set()
+    for index, token in enumerate(tokens):
+        kind = _dir_kind(token)
+        if kind is None:
+            continue
+        if index in blocked:
+            kind = "down" if kind == "up" else "up"
+        found.add(kind)
+    return found
+
+
+def _topics(tokens: list[str]) -> set[str]:
+    found: set[str] = set()
+    for token in tokens:
+        canon = _canon(token)
+        if canon in _TOPICS:
+            found.add(canon)
+    return found
+
+
+def _harm_case(text: str) -> str | None:
+    """Which inflation case the line treats as the harmful one.
+
+    Words after "than" are the comparison, not the case being called harmful.
+    "Expected inflation hurts more than a surprise" names the expected case.
+    """
+    harms = [match.start() for match in _HARM_RE.finditer(text)]
+    if not harms:
+        return None
+    harm_at = harms[-1]
+    after = text[harm_at:]
+    than = re.search(r"\bthan\b", after)
+    cutoff = harm_at + than.start() if than else len(text)
+
+    def nearest_before(pattern: re.Pattern[str]) -> int | None:
+        spots = [match.start() for match in pattern.finditer(text) if match.start() < cutoff]
+        spots = [spot for spot in spots if spot < harm_at or than is None]
+        if not spots:
+            return None
+        return min(abs(harm_at - spot) for spot in spots)
+
+    surprise = nearest_before(_SURPRISE_RE)
+    expected = nearest_before(_EXPECTED_RE)
+    if surprise is None and expected is None:
+        return None
+    if surprise is None:
+        return "expected"
+    if expected is None:
+        return "surprise"
+    if surprise == expected:
+        return None
+    return "surprise" if surprise < expected else "expected"
+
+
+def _comparison(text: str) -> str | None:
+    if re.search(r"\b(?:more|greater|higher)\s+than\b", text):
+        return "more"
+    if re.search(r"\b(?:less|fewer|lower|smaller)\s+than\b", text):
+        return "less"
+    return None
+
+
+def _contradicts(child: str, key: str, child_tokens: list[str], key_tokens: list[str]) -> bool:
+    """A negation or the opposite direction is not the key, even when other words match."""
+    child_polarity, child_blocked, _child_heads = _polarity(child_tokens)
+    key_polarity, key_blocked, key_heads = _polarity(key_tokens)
+    for concept, affirmed in child_polarity.items():
+        if not affirmed and key_polarity.get(concept) is True:
+            return True
+    for concept in key_heads:
+        if child_polarity.get(concept) is True:
+            return True
+    child_dirs = _directions(child_tokens, child_blocked)
+    key_dirs = _directions(key_tokens, key_blocked)
+    if len(child_dirs) == 1 and len(key_dirs) == 1 and child_dirs != key_dirs:
+        if _topics(child_tokens) & _topics(key_tokens):
+            return True
+    child_compare = _comparison(child)
+    key_compare = _comparison(key)
+    if child_compare and key_compare and child_compare != key_compare:
+        child_nouns = {_canon(token) for token in child_tokens} & _COMPARE_NOUNS
+        key_nouns = {_canon(token) for token in key_tokens} & _COMPARE_NOUNS
+        if child_nouns & key_nouns:
+            return True
+    child_case = _harm_case(child)
+    key_case = _harm_case(key)
+    return bool(child_case and key_case and child_case != key_case)
+
+
+def _is_instruction(tokens: list[str]) -> bool:
+    for token in tokens:
+        if token in _FUNCTION:
+            continue
+        return token in _TASK
+    return False
+
+
+def _required(tokens: list[str], instructional: bool) -> list[str]:
+    required: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if token in _FUNCTION or token in _NEGATORS:
+            continue
+        if instructional and token in _TASK:
+            continue
+        canon = _canon(token)
+        if instructional and canon in _FRAME:
+            continue
+        if not _keep(canon) or canon in seen:
+            continue
+        seen.add(canon)
+        required.append(canon)
+    return required
+
+
+def _covered(concept: str, have: set[str], negated_heads: set[str]) -> bool:
+    if concept in have:
+        return concept not in negated_heads
+    opposite = _OPPOSITE.get(concept)
+    return bool(concept in negated_heads and opposite and opposite in have)
+
+
+def _purpose_match(key: str, have: set[str]) -> bool:
+    for verb, noun in _PURPOSE_RE.findall(key):
+        verb_c = _canon(verb)
+        noun_c = _canon(noun)
+        if verb_c in _FUNCTION or noun_c in _FUNCTION or not _keep(verb_c) or not _keep(noun_c):
+            continue
+        if verb_c in have and noun_c in have:
+            return True
+    return False
+
 
 def line_matches_key(child: str, expected: str) -> bool:
     """The child's words against the answer key. The intent label is not consulted.
 
-    A short key has to be complete, so "the river is green" does not match
-    "the river is blue". A longer key matches when half of its content words
-    are in the child's line.
+    A short factual key has to be complete, so "the river is green" does not
+    match "the river is blue". An instruction and a longer key match on the
+    gist, including a paraphrase that never says the task verb. A negation
+    does not match a key that says the opposite.
     """
-    left = " ".join(_text(child).lower().split())
-    right = " ".join(_text(expected).lower().split())
+    left = _normalize(child)
+    right = _normalize(expected)
     if not left or not right:
         return False
+    child_tokens = left.split()
+    key_tokens = right.split()
+    if _contradicts(left, right, child_tokens, key_tokens):
+        return False
     if right in left:
+        prefix = left[: left.find(right)].split()
+        if not any(word in _NEGATORS for word in prefix[-3:]):
+            return True
+    have = _affirmed(child_tokens, left)
+    if _purpose_match(right, have):
         return True
-    needed = [word for word in re.findall(r"[a-z0-9']+", right) if len(word) > 3]
-    if not needed:
+    instructional = _is_instruction(key_tokens)
+    required = _required(key_tokens, instructional)
+    if not required:
         return left == right
-    have = {word for word in re.findall(r"[a-z0-9']+", left) if len(word) > 3}
-    hits = sum(1 for word in needed if word in have)
-    if len(needed) <= 4:
-        return hits == len(needed)
-    return hits * 2 >= len(needed)
+    key_heads = _polarity(key_tokens)[2]
+    if "expected" in required and "surprise" in required:
+        if "expected" not in have or "surprise" not in have:
+            return False
+    hits = sum(1 for concept in required if _covered(concept, have, key_heads))
+    if len(required) <= 4 and not instructional:
+        return hits == len(required)
+    return hits * 2 >= len(required)
 
 
 def graded_step(turn: dict) -> bool:
