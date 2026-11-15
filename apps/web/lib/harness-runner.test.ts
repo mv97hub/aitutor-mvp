@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ClaimedChat, HarnessTransport, SessionSnap } from "./harness-runner.ts";
-import { placeKey, playChat } from "./harness-runner.ts";
+import { claimStillOwns, placeKey, playChat } from "./harness-runner.ts";
 
 function session(overrides: Partial<SessionSnap> = {}): SessionSnap {
   return {
@@ -103,6 +103,45 @@ test("a model turn stores the child prompt, and a scripted line does not", async
   await playChat(chat(), transport);
   assert.equal(recorded[0]?.child_text, "the river is blue");
   assert.equal(recorded[0]?.child_prompt, "");
+});
+
+test("a loop stops when the claim generation is no longer its own", async () => {
+  let answers = 0;
+  let finished = false;
+  const owned = chat();
+  owned.claim_generation = 1;
+  owned.script = ["one", "two"];
+  const transport: HarnessTransport = {
+    runStatus: async () => ({
+      status: "running",
+      chat_rows: [{ id: "chat-1", claim_generation: answers === 0 ? 1 : 2 }],
+    }),
+    session: async () => session(),
+    speak: async () => session(),
+    answer: async () => {
+      answers += 1;
+      return session({
+        messages: [
+          { role: "assistant", content: "What color is the river?" },
+          { role: "user", content: "one" },
+          { role: "assistant", content: "Say the next part." },
+        ],
+      });
+    },
+    answerKey: async () => ({ expected: "blue", block_id: "blk" }),
+    childText: async () => {
+      throw new Error("script mode should not call the child model");
+    },
+    recordTurn: async () => ({ stop: "", cost_usd: "0", luna_tokens: 0 }),
+    finish: async () => {
+      finished = true;
+    },
+  };
+  assert.equal(await playChat(owned, transport), "paused");
+  assert.equal(answers, 1);
+  assert.equal(finished, false);
+  assert.equal(claimStillOwns({ status: "running", chat_rows: [{ id: "chat-1", claim_generation: 1 }] }, "chat-1", 1), true);
+  assert.equal(claimStillOwns({ status: "running", chat_rows: [{ id: "chat-1", claim_generation: 2 }] }, "chat-1", 1), false);
 });
 
 test("a paused run leaves the chat for resume", async () => {

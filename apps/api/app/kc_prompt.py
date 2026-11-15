@@ -2134,10 +2134,13 @@ def _forecast_known_close(forecast: object | None) -> bool:
 
 
 def _decision_sentence(turn: object, label: str) -> str:
-    """One reply instruction. stay, advance, or close, matching the loop."""
+    """One reply instruction. The order matches the speech.
+
+    An advance says advance and does not say stay. A stay says stay and does
+    not say advance. Close keeps its own order.
+    """
     speech = str(getattr(turn, "speech", "stay"))
     prefix = f"{label}: " if label else "Decision: "
-    order = "Set decision to stay."
     if getattr(turn, "unit_complete", False):
         order = "Set decision to complete."
         body = "This reply ends the unit. Close it. Ask no question. Do not open the next block."
@@ -2153,22 +2156,32 @@ def _decision_sentence(turn: object, label: str) -> str:
                 "The block is finished. Close in one sentence. Ask no question. Do not praise the block again. "
                 "Do not open the next block. The next block arrives in its own message. Set block_complete=true."
             )
-    elif speech == "advance" and getattr(turn, "revealed", False):
-        body = (
-            "This is the last allowed try. Give the answer and say plainly that you gave it. "
-            "The reply then moves to the next step of this block."
-        )
-    elif speech == "advance" and str(getattr(turn, "next_substep", "")) == "summary_check":
-        body = (
-            "If this answer satisfies the substep, set substep_passed=true and block_complete=false. "
-            "Congratulate the learner once for finishing this block. "
-            "Ask one question only: move on, or ask one more question. Do not open the next block."
-        )
     elif speech == "advance":
-        body = "The reply does the next step of this block. Do not ask the step this reply is leaving."
+        order = "Set decision to advance."
+        if getattr(turn, "revealed", False):
+            body = (
+                "This is the last allowed try. Give the answer and say plainly that you gave it. "
+                "The reply then moves to the next step of this block."
+            )
+        elif str(getattr(turn, "next_substep", "")) == "summary_check":
+            body = (
+                "If this answer satisfies the substep, set substep_passed=true and block_complete=false. "
+                "Congratulate the learner once for finishing this block. "
+                "Ask one question only: move on, or ask one more question. Do not open the next block."
+            )
+        else:
+            body = "The reply does the next step of this block. Do not ask the step this reply is leaving."
     else:
+        speech = "stay"
+        order = "Set decision to stay."
         body = "Stay on this step. Set substep_passed=false and block_complete=false."
     return f"{prefix}{speech}. {order} {body}"
+
+
+def _repeats_the_question(line: str) -> bool:
+    """A stay-on-course line that tells the model to ask the step again."""
+    lowered = line.lower()
+    return line.startswith("Stay on course:") or "repeat the active question" in lowered
 
 
 def _summary_future(line: str) -> bool:
@@ -2192,14 +2205,35 @@ def _future_matches(line: str, turn: object) -> bool:
     return True
 
 
+def _speech_of(turn: object | None) -> str:
+    return str(getattr(turn, "speech", "") or "")
+
+
 def _align_this_turn(lines: list[str], forecast: object | None, *, ready_check: bool) -> list[str]:
-    """Keep the one branch the dry run chose. A ready check stays as written."""
+    """Keep the one branch the dry run chose. A ready check stays as written.
+
+    A line that says to repeat the question belongs on a stay branch. It does
+    not sit beside an advance. A known stay does not tell the model to advance.
+    """
     if not _forecast_applies(forecast) or ready_check:
         return lines
     depends = bool(getattr(forecast, "depends_on_model", False))
     chosen = getattr(forecast, "chosen", None)
+    if_correct = getattr(forecast, "if_correct", None)
+    if_not = getattr(forecast, "if_not", None)
+    if depends:
+        advance_branch = _speech_of(if_correct) == "advance" or _speech_of(if_not) == "advance"
+    else:
+        advance_branch = _speech_of(chosen) == "advance"
+    known_stay = (not depends) and _speech_of(chosen) == "stay"
+    held_stay: list[str] = []
     kept: list[str] = []
     for line in lines:
+        if advance_branch and _repeats_the_question(line):
+            held_stay.append(line)
+            continue
+        if known_stay and line.startswith("Mid-Unit Contract"):
+            line = line.replace("Advance substep or next block when satisfied. ", "", 1)
         if _summary_future(line):
             if depends or chosen is None or not _future_matches(line, chosen):
                 continue
@@ -2218,13 +2252,20 @@ def _align_this_turn(lines: list[str], forecast: object | None, *, ready_check: 
             if True in ends:
                 continue
         kept.append(line)
+
+    def _branch(turn: object, label: str) -> str:
+        sentence = _decision_sentence(turn, label)
+        if held_stay and _speech_of(turn) == "stay":
+            sentence = f"{sentence} {' '.join(held_stay)}"
+        return sentence
+
     if depends:
         branch = [
-            _decision_sentence(getattr(forecast, "if_correct"), "If correct"),
-            _decision_sentence(getattr(forecast, "if_not"), "If not"),
+            _branch(if_correct, "If correct"),
+            _branch(if_not, "If not"),
         ]
     else:
-        branch = [_decision_sentence(chosen, "")]
+        branch = [_branch(chosen, "")]
     insert_at = 2 if len(kept) >= 2 else len(kept)
     return kept[:insert_at] + branch + kept[insert_at:]
 
