@@ -1733,6 +1733,14 @@ def resolve_block_turn(
         substep = "solo_solve"
         state["substep"] = substep
 
+    # A giveaway is sticky. A later correct answer does not record the block as passed.
+    # A reveal the loop already counted is not counted again when that answer arrives.
+    already_revealed = bool(state.get("revealed_substep") or state.get("recall_revealed"))
+    if tutor_gave_away_answer(block, state, substep, prior_tutor):
+        state["answer_given_away"] = True
+        if already_revealed:
+            state["giveaway_counted"] = True
+
     results = [dict(r) for r in (block_results or []) if isinstance(r, dict)]
     if btype == "explanation":
         return _resolve_explanation_turn(
@@ -1986,6 +1994,17 @@ def resolve_block_turn(
         )
 
     def finish(outcome: str, attempts: int, reveals_now: int) -> BlockResolution:
+        if state.get("answer_given_away") and outcome == "passed":
+            outcome = "revealed"
+        if (
+            state.get("answer_given_away")
+            and outcome == "revealed"
+            and not already_revealed
+            and not state.get("giveaway_counted")
+            and reveals_now <= reveals
+        ):
+            reveals_now = reveals + 1
+            state["giveaway_counted"] = True
         title = _block_title(block, index)
         noted_strong = strong_text or (title if outcome == "passed" else "")
         noted_work = work_text or ("" if outcome == "passed" else f"Look again at {title}.")
@@ -2048,7 +2067,7 @@ def resolve_block_turn(
     )
 
     def _summary_outcome() -> str:
-        if state.get("revealed_substep"):
+        if state.get("answer_given_away") or state.get("revealed_substep"):
             return "revealed"
         if btype == "curiosity" and not _counts_toward_mastery(block, cfg):
             return "engaged"
@@ -2256,6 +2275,104 @@ def _counts_toward_mastery(block: dict, cfg: dict) -> bool:
         return True
     bcfg = ((cfg or {}).get("blocks") or {}).get(kind) or {}
     return bool(bcfg.get("counts_toward_mastery_score", False))
+
+
+_GIVEAWAY_CUES = (
+    "say it back",
+    "say that back",
+    "put it in your own words",
+    "repeat it",
+    "repeat that",
+    "say it again",
+    "say that again",
+    "now you say",
+    "your turn to say",
+    "giving you the answer",
+    "give you the answer",
+    "the answer is",
+    "here's the answer",
+    "here is the answer",
+)
+
+
+def _folded(text: str) -> str:
+    return " ".join((text or "").lower().split())
+
+
+def _required_chain(block: dict, substep: str) -> str:
+    """The answer this step requires. A giveaway is this chain, said out loud."""
+    data = _data(block)
+    btype = str(block.get("type") or "").strip()
+    if btype == "topic_goal":
+        return str(data.get("acceptance_criteria") or data.get("goal") or "").strip()
+    if btype == "retrieval_check":
+        if substep == "elaborate_why":
+            return str(data.get("expected_why_rationale") or "").strip()
+        return str(data.get("expected_fact") or "").strip()
+    if btype == "worked_example" and substep == "solo_solve":
+        return str(data.get("solo_expected_answer") or "").strip()
+    if btype == "worked_example" and substep == "faded_step":
+        steps = data.get("steps") if isinstance(data.get("steps"), list) else []
+        index = int(data.get("faded_step_index") or 0)
+        step = steps[index] if 0 <= index < len(steps) else ""
+        text = step.get("step_text") if isinstance(step, dict) else str(step)
+        return str(text or "").strip()
+    if btype == "mcq" and substep == "awaiting_why":
+        return str(data.get("correct_explanation") or "").strip()
+    if btype == "spot_the_flaw":
+        return str(data.get("corrected_version") or "").strip()
+    if btype == "socratic":
+        return str(data.get("target_synthesis") or "").strip()
+    if btype == "case_study":
+        return str(data.get("invariant_principle") or data.get("transfer_expected") or "").strip()
+    return ""
+
+
+def _asks_to_repeat_or_gives_answer(text: str) -> bool:
+    folded = _folded(text)
+    return any(cue in folded for cue in _GIVEAWAY_CUES)
+
+
+def tutor_read_correct_choice(block: dict, state: dict | None, prior_tutor: str) -> bool:
+    """The previous reply names the correct option, rather than listing the menu."""
+    if str(block.get("type") or "").strip() != "mcq":
+        return False
+    choices, correct = mcq_payload(block, state if isinstance(state, dict) else {})
+    if not choices or correct < 0 or correct >= len(choices):
+        return False
+    folded = _folded(prior_tutor)
+    if not folded:
+        return False
+    correct_text = _folded(str(choices[correct].get("text") or ""))
+    if len(correct_text) < 4 or correct_text not in folded:
+        return False
+    others = [
+        _folded(str(item.get("text") or ""))
+        for index, item in enumerate(choices)
+        if index != correct and _folded(str(item.get("text") or ""))
+    ]
+    if others and all(item in folded for item in others):
+        return False
+    return True
+
+
+def tutor_gave_away_answer(block: dict, state: dict | None, substep: str, prior_tutor: str) -> bool:
+    """The tutor read the correct choice, or stated the required chain and asked for it back.
+
+    A later correct line does not undo this. The stored outcome stays revealed.
+    """
+    stored = state if isinstance(state, dict) else {}
+    if stored.get("answer_given_away"):
+        return True
+    if tutor_read_correct_choice(block, stored, prior_tutor):
+        return True
+    task = substep
+    if substep == "summary_check":
+        task = str(stored.get("last_task_substep") or "").strip() or substep
+    chain = _required_chain(block, task)
+    if not chain or not _asks_to_repeat_or_gives_answer(prior_tutor):
+        return False
+    return _matches(prior_tutor, chain)
 
 
 def _outcome_succeeded(row: dict | None) -> bool:
