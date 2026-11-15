@@ -790,7 +790,7 @@ def test_a_dynamic_mcq_reply_is_a_short_lead_in() -> None:
     assert "open Block 2" not in before
 
 
-def test_a_finished_block_closes_without_opening_the_next_one() -> None:
+def test_a_finished_block_reply_that_is_not_a_question_opens_the_next_one() -> None:
     node = _node(
         blocks=[
             {
@@ -819,19 +819,12 @@ def test_a_finished_block_closes_without_opening_the_next_one() -> None:
     )
     teach = _section(text, "What to teach")
     turn = _section(text, "This turn")
-    how = _section(text, "How to teach")
-    returned = _section(text, "What to return")
-    assert "close Block 1 with a brief affirmation" in teach
-    assert "Do not mention the next block and do not open it." in teach
-    assert "open Block 2" not in teach
-    assert "Name the river color" not in text
-    assert "Ask no question. Do not open the next block." in turn
-    assert "Congratulate the learner once for finishing this block." in how
-    assert "Ask one question only: move on, or ask one more question." in how
-    assert "Do not offer one more example." in how
-    assert "do not open the next block" in how.lower()
-    assert "End a teaching or probing turn with a single clear question." not in how
-    assert "Do not describe the next block." in returned
+    assert "Begin the next block in this same reply." in text
+    assert "and ask the goal again." not in text
+    assert "Stay on course: this is not an attempt at the goal." not in text
+    assert "First line:" in teach
+    assert "Ask no question and do not open the next block." not in turn
+    assert "Do not ask the goal again." in turn
 
 
 def test_summary_check_is_the_last_substep_and_hides_the_choice_widget() -> None:
@@ -899,6 +892,7 @@ def test_summary_check_prompt_distinguishes_a_completed_block_from_an_incomplete
     done = _text(
         node=node,
         opening=False,
+        last_answer="",
         active_block_state={"substep": "summary_check", "revealed_substep": False, "last_task_substep": "main"},
     )
     assert "The learner completed this block." in done
@@ -1302,4 +1296,36 @@ def test_one_follow_up_then_a_second_move_on_advances() -> None:
     assert closed.advance_block is True
     assert closed.next_step == 1
     assert closed.next_block_state.get("substep") != "summary_check"
+
+
+def test_a_non_question_on_a_passed_summary_opens_the_next_block() -> None:
+    """done, what's next, and ok are not on the old let's-go list. They still advance."""
+    node = _topic_node()
+    state = {"substep": "summary_check", "last_task_substep": "main", "revealed_substep": False}
+    for phrase in ("done", "what's next", "What's next?", "ok", "let's go", "move on"):
+        closed = _passed_summary_turn(phrase)
+        assert closed.advance_block is True, phrase
+        assert closed.next_step == 1, phrase
+        assert closed.next_block_state.get("substep") != "summary_check", phrase
+        text = _text(node=node, opening=False, last_answer=phrase, active_block_state=state)
+        assert "and ask the goal again." not in text, phrase
+        assert "Stay on course: this is not an attempt at the goal." not in text, phrase
+        assert "Begin the next block in this same reply." in text, phrase
+
+
+def test_a_question_on_a_passed_summary_does_not_advance() -> None:
+    question = "Why is scarcity the central problem?"
+    stayed = _passed_summary_turn(question, substep_passed=True)
+    assert stayed.advance_block is False
+    assert stayed.next_block_state["substep"] == "summary_check"
+    assert stayed.block_results == []
+    asked = _text(
+        node=_topic_node(),
+        opening=False,
+        last_answer=question,
+        active_block_state={"substep": "summary_check", "last_task_substep": "main", "revealed_substep": False},
+    )
+    assert "Begin the next block in this same reply." not in asked
+    assert "and ask the goal again." not in _section(asked, "This turn")
+    assert "then ask the same single choice: move on, or ask one more question." in asked
 

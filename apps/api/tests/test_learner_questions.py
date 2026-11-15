@@ -139,8 +139,16 @@ def test_only_an_explicit_move_on_completes_the_explanatory_summary() -> None:
         assert closed.unit_complete is False, phrase
         assert closed.next_step == 1, phrase
     shrugged = _summary_turn("ok", substep_passed=True, block_complete=True, decision="complete")
-    assert shrugged.advance_block is False
-    assert shrugged.next_block_state["substep"] == "summary_check"
+    assert shrugged.advance_block is True
+    assert shrugged.next_step == 1
+    asked = _summary_turn(
+        "Why is the denominator the bottom number?",
+        substep_passed=True,
+        block_complete=True,
+        decision="complete",
+    )
+    assert asked.advance_block is False
+    assert asked.next_block_state["substep"] == "summary_check"
 
 
 def _summary_prompt(answer: str) -> str:

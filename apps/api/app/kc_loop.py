@@ -374,8 +374,8 @@ def learner_wants_recap_elaboration(answer: str) -> bool:
     return text == "tell me more" or text.startswith("tell me more")
 
 
-def summary_ready_signal(answer: str) -> bool:
-    """Let's go, move on, next, or yes. These close a passed summary.
+def summary_explicit_move_on(answer: str) -> bool:
+    """Let's go, move on, next, or yes. These also close an incomplete summary.
 
     A question mark does not turn "move on?" into another question.
     A real question that only happens to contain one of these words does not close.
@@ -402,12 +402,73 @@ def summary_ready_signal(answer: str) -> bool:
     return False
 
 
+def _is_proceed_question(text: str) -> bool:
+    """A question whose point is to go on, such as what's next or move on?"""
+    if text in {"whats next", "what next", "what is next", "what s next", "yes", "next", "ok", "okay", "done", "ready"}:
+        return True
+    if text.startswith(("whats next", "what is next", "what next", "what s next")):
+        return True
+    if "lets go" in text or "move on" in text:
+        return True
+    return text.startswith("next ") or "next block" in text or "next part" in text or "next topic" in text
+
+
+def summary_content_question(answer: str) -> bool:
+    """A question that stays on a passed summary. A local check on the child's text.
+
+    what's next, move on?, let's go, done, and ok are not content questions.
+    tell me more and elaborate stay, because the summary offered more time.
+    """
+    raw = answer or ""
+    if learner_wants_recap_elaboration(raw):
+        return True
+    text = _proceed_text(raw)
+    if not text:
+        return False
+    if summary_explicit_move_on(raw) or _is_proceed_question(text):
+        return False
+    if "?" in raw:
+        return True
+    first = text.split()[0]
+    return first in {
+        "what",
+        "why",
+        "how",
+        "when",
+        "where",
+        "who",
+        "which",
+        "can",
+        "could",
+        "would",
+        "should",
+        "is",
+        "are",
+        "do",
+        "does",
+        "did",
+        "explain",
+        "tell",
+    }
+
+
+def summary_ready_signal(answer: str) -> bool:
+    """Any reply that is not a question closes a passed summary.
+
+    Local check on the child's text. No extra model call. A content question
+    stays. done, what's next, ok, let's go, and move on all close.
+    """
+    raw = (answer or "").strip()
+    if not raw or learner_wants_recap_elaboration(raw):
+        return False
+    return not summary_content_question(raw)
+
+
 def summary_further_question(answer: str) -> bool:
     """A further question on a finished block stays. It does not complete the block.
 
-    Model flags do not turn that question into a move-on. An explicit move-on,
-    including let's go, move on, next, and yes, still completes the block.
-    "move on?" is that move-on, not a new question.
+    Model flags do not turn that question into a move-on. Anything that is not
+    a question still completes a passed summary. "move on?" is that move-on.
     """
     if summary_ready_signal(answer):
         return False
@@ -417,12 +478,10 @@ def summary_further_question(answer: str) -> bool:
 
 
 def learner_may_complete_explanation_summary(answer: str) -> bool:
-    """Only an explicit move-on closes an explanatory summary. Model flags do not.
+    """A non-question closes an explanatory summary. A question does not.
 
-    "got it - move on", "no final questions", "let's continue", "let's go",
-    "move on", "next", and "yes" may complete.
+    Model flags do not turn a question into a move-on.
     "elaborate", "can you please elaborate?", and "tell me more" never do.
-    A further question stays on the summary.
     """
     if summary_ready_signal(answer):
         return True
@@ -866,6 +925,83 @@ def explanation_topic_capped(substep: str, state: dict | None) -> bool:
     )
 
 
+def _explanation_point_words(block: dict, state: dict | None) -> set[str]:
+    topics = explanation_topics(block)
+    if not topics:
+        return set()
+    topic = topics[explanation_topic_index(block, state)]
+    text = " ".join((topic["title"], topic["explanation"], topic["key_points"]))
+    return {word for word in _words(text) if len(word) > 3 and word not in _FILLER_ANCHORS}
+
+
+def _reply_content_words(answer: str) -> list[str]:
+    return [word for word in _words(answer) if len(word) > 3 and word not in _FILLER_ANCHORS]
+
+
+def explanation_restates_topic(block: dict, state: dict | None, answer: str) -> bool:
+    """The reply already says this explanatory topic's point, so the lesson moves on.
+
+    A question, a side story, and Tell me more do not. This is a local word check.
+    """
+    if str(block.get("type") or "") != "explanation":
+        return False
+    raw = answer or ""
+    if not raw.strip():
+        return False
+    stored = state if isinstance(state, dict) else {}
+    if str(stored.get("substep") or "explain_topic") == "summary_check":
+        return False
+    if (
+        learner_asks_question_or_background(raw)
+        or learner_wants_deeper_explanation(raw)
+        or learner_wants_recap_elaboration(raw)
+        or learner_ready_to_proceed(raw, False)
+        or ancillary_story(raw, block)
+    ):
+        return False
+    words = _reply_content_words(raw)
+    point = _explanation_point_words(block, stored)
+    if len(words) < 3 or not point:
+        return False
+    hits = [word for word in words if word in point]
+    return len(hits) >= 2 and len(hits) * 2 >= len(words)
+
+
+def explanation_side_remark(
+    block: dict,
+    answer: str,
+    state: dict | None,
+    cfg: dict | None,
+) -> bool:
+    """An off-topic remark on an explanatory topic. The reply stays one or two sentences.
+
+    An on-topic question still belongs to the topic. A restatement moves on instead.
+    """
+    if str(block.get("type") or "") != "explanation":
+        return False
+    raw = answer or ""
+    if not raw.strip():
+        return False
+    stored = state if isinstance(state, dict) else {}
+    if str(stored.get("substep") or "") == "summary_check":
+        return False
+    if (
+        learner_ready_to_proceed(raw, False)
+        or learner_wants_deeper_explanation(raw)
+        or learner_done_with_explanation(raw)
+        or _is_proceed_question(_proceed_text(raw))
+        or explanation_restates_topic(block, stored, raw)
+    ):
+        return False
+    point = _explanation_point_words(block, stored)
+    overlap = bool(point and set(_reply_content_words(raw)) & point)
+    if learner_asks_question_or_background(raw) and not overlap:
+        return True
+    if ancillary_story(raw, block):
+        return True
+    return _short_off_topic_remark(raw, block, "explain_topic", stored, cfg)
+
+
 def answers_during_explanation(
     block: dict,
     answer: str,
@@ -1099,11 +1235,17 @@ def _resolve_explanation_turn(
     state["topic_index"] = topic_index
     if substep == "summary_check":
         # The model cannot close this check by setting the flags. A further
-        # question stays. Only an explicit move-on completes the block.
+        # question stays. A reply that is not a question completes the block.
         ready = learner_may_complete_explanation_summary(answer)
     else:
         flagged = bool(substep_passed) or bool(block_complete) or bool(learner_ready)
-        ready = learner_ready_to_proceed(answer, flagged) or explanation_topic_capped(substep, state)
+        # A reply that already restates this topic moves on. The model does not
+        # have to flag it, and the topic is not taught again.
+        ready = (
+            learner_ready_to_proceed(answer, flagged)
+            or explanation_topic_capped(substep, state)
+            or explanation_restates_topic(block, state, answer)
+        )
     if not ready:
         state["elaboration_turns"] = int(state.get("elaboration_turns") or 0) + 1
         return _explanation_stay(
@@ -1546,9 +1688,12 @@ def resolve_block_turn(
         return stay(0, "nudge")
 
     def _resolve_summary_check() -> BlockResolution:
-        # Let's go, move on, next, and yes close a passed summary in this turn.
-        # That reply is not "not an attempt, ask the goal again."
-        if summary_ready_signal(answer):
+        # A passed summary closes on any reply that is not a question, in this turn.
+        # That reply is not sent back to the goal. An incomplete summary still
+        # closes only on let's go, move on, next, or yes, so a late correct
+        # answer can still clear the miss.
+        passed_summary = not state.get("revealed_substep")
+        if (passed_summary and summary_ready_signal(answer)) or summary_explicit_move_on(answer):
             tries = int(state.get("block_attempts") or 0) or 1
             return finish(_summary_outcome(), tries, reveals)
         # A further question stays on this summary even if the model set
