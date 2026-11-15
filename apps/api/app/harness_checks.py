@@ -101,7 +101,7 @@ UNSCORED_INTENTS = {
 }
 SIDE_INTENTS = {"off_topic", "side_story", "on_topic_question", "word_meaning", "short_remark"}
 
-_LEAK = re.compile(r"\b(block\s*\d+|substep|blk_[a-z0-9]+)\b", re.I)
+_LEAK = re.compile(r"\b(blocks?|substep|blk_[a-z0-9]+)\b", re.I)
 _LINK = re.compile(r"https?://", re.I)
 _PERSONAL_ASK = re.compile(
     r"\b(what is your (full )?name|where do you live|your address|your school|phone number)\b",

@@ -257,9 +257,9 @@ def test_one_message_per_block_change() -> None:
     turn = _section(close, "This turn")
     assert "Close in one sentence." in turn
     assert "Ask no question." in turn
-    assert "Do not praise the block again." in turn
+    assert "Do not praise." in turn
     assert "Begin the next block in this same reply." not in close
-    assert "The next block arrives in its own message." in close
+    assert "The next part arrives in its own message." in close
 
     opening = _text(
         node=node,
@@ -273,9 +273,9 @@ def test_one_message_per_block_change() -> None:
     )
     opened = _section(opening, "This turn")
     teach = _section(opening, "What to teach")
-    assert "Ask this block's question and nothing else." in opened
+    assert "Ask the question and nothing else." in opened
     assert "Give no cue and no example before the first try." in opened
-    assert "Do not praise the previous block." in opened
+    assert "Do not praise what came before." in opened
     assert "Turn Feedback (process_praise)" not in opened
     assert "Ask only this question:" in teach
     assert "Do not give a cue, an example, or a second question." in teach
@@ -284,5 +284,5 @@ def test_one_message_per_block_change() -> None:
     route = Path(__file__).resolve().parents[2] / "web" / "app" / "api" / "kc" / "tutor" / "speak" / "route.ts"
     spoken = route.read_text()
     assert "Give no cue." in spoken
-    assert "Do not praise the previous block." in spoken
+    assert "Do not praise what came before." in spoken
     assert "Say the opening now. Return the decision object." not in spoken

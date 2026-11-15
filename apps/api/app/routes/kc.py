@@ -249,6 +249,7 @@ class DecisionIn(BaseModel):
     strong: str = ""
     work_on: str = ""
     safety_flag: str = "none"
+    reply_unreadable: bool = False
 
 
 class SpeechIn(BaseModel):

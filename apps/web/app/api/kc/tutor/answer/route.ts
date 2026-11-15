@@ -43,6 +43,40 @@ type StoredCall = {
   model: string;
 };
 
+function replyUnreadable(reply: string, errorMessage = ""): boolean {
+  const text = reply.trim();
+  if (!text || /^[.…·\s]+$/.test(text)) return true;
+  const low = errorMessage.toLowerCase();
+  return (
+    low.includes("no object generated") ||
+    low.includes("could not parse") ||
+    low.includes("did not write a reply")
+  );
+}
+
+function blankDecision(): Decision & { reply_unreadable: true } {
+  return {
+    reply: "",
+    decision: "stay",
+    substep_passed: false,
+    block_complete: false,
+    generated_mcq: null,
+    rubric_met: [],
+    misconception: null,
+    hint_tier: "nudge",
+    help_requested: false,
+    off_course: false,
+    ready_to_move_on: false,
+    affect: "engaged",
+    confidence: "ok",
+    score_justification: "",
+    what_was_strong: "",
+    what_to_work_on: "",
+    safety_flag: "none",
+    reply_unreadable: true,
+  };
+}
+
 function asDecision(value: unknown): Decision | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Partial<Decision>;
@@ -154,10 +188,13 @@ export async function POST(req: Request) {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "The tutor could not answer.";
-    return new Response(message, { status: 502 });
+    if (!replyUnreadable("", message)) {
+      return new Response(message, { status: 502 });
+    }
+    decision = blankDecision();
   }
-  if (!decision || !decision.reply.trim()) {
-    return new Response("The tutor did not write a reply.", { status: 502 });
+  if (!decision || replyUnreadable(decision.reply)) {
+    decision = blankDecision();
   }
 
   let session: KcTutorSession & { loop_result?: Record<string, unknown> | null; loop_decision?: string };

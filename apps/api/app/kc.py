@@ -39,7 +39,7 @@ from app.engine.choices import (
     VOCABULARY_REGISTERS,
     VOICES,
 )
-from app.kc_loop import resolve_block_turn
+from app.kc_loop import SAY_THAT_AGAIN, hold_for_blank_reply, reply_is_unreadable, resolve_block_turn
 from app.kc_prompt import (
     AFFECTS,
     DECISIONS,
@@ -4091,14 +4091,17 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         db.commit()
         raise HTTPException(status_code=422, detail="This component session is already finished.")
     reply = str(body.get("reply") or "").strip()
-    if not reply:
+    blank_reply = bool(body.get("reply_unreadable")) or reply_is_unreadable(reply)
+    if blank_reply:
+        reply = SAY_THAT_AGAIN
+    elif not reply:
         raise HTTPException(status_code=422, detail="The tutor did not write a reply.")
     try:
         safety_flag = normalize_safety_flag(body.get("safety_flag", "none"))
     except AiSafetyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     decision = str(body.get("decision") or "").strip()
-    if decision not in DECISIONS:
+    if not blank_reply and decision not in DECISIONS:
         raise HTTPException(status_code=422, detail="The decision is stay, advance, complete, or redirect.")
     affect = str(body.get("affect") or "engaged").strip()
     if affect not in AFFECTS:
@@ -4149,31 +4152,44 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     reported = body.get("misconception")
     matched = _stored_wrong(node, answer, None if reported is None else str(reported))
     rubric = [str(item).strip() for item in (body.get("rubric_met") or []) if str(item).strip()]
-    resolution = resolve_block_turn(
-        decision=decision,
-        substep_passed=bool(body.get("substep_passed")),
-        block_complete=bool(body.get("block_complete")),
-        rubric_met=rubric,
-        stored_rubric=[str(item) for item in (session.rubric_met or [])],
-        matched_wrong=matched,
-        blocks=blocks,
-        step=index,
-        active_block_state=block_state,
-        block_results=list(session.block_results or []),
-        move_attempts=int(session.move_attempts or 0),
-        hint_tier=session.hint_tier or "nudge",
-        reveals=int(session.reveals or 0),
-        enrichment_turns=int(session.enrichment_turns or 0),
-        cfg=cfg,
-        goal=goal,
-        last_misconception=session.last_misconception or "",
-        answer=answer,
-        fragment=fragment,
-        strong=str(body.get("what_was_strong") or body.get("strong") or ""),
-        work_on=str(body.get("what_to_work_on") or body.get("work_on") or ""),
-        prior_tutor=next((message.content for message in reversed(messages) if message.role == "assistant"), ""),
-        learner_ready=bool(body.get("ready_to_move_on")),
-    )
+    if blank_reply:
+        resolution = hold_for_blank_reply(
+            blocks=blocks,
+            step=index,
+            active_block_state=block_state,
+            block_results=list(session.block_results or []),
+            move_attempts=int(session.move_attempts or 0),
+            hint_tier=session.hint_tier or "nudge",
+            reveals=int(session.reveals or 0),
+            enrichment_turns=int(session.enrichment_turns or 0),
+            rubric_met=[str(item) for item in (session.rubric_met or [])],
+        )
+    else:
+        resolution = resolve_block_turn(
+            decision=decision,
+            substep_passed=bool(body.get("substep_passed")),
+            block_complete=bool(body.get("block_complete")),
+            rubric_met=rubric,
+            stored_rubric=[str(item) for item in (session.rubric_met or [])],
+            matched_wrong=matched,
+            blocks=blocks,
+            step=index,
+            active_block_state=block_state,
+            block_results=list(session.block_results or []),
+            move_attempts=int(session.move_attempts or 0),
+            hint_tier=session.hint_tier or "nudge",
+            reveals=int(session.reveals or 0),
+            enrichment_turns=int(session.enrichment_turns or 0),
+            cfg=cfg,
+            goal=goal,
+            last_misconception=session.last_misconception or "",
+            answer=answer,
+            fragment=fragment,
+            strong=str(body.get("what_was_strong") or body.get("strong") or ""),
+            work_on=str(body.get("what_to_work_on") or body.get("work_on") or ""),
+            prior_tutor=next((message.content for message in reversed(messages) if message.role == "assistant"), ""),
+            learner_ready=bool(body.get("ready_to_move_on")),
+        )
     if resolution.mark_fragile:
         _mark_fragile(db, session, node)
         if resolution.redirect:
