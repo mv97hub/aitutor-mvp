@@ -883,12 +883,12 @@ def test_summary_check_prompt_distinguishes_a_completed_block_from_an_incomplete
         ]
     )
     entering = _text(node=node, opening=False, active_block_state={"substep": "main"})
-    assert "Summary close:" in entering
-    assert "Congratulate the learner once for finishing this block." in entering
-    assert "Ask one question only: move on, or ask one more question." in entering
-    assert "Do not offer one more example." in entering
-    assert "did not fully complete this block yet" in entering
-    assert "Never say congratulations" in entering
+    entering_turn = _section(entering, "This turn")
+    assert entering_turn.count("Decision: stay.") == 1
+    assert "If correct:" not in entering_turn
+    assert "Summary close:" not in entering_turn
+    assert "Congratulate the learner once for finishing this block." not in entering
+    assert "Never say congratulations" not in entering
 
     done = _text(
         node=node,
@@ -907,10 +907,13 @@ def test_summary_check_prompt_distinguishes_a_completed_block_from_an_incomplete
         opening=False,
         active_block_state={"substep": "summary_check", "revealed_substep": True, "last_task_substep": "main"},
     )
-    assert "did not fully complete this block yet" in missed
-    assert "Never say congratulations" in missed
-    assert "affirm that they have now completed the block" in missed
-    assert "If the block is still incomplete, do not say congratulations." in missed
+    missed_turn = _section(missed, "This turn")
+    assert missed_turn.count("If correct:") == 1
+    assert missed_turn.count("If not:") == 1
+    assert "close." in missed_turn
+    assert "stay." in missed_turn
+    assert "Never say congratulations" not in missed
+    assert "Congratulate the learner once for finishing this block." not in missed
 
     guided = _node(
         blocks=[
@@ -926,7 +929,9 @@ def test_summary_check_prompt_distinguishes_a_completed_block_from_an_incomplete
         opening=False,
         active_block_state={"substep": "counterexample_probe", "revealed_substep": True},
     )
-    assert "Summary close on the attempt limit:" in probe
+    assert _section(probe, "This turn").count("Decision: stay.") == 1
+    assert "Summary close on the attempt limit:" not in probe
+    assert "Never say congratulations" not in probe
 
     quiz = _node(
         blocks=[
@@ -948,7 +953,11 @@ def test_summary_check_prompt_distinguishes_a_completed_block_from_an_incomplete
         opening=False,
         active_block_state={"substep": "summary_check", "revealed_substep": True, "last_task_substep": "choice"},
     )
-    assert "Never say congratulations" in summary
+    summary_turn = _section(summary, "This turn")
+    assert summary_turn.count("If correct:") == 1
+    assert summary_turn.count("If not:") == 1
+    assert "Never say congratulations" not in summary
+    assert "Congratulate the learner once for finishing this block." not in summary
 
 
 def _topic_node() -> KcNode:

@@ -1779,6 +1779,8 @@ def _this_turn(
     early_answer: bool = False,
     summary_begin: bool = False,
     has_next: bool = False,
+    forecast: object | None = None,
+    ready_check: bool = False,
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -1954,7 +1956,7 @@ def _this_turn(
             "Do not list the options in reply, and do not ask the child to type a letter. "
             "The choice card shows the stem and the choices."
         )
-    elif needs_dynamic_mcq:
+    elif needs_dynamic_mcq and not _forecast_known_close(forecast):
         lines.append(
             "Dynamic MCQ: If this reply opens the dynamic multiple choice, reply is a short lead-in only. "
             "Put the question stem and the choices only in generated_mcq, "
@@ -1996,7 +1998,7 @@ def _this_turn(
         )
     )
     elaborating = _summary_elaboration(block, substep, last_answer)
-    if close_block_only and not elaborating and not summary_begin:
+    if close_block_only and not elaborating and not summary_begin and not _forecast_applies(forecast):
         lines.append(
             "If block_complete=true, this reply only affirms and closes the active block. "
             "Ask no question. Do not open the next block. "
@@ -2050,13 +2052,16 @@ def _this_turn(
                     "Do not restate the other topics. Do not close the block. Do not quiz."
                 )
             else:
-                lines.append(
-                    "The learner has replied on the current topic. If they have a question or want elaboration, stay on this topic and answer. "
-                    "If they are ready, follow the move-on instruction in What to teach and teach the next topic, "
-                    "or close the block in one or two sentences when this was the last topic. "
-                    "Do not restate each topic and do not ask whether to move on. Do not quiz."
-                )
-    if worked_close == "affirm":
+                if not _forecast_applies(forecast):
+                    lines.append(
+                        "The learner has replied on the current topic. If they have a question or want elaboration, stay on this topic and answer. "
+                        "If they are ready, follow the move-on instruction in What to teach and teach the next topic, "
+                        "or close the block in one or two sentences when this was the last topic. "
+                        "Do not restate each topic and do not ask whether to move on. Do not quiz."
+                    )
+    if worked_close == "affirm" and not (
+        _forecast_applies(forecast) and getattr(forecast, "depends_on_model", False)
+    ):
         lines.append(_SUMMARY_BEGIN if has_next else _SUMMARY_BEGIN_LAST)
     elif worked_close == "continue":
         lines.append(_WORKED_CONTINUE)
@@ -2096,7 +2101,153 @@ def _this_turn(
             last_answer=last_answer,
         )
     )
-    return lines
+    return _align_this_turn(lines, forecast, ready_check=ready_check)
+
+
+def _forecast_applies(forecast: object | None) -> bool:
+    return bool(forecast is not None and getattr(forecast, "applies", False))
+
+
+def _forecast_known_close(forecast: object | None) -> bool:
+    if not _forecast_applies(forecast) or getattr(forecast, "depends_on_model", False):
+        return False
+    chosen = getattr(forecast, "chosen", None)
+    return bool(chosen is not None and chosen.speech == "close")
+
+
+def _decision_sentence(turn: object, label: str) -> str:
+    """One reply instruction. stay, advance, or close, matching the loop."""
+    speech = str(getattr(turn, "speech", "stay"))
+    prefix = f"{label}: " if label else "Decision: "
+    order = "Set decision to stay."
+    if getattr(turn, "unit_complete", False):
+        order = "Set decision to complete."
+        body = "This reply ends the unit. Close it. Ask no question. Do not open the next block."
+    elif speech == "close":
+        order = "Set decision to advance." if getattr(turn, "advance_block", False) else "Set decision to complete."
+        if getattr(turn, "revealed", False):
+            body = (
+                "Close in one sentence. Ask no question. Say plainly that you gave the answer. "
+                "Do not open the next block. The next block arrives in its own message. Set block_complete=true."
+            )
+        else:
+            body = (
+                "The block is finished. Close in one sentence. Ask no question. Do not praise the block again. "
+                "Do not open the next block. The next block arrives in its own message. Set block_complete=true."
+            )
+    elif speech == "advance" and getattr(turn, "revealed", False):
+        body = (
+            "This is the last allowed try. Give the answer and say plainly that you gave it. "
+            "The reply then moves to the next step of this block."
+        )
+    elif speech == "advance" and str(getattr(turn, "next_substep", "")) == "summary_check":
+        body = (
+            "If this answer satisfies the substep, set substep_passed=true and block_complete=false. "
+            "Congratulate the learner once for finishing this block. "
+            "Ask one question only: move on, or ask one more question. Do not open the next block."
+        )
+    elif speech == "advance":
+        body = "The reply does the next step of this block. Do not ask the step this reply is leaving."
+    else:
+        body = "Stay on this step. Set substep_passed=false and block_complete=false."
+    return f"{prefix}{speech}. {order} {body}"
+
+
+def _summary_future(line: str) -> bool:
+    return line.startswith("Summary close") or line.startswith("Summary reply")
+
+
+def _future_matches(line: str, turn: object) -> bool:
+    low = line.lower()
+    never = "never say congratulations" in low
+    praise = "congratulate the learner once" in low
+    revealed = bool(getattr(turn, "revealed", False))
+    speech = str(getattr(turn, "speech", "stay"))
+    if speech == "stay":
+        return False
+    if revealed and praise:
+        return False
+    if revealed and never:
+        return True
+    if never:
+        return False
+    return True
+
+
+def _align_this_turn(lines: list[str], forecast: object | None, *, ready_check: bool) -> list[str]:
+    """Keep the one branch the dry run chose. A ready check stays as written."""
+    if not _forecast_applies(forecast) or ready_check:
+        return lines
+    depends = bool(getattr(forecast, "depends_on_model", False))
+    chosen = getattr(forecast, "chosen", None)
+    kept: list[str] = []
+    for line in lines:
+        if _summary_future(line):
+            if depends or chosen is None or not _future_matches(line, chosen):
+                continue
+        if (
+            not depends
+            and chosen is not None
+            and chosen.unit_complete
+            and ("NEVER say the unit is complete" in line or line.startswith("Mid-Unit Contract"))
+        ):
+            continue
+        if depends and ("NEVER say the unit is complete" in line or line.startswith("Mid-Unit Contract")):
+            ends = {
+                bool(getattr(getattr(forecast, "if_correct", None), "unit_complete", False)),
+                bool(getattr(getattr(forecast, "if_not", None), "unit_complete", False)),
+            }
+            if True in ends:
+                continue
+        kept.append(line)
+    if depends:
+        branch = [
+            _decision_sentence(getattr(forecast, "if_correct"), "If correct"),
+            _decision_sentence(getattr(forecast, "if_not"), "If not"),
+        ]
+    else:
+        branch = [_decision_sentence(chosen, "")]
+    insert_at = 2 if len(kept) >= 2 else len(kept)
+    return kept[:insert_at] + branch + kept[insert_at:]
+
+
+def _teach_outcome(turn: object) -> str:
+    if getattr(turn, "unit_complete", False):
+        return "This reply ends the unit. Close it. Ask no question."
+    if str(getattr(turn, "speech", "")) == "close":
+        return (
+            "This reply closes the block in one sentence and asks no question. "
+            "The next block arrives in its own message. Do not open it here."
+        )
+    if str(getattr(turn, "speech", "")) == "stay":
+        return "Ask one question that stays on this block."
+    return "The reply moves to the next step of this block."
+
+
+def _drop_praise_conflict(
+    sections: list[tuple[str, list[str]]],
+    forecast: object | None,
+) -> list[tuple[str, list[str]]]:
+    """A stored prompt does not hold both congratulate and never congratulate."""
+    blob = "\n".join(line for _, lines in sections for line in lines).lower()
+    praise = "congratulate the learner once" in blob
+    never = "never say congratulations" in blob
+    if not (praise and never):
+        return sections
+    drop = "never say congratulations"
+    chosen = getattr(forecast, "chosen", None) if forecast is not None else None
+    if (
+        _forecast_applies(forecast)
+        and not getattr(forecast, "depends_on_model", False)
+        and chosen is not None
+        and chosen.revealed
+        and chosen.speech != "stay"
+    ):
+        drop = "congratulate the learner once"
+    cleaned: list[tuple[str, list[str]]] = []
+    for title, lines in sections:
+        cleaned.append((title, [line for line in lines if drop not in line.lower()]))
+    return cleaned
 
 
 def _last_topic_close_now(block: dict, state: dict | None, answer: str) -> bool:
@@ -2300,6 +2451,7 @@ def _what_to_teach(
     active_state: dict | None = None,
     summary_begin: bool = False,
     has_next: bool = False,
+    forecast: object | None = None,
 ) -> list[str]:
     """Strict block isolation: injects ONLY the currently active block and its active substep."""
     btype = str(block.get("type") or "topic_goal").strip()
@@ -2574,6 +2726,15 @@ def _what_to_teach(
             lines.append(
                 "This reply closes the block in one sentence and asks no question. "
                 "The next block arrives in its own message. Do not open it here."
+            )
+        elif _forecast_applies(forecast) and not getattr(forecast, "depends_on_model", False):
+            lines.append(_teach_outcome(getattr(forecast, "chosen")))
+        elif _forecast_applies(forecast):
+            lines.append(
+                "If correct: "
+                + _teach_outcome(getattr(forecast, "if_correct"))
+                + " If not: "
+                + _teach_outcome(getattr(forecast, "if_not"))
             )
         else:
             lines.append(
@@ -3766,11 +3927,12 @@ def _fit_prompt_sections(
     return ordered
 
 
-def _blocks_text(sections: list[tuple[str, list[str]]]) -> str:
+def _blocks_text(sections: list[tuple[str, list[str]]], forecast: object | None = None) -> str:
     include_generated_mcq = any(
         "populate generated_mcq" in line for _, lines in sections for line in lines
     )
     sections = _fit_prompt_sections(sections, include_generated_mcq=include_generated_mcq)
+    sections = _drop_praise_conflict(sections, forecast)
     chunks: list[str] = []
     for title, lines in sections:
         body = [line.strip() for line in lines if line and line.strip()]
@@ -3983,6 +4145,31 @@ def build_kc_prompt(
         )
         and course_stay
     )
+    from app.kc_loop import forecast_this_turn
+
+    forecast = forecast_this_turn(
+        blocks=blocks,
+        step=index,
+        active_block_state=state_dict,
+        block_results=list(block_results or []),
+        answer=last_answer or "",
+        cfg=cfg,
+        goal=goal,
+        stored_rubric=list(rubric_met or []),
+        move_attempts=int(attempts or 0),
+        hint_tier=hint_tier or "nudge",
+        reveals=int(reveals or 0),
+        enrichment_turns=int(enrichment_turns or 0),
+        fragment=bool(fragment),
+        prior_tutor=_previous_tutor_text(last_messages or "", last_answer or ""),
+        opening=opening,
+    )
+    ends_unit = (
+        _forecast_applies(forecast)
+        and not forecast.depends_on_model
+        and forecast.chosen is not None
+        and forecast.chosen.unit_complete
+    )
 
     prompt = _blocks_text(
         [
@@ -4000,7 +4187,7 @@ def build_kc_prompt(
                     substep=substep,
                     opening=opening,
                     orient_framing=str(over.get("orient_framing") or "elaborate_outline"),
-                    unit_complete=unit_complete,
+                    unit_complete=unit_complete or ends_unit,
                     course_complete=course_complete,
                     choice_on_screen=widget_on,
                     fragment=fragment,
@@ -4035,6 +4222,8 @@ def build_kc_prompt(
                     early_answer=early_answer,
                     summary_begin=summary_begin,
                     has_next=has_next,
+                    forecast=forecast,
+                    ready_check=ready_check,
                 ),
             ),
             (
@@ -4053,6 +4242,7 @@ def build_kc_prompt(
                 active_state=state_dict,
                 summary_begin=summary_begin,
                 has_next=has_next,
+                forecast=forecast,
             ),
             ),
             (
@@ -4148,7 +4338,8 @@ def build_kc_prompt(
                     ),
                 ),
             ),
-        ]
+        ],
+        forecast,
     )
     return {
         "system_prompt": prompt,
