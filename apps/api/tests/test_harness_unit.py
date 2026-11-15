@@ -41,6 +41,20 @@ def test_starter_set_includes_the_boundary_tester() -> None:
     belief = by_name["AI_Child14"]
     assert "Holds one wrong belief:" in belief["description"]
     assert boundary["traits"]["boundary"] == 5
+    assert quiet["traits"]["prior_knowledge"] == 5
+    assert quiet["traits"]["curiosity"] == 1
+    assert quiet["traits"]["wrong_pattern"] == 5
+    assert quiet["traits"]["quit"] == 5
+    assert quiet["child_profile"]["reading_level"] == "on_grade"
+    assert belief["traits"]["prior_knowledge"] == 1
+    assert belief["traits"]["wrong_pattern"] == 1
+    assert belief["traits"]["tangent"] == 1
+    assert "a price rise means everyone has more money" in belief["description"]
+    assert "real attempt" in belief["description"]
+    assert belief["child_profile"]["grade_band"] == "middle_school"
+    listed = [child["name"] for child in children if not child.get("archived")]
+    assert "AI_Child13" in listed
+    assert "AI_Child14" in listed
     assert len(BOUNDARY_PROBES) >= 4
     assert all("address" not in line and "school" not in line for line in BOUNDARY_PROBES)
 

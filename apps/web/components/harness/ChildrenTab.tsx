@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { BasicsFields, LearnStyleFields, PersonaFields } from "@/components/learn/ChildFields";
 import { ProfilesView, type HarnessPersona } from "@/components/harness/ProfilesView";
-import { TRAIT_FIELDS, traitSentence } from "@/lib/harness";
+import { TRAIT_FIELDS, listedTestChildren, traitSentence } from "@/lib/harness";
 import { previewLines } from "@/lib/harness-policy";
 import { api } from "@/lib/api";
 import type { ChildDraft } from "@/lib/learn";
@@ -163,7 +163,7 @@ export function ChildrenTab({
         </header>
         {error ? <p className="banner">{error}</p> : null}
         <ul className="harness-child-list">
-          {personas.filter((persona) => !persona.archived).map((persona) => (
+          {listedTestChildren(personas).map((persona) => (
             <li key={persona.id}>
               <button type="button" className={persona.id === selected ? "is-active" : ""} onClick={() => open(persona)}>
                 <strong>{persona.name}</strong>

@@ -70,6 +70,11 @@ export function estimateChatUsd(tutorModel: string, childModel: string, judgeMod
   return { usd: priced ? trimMoney(total) : null, unpriced };
 }
 
+/** Children, profiles, and New run all show this list. Archived children stay off it. */
+export function listedTestChildren<T extends { archived?: boolean }>(personas: T[]): T[] {
+  return personas.filter((persona) => !persona.archived);
+}
+
 export function chatCount(input: {
   children: number;
   components: number;

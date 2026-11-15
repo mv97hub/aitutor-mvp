@@ -14,6 +14,7 @@ import {
   HARNESS_MODELS,
   chatCount,
   estimateChatUsd,
+  listedTestChildren,
   lunaNote,
   sameModelWarning,
 } from "@/lib/harness";
@@ -157,7 +158,7 @@ export function NewRunTab({
       <div className="harness-two">
         <fieldset>
           <legend>Test children</legend>
-          {personas.filter((persona) => !persona.archived).map((persona) => (
+          {listedTestChildren(personas).map((persona) => (
             <label key={persona.id}>
               <input
                 type="checkbox"
