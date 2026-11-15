@@ -76,6 +76,19 @@ function lastTutor(session: SessionSnap): string {
   return message?.content ?? "";
 }
 
+function assistantCount(session: SessionSnap): number {
+  return session.messages.filter((item) => item.role === "assistant").length;
+}
+
+/** A tutor reply produced by this call. The previous reply is not copied forward. */
+function newTutorReply(before: SessionSnap, after: SessionSnap): string | null {
+  const latest = lastTutor(after).trim();
+  if (!latest) return null;
+  if (assistantCount(after) > assistantCount(before)) return latest;
+  if (latest === lastTutor(before).trim()) return null;
+  return latest;
+}
+
 function placeOf(
   session: SessionSnap,
   key?: { block_id?: string; block_type?: string; move_attempts?: number },
@@ -211,20 +224,31 @@ export async function playChat(
     const before = placeOf(session, { ...key, block_type: answerKey.block_type || session.active_block_type });
     let afterSession = session;
     let error = "";
+    let freshReply: string | null = null;
     try {
       afterSession = await transport.answer(session.id, text.slice(0, 2000), chat.tutor_model);
-      emitNew(seen, afterSession, chat.id, onLive);
-      errors = 0;
+      freshReply = newTutorReply(session, afterSession);
+      if (freshReply) {
+        emitNew(seen, afterSession, chat.id, onLive);
+        errors = 0;
+      } else {
+        errors += 1;
+        error = "The tutor did not write a new reply.";
+      }
     } catch (err) {
       errors += 1;
       error = err instanceof Error ? err.message : "The tutor route failed.";
+      freshReply = null;
     }
     const afterKey = error ? key : await transport.answerKey(chat.id).catch(() => key);
     const after = placeOf(afterSession, {
       ...afterKey,
       block_type: (afterKey as { block_type?: string }).block_type || afterSession.active_block_type,
     });
-    if (error) after.error = error;
+    if (!freshReply) {
+      after.tutor_reply = "";
+      after.error = error || "The tutor did not write a new reply.";
+    }
     const place = `${after.block_id}:${after.substep}`;
     inner = updateInner(move.inner, {
       traits,

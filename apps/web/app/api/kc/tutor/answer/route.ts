@@ -10,12 +10,11 @@ import { requestForCall, type ModelCall } from "@/lib/stored-prompt";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const ANSWER_PROMPT = "The child's latest message is their answer. Return the decision object.";
-
 type TurnBundle = KcTutorSession & {
   system_prompt: string;
   response_schema: Record<string, unknown>;
   temperature: number;
+  user_message?: string;
 };
 
 type Decision = {
@@ -132,13 +131,15 @@ export async function POST(req: Request) {
     },
   };
 
+  const graded = typeof bundle.user_message === "string" ? bundle.user_message.trim() : "";
+  const childLine = graded || answer;
   let decision: Decision | null = null;
   let usage: ModelUsageCounts = readModelUsage(undefined);
   try {
     const result = await generateText({
       model: wrapLanguageModel({ model: languageModel(modelName), middleware: captureRequest }),
       instructions: bundle.system_prompt,
-      prompt: ANSWER_PROMPT,
+      prompt: childLine,
       temperature: bundle.temperature,
       output: Output.object({ schema: jsonSchema(bundle.response_schema) }),
     });
@@ -173,7 +174,7 @@ export async function POST(req: Request) {
   const added = [...session.messages].reverse().find((message) => message.role === "assistant");
   const stored = captured ?? {
     system_prompt: bundle.system_prompt,
-    messages: [{ role: "user", content: ANSWER_PROMPT }],
+    messages: [{ role: "user", content: childLine }],
     model: modelName,
   };
   try {
