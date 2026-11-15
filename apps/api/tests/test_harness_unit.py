@@ -4,7 +4,15 @@ from fastapi import HTTPException
 
 from types import SimpleNamespace
 
-from app.harness import expected_for_step, fixture_document, run_code_version, save_recommendations
+from app.harness import (
+    claim_opens_session,
+    expected_for_step,
+    fixture_document,
+    next_claim_generation,
+    replaced_session_id,
+    run_code_version,
+    save_recommendations,
+)
 from app.harness_download import render_download
 from app.harness_checks import automatic_checks, place_key, stop_reason, stuck_after_turn
 from app.harness_report import chat_is_stuck, stuck_nudge_rows
@@ -43,6 +51,17 @@ def test_fixture_course_has_every_block_type() -> None:
     kinds = [block["type"] for block in blocks]
     assert set(kinds) == set(ALL_BLOCK_TYPES)
     assert len(kinds) == 11
+
+
+def test_a_second_claim_keeps_the_session_and_closes_a_replaced_one() -> None:
+    assert claim_opens_session(None) is True
+    assert claim_opens_session("session-1") is False
+    assert next_claim_generation(0) == 1
+    assert next_claim_generation(1) == 2
+    assert next_claim_generation("nope") == 1
+    assert replaced_session_id(None, "session-2") is None
+    assert replaced_session_id("session-1", "session-1") is None
+    assert replaced_session_id("session-1", "session-2") == "session-1"
 
 
 def test_stop_on_cap_and_luna_ceiling() -> None:

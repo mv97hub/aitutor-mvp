@@ -1482,6 +1482,7 @@ class HarnessChat(Base):
     turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pending_nudges: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     stuck_answers: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    claim_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )

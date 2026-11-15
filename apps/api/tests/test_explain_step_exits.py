@@ -517,19 +517,19 @@ def test_an_explanatory_topic_moves_on_when_the_model_flags_ready() -> None:
     assert flagged.next_block_state["topic_index"] == 1
 
 
-def test_the_explanatory_summary_stays_for_a_question_and_advances_on_whats_next() -> None:
+def test_the_explanatory_summary_closes_after_one_question() -> None:
     summary = {"substep": "summary_check", "topic_index": 1, "dialogue_turns": 6, "elaboration_turns": 5}
-    held = _explanatory_turn(
+    closed = _explanatory_turn(
         "Why is the denominator on the bottom?",
         summary,
         substep_passed=True,
         block_complete=True,
     )
-    assert held.next_block_state["substep"] == "summary_check"
-    assert held.unit_complete is False
-    closed = _explanatory_turn("What's next?", summary, substep_passed=True, block_complete=True)
     assert closed.unit_complete is True
     assert closed.block_results[-1]["outcome"] == "engaged"
+    moved = _explanatory_turn("What's next?", summary, substep_passed=True, block_complete=True)
+    assert moved.unit_complete is True
+    assert moved.block_results[-1]["outcome"] == "engaged"
 
 
 def test_the_explanatory_prompt_names_ready_signals_and_the_cap() -> None:

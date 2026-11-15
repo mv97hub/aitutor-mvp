@@ -3,7 +3,10 @@
 import { availableActions } from "./harness-actions.ts";
 import { EMPTY_INNER, holdQuit, nudgeAllowed, nudgeTurn, pickMove, updateInner, type InnerState, type Traits } from "./harness-policy.ts";
 
-export type RunStatus = { status: string };
+export type RunStatus = {
+  status: string;
+  chat_rows?: { id: string; claim_generation?: number }[];
+};
 
 export type SessionSnap = {
   id: string;
@@ -41,6 +44,7 @@ export type ClaimedChat = {
   child: { description?: string; traits?: Traits; child_profile?: { interests?: string } };
   pending_nudges?: number;
   stuck_answers?: number;
+  claim_generation?: number;
 };
 
 export type TurnRecord = {
@@ -139,7 +143,15 @@ function placeOf(
   return row;
 }
 
-export type LiveLine = { chatId: string; role: "tutor" | "child"; text: string };
+export type LiveLine = { chatId: string; role: "tutor" | "child"; text: string; seq?: number };
+
+/** The loop keeps going only while this claim still owns the chat. */
+export function claimStillOwns(run: RunStatus, chatId: string, generation: number | undefined): boolean {
+  if (typeof generation !== "number") return true;
+  const row = run.chat_rows?.find((item) => item.id === chatId);
+  if (!row || typeof row.claim_generation !== "number") return true;
+  return row.claim_generation === generation;
+}
 
 function emitNew(seen: Set<string>, session: SessionSnap, chatId: string, onLive?: (line: LiveLine) => void) {
   if (!onLive) return;
@@ -168,9 +180,11 @@ export async function playChat(
   let nudgesLeft = Math.max(0, Number(chat.pending_nudges) || 0);
   let stuckAnswers = Math.max(0, Number(chat.stuck_answers) || 0);
   const traits = chat.child.traits ?? {};
+  const generation = typeof chat.claim_generation === "number" ? chat.claim_generation : undefined;
   while (!signal?.aborted) {
     const run = await transport.runStatus();
     if (run.status === "paused" || run.status === "cancelled") return "paused";
+    if (!claimStillOwns(run, chat.id, generation)) return "paused";
     if (session.needs_speech) {
       try {
         session = await transport.speak(session.id, chat.tutor_model);

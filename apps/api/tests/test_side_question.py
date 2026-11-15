@@ -75,35 +75,28 @@ def _prompt(answer: str, substep: str, *, block: dict | None = None, blocks: lis
     )
 
 
-def test_what_is_a_province_stays_on_the_summary_and_the_prompt_defines_it() -> None:
-    stayed = _turn(
+def test_what_is_a_province_is_answered_and_the_summary_closes() -> None:
+    closed = _turn(
         "what is a province",
         "summary_check",
         blocks=[GOAL],
         state={"substep": "summary_check", "last_task_substep": "main", "block_attempts": 1},
     )
-    assert stayed.decision == "stay"
-    assert stayed.passed is False
-    assert stayed.advance_block is False
-    assert stayed.unit_complete is False
-    assert stayed.move_attempts == 1
-    assert stayed.next_block_state["substep"] == "summary_check"
-    assert stayed.next_block_state["block_attempts"] == 1
-    assert stayed.block_results == []
-    assert stayed.rubric_met == ["kept"]
+    assert closed.decision == "complete"
+    assert closed.advance_block is False
+    assert closed.unit_complete is True
+    assert closed.next_block_state["substep"] == "done"
+    assert closed.block_results
 
     text = _prompt("what is a province", "summary_check", blocks=[GOAL])
     turn = _section(text, "This turn")
     assert "Their question: what is a province." in turn
     assert "define it" in turn
     assert "Answer that question in one or two sentences." in turn
-    assert "same single choice" in turn
-    assert "Do not return to the goal" in turn
+    assert "Do not ask move on, or one more question, again." in turn
+    assert "same single choice" not in turn
     assert "ask the goal again" not in turn
-    assert "help_requested=true" in turn
-    assert "substep_passed=false" in turn
-    assert "block_complete=false" in turn
-    assert "Do not say the reply was partial, close, or a good start." in turn
+    assert "Set block_complete=true." in turn
     assert "keep discussing or move on" not in turn
     assert "concrete partial step" not in text
 

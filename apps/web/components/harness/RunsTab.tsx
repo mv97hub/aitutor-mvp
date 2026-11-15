@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { RunSummary } from "@/components/harness/RunSummary";
 import { downloadHarnessFile } from "@/lib/harness-file";
 import { runStatusLine } from "@/lib/harness-background";
-import { transcriptForChat } from "@/lib/harness-live";
+import { recentLines, transcriptForChat, type TranscriptLine } from "@/lib/harness-live";
 
 type ChatRow = {
   id: string;
@@ -29,6 +29,19 @@ type RunRow = {
   totals: { priced_cents?: number; luna_tokens?: number; cost_usd?: string | null };
   plan: { concurrency?: number; child_model?: string; judge_model?: string };
 };
+
+function LiveLines({ chatId, lines }: { chatId: string; lines: TranscriptLine[] }) {
+  const shown = recentLines(lines);
+  return (
+    <ol className="harness-transcript">
+      {shown.map((line) => (
+        <li key={`${chatId}-${line.seq}`} value={line.seq}>
+          <strong>{line.role === "tutor" ? "Tutor" : "Child"}:</strong> {line.text}
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 export function RunsTab({
   selected,
@@ -183,17 +196,7 @@ export function RunsTab({
                   </button>
                 </p>
                 {lines.length > 0 ? (
-                  <ol className="harness-transcript">
-                    {lines.map((line, index) => (
-                      <li key={`${chat.id}-${line.seq ?? index}`}>
-                        <strong>
-                          {typeof line.seq === "number" ? `${line.seq}. ` : ""}
-                          {line.role === "tutor" ? "Tutor" : "Child"}:
-                        </strong>{" "}
-                        {line.text}
-                      </li>
-                    ))}
-                  </ol>
+                  <LiveLines chatId={chat.id} lines={lines} />
                 ) : (
                   <p className="help">
                     {chat.session_id ? "Waiting for the first tutor message." : "Queued. Press Start to run this chat on the server."}
