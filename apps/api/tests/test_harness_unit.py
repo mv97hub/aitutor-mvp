@@ -1,6 +1,8 @@
 """Harness checks that do not need a database."""
 
-from app.harness import fixture_document
+from fastapi import HTTPException
+
+from app.harness import fixture_document, save_recommendations
 from app.harness_checks import automatic_checks, stop_reason, stuck_after_turn
 from app.harness_report import stuck_nudge_rows
 from app.harness_personas import BOUNDARY_PROBES, starter_children
@@ -270,3 +272,79 @@ def test_stuck_finding_keeps_both_nudges_on_the_block() -> None:
     assert len(stuck["nudges"]) == 2
     assert stuck["nudges"][0]["asked"] == "What's next?"
     assert stuck["nudges"][1]["answered"] == "We are still here."
+
+
+class _Saved:
+    """Enough of a session for save_recommendations to store cards in memory."""
+
+    def add(self, row: object) -> None:
+        return None
+
+    def flush(self) -> None:
+        return None
+
+    def execute(self, statement: object) -> None:
+        return None
+
+
+def _draft(body: dict) -> list[dict]:
+    rejected = "A batch that only proposes additions is incomplete. Include a removal or a shorter wording."
+    try:
+        saved = save_recommendations(_Saved(), body)  # type: ignore[arg-type]
+    except HTTPException as exc:
+        assert exc.detail != rejected
+        raise
+    assert saved
+    assert rejected not in str(saved)
+    return saved
+
+
+def test_additions_only_or_observations_only_batch_drafts() -> None:
+    """A draft of additions or observations does not need a removal or shorter wording."""
+    additions = _draft(
+        {
+            "cards": [
+                {
+                    "title": "Add a boredom line",
+                    "kind": "add",
+                    "prompt_direction": "longer",
+                    "proposed": {"text": "Notice when the child is bored."},
+                }
+            ]
+        }
+    )
+    observations = _draft(
+        {
+            "cards": [
+                {
+                    "title": "Turn 4: the tutor ignored the question",
+                    "kind": "setting",
+                    "prompt_direction": "same",
+                    "proposed": {"text": "", "shorter": ""},
+                    "evidence": {
+                        "summary": "The child asked what govern means. The tutor moved on.",
+                        "fault": "The tutor ignored the child's question.",
+                    },
+                }
+            ]
+        }
+    )
+    flagged = _draft(
+        {
+            "observations": True,
+            "cards": [
+                {
+                    "title": "Turn 9: the step did not move",
+                    "kind": "setting",
+                    "prompt_direction": "same",
+                    "proposed": {"text": "", "shorter": ""},
+                }
+            ],
+        }
+    )
+    assert additions[0]["kind"] == "add"
+    assert observations[0]["kind"] == "setting"
+    assert observations[0]["proposed"] == {"text": "", "shorter": ""}
+    assert "replacement" not in observations[0]["evidence"]
+    assert flagged[0]["proposed"]["shorter"] == ""
+    assert flagged[0]["proposed"]["text"] == ""
