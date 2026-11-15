@@ -1040,15 +1040,45 @@ def explanation_restates_topic(block: dict, state: dict | None, answer: str) -> 
     return len(hits) >= 2 and len(hits) * 2 >= len(words)
 
 
+def explanation_move_on_reply(block: dict, state: dict | None, answer: str) -> bool:
+    """This reply advances an explanatory topic. The spoken reply stays short.
+
+    A restatement, a ready line, a proceed question, or the two-extra-turn cap.
+    Not a content question, and not the last topic (that close is its own rule).
+    """
+    if str(block.get("type") or "") != "explanation":
+        return False
+    stored = state if isinstance(state, dict) else {}
+    if str(stored.get("substep") or "explain_topic") == "summary_check":
+        return False
+    if explanation_on_last_topic(block, stored):
+        return False
+    if explanation_topic_capped("explain_topic", stored):
+        return True
+    raw = answer or ""
+    if not raw.strip():
+        return False
+    if explanation_side_remark(block, raw, stored, None):
+        return False
+    if learner_wants_recap_elaboration(raw) or learner_wants_deeper_explanation(raw):
+        return False
+    if explanation_restates_topic(block, stored, raw):
+        return True
+    if learner_ready_to_proceed(raw, False):
+        return True
+    return _is_proceed_question(_proceed_text(raw))
+
+
 def explanation_side_remark(
     block: dict,
     answer: str,
     state: dict | None,
     cfg: dict | None,
 ) -> bool:
-    """An off-topic remark on an explanatory topic. The reply stays one or two sentences.
+    """A short explanatory turn: an aside, or a question on a topic that is not finished.
 
-    An on-topic question still belongs to the topic. A restatement moves on instead.
+    The reply is one or two sentences, then one line back. A restatement moves on instead.
+    The last topic and the two-extra-turn cap use their own closes.
     """
     if str(block.get("type") or "") != "explanation":
         return False
@@ -1058,6 +1088,9 @@ def explanation_side_remark(
     stored = state if isinstance(state, dict) else {}
     if str(stored.get("substep") or "") == "summary_check":
         return False
+    # The two-extra-turn cap moves on. A question there is answered in the cap line.
+    if explanation_topic_capped(str(stored.get("substep") or "explain_topic"), stored):
+        return False
     if (
         learner_ready_to_proceed(raw, False)
         or learner_wants_deeper_explanation(raw)
@@ -1066,6 +1099,14 @@ def explanation_side_remark(
         or explanation_restates_topic(block, stored, raw)
     ):
         return False
+    # A real question on a topic that is not finished. The last topic has its own close.
+    # Elaborate and tell me more stay on the longer path. One or two sentences, then one line back.
+    if (
+        not explanation_on_last_topic(block, stored)
+        and learner_asks_question_or_background(raw)
+        and not learner_wants_recap_elaboration(raw)
+    ):
+        return True
     point = _explanation_point_words(block, stored)
     overlap = bool(point and set(_reply_content_words(raw)) & point)
     if learner_asks_question_or_background(raw) and not overlap:

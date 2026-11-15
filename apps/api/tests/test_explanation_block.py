@@ -324,8 +324,12 @@ def test_an_explanatory_restatement_moves_to_the_next_topic() -> None:
     assert "Do not re-teach the whole topic." in teaching
     assert "Explain this topic from:" not in teaching
     assert "Topic point, already said, for the one-sentence gap only:" in teaching
-    assert "explain the next topic" in teaching.lower()
+    assert "write the first line of the next topic only" in teaching.lower()
+    assert "Do not teach that topic." in teaching
+    assert "Do not ask a question." in teaching
+    assert "ask if they have questions or want elaboration" not in teaching.lower()
     assert "Causes" in teaching
+    assert "Spending, jobs, and confidence push the cycle from one phase to the next." not in teaching
     held = _cycle_turn("Why are there four phases?")
     assert held.next_block_state["topic_index"] == 0
 
@@ -447,6 +451,143 @@ def _lags_turn(answer: str, *, substep_passed: bool = False, block_complete: boo
         last_misconception="",
         answer=answer,
     )
+
+
+RUHR = {
+    "id": "blk_ruhr",
+    "type": "explanation",
+    "data": {
+        "block_title": "The Ruhr crisis",
+        "topics": [
+            {
+                "id": "top_ruhr",
+                "title": "The Ruhr occupation",
+                "explanation": (
+                    "French and Belgian troops occupied the Ruhr. "
+                    "Many Germans felt that occupation was an invasion."
+                ),
+                "key_points": "Occupation. Invasion.",
+                "examples_or_analogies": "",
+            },
+            {
+                "id": "top_passive",
+                "title": "Passive Resistance",
+                "explanation": (
+                    "Workers in the Ruhr refused to work for the occupiers. "
+                    "The government printed money to pay them, and prices rose."
+                ),
+                "key_points": "Refusal to work. Printed money.",
+                "examples_or_analogies": "A strike against the occupation.",
+            },
+        ],
+        "summary_takeaway": "The Ruhr occupation met passive resistance.",
+    },
+}
+RUHR_NEXT = {"id": "blk_after", "type": "topic_goal", "data": {"topic": "Hyperinflation", "goal": "Explain hyperinflation."}}
+RUHR_LINE = "The Ruhr occupation felt like an invasion."
+RUHR_QUESTION = "So did they realize too late that Hitler could take control of those institutions too?"
+PASSIVE_EXPLANATION = (
+    "Workers in the Ruhr refused to work for the occupiers. "
+    "The government printed money to pay them, and prices rose."
+)
+
+
+def _ruhr_prompt(answer: str) -> str:
+    return build_kc_prompt(
+        student=_student(),
+        profile=_profile(),
+        node=_node(blocks=[deepcopy(RUHR), deepcopy(RUHR_NEXT)]),
+        goal=_goal(),
+        step=0,
+        opening=False,
+        choice_on_screen=False,
+        prerequisite_status="",
+        support_band="ready",
+        course_position="1 of 2",
+        unit_complete=False,
+        course_complete=False,
+        attempts=0,
+        hint_tier="nudge",
+        reveals=0,
+        off_course_count=0,
+        affect="",
+        enrichment_turns=0,
+        help_requested=False,
+        minutes_used=0,
+        component_status="unknown",
+        stability="0",
+        last_answer=answer,
+        last_misconception="",
+        last_messages="",
+        rubric_met=[],
+        redirect_pending=False,
+        fragment=False,
+        others_known=False,
+        active_block_state={"substep": "explain_topic", "topic_index": 0, "dialogue_turns": 2, "elaboration_turns": 0},
+    )["system_prompt"]
+
+
+def _ruhr_turn(answer: str, *, substep_passed: bool = False):
+    return resolve_block_turn(
+        decision="stay",
+        substep_passed=substep_passed,
+        block_complete=False,
+        rubric_met=[],
+        stored_rubric=[],
+        matched_wrong="",
+        blocks=[deepcopy(RUHR), deepcopy(RUHR_NEXT)],
+        step=0,
+        active_block_state={"substep": "explain_topic", "topic_index": 0, "dialogue_turns": 2, "elaboration_turns": 0},
+        block_results=[],
+        move_attempts=0,
+        hint_tier="nudge",
+        reveals=0,
+        enrichment_turns=0,
+        cfg=_cfg(),
+        goal=None,
+        last_misconception="",
+        answer=answer,
+    )
+
+
+def test_a_ruhr_style_advance_is_short_and_does_not_teach_the_next_topic() -> None:
+    """An accepted line moves on in one or two sentences, then the next topic's first line.
+
+    It does not teach Passive Resistance, and it does not ask whether to elaborate.
+    """
+    moved = _ruhr_turn(RUHR_LINE, substep_passed=True)
+    assert moved.next_block_state["topic_index"] == 1
+    assert moved.next_block_state["substep"] == "explain_topic"
+    assert moved.advance_block is False
+    text = _ruhr_prompt(RUHR_LINE)
+    teaching = text.split("What to teach", 1)[-1].split("Who you are talking to", 1)[0]
+    lowered = text.lower()
+    assert "one sentence" in lowered or "one or two sentences" in lowered
+    assert "write the first line of the next topic only" in teaching.lower()
+    assert "Topic 2 of 2: Passive Resistance." in teaching
+    assert "Do not teach that topic." in teaching
+    assert "Do not ask a question." in teaching
+    assert PASSIVE_EXPLANATION not in text
+    assert "A strike against the occupation." not in text
+    assert "ask if they have questions or want elaboration" not in lowered
+    assert "would you like me to elaborate" not in lowered
+    assert "ask one question only: move on, or ask one more question" not in lowered
+
+
+def test_a_question_on_an_unfinished_topic_stays_short() -> None:
+    """A real question is one or two sentences, then one line back. It does not advance."""
+    held = _ruhr_turn(RUHR_QUESTION, substep_passed=True)
+    assert held.next_block_state["topic_index"] == 0
+    assert held.advance_block is False
+    text = _ruhr_prompt(RUHR_QUESTION)
+    teaching = text.split("What to teach", 1)[-1].split("Who you are talking to", 1)[0]
+    lowered = text.lower()
+    assert "one or two sentences" in lowered
+    assert "one line back" in lowered
+    assert "Explain this topic from:" not in teaching
+    assert PASSIVE_EXPLANATION not in text
+    assert "ask if they have questions or want elaboration" not in lowered
+    assert "would you like me to elaborate" not in lowered
 
 
 def test_got_it_move_on_on_the_last_topic_opens_the_next_block() -> None:

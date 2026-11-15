@@ -69,17 +69,17 @@ def test_a_correct_solo_answer_completes_the_block_without_a_follow_up_question(
     turn = _section(text, "This turn")
     how = _section(text, "How to teach")
     teach = _section(text, "What to teach")
-    assert "short affirmation of that answer" in turn
-    assert "Do not ask Ready for the next challenge." in turn
-    assert "Do not summarize the block" in turn
-    assert "do not ask whether to discuss or move on" in turn
-    assert "Set substep_passed=true and block_complete=true." in turn
-    assert "Ask no question." in turn
+    assert "The block is finished. Congratulate the learner once." in turn
+    assert "the first line of the next block" in turn
+    assert "Begin the next block in this same reply." in turn
+    assert "ask one question only: move on, or ask one more question" not in text.lower()
+    assert "Do not mention the next block and do not open it." not in text
     assert "ask whether the learner wants to continue discussing" not in text
     assert "Give a short summary of what this block covered" not in text
     assert "End a teaching or probing turn with a single clear question." not in how
     assert "Ask the learner to solve solo problem" not in teach
     assert "Do not ask them to solve it again." in teach
+    assert "First line: explain what Next is and why it matters." in teach
 
     solved = _turn("The river is blue.", "solo_solve", substep_passed=True)
     assert solved.advance_block is True
@@ -145,3 +145,81 @@ def test_a_bare_yes_on_an_ordinary_worked_step_is_not_a_close() -> None:
     )
     assert faded.advance_block is False
     assert faded.next_block_state["substep"] == "solo_solve"
+
+
+APPOINTED = "The Nazis got votes but Hitler was appointed."
+APPOINTMENT = {
+    "id": "work",
+    "type": "worked_example",
+    "data": {
+        "problem_statement": "How did Hitler become chancellor?",
+        "steps": [{"step_text": "The Nazis won seats, then the president appointed Hitler."}],
+        "solo_problem": "How did Hitler take office?",
+        "solo_expected_answer": APPOINTED,
+    },
+}
+AFTER = {"id": "next", "type": "topic_goal", "data": {"topic": "The Enabling Act", "goal": "Explain the Enabling Act."}}
+
+
+def _appointment_prompt(answer: str, substep: str):
+    return _text(
+        node=_node(blocks=[dict(APPOINTMENT), dict(AFTER)], misconceptions=[]),
+        opening=False,
+        attempts=0,
+        last_answer=answer,
+        last_messages=f"assistant: How did Hitler take office? | user: {answer}",
+        active_block_state={"substep": substep},
+        fragment=False,
+    )
+
+
+def _appointment_turn(answer: str, substep: str, *, substep_passed: bool = False, move_attempts: int = 0):
+    return resolve_block_turn(
+        decision="stay",
+        substep_passed=substep_passed,
+        block_complete=False,
+        rubric_met=[],
+        stored_rubric=[],
+        matched_wrong="",
+        blocks=[dict(APPOINTMENT), dict(AFTER)],
+        step=0,
+        active_block_state={"substep": substep, "dialogue_turns": 1},
+        block_results=[],
+        move_attempts=move_attempts,
+        hint_tier="nudge",
+        reveals=0,
+        enrichment_turns=0,
+        cfg=CFG,
+        goal=None,
+        last_misconception="",
+        answer=answer,
+    )
+
+
+def test_a_finished_worked_example_starts_the_next_block_without_asking() -> None:
+    """The appointment close congratulates and starts the next block. It does not ask to move on."""
+    text = _appointment_prompt(APPOINTED, "solo_solve")
+    lowered = text.lower()
+    assert "The block is finished. Congratulate the learner once." in text
+    assert "Begin the next block in this same reply." in text
+    assert "the first line of the next block" in lowered
+    assert "First line: explain what The Enabling Act is and why it matters." in text
+    assert "ask one question only: move on, or ask one more question" not in lowered
+    assert "do you want to move on" not in lowered
+    closed = _appointment_turn(APPOINTED, "solo_solve", substep_passed=True)
+    assert closed.advance_block is True
+    assert closed.next_step == 1
+    assert closed.block_results[-1]["outcome"] == "passed"
+    assert closed.next_block_state.get("substep") != "summary_check"
+
+    missed = _appointment_turn("I don't know", "faded_step")
+    assert missed.advance_block is False
+    assert missed.next_block_state["substep"] == "faded_step"
+    cleared = _appointment_turn(
+        "The Nazis won seats, then the president appointed Hitler.",
+        "faded_step",
+        substep_passed=True,
+        move_attempts=missed.move_attempts,
+    )
+    assert cleared.advance_block is False
+    assert cleared.next_block_state["substep"] == "solo_solve"
