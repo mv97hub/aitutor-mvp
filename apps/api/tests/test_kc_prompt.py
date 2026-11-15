@@ -819,12 +819,13 @@ def test_a_finished_block_reply_that_is_not_a_question_opens_the_next_one() -> N
     )
     teach = _section(text, "What to teach")
     turn = _section(text, "This turn")
-    assert "Begin the next block in this same reply." in text
+    assert "Begin the next block in this same reply." not in text
+    assert "Close in one sentence." in text
+    assert "The next block arrives in its own message." in text
     assert "and ask the goal again." not in text
     assert "Stay on course: this is not an attempt at the goal." not in text
-    assert "First line:" in teach
-    assert "Ask no question and do not open the next block." not in turn
-    assert "Do not ask the goal again." in turn
+    assert "First line:" not in teach
+    assert "Ask no question." in turn
 
 
 def test_summary_check_is_the_last_substep_and_hides_the_choice_widget() -> None:
@@ -1246,12 +1247,12 @@ def test_lets_go_after_a_passed_goal_opens_the_next_block() -> None:
     )
     assert "Stay on course: this is not an attempt at the goal." not in text
     assert "and ask the goal again." not in text
-    assert "The block is finished. Congratulate the learner once." in text
-    assert "The reply is that congratulations plus the first line of the next block, not a second goodbye." in text
-    assert "Begin the next block in this same reply." in text
-    assert "Do not offer one more example." in text
+    assert "The block is finished. Close in one sentence." in text
+    assert "Do not praise the block again." in text
+    assert "Begin the next block in this same reply." not in text
+    assert "The next block arrives in its own message." in text
     teach = _section(text, "What to teach")
-    assert "First line: explain what Next is and why it matters." in teach
+    assert "First line:" not in teach
 
 
 def test_move_on_question_does_not_reask_the_goal() -> None:
@@ -1267,8 +1268,8 @@ def test_move_on_question_does_not_reask_the_goal() -> None:
     )
     assert "Stay on course: this is not an attempt at the goal." not in text
     assert "and ask the goal again." not in text
-    assert "The block is finished. Congratulate the learner once." in text
-    assert "Begin the next block in this same reply." in text
+    assert "The block is finished. Close in one sentence." in text
+    assert "Begin the next block in this same reply." not in text
     for ready in ("yes", "next", "let's go"):
         moved = _passed_summary_turn(ready)
         assert moved.advance_block is True, ready
@@ -1310,7 +1311,8 @@ def test_a_non_question_on_a_passed_summary_opens_the_next_block() -> None:
         text = _text(node=node, opening=False, last_answer=phrase, active_block_state=state)
         assert "and ask the goal again." not in text, phrase
         assert "Stay on course: this is not an attempt at the goal." not in text, phrase
-        assert "Begin the next block in this same reply." in text, phrase
+        assert "Begin the next block in this same reply." not in text, phrase
+        assert "Close in one sentence." in text, phrase
 
 
 def test_a_question_on_a_passed_summary_does_not_advance() -> None:

@@ -69,9 +69,10 @@ def test_a_correct_solo_answer_completes_the_block_without_a_follow_up_question(
     turn = _section(text, "This turn")
     how = _section(text, "How to teach")
     teach = _section(text, "What to teach")
-    assert "The block is finished. Congratulate the learner once." in turn
-    assert "the first line of the next block" in turn
-    assert "Begin the next block in this same reply." in turn
+    assert "The block is finished. Close in one sentence." in turn
+    assert "Ask no question." in turn
+    assert "Do not praise the block again." in turn
+    assert "Begin the next block in this same reply." not in turn
     assert "ask one question only: move on, or ask one more question" not in text.lower()
     assert "Do not mention the next block and do not open it." not in text
     assert "ask whether the learner wants to continue discussing" not in text
@@ -79,7 +80,8 @@ def test_a_correct_solo_answer_completes_the_block_without_a_follow_up_question(
     assert "End a teaching or probing turn with a single clear question." not in how
     assert "Ask the learner to solve solo problem" not in teach
     assert "Do not ask them to solve it again." in teach
-    assert "First line: explain what Next is and why it matters." in teach
+    assert "First line:" not in teach
+    assert "The next block arrives in its own message." in teach
 
     solved = _turn("The river is blue.", "solo_solve", substep_passed=True)
     assert solved.advance_block is True
@@ -200,10 +202,10 @@ def test_a_finished_worked_example_starts_the_next_block_without_asking() -> Non
     """The appointment close congratulates and starts the next block. It does not ask to move on."""
     text = _appointment_prompt(APPOINTED, "solo_solve")
     lowered = text.lower()
-    assert "The block is finished. Congratulate the learner once." in text
-    assert "Begin the next block in this same reply." in text
-    assert "the first line of the next block" in lowered
-    assert "First line: explain what The Enabling Act is and why it matters." in text
+    assert "The block is finished. Close in one sentence." in text
+    assert "Begin the next block in this same reply." not in text
+    assert "The next block arrives in its own message." in text
+    assert "First line:" not in text
     assert "ask one question only: move on, or ask one more question" not in lowered
     assert "do you want to move on" not in lowered
     closed = _appointment_turn(APPOINTED, "solo_solve", substep_passed=True)
