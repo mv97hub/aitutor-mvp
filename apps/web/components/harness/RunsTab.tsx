@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "@/lib/api";
 import { RunSummary } from "@/components/harness/RunSummary";
-import { transcriptForChat } from "@/lib/harness-live";
+import { recentLines, transcriptForChat, type TranscriptLine } from "@/lib/harness-live";
 import type { ClaimedChat, HarnessTransport, LiveLine, SessionSnap } from "@/lib/harness-runner";
 import { driveRun } from "@/lib/harness-runner";
 
@@ -19,7 +19,7 @@ type ChatRow = {
   luna_tokens: number;
 };
 
-type SessionMessage = { role?: string; content?: string };
+type SessionMessage = { role?: string; content?: string; seq?: number };
 
 type RunRow = {
   id: string;
@@ -118,6 +118,19 @@ function transport(runId: string): HarnessTransport {
       if (!response.ok) throw new Error(await response.text());
     },
   };
+}
+
+function LiveLines({ chatId, lines }: { chatId: string; lines: TranscriptLine[] }) {
+  const shown = recentLines(lines);
+  return (
+    <ol className="harness-transcript">
+      {shown.map((line) => (
+        <li key={`${chatId}-${line.seq}`} value={line.seq}>
+          <strong>{line.role === "tutor" ? "Tutor" : "Child"}:</strong> {line.text}
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 export function RunsTab({
@@ -229,7 +242,9 @@ export function RunsTab({
           setLive((current) => {
             const last = current[current.length - 1];
             if (last && last.role === line.role && last.text === line.text && last.chatId === line.chatId) return current;
-            return [...current, line].slice(-40);
+            const nextSeq =
+              current.reduce((max, item) => (item.chatId === line.chatId ? Math.max(max, item.seq || 0) : max), 0) + 1;
+            return [...current, { ...line, seq: line.seq ?? nextSeq }].slice(-40);
           });
         },
       );
@@ -265,13 +280,7 @@ export function RunsTab({
                   </button>
                 </p>
                 {lines.length > 0 ? (
-                  <ol className="harness-transcript">
-                    {lines.map((line, index) => (
-                      <li key={`${chat.id}-${index}`}>
-                        <strong>{line.role === "tutor" ? "Tutor" : "Child"}:</strong> {line.text}
-                      </li>
-                    ))}
-                  </ol>
+                  <LiveLines chatId={chat.id} lines={lines} />
                 ) : (
                   <p className="help">
                     {chat.session_id ? "Waiting for the first tutor message." : "Queued. Press Resume to start this chat."}
@@ -285,13 +294,7 @@ export function RunsTab({
             return (
               <article key={chatId}>
                 <p>Running chat</p>
-                <ol className="harness-transcript">
-                  {lines.map((line, index) => (
-                    <li key={`${chatId}-${index}`}>
-                      <strong>{line.role === "tutor" ? "Tutor" : "Child"}:</strong> {line.text}
-                    </li>
-                  ))}
-                </ol>
+                <LiveLines chatId={chatId} lines={lines} />
               </article>
             );
           })}

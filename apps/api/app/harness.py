@@ -470,6 +470,7 @@ def chat_out(chat: HarnessChat) -> dict:
         "turn_count": chat.turn_count,
         "pending_nudges": int(chat.pending_nudges or 0),
         "stuck_answers": int(chat.stuck_answers or 0),
+        "claim_generation": int(chat.claim_generation or 0),
         "created_at": chat.created_at,
         "updated_at": chat.updated_at,
     }
@@ -513,6 +514,26 @@ def pause_run(db: Session, run_id: uuid.UUID) -> dict:
     return run_out(db, run)
 
 
+def claim_opens_session(session_id: object) -> bool:
+    """A chat that already has a tutor session does not open another one."""
+    return session_id is None
+
+
+def next_claim_generation(current: object) -> int:
+    try:
+        value = int(current or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return max(0, value) + 1
+
+
+def replaced_session_id(previous: object, new: object) -> object | None:
+    """The open session to close when a chat is pointed at a different one."""
+    if previous is None or new is None or previous == new:
+        return None
+    return previous
+
+
 def resume_run(db: Session, run_id: uuid.UUID) -> dict:
     run = _run_or_404(db, run_id)
     if run.status in {"paused", "queued"}:
@@ -522,6 +543,9 @@ def resume_run(db: Session, run_id: uuid.UUID) -> dict:
             select(HarnessChat).where(HarnessChat.run_id == run.id, HarnessChat.status == "running")
         ).all()
         for chat in running:
+            # Queue the chat so the open tab can continue it. Do not clear session_id.
+            # claim_chat keeps that session and does not call open_session again.
+            # A second claim only bumps claim_generation, which stops the old loop.
             chat.status = "queued"
             chat.updated_at = _now()
     return run_out(db, run)
@@ -611,6 +635,17 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
             run.status = "completed"
             run.updated_at = _now()
         return None
+    if not claim_opens_session(chat.session_id):
+        existing = db.get(KcSession, chat.session_id)
+        if existing is not None:
+            chat.claim_generation = next_claim_generation(chat.claim_generation)
+            chat.status = "running"
+            chat.updated_at = _now()
+            run.updated_at = _now()
+            db.flush()
+            body = chat_out(chat)
+            body["session"] = {"id": str(existing.id), "status": existing.status}
+            return body
     goal = db.get(KcGoal, chat.course_id)
     node = db.get(KcNode, chat.component_id)
     profile = get_profile_by_id_or_slug(db, chat.tutor_profile_id) if chat.tutor_profile_id else load_profile(db)
@@ -636,8 +671,12 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
     db.add(student)
     db.flush()
     session = open_session(db, student, goal, node, tutor_profile_id=profile.id)
+    previous = replaced_session_id(chat.session_id, session.id)
+    if previous is not None:
+        _close_open_session(db, previous)
     chat.student_id = student.id
     chat.session_id = session.id
+    chat.claim_generation = next_claim_generation(chat.claim_generation)
     chat.settings_copy = _settings_copy(db, profile, node)
     chat.status = "running"
     chat.updated_at = _now()
@@ -875,13 +914,17 @@ def _refresh_totals(db: Session, run: HarnessRun) -> None:
     run.updated_at = _now()
 
 
-def _close_session(db: Session, chat: HarnessChat) -> None:
-    if chat.session_id is None:
+def _close_open_session(db: Session, session_id: object) -> None:
+    if session_id is None:
         return
-    session = db.get(KcSession, chat.session_id)
+    session = db.get(KcSession, session_id)
     if session is not None and session.status == "in_progress":
         session.status = "completed"
         session.updated_at = _now()
+
+
+def _close_session(db: Session, chat: HarnessChat) -> None:
+    _close_open_session(db, chat.session_id)
 
 
 def _same_place(turns: list[HarnessTurn]) -> int:
