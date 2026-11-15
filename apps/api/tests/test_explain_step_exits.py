@@ -536,7 +536,7 @@ def test_the_explanatory_prompt_names_ready_signals_and_the_cap() -> None:
     open_text = _explanatory_prompt(opening=False, last_answer="What's next?", active_block_state=_topic_state())
     assert (
         "If the learner is good to proceed, for example What's next?, ok, I get it, or let's go, "
-        "set substep_passed=true and, in this same reply, explain the next topic"
+        "set substep_passed=true and, in this same reply, write the first line of the next topic only"
     ) in open_text
     assert "Do not move on while they still have questions." in open_text
     assert "two extra turns" not in open_text
@@ -550,7 +550,7 @@ def test_the_explanatory_prompt_names_ready_signals_and_the_cap() -> None:
     assert "If their last message was a question or a remark, answer it in one sentence first." in capped
     assert (
         "The learner has used the two extra turns on this topic. Set substep_passed=true and, "
-        "in this same reply, explain the next topic"
+        "in this same reply, write the first line of the next topic only"
     ) in capped
     assert "On this turn set substep_passed=true." in capped
     assert "Do not move on while they still have questions." not in capped

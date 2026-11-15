@@ -140,11 +140,17 @@ def explanation_length_override(
     """The cross-layer length sentence, or empty when this turn keeps response_length."""
     if str(block.get("type") or "").strip() != "explanation":
         return ""
-    from app.kc_loop import explanation_restates_topic, explanation_side_remark, last_topic_closes_block
+    from app.kc_loop import (
+        explanation_move_on_reply,
+        explanation_restates_topic,
+        explanation_side_remark,
+        last_topic_closes_block,
+    )
 
     if (
         explanation_side_remark(block, last_answer, active_block_state, cfg)
         or explanation_restates_topic(block, active_block_state, last_answer)
+        or explanation_move_on_reply(block, active_block_state, last_answer)
         or last_topic_closes_block(block, active_block_state, last_answer)
     ):
         return ""
@@ -1022,11 +1028,17 @@ def _who_you_are_talking_to(
         active_block_state=active_block_state,
         last_answer=last_answer,
     )
-    from app.kc_loop import explanation_restates_topic, explanation_side_remark, last_topic_closes_block
+    from app.kc_loop import (
+        explanation_move_on_reply,
+        explanation_restates_topic,
+        explanation_side_remark,
+        last_topic_closes_block,
+    )
 
     short_explanation_turn = (
         explanation_side_remark(block, last_answer, active_block_state, cfg)
         or explanation_restates_topic(block, active_block_state, last_answer)
+        or explanation_move_on_reply(block, active_block_state, last_answer)
         or last_topic_closes_block(block, active_block_state, last_answer)
     )
     if length_override:
@@ -1223,7 +1235,7 @@ _GOAL_EARLY_ANSWER = (
 _EXPLANATION_CAP = (
     "The learner has had two extra turns on this topic, so the lesson moves on now. "
     "If their last message was a question or a remark, answer it in one sentence first. "
-    "Then follow the move-on instruction in What to teach in this same reply: explain the next topic, "
+    "Then follow the move-on instruction in What to teach in this same reply: the first line of the next topic, "
     "or close the block when this was the last topic. Do not quiz."
 )
 _LAST_TOPIC_CLOSE = (
@@ -1498,12 +1510,20 @@ def _summary_close_lines(
                 "answer it and ask the goal again. Set substep_passed=false and block_complete=false. "
                 "Do not summarize the block, do not offer to move on, and do not offer another example."
             )
+        if block_type == "worked_example":
+            begun = _SUMMARY_BEGIN if has_next else _SUMMARY_BEGIN_LAST
+            satisfy = (
+                "Summary close: If this answer satisfies the substep, set substep_passed=true and block_complete=true. "
+                f"{begun}"
+            )
+        else:
+            satisfy = (
+                "Summary close: If this answer satisfies the substep, set substep_passed=true and block_complete=false. "
+                f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} Do not open the next block."
+            )
         lines.extend(
             [
-                (
-                    "Summary close: If this answer satisfies the substep, set substep_passed=true and block_complete=false. "
-                    f"{_SUMMARY_CONGRATULATE} {_SUMMARY_CHOICE} Do not open the next block."
-                ),
+                satisfy,
                 (
                     "Summary close on the attempt limit: If this is the last allowed try and the answer still misses the goal, "
                     "set substep_passed=false and block_complete=false. Highlight that the learner reached the attempt limit "
@@ -1814,7 +1834,13 @@ def _this_turn(
         pass
     elif side and goal_start in {"explain", "deepen"}:
         lines.append(_SIDE_EXPLAIN)
-    elif side and stay_on and goal_start != "clarify" and substep != "summary_check":
+    elif (
+        side
+        and stay_on
+        and goal_start != "clarify"
+        and substep != "summary_check"
+        and str(block.get("type") or "") != "explanation"
+    ):
         lines.append(_SIDE_STAY)
     elif side and not stay_on and substep != "summary_check":
         lines.append(_SIDE_FOLLOW)
@@ -1993,7 +2019,7 @@ def _this_turn(
                 lines.append(
                     "The learner already restated this point. Name anything missed in one sentence. "
                     "Do not re-teach the whole topic. Then follow the move-on instruction in What to teach "
-                    "and explain the next topic, or close the block in one or two sentences when this was the last topic. "
+                    "and write the first line of the next topic, or close the block in one or two sentences when this was the last topic. "
                     "Do not restate each topic and do not ask whether to move on. Do not quiz."
                 )
             elif explanation_on_last_topic(block, active_block_state) and learner_wants_recap_elaboration(last_answer):
@@ -2004,12 +2030,12 @@ def _this_turn(
             else:
                 lines.append(
                     "The learner has replied on the current topic. If they have a question or want elaboration, stay on this topic and answer. "
-                    "If they are ready, follow the move-on instruction in What to teach and explain the next topic, "
+                    "If they are ready, follow the move-on instruction in What to teach and write the first line of the next topic, "
                     "or close the block in one or two sentences when this was the last topic. "
                     "Do not restate each topic and do not ask whether to move on. Do not quiz."
                 )
     if worked_close == "affirm":
-        lines.append(_WORKED_AFFIRM)
+        lines.append(_SUMMARY_BEGIN if has_next else _SUMMARY_BEGIN_LAST)
     elif worked_close == "continue":
         lines.append(_WORKED_CONTINUE)
         lines.append(_SUMMARY_NO_PRAISE)
@@ -2084,7 +2110,12 @@ def _explanation_teach_lines(
     lines = [
         "Do NOT quiz or test the learner on this block. Never ask them to solve, recall for a grade, or prove they know it.",
     ]
-    from app.kc_loop import explanation_restates_topic, explanation_side_remark, last_topic_question_close
+    from app.kc_loop import (
+        explanation_move_on_reply,
+        explanation_restates_topic,
+        explanation_side_remark,
+        last_topic_question_close,
+    )
 
     if (not opening) and _last_topic_close_now(block, state, last_answer):
         title = str(data.get("block_title") or "").strip()
@@ -2104,7 +2135,8 @@ def _explanation_teach_lines(
 
     aside = (not opening) and explanation_side_remark(block, last_answer, state, None)
     restated = (not opening) and (not aside) and explanation_restates_topic(block, state, last_answer)
-    if not aside and not restated:
+    moving = (not opening) and explanation_move_on_reply(block, state, last_answer)
+    if not aside and not restated and not moving:
         lines.append(
             "Explain the topic clearly, then ask if they have any questions or would like you to elaborate."
         )
@@ -2205,14 +2237,10 @@ def _explanation_teach_lines(
     if topics and index < len(topics) - 1:
         nxt = topics[index + 1]
         lines.append(
-            f"{proceed} and, in this same reply, explain the next topic: "
-            f"Topic {index + 2} of {total}: {nxt['title'] or 'the next topic'}. {_finish(nxt['explanation'])}"
+            f"{proceed} and, in this same reply, write the first line of the next topic only: "
+            f"Topic {index + 2} of {total}: {nxt['title'] or 'the next topic'}. "
+            "Do not teach that topic. Do not ask a question. Do not quiz."
         )
-        if nxt["key_points"]:
-            lines.append(f"Next topic key points: {_finish(nxt['key_points'])}")
-        if nxt["examples_or_analogies"]:
-            lines.append(f"Next topic example or analogy: {_finish(nxt['examples_or_analogies'])}")
-        lines.append("After that explanation, ask if they have questions or want elaboration. Do not quiz.")
         return lines
     lines.append(
         "This is the last topic. Stay on this topic. "
@@ -2536,11 +2564,8 @@ def _what_to_teach(
                 "This reply is one short closing line and no question. "
                 "Do not restate the summary. Do not mention the next block and do not open it."
             )
-        elif worked_close == "affirm":
-            lines.append(
-                "This reply is a short affirmation of the correct answer and no question. "
-                "Do not summarize the block. Do not mention the next block and do not open it."
-            )
+        elif worked_close == "affirm" and has_next and isinstance(next_block, dict):
+            lines.extend(_next_block_opening(next_block))
         elif summary_begin and has_next:
             lines.extend(_next_block_opening(next_block))
         elif _last_topic_close_now(block, active_block_state, last_answer) and has_next:
@@ -3031,6 +3056,7 @@ def _how_to_teach(
         block, substep, opening=opening, last_answer=last_answer, cfg=cfg, state=active_block_state
     )
     from app.kc_loop import (
+        explanation_move_on_reply,
         explanation_on_last_topic,
         explanation_restates_topic,
         explanation_side_remark,
@@ -3042,6 +3068,7 @@ def _how_to_teach(
     stay_on = stay_on_course_enabled(cfg)
     aside = explanation_side_remark(block, last_answer, active_block_state, cfg)
     restated = explanation_restates_topic(block, active_block_state, last_answer)
+    moving = (not opening) and explanation_move_on_reply(block, active_block_state, last_answer)
     closing = (not opening) and _last_topic_close_now(block, active_block_state, last_answer)
     elaborating_last = (
         (not opening)
@@ -3049,7 +3076,7 @@ def _how_to_teach(
         and explanation_on_last_topic(block, active_block_state)
         and learner_wants_recap_elaboration(last_answer)
     )
-    if aside or restated or closing:
+    if aside or restated or moving or closing:
         lecture_bits = (
             "explanation depth",
             "when the learner asks a question or wants elaboration",
@@ -3102,7 +3129,7 @@ def _how_to_teach(
             "Answer the side remark in one or two sentences, then one line back to the active lesson. "
             "Do not start a new explanation of this block."
         )
-    elif restated:
+    elif restated or moving:
         lines.append(
             "The learner already restated this point. Name anything missed in one sentence. "
             "Do not re-teach the whole topic."
@@ -3129,7 +3156,7 @@ def _how_to_teach(
             "Set help_requested=true."
         )
 
-    if not side_question and not aside and not restated and not closing:
+    if not side_question and not aside and not restated and not moving and not closing:
         if escalation == "socratic_probing":
             lines.append(
                 "Scaffolding escalation (socratic_probing): on misses, ask targeted diagnostic questions to help the learner spot the gap themselves."
@@ -3152,11 +3179,11 @@ def _how_to_teach(
 
     if goal_start in {"aside", "cap"} or aside:
         pass
-    elif side and not stay_on:
+    elif side and not stay_on and not aside:
         lines.append(_SIDE_FOLLOW)
     elif side and goal_start in {"explain", "deepen", "clarify"}:
         pass
-    elif side:
+    elif side and not aside:
         lines.append(
             "Answer that request inside the safety rules, in one or two sentences, then repeat the active question. "
             "Do not call the reply partial, a close, or a good start."
@@ -3266,7 +3293,7 @@ def _how_to_teach(
                 "Answer the side remark in one or two sentences, then one line back to the lesson. "
                 "Do not re-teach this topic."
             )
-        elif restated:
+        elif restated or moving:
             lines.append(
                 "Explanatory block override: do not quiz, score, or reveal an answer. "
                 "Name anything missed in one sentence. Do not re-teach the whole topic."
@@ -3290,7 +3317,7 @@ def _how_to_teach(
             )
         if _summary_elaboration(block, substep, last_answer):
             lines.append(_SUMMARY_ELABORATE)
-    elif worked_close in {"affirm", "continue"}:
+    elif worked_close == "continue":
         lines.append("This worked-example turn closes the block. Ask no question.")
     elif summary_begin:
         lines.append(begun)
@@ -3513,6 +3540,7 @@ def _what_to_return(
     summary_begin: bool = False,
     has_next: bool = False,
     last_topic_close: str = "",
+    explanation_short: bool = False,
 ) -> list[str]:
     if presenting_dynamic_mcq:
         reply_line = (
@@ -3552,6 +3580,11 @@ def _what_to_return(
             lines.append(
                 "On this turn set substep_passed=true. The two extra turns on this topic are used, so the lesson moves on. "
                 "Set block_complete=false. Never quiz."
+            )
+        elif explanation_short:
+            lines.append(
+                "On an explanation block, set substep_passed=false when the learner asks a question or wants elaboration, "
+                "and substep_passed=true when they are ready to proceed. Never quiz."
             )
         else:
             lines.append(
@@ -3897,6 +3930,9 @@ def build_kc_prompt(
         is_final_block_and_substep = True
         include_close = True
     from app.kc_loop import (
+        explanation_move_on_reply,
+        explanation_restates_topic,
+        explanation_side_remark,
         learner_asks_clarification,
         stay_on_course_enabled,
         summary_ready_signal,
@@ -3915,11 +3951,16 @@ def build_kc_prompt(
         )
     summary_begin = (
         not opening
-        and substep == "summary_check"
-        and not state_dict.get("revealed_substep")
         and not summary_elaborate
-        and worked_close not in {"affirm", "continue"}
-        and summary_ready_signal(last_answer or "")
+        and worked_close != "continue"
+        and (
+            worked_close == "affirm"
+            or (
+                substep == "summary_check"
+                and not state_dict.get("revealed_substep")
+                and summary_ready_signal(last_answer or "")
+            )
+        )
     )
     if (summary_begin or bool(last_topic_close)) and has_next:
         nxt = blocks[index + 1]
@@ -4099,6 +4140,15 @@ def build_kc_prompt(
                     summary_begin=summary_begin,
                     has_next=has_next,
                     last_topic_close=last_topic_close,
+                    explanation_short=bool(
+                        btype == "explanation"
+                        and (
+                            explanation_side_remark(active_block, last_answer or "", state_dict, cfg)
+                            or explanation_restates_topic(active_block, state_dict, last_answer or "")
+                            or explanation_move_on_reply(active_block, state_dict, last_answer or "")
+                            or bool(last_topic_close)
+                        )
+                    ),
                 ),
             ),
         ]
