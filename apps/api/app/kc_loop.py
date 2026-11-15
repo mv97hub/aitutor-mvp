@@ -25,6 +25,7 @@ from app.kc_prompt import (
 from app.models import KcGoal
 
 ENRICHMENT_CAP = 2
+SAY_THAT_AGAIN = "Say that again?"
 
 
 @dataclass(frozen=True)
@@ -1668,6 +1669,57 @@ def _unscored_stay(
         next_block_id=bid,
         next_block_state=state,
         block_results=results,
+        mark_known=False,
+        mark_fragile=False,
+        redirect=False,
+        unit_complete=False,
+        advance_block=False,
+        passed=False,
+    )
+
+
+def reply_is_unreadable(reply: str) -> bool:
+    """An empty reply, or one that is only dots, is not something the child can read."""
+    text = (reply or "").strip()
+    if not text:
+        return True
+    compact = text.replace(".", "").replace("…", "").replace("·", "").strip()
+    return not compact
+
+
+def hold_for_blank_reply(
+    *,
+    blocks: list[dict],
+    step: int,
+    active_block_state: dict,
+    block_results: list[dict],
+    move_attempts: int,
+    hint_tier: str,
+    reveals: int,
+    enrichment_turns: int,
+    rubric_met: list[str],
+) -> BlockResolution:
+    """A blank model reply stays. It does not count a try and does not move the topic.
+
+    The child hears a fixed line. This does not call the model again.
+    """
+    index = min(max(int(step or 0), 0), max(len(blocks) - 1, 0))
+    block = blocks[index] if blocks else {}
+    bid = str(block.get("id") or f"blk_{index + 1}").strip()
+    state = dict(active_block_state or {})
+    tier = hint_tier if hint_tier in HINTS else "nudge"
+    return BlockResolution(
+        decision="stay",
+        hint_tier=tier,
+        move_attempts=int(move_attempts or 0),
+        reveals=int(reveals or 0),
+        enrichment_turns=int(enrichment_turns or 0),
+        rubric_met=_clean_ids(list(rubric_met or [])),
+        misconception="",
+        next_step=index,
+        next_block_id=bid or None,
+        next_block_state=state,
+        block_results=[dict(row) for row in (block_results or []) if isinstance(row, dict)],
         mark_known=False,
         mark_fragile=False,
         redirect=False,

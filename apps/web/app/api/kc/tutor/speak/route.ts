@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const SPEAK_PROMPT =
-  "Say the opening of this block now. This is the only message for this block change. Ask the new question if this block opens with one. Give no cue. Do not praise the previous block. Return the decision object.";
+  "Say the opening now. This is the only message for this change. Ask the new question if this step opens with one. Give no cue. Do not praise what came before. Never say the word block to the learner. Return the decision object.";
 
 type PromptBundle = {
   system_prompt: string;

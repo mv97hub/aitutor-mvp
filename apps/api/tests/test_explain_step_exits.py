@@ -43,7 +43,7 @@ EARLY_LINE = (
 SIDE_LINE = (
     "Goal start: The learner typed a side remark. It is not an attempt and it is not a request to learn more. "
     "Answer it inside the safety rules, in one or two sentences, then one line back to the active lesson. "
-    "Do not start a new explanation of this block. "
+    "Do not start a new explanation of this topic. "
     "Do not ask the goal question. "
     "Do not ask a question applies to your lesson text, not to the student. "
     "It does not mean ignore the question they typed. "
@@ -444,7 +444,7 @@ def test_the_lesson_text_clarification_reaches_a_side_remark_turn_once() -> None
         ) in how, phrase
         assert (
             "Answer the side remark in one or two sentences, then one line back to the active lesson. "
-            "Do not start a new explanation of this block. "
+            "Do not start a new explanation of this topic. "
             "The goal question waits until the learner moves on."
         ) in how, phrase
     assert CLARIFICATION not in _prompt("Tell me more")

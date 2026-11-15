@@ -218,7 +218,7 @@ def test_opening_side_remarks_stay_on_the_step_and_are_not_scored() -> None:
         text = _apple_prompt(phrase)
         turn = _section(text, "This turn")
         assert ASIDE in turn, phrase
-        assert "Do not start a new explanation of this block." in turn, phrase
+        assert "Do not start a new explanation of this topic." in turn, phrase
         assert "Do not ask a question applies to your lesson text, not to the student." in turn, phrase
         assert "Do not score this reply." in turn, phrase
         assert "Do not say Nice connection" in turn, phrase
@@ -246,7 +246,7 @@ def test_a_real_apple_attempt_is_scored_and_move_on_opens_the_question() -> None
     assert answered.next_block_state["elaboration_turns"] == 0
     assert answered.rubric_met == ["kept", "apple"]
     assert answered.advance_block is False
-    assert "Do not start a new explanation of this block." not in _apple_prompt(REAL_APPLE)
+    assert "Do not start a new explanation of this topic." not in _apple_prompt(REAL_APPLE)
     opened = _apple_turn("Got it - move on")
     assert opened.next_block_state["substep"] == "main"
     assert opened.advance_block is False

@@ -90,23 +90,27 @@ def _profile_for(depth: int = 4, allow: bool = True):
     return _profile(kc_tutor_config=_cfg(depth, allow))
 
 
-def test_depth_four_overrides_bite_sized_length() -> None:
+def test_depth_four_keeps_bite_sized_on_the_first_teaching() -> None:
     text = _prompt(profile=_profile_for(4))
-    assert "CROSS-LAYER LENGTH OVERRIDE FOR EXPLANATORY BLOCK" in text
-    assert "bite_sized" in text
-    assert "on_grade" in text
-    assert "concrete_examples" in text
-    assert "Keep response length bite-sized" not in text
+    who = text.split("Who you are talking to", 1)[1].split("How to sound", 1)[0]
+    assert "CROSS-LAYER LENGTH OVERRIDE" not in who
+    assert "CROSS-LAYER LENGTH OVERRIDE" not in text
+    assert "Keep response length bite-sized" in who
+    assert "Length override is on" not in text
+    assert "stays inside the learner's response_length" in text
+    assert "bite-sized" in text
+    assert "Reading level on grade" in text
+    assert "concrete examples" in text
     assert "Do NOT quiz" in text
     assert "Denominator" in text
-    assert "Numerator" not in text.split("What to teach", 1)[-1].split("Who you are talking to", 1)[0]
+    assert "Numerator" not in text.split("What to teach", 1)[-1].split("This turn", 1)[0]
 
 
 def test_depth_one_keeps_response_length_and_names_elaboration() -> None:
     text = _prompt(profile=_profile_for(1))
     assert "CROSS-LAYER LENGTH OVERRIDE" not in text
     assert "Keep response length bite-sized" in text
-    assert "If the learner asks to elaborate, do NOT truncate" in text
+    assert "stays inside the learner's response_length" in text
     assert "Explanation depth 1 of 5" in text
 
 
@@ -120,15 +124,15 @@ def test_summary_lists_every_topic() -> None:
     assert "Denominator" in teaching
     assert "Numerator" in teaching
     assert "summary_check" in teaching
-    assert "congratulate the learner once for finishing this block" in teaching.lower()
+    assert "congratulate the learner once" in teaching.lower()
     assert "ask one question only: move on, or ask one more question" in teaching.lower()
     assert "do not offer one more example" in teaching.lower()
     assert "any other final questions" not in teaching.lower()
-    assert "do not open the next block" in teaching.lower()
+    assert "do not open the next part" in teaching.lower()
     how = text.split("How to teach", 1)[-1].split("How to sound", 1)[0]
     assert "then ask if there are any final questions" not in how.lower()
     assert "any other final questions" not in how.lower()
-    assert "congratulate the learner once for finishing this block" in how.lower()
+    assert "congratulate the learner once" in how.lower()
     assert "ask one question only: move on, or ask one more question" in how.lower()
 
 
@@ -297,7 +301,7 @@ def test_a_side_remark_on_an_explanatory_topic_stays_one_or_two_sentences() -> N
     how = text.split("How to teach", 1)[-1].split("How to sound", 1)[0]
     assert "one or two sentences" in text
     assert "one line back to the active lesson" in teaching
-    assert "Do not start a new explanation of this block." in teaching
+    assert "Do not start a new explanation of this topic." in teaching
     assert "Explain this topic from:" not in teaching
     assert "The Great Recession was a deep contraction." not in text
     assert "CROSS-LAYER LENGTH OVERRIDE" not in text
@@ -600,11 +604,11 @@ def test_got_it_move_on_on_the_last_topic_opens_the_next_block() -> None:
     assert closed.next_block_state.get("substep") != "summary_check"
     assert closed.block_results[-1]["block_type"] == "explanation"
     text = _lags_prompt("Got it - move on")
-    assert "The close is one or two sentences: what the block was, and that they are done." in text
+    assert "The close is one or two sentences: what this part was, and that they are done." in text
     assert "Do not restate each topic." in text
     assert "Do not ask whether to move on." in text
     assert "Begin the next block in this same reply." not in text
-    assert "The next block arrives in its own message." in text
+    assert "The next part arrives in its own message." in text
     assert "First line:" not in text
     lowered = text.lower()
     assert "summarize every topic" not in lowered
@@ -623,8 +627,8 @@ def test_a_question_on_the_last_topic_is_answered_then_the_block_closes() -> Non
     assert closed.next_block_id == "blk_worked"
     assert closed.next_block_state["substep"] == "faded_step"
     text = _lags_prompt(question)
-    assert "Answer the question in one or two sentences, then close the block." in text
-    assert "The close is one or two sentences: what the block was, and that they are done." in text
+    assert "Answer the question in one or two sentences, then close." in text
+    assert "The close is one or two sentences: what this part was, and that they are done." in text
     assert "Do not restate each topic." in text
     assert "Do not ask whether to move on." in text
     assert "Topic point, for the one-or-two-sentence answer only:" in text

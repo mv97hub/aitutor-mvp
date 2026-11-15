@@ -58,7 +58,7 @@ def test_lemonade_cup_is_answered_before_the_topic_moves_on() -> None:
         turn = _section(text, "This turn")
         assert CLARIFY in turn, phrase
         assert "one line back to the active lesson" in turn, phrase
-        assert "Do not start a new explanation of this block." in turn, phrase
+        assert "Do not start a new explanation of this topic." in turn, phrase
         assert "Set help_requested=true." in text, phrase
         assert "The child has asked for help." in text, phrase
         assert "The child has not asked for help." not in text, phrase

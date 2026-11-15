@@ -821,7 +821,7 @@ def test_a_finished_block_reply_that_is_not_a_question_opens_the_next_one() -> N
     turn = _section(text, "This turn")
     assert "Begin the next block in this same reply." not in text
     assert "Close in one sentence." in text
-    assert "The next block arrives in its own message." in text
+    assert "The next part arrives in its own message." in text
     assert "and ask the goal again." not in text
     assert "Stay on course: this is not an attempt at the goal." not in text
     assert "First line:" not in teach
@@ -896,11 +896,11 @@ def test_summary_check_prompt_distinguishes_a_completed_block_from_an_incomplete
         last_answer="",
         active_block_state={"substep": "summary_check", "revealed_substep": False, "last_task_substep": "main"},
     )
-    assert "The learner completed this block." in done
+    assert "The learner finished this part." in done
     assert "Never say congratulations" not in done
     assert "set substep_passed=true and block_complete=false" in done
     assert "brief closing statement only" in done
-    assert "do not open the next block" in done.lower()
+    assert "do not open the next part" in done.lower()
 
     missed = _text(
         node=node,
@@ -1037,12 +1037,12 @@ def test_praise_only_when_the_reply_meets_the_goal() -> None:
     assert "names a real step toward it" not in text
     assert "Asking a question, asking for background, or asking to move on is not noteworthy work." in teach
     turn = _section(text, "This turn")
-    assert "Congratulate the learner once for finishing this block." in turn
+    assert "Congratulate the learner once." in turn
     assert "Ask one question only: move on, or ask one more question." in turn
     assert "Do not offer one more example." in turn
 
 
-_CONGRATULATE = "Congratulate the learner once for finishing this block."
+_CONGRATULATE = "Congratulate the learner once."
 _CHOICE = "Ask one question only: move on, or ask one more question."
 _REMINDER = "If they ask one further question, answer it, then close."
 
@@ -1132,14 +1132,14 @@ def test_every_summary_block_congratulates_offers_a_choice_and_reminds_after_a_q
             },
         )
         assert "any other final questions" not in asked, block_type
-        assert _CONGRATULATE in asked, block_type
-        assert _CHOICE in asked, block_type
-        assert _REMINDER in asked, block_type
-        assert "do not open the next block" in asked.lower(), block_type
+        assert _CONGRATULATE not in asked, block_type
+        assert "Close in one sentence." in asked, block_type
+        assert "Do not ask move on, or one more question, again." in asked, block_type
+        assert "do not open the next part" in asked.lower(), block_type
         assert "You do not set the block order" in asked, block_type
         returned = _section(asked, "What to return")
-        assert "A move-on also sets block_complete=true." in returned, block_type
-        assert "answer it, then close" in returned.lower(), block_type
+        assert "reply is the only text the child reads." in returned, block_type
+        assert "A move-on also sets block_complete=true." not in returned, block_type
     assert changed == [
         "topic_goal",
         "mcq",
@@ -1257,10 +1257,10 @@ def test_lets_go_after_a_passed_goal_opens_the_next_block() -> None:
     )
     assert "Stay on course: this is not an attempt at the goal." not in text
     assert "and ask the goal again." not in text
-    assert "The block is finished. Close in one sentence." in text
-    assert "Do not praise the block again." in text
+    assert "Close in one sentence." in text
+    assert "Do not praise." in text
     assert "Begin the next block in this same reply." not in text
-    assert "The next block arrives in its own message." in text
+    assert "The next part arrives in its own message." in text
     teach = _section(text, "What to teach")
     assert "First line:" not in teach
 
@@ -1278,7 +1278,7 @@ def test_move_on_question_does_not_reask_the_goal() -> None:
     )
     assert "Stay on course: this is not an attempt at the goal." not in text
     assert "and ask the goal again." not in text
-    assert "The block is finished. Close in one sentence." in text
+    assert "Close in one sentence." in text
     assert "Begin the next block in this same reply." not in text
     for ready in ("yes", "next", "let's go"):
         moved = _passed_summary_turn(ready)
@@ -1307,7 +1307,7 @@ def test_one_further_question_then_closes() -> None:
     assert "Do not ask move on, or one more question, again." in turn
     assert "then ask the same single choice" not in turn.lower()
     assert "Set block_complete=true." in turn
-    assert "do not open the next block" in asked.lower()
+    assert "do not open the next part" in asked.lower()
 
 
 def test_can_we_keep_going_advances_a_passed_summary() -> None:
@@ -1327,7 +1327,7 @@ def test_can_we_keep_going_advances_a_passed_summary() -> None:
             last_answer=phrase,
             active_block_state={"substep": "summary_check", "last_task_substep": "main", "revealed_substep": False},
         )
-        assert "The block is finished. Close in one sentence." in text, phrase
+        assert "Close in one sentence." in text, phrase
         assert "Stay on course: this is not an attempt at the goal." not in text, phrase
 
 
