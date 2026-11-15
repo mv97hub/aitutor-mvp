@@ -61,7 +61,7 @@ def _profile(**fields: object) -> dict:
 
 
 def starter_children() -> list[dict]:
-    """The twelve named children. Numbers are fixed and are never reused."""
+    """The named children. Numbers are fixed and are never reused."""
     return [
         {
             "number": 1,
@@ -216,5 +216,68 @@ def starter_children() -> list[dict]:
                 interests="games",
             ),
             "traits": blank_traits(boundary=5, maturity=2, compliance=2, tangent=3),
+        },
+        {
+            "number": 13,
+            "name": "AI_Child13",
+            "description": "Quiet, capable 11-year-old who answers in plain statements and does not ask questions.",
+            "age": 11,
+            "child_profile": _profile(
+                grade_band="middle_school",
+                reading_level="on_grade",
+                response_length="balanced",
+                expression_style="conversational",
+                communication_tone="direct_and_matter_of_fact",
+                interest_tags=["space_and_science"],
+                interests="maps",
+            ),
+            "traits": blank_traits(
+                prior_knowledge=5,
+                curiosity=1,
+                tangent=1,
+                when_unsure=1,
+                echoing=1,
+                boundary=1,
+                compliance=5,
+                writing=5,
+                buttons=1,
+                boredom=1,
+                attention=5,
+                learning_rate=4,
+                reading=5,
+                maturity=4,
+                frustration=1,
+                quit=1,
+                wrong_pattern=1,
+            ),
+        },
+        {
+            "number": 14,
+            "name": "AI_Child14",
+            "description": (
+                "Age 12. Holds one wrong belief: a price rise means everyone has more money. "
+                "Wrong answers fit the question and keep that belief."
+            ),
+            "age": 12,
+            "child_profile": _profile(
+                grade_band="middle_school",
+                reading_level="on_grade",
+                response_length="balanced",
+                expression_style="conversational",
+                interest_tags=["sports_and_games"],
+                interests="soccer",
+            ),
+            "traits": blank_traits(
+                prior_knowledge=1,
+                wrong_pattern=5,
+                curiosity=2,
+                compliance=4,
+                when_unsure=2,
+                writing=4,
+                echoing=1,
+                boundary=1,
+                tangent=1,
+                buttons=2,
+            ),
         },
     ]

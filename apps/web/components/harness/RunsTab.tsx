@@ -34,19 +34,38 @@ async function readSnap(sessionId: string): Promise<SessionSnap> {
   const session = await api<SessionSnap>(`/kc/tutor/sessions/${sessionId}`);
   let prompt = "";
   let safety = "none";
-  let passed = false;
+  let loop: SessionSnap["loop_result"] = session.loop_result ?? null;
+  let loopDecision = session.loop_decision || "";
   try {
-    const detail = await api<{ prompts?: { system_prompt?: string; decision?: { safety_flag?: string; substep_passed?: boolean; block_complete?: boolean } }[] }>(
-      `/kc/sessions/${sessionId}`,
-    );
+    const detail = await api<{
+      prompts?: {
+        system_prompt?: string;
+        decision?: {
+          safety_flag?: string;
+          loop_result?: SessionSnap["loop_result"];
+          loop_decision?: string;
+        };
+      }[];
+    }>(`/kc/sessions/${sessionId}`);
     const latest = detail.prompts?.[detail.prompts.length - 1];
     prompt = latest?.system_prompt || "";
     safety = latest?.decision?.safety_flag || "none";
-    passed = Boolean(latest?.decision?.substep_passed || latest?.decision?.block_complete);
+    if (latest?.decision?.loop_result) loop = latest.decision.loop_result;
+    if (latest?.decision?.loop_decision) loopDecision = latest.decision.loop_decision;
   } catch {
     prompt = "";
   }
-  return { ...session, id: sessionId, prompt, safety_flag: safety, passed, messages: session.messages || [] };
+  const accepted = Boolean(loop && loop.closed !== "revealed" && (loop.closed === "passed" || loop.advanced));
+  return {
+    ...session,
+    id: sessionId,
+    prompt,
+    safety_flag: safety,
+    passed: accepted,
+    loop_result: loop,
+    loop_decision: loopDecision,
+    messages: session.messages || [],
+  };
 }
 
 function transport(runId: string): HarnessTransport {
@@ -81,45 +100,24 @@ function transport(runId: string): HarnessTransport {
       if (!response.ok) throw new Error(await response.text());
       return response.json();
     },
-    recordTurn: (chatId, body) => api(`/kc/harness/chats/${chatId}/turns`, { method: "POST", body: JSON.stringify(body) }),
+    recordTurn: async (chatId, body) => {
+      const response = await fetch("/api/kc/harness/turn", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chatId, turn: body }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    },
     finish: async (chatId, reason) => {
-      await api(`/kc/harness/chats/${chatId}/finish`, { method: "POST", body: JSON.stringify({ reason }) });
+      const response = await fetch("/api/kc/harness/finish", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chatId, reason }),
+      });
+      if (!response.ok) throw new Error(await response.text());
     },
   };
-}
-
-async function judgeChat(chatId: string, model: string) {
-  const detail = await api<{
-    child?: { description?: string };
-    turns?: { seq: number; intent: string; child_text: string; session_after?: { tutor_reply?: string } }[];
-    evaluations?: { kind: string; checks?: { side?: { turn?: number; answered?: boolean }[] } }[];
-  }>(`/kc/harness/chats/${chatId}`);
-  const turns = (detail.turns || []).map((turn) => ({
-    seq: turn.seq,
-    intent: turn.intent,
-    child_text: turn.child_text,
-    tutor_reply: turn.session_after?.tutor_reply || "",
-  }));
-  const transcript = turns.map((turn) => `${turn.seq}. intent: ${turn.intent}\nchild: ${turn.child_text}\ntutor: ${turn.tutor_reply}`).join("\n");
-  const checks = detail.evaluations?.find((item) => item.kind === "automatic")?.checks;
-  const response = await fetch("/api/kc/harness/judge", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model, transcript, child: detail.child?.description || "", turns, checks }),
-  });
-  if (!response.ok) return;
-  const judged = await response.json();
-  await api(`/kc/harness/chats/${chatId}/evaluations`, {
-    method: "POST",
-    body: JSON.stringify({
-      scores: judged.scores,
-      tags: judged.tags,
-      child_realism: judged.child_realism,
-      rubric_version: judged.rubric_version,
-      judge_model: judged.judge_model,
-      usage: judged.usage,
-    }),
-  });
 }
 
 export function RunsTab({
@@ -235,17 +233,6 @@ export function RunsTab({
           });
         },
       );
-      const latest = await api<{ chat_rows?: { id: string; status: string }[]; plan?: { judge_model?: string } }>(`/kc/harness/runs/${run.id}`);
-      const judgeModel = latest.plan?.judge_model || "gpt-6.1-sol";
-      for (const chat of latest.chat_rows || []) {
-        if (chat.status === "completed" || chat.status === "failed") {
-          try {
-            await judgeChat(chat.id, judgeModel);
-          } catch {
-            setError("A chat finished, and the judge did not score it.");
-          }
-        }
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "The run stopped.");
     } finally {

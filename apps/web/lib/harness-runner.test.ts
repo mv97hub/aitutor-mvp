@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ClaimedChat, HarnessTransport, SessionSnap } from "./harness-runner.ts";
-import { playChat } from "./harness-runner.ts";
+import { placeKey, playChat } from "./harness-runner.ts";
 
 function session(overrides: Partial<SessionSnap> = {}): SessionSnap {
   return {
@@ -119,6 +119,13 @@ test("a paused run leaves the chat for resume", async () => {
     },
   };
   assert.equal(await playChat(chat(), transport), "paused");
+});
+
+test("the place key includes the topic, so three explanation topics are not one place", () => {
+  assert.equal(placeKey("e", "explain_topic", undefined), "e:explain_topic");
+  assert.equal(placeKey("e", "explain_topic", null), "e:explain_topic");
+  assert.notEqual(placeKey("e", "explain_topic", 0), placeKey("e", "explain_topic", 1));
+  assert.notEqual(placeKey("e", "explain_topic", 1), placeKey("e", "explain_topic", 2));
 });
 
 test("eight same-place turns are followed by two nudges, then stuck", async () => {

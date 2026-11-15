@@ -69,7 +69,7 @@ export function ResultsTab({ runId }: { runId: string }) {
       <h2>Results</h2>
       {report.summary?.text ? <RunSummary text={report.summary.text} /> : null}
       <p className="help">
-        {report.usable_chats} of {report.chats} chats are in the roll-up. Low child-realism chats are left out.
+        {report.usable_chats} of {report.chats} chats are in the roll-up. A chat counts only when it was judged and its child realism is 3 or higher. A missing score is not judged.
         {report.baseline ? ` Baseline: ${report.baseline.band}, ${report.baseline.verdict}. Score change ${report.baseline.mean_score_delta ?? "—"}.` : ""}
       </p>
       {report.baseline?.dimension_deltas?.length ? <DeltaList rows={report.baseline.dimension_deltas} /> : null}
@@ -88,7 +88,7 @@ export function ResultsTab({ runId }: { runId: string }) {
       <ul className="harness-grid-scores">
         {report.grid.map((cell) => (
           <li key={`${cell.child}-${cell.block}`} data-score={cell.score ?? ""}>
-            {cell.child} · {cell.block} · {cell.score ?? "—"}
+            {cell.child} · {cell.block} · {cell.score ?? "not judged"}
           </li>
         ))}
       </ul>
@@ -163,7 +163,7 @@ function ScoreTable({
               <td>{row.name}</td>
               <td>{row.chats}</td>
               <td>{row.completion_rate}</td>
-              <td>{row.mean_score ?? "—"}</td>
+              <td>{row.mean_score ?? "not judged"}</td>
               <td>{row.false_passes ?? ""}</td>
               <td>{row.stuck ?? ""}</td>
             </tr>

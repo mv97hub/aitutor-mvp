@@ -40,7 +40,10 @@ type ChatDetail = {
     scores?: Score[];
     tags?: { tag: string; turn: number; quote: string }[];
     child_realism?: number | null;
+    error?: string;
   }[];
+  component_score?: number | null;
+  block_outcomes?: { title: string; outcome: string }[];
   safety_flags?: { category: string; child_message: string; tutor_reply: string }[];
 };
 
@@ -187,6 +190,9 @@ export function ChatTab({ chatId }: { chatId: string }) {
           <p className="help">
             {chat.child?.description} · priced cost {chat.cost_usd ?? "blank"} · luna tokens {chat.luna_tokens}
             {chat.session_id ? ` · session ${chat.session_id}` : ""}
+            {chat.component_score != null || (chat.block_outcomes || []).length
+              ? ` · score ${chat.component_score ?? "not finished"}. ${(chat.block_outcomes || []).map((item) => `${item.title} (${item.outcome})`).join(", ") || "no block outcomes"}.`
+              : ""}
           </p>
           {live.length > 0 ? (
             <>
@@ -255,7 +261,9 @@ export function ChatTab({ chatId }: { chatId: string }) {
           <h3>Automatic checks</h3>
           <pre className="harness-json">{JSON.stringify(automatic?.checks || {}, null, 2)}</pre>
           <h3>Judge</h3>
-          {judged ? (
+          {judged?.error || (judged && judged.child_realism == null && !(judged.scores || []).length) ? (
+            <p className="help">not judged</p>
+          ) : judged ? (
             <ul>
               {(judged.scores || []).map((score) => {
                 const handScore = handByDimension.get(score.dimension);
@@ -266,7 +274,7 @@ export function ChatTab({ chatId }: { chatId: string }) {
                   </li>
                 );
               })}
-              <li>Child realism {judged.child_realism ?? "—"}</li>
+              <li>Child realism {judged.child_realism ?? "not judged"}</li>
               {(judged.tags || []).map((tag) => (
                 <li key={`${tag.tag}-${tag.turn}`}>
                   {tag.tag} on turn {tag.turn}. “{tag.quote}”

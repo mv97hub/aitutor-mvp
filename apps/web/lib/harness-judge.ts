@@ -133,6 +133,56 @@ export function acceptJudgeOutput(
   };
 }
 
+export type JudgeEvaluation = {
+  scores: JudgeScore[];
+  tags: JudgeTag[];
+  child_realism: number | null;
+  error: string;
+  rubric_version: string;
+  judge_model: string;
+  usage: { input_tokens?: number; output_tokens?: number; cached_tokens?: number; total_tokens?: number };
+};
+
+/** A failed call is stored with no scores. The report says not judged. */
+export function evaluationFromJudge(input: {
+  ok: boolean;
+  error?: string;
+  scores?: JudgeScore[];
+  tags?: JudgeTag[];
+  child_realism?: number | null;
+  judge_model?: string;
+  usage?: JudgeEvaluation["usage"];
+}): JudgeEvaluation {
+  if (!input.ok) {
+    return {
+      scores: [],
+      tags: [],
+      child_realism: null,
+      error: (input.error || "The judge failed.").slice(0, 500),
+      rubric_version: RUBRIC_VERSION,
+      judge_model: input.judge_model || "",
+      usage: {},
+    };
+  }
+  return {
+    scores: input.scores || [],
+    tags: input.tags || [],
+    child_realism: typeof input.child_realism === "number" ? input.child_realism : null,
+    error: "",
+    rubric_version: RUBRIC_VERSION,
+    judge_model: input.judge_model || "",
+    usage: input.usage || {},
+  };
+}
+
+export function judgedAlready(
+  evaluations: { kind?: string; scores?: { length?: number } | null; child_realism?: number | null; error?: string }[] | undefined,
+): boolean {
+  return (evaluations || []).some(
+    (row) => row.kind === "judged" && !row.error && (row.child_realism != null || (row.scores?.length || 0) > 0),
+  );
+}
+
 export function agreementLabel(judge: number, hand: number): string {
   const gap = Math.abs(judge - hand);
   if (gap === 0) return "agree";

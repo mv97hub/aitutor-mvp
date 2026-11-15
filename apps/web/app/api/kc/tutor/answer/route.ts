@@ -160,12 +160,15 @@ export async function POST(req: Request) {
     return new Response("The tutor did not write a reply.", { status: 502 });
   }
 
-  let session: KcTutorSession;
+  let session: KcTutorSession & { loop_result?: Record<string, unknown> | null; loop_decision?: string };
   try {
-    session = await api<KcTutorSession>(`/kc/tutor/sessions/${sessionId}/decision`, {
-      method: "POST",
-      body: JSON.stringify(decision),
-    });
+    session = await api<KcTutorSession & { loop_result?: Record<string, unknown> | null; loop_decision?: string }>(
+      `/kc/tutor/sessions/${sessionId}/decision`,
+      {
+        method: "POST",
+        body: JSON.stringify(decision),
+      },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not apply that decision.";
     return new Response(message, { status: 502 });
@@ -187,7 +190,11 @@ export async function POST(req: Request) {
         message_id: added?.id ?? null,
         rubric_met: decision.rubric_met,
         misconception: decision.misconception,
-        decision,
+        decision: {
+          ...decision,
+          loop_result: session.loop_result ?? null,
+          loop_decision: session.loop_decision || "",
+        },
       }),
     });
     await api(`/kc/sessions/${sessionId}/token-usage`, {
@@ -203,5 +210,9 @@ export async function POST(req: Request) {
     const message = error instanceof Error ? error.message : "Could not store the prompt.";
     return new Response(message, { status: 502 });
   }
-  return Response.json({ ...session, loop_decision: decision.decision });
+  return Response.json({
+    ...session,
+    loop_result: session.loop_result ?? null,
+    loop_decision: session.loop_decision || decision.decision,
+  });
 }

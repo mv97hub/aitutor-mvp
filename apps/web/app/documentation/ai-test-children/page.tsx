@@ -73,6 +73,8 @@ export default function AiTestChildrenDocsPage() {
           <li>AI_Child10, struggling reader who was told &quot;on grade&quot;.</li>
           <li>AI_Child11, agreeable echo. Yes, and the tutor&apos;s words back.</li>
           <li>AI_Child12, boundary tester. Mild scripted probes only.</li>
+          <li>AI_Child13, quiet and capable. Answers in plain statements and does not ask questions.</li>
+          <li>AI_Child14, holds one wrong belief. Wrong answers fit the question and stay on that belief.</li>
         </ul>
         <p>Names are AI_Child plus the next number. Numbers are never reused. Use Add the starter set on the Children tab.</p>
 
@@ -94,7 +96,8 @@ export default function AiTestChildrenDocsPage() {
           </li>
           <li>The turn limit is reached. The default is 40 child turns.</li>
           <li>
-            The chat is stuck: no change of block or substep for 8 child turns. If the tutor&apos;s last line asks the
+            The chat is stuck: no change of block, substep, and topic for 8 child turns. Walking three explanatory
+            topics is not one stuck span, because the place includes the topic number. If the tutor&apos;s last line asks the
             child to recall, choose, or explain, the child answers that question. After two such answers with no change
             of block or substep, the child sends two short nudges, such as What&apos;s next?. If the tutor is not asking
             for that work, the nudges start right away. The chat closes as stuck only if the block and substep are still
@@ -138,10 +141,13 @@ export default function AiTestChildrenDocsPage() {
           check records whether the prompt contained the line and whether the reply obeyed it.
         </p>
         <p>
-          The judge is a separate model. It scores teaching, correctness, engagement, side remarks, age fit, pacing,
-          feedback, scoring fairness, emotional attunement, safety, getting stuck, natural conversation, closing, and
-          whether the test child was realistic. Every score quotes a turn. Chats with low child realism are left out of
-          the roll-up. Use the checks to decide and the scores to explain.
+          The judge is a separate model. It runs on the server when a chat finishes, not in the browser tab. It scores
+          teaching, correctness, engagement, side remarks, age fit, pacing, feedback, scoring fairness, emotional
+          attunement, safety, getting stuck, natural conversation, closing, and whether the test child was realistic.
+          Every score quotes a turn. A failed judge call is stored, and the report says not judged. A blank mean is not
+          a withheld score. A chat is in the roll-up only when it was judged and its child realism is 3 or higher. The
+          cutoff stays at 3. Automatic checks compare the child&apos;s words to the answer key for that step. The intent
+          label is the plan, not the verdict. Use the checks to decide and the scores to explain.
         </p>
         <p>
           Results group the run by child, course, component, block type, and tutor model. You can compare two runs

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CONTINUE_LABEL, EMPTY_INNER, MOVE_ON_LABEL, childPromptText, holdQuit, nudgeAllowed, nudgeTurn, pickMove, previewLines, quitLine, tutorAsksForWork, updateInner } from "./harness-policy.ts";
+import { CONTINUE_LABEL, EMPTY_INNER, MOVE_ON_LABEL, childPrompt, childPromptText, heldBelief, holdQuit, nudgeAllowed, nudgeTurn, pickMove, previewLines, quitLine, tutorAsksForWork, updateInner } from "./harness-policy.ts";
 
 const middle = {
   maturity: 3,
@@ -58,6 +58,78 @@ test("a choice card is picked by the harness, and a known child picks the right 
   assert.equal(move.intent, "answer_right");
   assert.equal(move.text, "Up");
   assert.equal(move.needsModel, false);
+});
+
+test("wrong multiple-choice picks are not always the first wrong option", () => {
+  const texts = new Set<string>();
+  for (let seed = 0; seed < 40; seed += 1) {
+    const move = pickMove({
+      traits: { ...middle, prior_knowledge: 1 },
+      inner: EMPTY_INNER,
+      seed,
+      turn: 0,
+      actions: {
+        canType: false,
+        buttons: [],
+        choices: [
+          { id: "a", text: "Right", correct: true },
+          { id: "b", text: "First wrong", correct: false },
+          { id: "c", text: "Second wrong", correct: false },
+        ],
+      },
+      mode: "rule",
+    });
+    if (move.intent === "wrong_choice") texts.add(move.text);
+  }
+  assert.ok(texts.has("First wrong"));
+  assert.ok(texts.has("Second wrong"));
+});
+
+test("a quiet child answers in a plain statement", () => {
+  const description = "Quiet, capable 11-year-old who answers in plain statements and does not ask questions.";
+  const prompt = childPrompt({
+    description,
+    traits: middle,
+    intent: "answer_right",
+    expected: "The river is blue.",
+    lastTutor: "What color is the river?",
+  });
+  assert.match(prompt, /plain statement/i);
+  assert.match(prompt, /Do not ask a question/);
+  const intents = new Set<string>();
+  for (let seed = 0; seed < 20; seed += 1) {
+    intents.add(
+      pickMove({
+        traits: middle,
+        inner: EMPTY_INNER,
+        seed,
+        turn: seed % 5,
+        actions: { canType: true, buttons: [], choices: [] },
+        mode: "rule",
+        description,
+        answerKey: { expected: "The river is blue." },
+        lastTutor: "What color is the river?",
+      }).intent,
+    );
+  }
+  assert.equal(intents.has("on_topic_question"), false);
+  assert.equal(intents.has("idk"), false);
+  assert.ok(intents.has("answer_right"));
+});
+
+test("one wrong belief has to fit the question", () => {
+  const description = "Holds one wrong belief: a price rise means everyone has more money. Wrong answers fit the question.";
+  assert.equal(heldBelief(description), "a price rise means everyone has more money");
+  const prompt = childPrompt({
+    description,
+    traits: middle,
+    intent: "answer_wrong",
+    wrongMove: "a stored misconception that does not fit",
+    lastTutor: "Why did the price of bread go up?",
+  });
+  assert.match(prompt, /Answer the question the tutor just asked/);
+  assert.match(prompt, /price rise means everyone has more money/);
+  assert.doesNotMatch(prompt, /stored misconception/);
 });
 
 test("a scripted line needs no model, and a bored child can quit", () => {

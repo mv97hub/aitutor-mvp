@@ -3048,6 +3048,92 @@ def _tutor_meta_dict(profile) -> dict:
     }
 
 
+def _topic_index(state: dict | None) -> int | None:
+    """The explanatory topic, when this block has one. Other blocks leave it unset."""
+    if not isinstance(state, dict) or "topic_index" not in state:
+        return None
+    try:
+        return int(state.get("topic_index") or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def loop_turn_result(
+    *,
+    before_step: int,
+    before_state: dict,
+    before_attempts: int,
+    before_results: list,
+    resolution,
+) -> dict:
+    """What the loop did with this turn. It does not decide the turn.
+
+    stayed, advanced, closed as passed or revealed or engaged, ended the unit,
+    and whether the try was counted. The model's proposed decision is not this.
+    """
+    after = resolution.next_block_state if isinstance(resolution.next_block_state, dict) else {}
+    before_sub = str((before_state or {}).get("substep") or "")
+    after_sub = str(after.get("substep") or "")
+    try:
+        before_block_attempts = int((before_state or {}).get("block_attempts") or 0)
+    except (TypeError, ValueError):
+        before_block_attempts = 0
+    try:
+        after_block_attempts = int(after.get("block_attempts") or 0)
+    except (TypeError, ValueError):
+        after_block_attempts = 0
+    stored = [row for row in (before_results or []) if isinstance(row, dict)]
+    produced = [row for row in (resolution.block_results or []) if isinstance(row, dict)]
+    new_rows = produced[len(stored) :] if len(produced) > len(stored) else []
+    closed = ""
+    for row in new_rows:
+        outcome = str(row.get("outcome") or "").strip()
+        if outcome in {"passed", "revealed", "engaged"}:
+            closed = outcome
+    same_block = int(resolution.next_step) == int(before_step)
+    sub_moved = after_sub != before_sub
+    topic_moved = same_block and _topic_index(before_state) != _topic_index(after)
+    advanced = bool((not same_block or sub_moved or topic_moved) and not closed)
+    ended = bool(resolution.unit_complete)
+    stayed = not advanced and not closed and not ended
+    attempt_counted = False
+    if same_block and after_block_attempts > before_block_attempts:
+        attempt_counted = True
+    elif same_block and int(resolution.move_attempts) > int(before_attempts) and not resolution.advance_block:
+        attempt_counted = True
+    else:
+        for row in new_rows:
+            try:
+                noted = int(row.get("attempts") or 0)
+            except (TypeError, ValueError):
+                noted = 0
+            if noted > before_block_attempts:
+                attempt_counted = True
+                break
+    return {
+        "stayed": stayed,
+        "advanced": advanced,
+        "closed": closed,
+        "ended_unit": ended,
+        "attempt_counted": attempt_counted,
+    }
+
+
+def loop_result_label(facts: dict) -> str:
+    parts = []
+    if facts.get("stayed"):
+        parts.append("stayed")
+    if facts.get("advanced"):
+        parts.append("advanced")
+    closed = str(facts.get("closed") or "").strip()
+    if closed:
+        parts.append(f"closed {closed}")
+    if facts.get("ended_unit"):
+        parts.append("ended the unit")
+    parts.append("try counted" if facts.get("attempt_counted") else "try not counted")
+    return ", ".join(parts)
+
+
 def session_out(db: Session, session: KcSession) -> dict:
     node = db.get(KcNode, session.kc_id)
     profile, _goal, messages, _fragment, cfg, blocks, index, block, state = _block_context(db, session, node)
@@ -3074,6 +3160,8 @@ def session_out(db: Session, session: KcSession) -> dict:
         "step_label": label,
         "status": session.status,
         "score": session.score,
+        "block_id": str(block.get("id") or "") if isinstance(block, dict) else "",
+        "topic_index": _topic_index(state),
         "needs_speech": needs_speech,
         "choice": choice,
         "redirect": None
@@ -4023,6 +4111,10 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     if not any(message.role == "user" for message in messages):
         raise HTTPException(status_code=422, detail="Write an answer first.")
     answer = next(message.content for message in reversed(messages) if message.role == "user")
+    before_state = dict(block_state or {})
+    before_attempts = int(session.move_attempts or 0)
+    before_results = list(session.block_results or [])
+    before_step = index
     if safety_flag != "none":
         stored = _add_message(db, session, "assistant", reply, step=index)
         record_safety_event(
@@ -4044,6 +4136,15 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         result["unit_complete"] = False
         result["course_complete"] = False
         result["safety_flag"] = safety_flag
+        held = {
+            "stayed": True,
+            "advanced": False,
+            "closed": "",
+            "ended_unit": False,
+            "attempt_counted": False,
+        }
+        result["loop_result"] = held
+        result["loop_decision"] = loop_result_label(held)
         return result
     reported = body.get("misconception")
     matched = _stored_wrong(node, answer, None if reported is None else str(reported))
@@ -4119,6 +4220,18 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     result["passed"] = resolution.passed
     result["unit_complete"] = unit_complete
     result["course_complete"] = course_complete
+    facts = loop_turn_result(
+        before_step=before_step,
+        before_state=before_state,
+        before_attempts=before_attempts,
+        before_results=before_results,
+        resolution=resolution,
+    )
+    if unit_complete:
+        facts["ended_unit"] = True
+        facts["stayed"] = False
+    result["loop_result"] = facts
+    result["loop_decision"] = loop_result_label(facts)
     return result
 
 

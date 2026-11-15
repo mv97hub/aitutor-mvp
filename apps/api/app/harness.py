@@ -24,6 +24,7 @@ from app.harness_checks import (
     DEFAULT_TURN_LIMIT,
     WRONG_INTENTS,
     automatic_checks,
+    place_key,
     stop_reason,
     stuck_after_turn,
 )
@@ -67,19 +68,7 @@ from app.tutor_profile import create_tutor_profile, effective_kc_tutor_config, g
 HARNESS_CODE_VERSION = "harness-1"
 FIXTURE_CODE = "harness-every-block"
 LUNA_MODEL = "gpt-6-luna"
-_EXPECTED_FIELDS = (
-    "goal",
-    "acceptance_criteria",
-    "solo_expected_answer",
-    "expected_fact",
-    "expected_why_rationale",
-    "invariant_principle",
-    "target_synthesis",
-    "corrected_version",
-    "expected_central_idea",
-    "expected_analysis",
-    "summary_takeaway",
-)
+_UNGRADED_STEPS = {"explain", "explain_topic", "summary_check"}
 
 
 def _now() -> datetime:
@@ -676,12 +665,72 @@ def _stored_block_title(data: dict) -> str:
     return ""
 
 
-def _expected(data: dict) -> str:
-    for key in _EXPECTED_FIELDS:
+def _first_text(data: dict, *keys: str) -> str:
+    for key in keys:
         text = str(data.get(key) or "").strip()
         if text:
             return text
     return ""
+
+
+def expected_for_step(block_type: str, substep: str, data: dict) -> str:
+    """The answer key for this step. A later step's answer is not used here.
+
+    Explanation and the summary close have nothing to grade.
+    """
+    kind = (block_type or "").strip()
+    step = (substep or "").strip()
+    if step in _UNGRADED_STEPS:
+        return ""
+    if kind == "topic_goal" and step == "main":
+        return _first_text(data, "goal", "acceptance_criteria")
+    if kind == "worked_example" and step == "faded_step":
+        steps = data.get("steps") if isinstance(data.get("steps"), list) else []
+        try:
+            index = int(data.get("faded_step_index") or 0)
+        except (TypeError, ValueError):
+            index = 0
+        if 0 <= index < len(steps):
+            row = steps[index]
+            if isinstance(row, dict):
+                return str(row.get("step_text") or "").strip()
+            return str(row or "").strip()
+        return ""
+    if kind == "worked_example" and step == "solo_solve":
+        return str(data.get("solo_expected_answer") or "").strip()
+    if kind == "retrieval_check" and step == "recall":
+        return str(data.get("expected_fact") or "").strip()
+    if kind == "retrieval_check" and step in {"elaborate_why", "why"}:
+        return str(data.get("expected_why_rationale") or "").strip()
+    if kind == "mcq" and step in {"choice", "awaiting_why"}:
+        for choice in data.get("choices") or []:
+            if isinstance(choice, dict) and choice.get("is_correct"):
+                return str(choice.get("text") or choice.get("id") or "").strip()
+        return ""
+    if kind == "spot_the_flaw":
+        return _first_text(data, "flaw_description", "corrected_version")
+    if kind == "case_study" and step == "contrast_and_rule":
+        return str(data.get("invariant_principle") or "").strip()
+    if kind == "case_study" and step == "transfer":
+        return _first_text(data, "transfer_expected", "invariant_principle")
+    if kind == "socratic" and step == "counterexample_probe":
+        return str(data.get("target_synthesis") or "").strip()
+    if kind == "passage_ela" and step == "central_idea":
+        return str(data.get("expected_central_idea") or "").strip()
+    if kind == "passage_ela" and step == "craft_or_inference":
+        return str(data.get("expected_analysis") or "").strip()
+    if kind == "teach_back":
+        return _first_text(data, "goal", "summary_takeaway")
+    return ""
+
+
+def _topic_number(state: dict | None) -> int | None:
+    if not isinstance(state, dict) or "topic_index" not in state:
+        return None
+    try:
+        return int(state.get("topic_index") or 0)
+    except (TypeError, ValueError):
+        return None
 
 
 def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
@@ -721,7 +770,12 @@ def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
         "block_type": str(block.get("type") or "") if isinstance(block, dict) else "",
         "block_title": _stored_block_title(data),
         "substep": str(state.get("substep") or ""),
-        "expected": _expected(data),
+        "topic_index": _topic_number(state),
+        "expected": expected_for_step(
+            str(block.get("type") or "") if isinstance(block, dict) else "",
+            str(state.get("substep") or ""),
+            data,
+        ),
         "correct_choice_id": correct,
         "choices": choices,
         "misconceptions": misconceptions,
@@ -837,7 +891,8 @@ def _same_place(turns: list[HarnessTurn]) -> int:
     run = 0
     for turn in turns:
         after = turn.session_after if isinstance(turn.session_after, dict) else {}
-        place = f"{after.get('block_id')}:{after.get('substep')}"
+        topic = after.get("topic_index") if "topic_index" in after else None
+        place = place_key(after.get("block_id"), after.get("substep"), topic)
         if place == last:
             run += 1
         else:
@@ -938,6 +993,7 @@ def _turns_for_checks(db: Session, chat: HarnessChat) -> list[dict]:
                 "tutor_reply": after.get("tutor_reply") or "",
                 "prompt": after.get("prompt") or "",
                 "passed": bool(after.get("passed")),
+                "loop_result": after.get("loop_result") if isinstance(after.get("loop_result"), dict) else {},
                 "attempt_before": int(before.get("move_attempts") or 0),
                 "attempt_after": int(after.get("move_attempts") or 0),
                 "block_id": after.get("block_id") or "",
@@ -946,9 +1002,13 @@ def _turns_for_checks(db: Session, chat: HarnessChat) -> list[dict]:
                 "substep_before": before.get("substep") or "",
                 "safety_flag": after.get("safety_flag") or "none",
                 "error": after.get("error") or "",
-                "expected": after.get("expected") or "",
+                "expected": before.get("expected") or "",
             }
         )
+        if "topic_index" in after:
+            rows[-1]["topic_index"] = after.get("topic_index")
+        if "topic_index" in before:
+            rows[-1]["topic_before"] = before.get("topic_index")
     return rows
 
 
@@ -1011,12 +1071,16 @@ def save_evaluation(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     tags = body.get("tags") if isinstance(body.get("tags"), list) else []
     usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
     realism = body.get("child_realism")
+    error = str(body.get("error") or "").strip()[:500]
+    payload = {"items": scores, "usage": usage}
+    if error:
+        payload["error"] = error
     db.add(
         HarnessEvaluation(
             chat_id=chat.id,
             kind="judged",
             checks={},
-            scores={"items": scores, "usage": usage},
+            scores=payload,
             tags=tags,
             rubric_version=str(body.get("rubric_version") or "1")[:40],
             judge_model=str(body.get("judge_model") or chat.judge_model or "")[:120],
@@ -1083,6 +1147,7 @@ def _evaluation_out(row: HarnessEvaluation) -> dict:
         "kind": row.kind,
         "checks": row.checks if isinstance(row.checks, dict) else {},
         "scores": items if isinstance(items, list) else [],
+        "error": str(scores.get("error") or "") if isinstance(scores, dict) else "",
         "tags": row.tags if isinstance(row.tags, list) else [],
         "rubric_version": row.rubric_version,
         "judge_model": row.judge_model,
@@ -1133,6 +1198,10 @@ def chat_detail(db: Session, chat: HarnessChat) -> dict:
     body["evaluations"] = [_evaluation_out(row) for row in reviews]
     body["safety_flags"] = flags
     body["settings_copy"] = dict(chat.settings_copy or {})
+    if chat.session_id is not None:
+        score, outcomes = _block_score(db, chat)
+        body["component_score"] = score
+        body["block_outcomes"] = outcomes
     return body
 
 
@@ -1143,7 +1212,7 @@ def _loop_decision(turn: HarnessTurn, prompts: list[KcModelPrompt]) -> str:
     """The loop decision stored on the turn, or on the prompt log for that reply."""
     after = turn.session_after if isinstance(turn.session_after, dict) else {}
     stored = str(after.get("loop_decision") or "").strip()
-    if stored in _LOOP_DECISIONS:
+    if stored:
         return stored
     reply = str(after.get("tutor_reply") or "").strip()
     child = str(turn.child_text or "").strip()
@@ -1185,12 +1254,32 @@ def get_chat(db: Session, chat_id: uuid.UUID) -> dict:
     return chat_detail(db, chat)
 
 
+def _block_score(db: Session, chat: HarnessChat) -> tuple[int | None, list[dict]]:
+    """The component score and each block outcome stored on the session."""
+    if chat.session_id is None:
+        return None, []
+    session = db.get(KcSession, chat.session_id)
+    if session is None:
+        return None, []
+    outcomes = []
+    for row in session.block_results or []:
+        if not isinstance(row, dict):
+            continue
+        outcome = str(row.get("outcome") or "").strip()
+        if outcome not in {"passed", "revealed", "engaged"}:
+            continue
+        title = str(row.get("title") or row.get("block_type") or "block").strip() or "block"
+        outcomes.append({"title": title, "outcome": outcome})
+    return session.score, outcomes
+
+
 def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
     reviews = db.scalars(select(HarnessEvaluation).where(HarnessEvaluation.chat_id == chat.id)).all()
     checks = {}
     scores: list = []
     tags: list = []
     realism = None
+    judge_error = ""
     for review in reviews:
         if review.kind == "automatic" and isinstance(review.checks, dict):
             checks = review.checks
@@ -1199,6 +1288,7 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
             scores = payload.get("items") if isinstance(payload.get("items"), list) else []
             tags = review.tags if isinstance(review.tags, list) else []
             realism = review.child_realism
+            judge_error = str(payload.get("error") or "") if isinstance(payload, dict) else ""
     turns = db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id).order_by(HarnessTurn.seq)).all()
     snapshot = chat.child_snapshot if isinstance(chat.child_snapshot, dict) else {}
     settings = chat.settings_copy if isinstance(chat.settings_copy, dict) else {}
@@ -1227,20 +1317,26 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
         if label and label not in turn_blocks:
             turn_blocks.append(label)
         after = turn.session_after if isinstance(turn.session_after, dict) else {}
-        if turn.intent in WRONG_INTENTS and after.get("passed") and label and label not in false_pass_blocks:
-            false_pass_blocks.append(label)
-        place = f"{after.get('block_id')}:{after.get('substep')}"
+        topic = after.get("topic_index") if "topic_index" in after else None
+        place = place_key(after.get("block_id"), after.get("substep"), topic)
+        stuck_label = label
+        if label and str(after.get("substep") or "") == "explain_topic" and topic is not None and topic != "":
+            try:
+                stuck_label = f"{label}, topic {int(topic) + 1}"
+            except (TypeError, ValueError):
+                stuck_label = label
         if place == last_place:
             same_step += 1
-            if same_step >= 8 and label and label not in stuck_blocks:
-                stuck_blocks.append(label)
+            if same_step >= 8 and stuck_label and stuck_label not in stuck_blocks:
+                stuck_blocks.append(stuck_label)
         else:
             same_step = 1
             last_place = place
-    if chat.ended_how == "stuck" and turns:
-        last_label = turn_label(turns[-1])
-        if last_label and last_label not in stuck_blocks:
-            stuck_blocks.append(last_label)
+    for index in checks.get("false_passes") or []:
+        if isinstance(index, int) and 0 <= index < len(turns):
+            label = turn_label(turns[index])
+            if label and label not in false_pass_blocks:
+                false_pass_blocks.append(label)
     nudge_turns = []
     for turn in turns:
         after = turn.session_after if isinstance(turn.session_after, dict) else {}
@@ -1288,10 +1384,15 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
                 "substep_before": str(before.get("substep") or ""),
                 "passed": bool(after.get("passed")),
                 "error": str(after.get("error") or ""),
+                "expected": str(before.get("expected") or ""),
+                "loop_result": after.get("loop_result") if isinstance(after.get("loop_result"), dict) else {},
             }
         )
+        if "topic_index" in after:
+            report_turns[-1]["topic_index"] = after.get("topic_index")
     goal = db.get(KcGoal, chat.course_id) if chat.course_id else None
     node = db.get(KcNode, chat.component_id) if chat.component_id else None
+    component_score, block_outcomes = _block_score(db, chat) if chat.session_id is not None else (None, [])
     return {
         "id": str(chat.id),
         "persona_name": snapshot.get("name") or "",
@@ -1313,6 +1414,9 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
         "scores": scores,
         "tags": tags,
         "child_realism": realism,
+        "judge_error": judge_error,
+        "component_score": component_score,
+        "block_outcomes": block_outcomes,
         "seed": chat.seed,
         "iteration": chat.iteration,
         "turn_intents": [turn.intent for turn in turns],
