@@ -7,6 +7,7 @@ structured evaluation (`substep_passed`, `block_complete`, `rubric_met`).
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 
 from app.kc_blocks import learner_asks_for_passage, quote_in_text
@@ -2305,6 +2306,130 @@ def _advance_or_close_component(
         advance_block=False,
         passed=not fragile,
     )
+
+
+@dataclass(frozen=True)
+class SpokenTurn:
+    """What the reply should do. stay, advance, or close."""
+
+    speech: str
+    unit_complete: bool
+    advance_block: bool
+    revealed: bool
+    next_substep: str
+    decision: str
+
+
+@dataclass(frozen=True)
+class TurnForecast:
+    """Loop outcome for this child line, computed before the model speaks.
+
+    applies is false on an opening and when there is no child line.
+    depends_on_model is true when a pass and a miss would not say the same thing.
+    """
+
+    applies: bool
+    depends_on_model: bool
+    chosen: SpokenTurn | None
+    if_correct: SpokenTurn | None
+    if_not: SpokenTurn | None
+
+
+def _spoken_turn(resolution: BlockResolution, *, before_substep: str, before_topic: int) -> SpokenTurn:
+    state = resolution.next_block_state if isinstance(resolution.next_block_state, dict) else {}
+    substep = str(state.get("substep") or "")
+    topic = int(state.get("topic_index") or 0)
+    revealed = bool(state.get("revealed_substep") or state.get("recall_revealed"))
+    if resolution.hint_tier == "reveal":
+        revealed = True
+    if resolution.unit_complete or resolution.advance_block:
+        speech = "close"
+    elif substep != before_substep or topic != before_topic:
+        speech = "advance"
+    else:
+        speech = "stay"
+    return SpokenTurn(
+        speech=speech,
+        unit_complete=bool(resolution.unit_complete),
+        advance_block=bool(resolution.advance_block),
+        revealed=revealed,
+        next_substep=substep,
+        decision=str(resolution.decision or "stay"),
+    )
+
+
+def _same_speech(left: SpokenTurn, right: SpokenTurn) -> bool:
+    return (
+        left.speech == right.speech
+        and left.unit_complete == right.unit_complete
+        and left.advance_block == right.advance_block
+        and left.revealed == right.revealed
+        and left.next_substep == right.next_substep
+    )
+
+
+def forecast_this_turn(
+    *,
+    blocks: list[dict],
+    step: int,
+    active_block_state: dict,
+    block_results: list[dict],
+    answer: str,
+    cfg: dict,
+    goal: KcGoal | None,
+    stored_rubric: list[str],
+    move_attempts: int,
+    hint_tier: str,
+    reveals: int,
+    enrichment_turns: int,
+    fragment: bool = False,
+    prior_tutor: str = "",
+    opening: bool = False,
+) -> TurnForecast:
+    """Run the loop twice on copies. No model call.
+
+    One run assumes the model accepts the line. The other assumes it does not.
+    When both say the same thing, the turn is known. Otherwise the prompt
+    carries both, labeled if correct and if not.
+    """
+    empty = TurnForecast(False, False, None, None, None)
+    if opening or not str(answer or "").strip():
+        return empty
+    before = active_block_state if isinstance(active_block_state, dict) else {}
+    before_substep = str(before.get("substep") or "")
+    before_topic = int(before.get("topic_index") or 0)
+
+    def run(passed: bool) -> SpokenTurn:
+        resolution = resolve_block_turn(
+            decision="advance" if passed else "stay",
+            substep_passed=passed,
+            block_complete=False,
+            rubric_met=[],
+            stored_rubric=list(stored_rubric or []),
+            matched_wrong="",
+            blocks=copy.deepcopy(blocks),
+            step=step,
+            active_block_state=copy.deepcopy(before),
+            block_results=copy.deepcopy(block_results or []),
+            move_attempts=move_attempts,
+            hint_tier=hint_tier,
+            reveals=reveals,
+            enrichment_turns=enrichment_turns,
+            cfg=cfg,
+            goal=goal,
+            last_misconception="",
+            answer=answer,
+            fragment=fragment,
+            prior_tutor=prior_tutor,
+            learner_ready=False,
+        )
+        return _spoken_turn(resolution, before_substep=before_substep, before_topic=before_topic)
+
+    accepted = run(True)
+    missed = run(False)
+    if _same_speech(accepted, missed):
+        return TurnForecast(True, False, accepted, accepted, missed)
+    return TurnForecast(True, True, None, accepted, missed)
 
 
 @dataclass(frozen=True)
