@@ -267,9 +267,22 @@ export function pickMove(input: {
     return { intent: "boundary_probe", text, needsModel: false, inner };
   }
   if (input.actions.choices.length > 0) {
-    const chance = rightChance(traits, inner.hints);
     const correct = input.actions.choices.find((choice) => choice.correct) ?? input.actions.choices[0];
     const wrongs = input.actions.choices.filter((choice) => choice !== correct && !choice.correct);
+    if (plainStatements(input.description)) {
+      return { intent: "answer_right", text: correct.text, needsModel: false, inner };
+    }
+    if (heldBelief(input.description)) {
+      const pool = wrongs.length > 0 ? wrongs : [correct];
+      const picked = pool[Math.floor(random() * pool.length) % pool.length];
+      return {
+        intent: picked.correct ? "answer_right" : "wrong_choice",
+        text: picked.text,
+        needsModel: false,
+        inner,
+      };
+    }
+    const chance = rightChance(traits, inner.hints);
     const pool = wrongs.length > 0 ? wrongs : [correct];
     const picked = roll < chance ? correct : pool[Math.floor(random() * pool.length) % pool.length];
     return {
@@ -295,10 +308,13 @@ export function pickMove(input: {
   if (trait(traits, "compliance") <= 2 && trait(traits, "writing") <= 2 && roll < 0.35) {
     return { intent: "one_word", text: trait(traits, "maturity") <= 2 ? "k" : "ok", needsModel: false, inner };
   }
-  let intent = weightedIntent(traits, inner, random);
-  if (plainStatements(input.description) && !["answer_right", "answer_part", "move_on", "quit", "say_yes"].includes(intent)) {
-    intent = "answer_right";
+  if (plainStatements(input.description)) {
+    return { intent: "answer_right", text: "", needsModel: input.actions.canType, inner };
   }
+  if (heldBelief(input.description)) {
+    return { intent: "answer_wrong", text: "", needsModel: input.actions.canType, inner };
+  }
+  let intent = weightedIntent(traits, inner, random);
   if (intent === "idk") return { intent, text: "idk", needsModel: false, inner };
   if (intent === "say_yes") return { intent, text: "yes", needsModel: false, inner };
   if (intent === "one_word") return { intent, text: "ok", needsModel: false, inner };
@@ -382,14 +398,16 @@ export function childPrompt(input: {
     `Writing is ${trait(input.traits, "writing")} of 5. 1 is short and misspelled. 5 is a clear sentence.`,
   ];
   if (plainStatements(input.description)) {
-    lines.push("Answer in one plain statement. Do not ask a question.");
+    lines.push("Answer in one plain statement. Do not ask a question, stall, or play dumb.");
   }
   if (input.intent === "answer_right" && input.expected) lines.push(`The right idea is: ${input.expected}`);
   const belief = heldBelief(input.description);
   const wrongAnswer = input.intent === "answer_wrong" || input.intent === "careless_slip" || input.intent === "guess";
   if (wrongAnswer && belief) {
     lines.push("Answer the question the tutor just asked.");
+    lines.push("Give a real try at that question. Do not change the subject or send gibberish.");
     lines.push(`Hold this one wrong belief, and do not give it up: ${belief}`);
+    lines.push("If that belief bears on the question, the answer follows it. If it does not, still answer the question wrongly.");
   } else if ((input.intent === "answer_wrong" || input.intent === "careless_slip") && input.wrongMove) {
     lines.push("Answer the question the tutor just asked.");
     lines.push(`Use this wrong idea, and make it fit that question: ${input.wrongMove}`);

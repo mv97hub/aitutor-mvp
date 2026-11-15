@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-import { TRAIT_FIELDS, traitSentence } from "@/lib/harness";
+import { TRAIT_FIELDS, listedTestChildren, traitSentence } from "@/lib/harness";
 
 export type HarnessPersona = {
   id: string;
@@ -34,7 +34,7 @@ function profileLine(profile: HarnessPersona["child_profile"]): string {
 }
 
 export function ProfilesView({ personas, heading = "Profiles" }: { personas: HarnessPersona[]; heading?: string }) {
-  const rows = personas.filter((persona) => !persona.archived);
+  const rows = listedTestChildren(personas);
   return (
     <section className="harness-panel" aria-label={heading}>
       <header className="harness-panel-head">

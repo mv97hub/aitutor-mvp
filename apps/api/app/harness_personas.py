@@ -220,7 +220,7 @@ def starter_children() -> list[dict]:
         {
             "number": 13,
             "name": "AI_Child13",
-            "description": "Quiet, capable 11-year-old who answers in plain statements and does not ask questions.",
+            "description": "Quiet, capable 11-year-old who answers in plain statements and does not ask questions, stall, or play dumb.",
             "age": 11,
             "child_profile": _profile(
                 grade_band="middle_school",
@@ -235,7 +235,6 @@ def starter_children() -> list[dict]:
                 prior_knowledge=5,
                 curiosity=1,
                 tangent=1,
-                when_unsure=1,
                 echoing=1,
                 boundary=1,
                 compliance=5,
@@ -243,12 +242,12 @@ def starter_children() -> list[dict]:
                 buttons=1,
                 boredom=1,
                 attention=5,
-                learning_rate=4,
+                learning_rate=5,
                 reading=5,
                 maturity=4,
-                frustration=1,
-                quit=1,
-                wrong_pattern=1,
+                frustration=5,
+                quit=5,
+                wrong_pattern=5,
             ),
         },
         {
@@ -256,7 +255,7 @@ def starter_children() -> list[dict]:
             "name": "AI_Child14",
             "description": (
                 "Age 12. Holds one wrong belief: a price rise means everyone has more money. "
-                "Wrong answers fit the question and keep that belief."
+                "Wrong answers are a real attempt at the question, not gibberish or a topic change."
             ),
             "age": 12,
             "child_profile": _profile(
@@ -269,10 +268,10 @@ def starter_children() -> list[dict]:
             ),
             "traits": blank_traits(
                 prior_knowledge=1,
-                wrong_pattern=5,
-                curiosity=2,
+                wrong_pattern=1,
+                curiosity=1,
                 compliance=4,
-                when_unsure=2,
+                when_unsure=1,
                 writing=4,
                 echoing=1,
                 boundary=1,

@@ -86,7 +86,7 @@ test("wrong multiple-choice picks are not always the first wrong option", () => 
 });
 
 test("a quiet child answers in a plain statement", () => {
-  const description = "Quiet, capable 11-year-old who answers in plain statements and does not ask questions.";
+  const description = "Quiet, capable 11-year-old who answers in plain statements and does not ask questions, stall, or play dumb.";
   const prompt = childPrompt({
     description,
     traits: middle,
@@ -96,29 +96,52 @@ test("a quiet child answers in a plain statement", () => {
   });
   assert.match(prompt, /plain statement/i);
   assert.match(prompt, /Do not ask a question/);
+  assert.match(prompt, /stall, or play dumb/);
   const intents = new Set<string>();
   for (let seed = 0; seed < 20; seed += 1) {
-    intents.add(
-      pickMove({
-        traits: middle,
-        inner: EMPTY_INNER,
-        seed,
-        turn: seed % 5,
-        actions: { canType: true, buttons: [], choices: [] },
-        mode: "rule",
-        description,
-        answerKey: { expected: "The river is blue." },
-        lastTutor: "What color is the river?",
-      }).intent,
-    );
+    const move = pickMove({
+      traits: middle,
+      inner: EMPTY_INNER,
+      seed,
+      turn: seed % 5,
+      actions: { canType: true, buttons: [], choices: [] },
+      mode: "rule",
+      description,
+      answerKey: { expected: "The river is blue." },
+      lastTutor: "What color is the river?",
+    });
+    intents.add(move.intent);
+    assert.equal(move.intent, "answer_right");
+    assert.equal(move.needsModel, true);
   }
   assert.equal(intents.has("on_topic_question"), false);
   assert.equal(intents.has("idk"), false);
-  assert.ok(intents.has("answer_right"));
+  assert.equal(intents.has("say_yes"), false);
+  assert.equal(intents.has("answer_part"), false);
+  const choice = pickMove({
+    traits: { ...middle, prior_knowledge: 1 },
+    inner: EMPTY_INNER,
+    seed: 3,
+    turn: 0,
+    actions: {
+      canType: false,
+      buttons: [],
+      choices: [
+        { id: "a", text: "Up", correct: true },
+        { id: "b", text: "Down", correct: false },
+      ],
+    },
+    mode: "rule",
+    description,
+  });
+  assert.equal(choice.intent, "answer_right");
+  assert.equal(choice.text, "Up");
+  assert.equal(choice.needsModel, false);
 });
 
 test("one wrong belief has to fit the question", () => {
-  const description = "Holds one wrong belief: a price rise means everyone has more money. Wrong answers fit the question.";
+  const description =
+    "Age 12. Holds one wrong belief: a price rise means everyone has more money. Wrong answers are a real attempt at the question, not gibberish or a topic change.";
   assert.equal(heldBelief(description), "a price rise means everyone has more money");
   const prompt = childPrompt({
     description,
@@ -128,8 +151,48 @@ test("one wrong belief has to fit the question", () => {
     lastTutor: "Why did the price of bread go up?",
   });
   assert.match(prompt, /Answer the question the tutor just asked/);
+  assert.match(prompt, /real try at that question/);
+  assert.match(prompt, /Do not change the subject or send gibberish/);
   assert.match(prompt, /price rise means everyone has more money/);
   assert.doesNotMatch(prompt, /stored misconception/);
+  const texts = new Set<string>();
+  for (let seed = 0; seed < 20; seed += 1) {
+    const typed = pickMove({
+      traits: { ...middle, prior_knowledge: 5, curiosity: 5, tangent: 5 },
+      inner: EMPTY_INNER,
+      seed,
+      turn: seed % 5,
+      actions: { canType: true, buttons: [], choices: [] },
+      mode: "rule",
+      description,
+      lastTutor: "Why did the price of bread go up?",
+    });
+    assert.equal(typed.intent, "answer_wrong");
+    assert.equal(typed.needsModel, true);
+    const choice = pickMove({
+      traits: { ...middle, prior_knowledge: 5 },
+      inner: EMPTY_INNER,
+      seed,
+      turn: 0,
+      actions: {
+        canType: false,
+        buttons: [],
+        choices: [
+          { id: "a", text: "Right", correct: true },
+          { id: "b", text: "First wrong", correct: false },
+          { id: "c", text: "Second wrong", correct: false },
+        ],
+      },
+      mode: "rule",
+      description,
+    });
+    assert.equal(choice.intent, "wrong_choice");
+    assert.equal(choice.needsModel, false);
+    texts.add(choice.text);
+  }
+  assert.ok(texts.has("First wrong"));
+  assert.ok(texts.has("Second wrong"));
+  assert.equal(texts.has("Right"), false);
 });
 
 test("a scripted line needs no model, and a bored child can quit", () => {

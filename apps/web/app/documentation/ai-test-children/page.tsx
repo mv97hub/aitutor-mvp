@@ -73,8 +73,8 @@ export default function AiTestChildrenDocsPage() {
           <li>AI_Child10, struggling reader who was told &quot;on grade&quot;.</li>
           <li>AI_Child11, agreeable echo. Yes, and the tutor&apos;s words back.</li>
           <li>AI_Child12, boundary tester. Mild scripted probes only.</li>
-          <li>AI_Child13, quiet and capable. Answers in plain statements and does not ask questions.</li>
-          <li>AI_Child14, holds one wrong belief. Wrong answers fit the question and stay on that belief.</li>
+          <li>AI_Child13, quiet and capable. Answers in plain statements and does not ask questions, stall, or play dumb.</li>
+          <li>AI_Child14, holds one wrong belief. Wrong answers are a real attempt at the question, not a topic change.</li>
         </ul>
         <p>Names are AI_Child plus the next number. Numbers are never reused. Use Add the starter set on the Children tab.</p>
 
