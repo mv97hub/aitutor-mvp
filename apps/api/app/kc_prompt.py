@@ -3388,6 +3388,15 @@ def _proceed_text_is_yes(answer: str) -> bool:
     return _proceed_text(answer) == "yes"
 
 
+def current_child_line(last_answer: str) -> str:
+    """The child line just sent.
+
+    Checks grade this string, and the recent transcript ends on it.
+    An empty answer stays empty: the summary and the opening have no new line.
+    """
+    return (last_answer or "").strip()
+
+
 def _recent_without_last_answer(last_messages: str, last_answer: str) -> str:
     """Drop the newest user line when The last answer already states it."""
     text = (last_messages or "").strip()
@@ -3397,6 +3406,17 @@ def _recent_without_last_answer(last_messages: str, last_answer: str) -> str:
     parts = [part.strip() for part in text.split("|") if part.strip()]
     if answer and parts and parts[-1] == f"user: {answer}":
         parts = parts[:-1]
+    return " | ".join(parts)
+
+
+def _recent_ending_on_child(last_messages: str, last_answer: str) -> str:
+    """Recent transcript whose last user message is the child line just sent."""
+    answer = (last_answer or "").strip()
+    parts = [part.strip() for part in (last_messages or "").split("|") if part.strip()]
+    if answer:
+        tail = f"user: {answer}"
+        if not parts or parts[-1] != tail:
+            parts.append(tail)
     return " | ".join(parts)
 
 
@@ -3434,7 +3454,8 @@ def _what_happened(
         lines.append(
             f"Elaboration turns on this topic: {int(active_block_state.get('elaboration_turns') or 0)}."
         )
-    lines.append(f"The last answer was: {last_answer or 'none yet'}.")
+    child = current_child_line(last_answer)
+    lines.append(f"The last answer was: {child or 'none yet'}.")
     tier = (hint_tier or "").strip()
     if tier and tier != "none":
         lines.append(f"The hint tier already given is: {tier}.")
@@ -3444,7 +3465,7 @@ def _what_happened(
         lines.append(f"The child seems {affect}.")
     lines.append("The child has asked for help." if help_requested else "The child has not asked for help.")
     lines.append(f"Off-course turns so far: {off_course_count}.")
-    recent = _recent_without_last_answer(last_messages, last_answer)
+    recent = _recent_ending_on_child(last_messages, child)
     lines.append(f"Recent messages: {recent or 'none yet'}.")
     lines.append(
         f"The last matched wrong move was: {last_misconception}."
@@ -3768,6 +3789,8 @@ def build_kc_prompt(
     del stability
     del moves
     del course_position
+    # Every check below, and the last user message, use the child line just sent.
+    last_answer = current_child_line(last_answer)
     from app.ai_safety import normalize_ai_safety, safety_lines
 
     safety_cfg = normalize_ai_safety(safety, strict=False)
@@ -4088,6 +4111,7 @@ def build_kc_prompt(
             ready_check=ready_check,
         ),
         "temperature": TEMPERATURE,
+        "user_message": last_answer,
     }
 
 

@@ -228,6 +228,64 @@ test("a refresh resumes the remaining nudge instead of repeating the first", asy
   assert.deepEqual(childLines, ["What should we do next?"]);
 });
 
+test("an empty tutor reply is not stored as the previous reply", async () => {
+  const prior = "What color is the river?";
+  const recorded: { tutor_reply?: string; error?: string; child_text?: string }[] = [];
+  const transport: HarnessTransport = {
+    runStatus: async () => ({ status: "running" }),
+    session: async () => session({ messages: [{ role: "assistant", content: prior }] }),
+    speak: async () => session(),
+    answer: async () => session({ messages: [{ role: "assistant", content: prior }] }),
+    answerKey: async () => ({ expected: "blue", block_id: "blk" }),
+    childText: async () => {
+      throw new Error("script mode should not call the child model");
+    },
+    recordTurn: async (_id, body) => {
+      const after = body.session_after as { tutor_reply?: string; error?: string };
+      recorded.push({
+        child_text: String(body.child_text || ""),
+        tutor_reply: after.tutor_reply,
+        error: String(after.error || ""),
+      });
+      return { stop: "completed", cost_usd: "0", luna_tokens: 0 };
+    },
+    finish: async () => undefined,
+  };
+  await playChat(chat(), transport);
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]?.child_text, "the river is blue");
+  assert.equal(recorded[0]?.tutor_reply, "");
+  assert.notEqual(recorded[0]?.tutor_reply, prior);
+  assert.match(recorded[0]?.error || "", /new reply/);
+});
+
+test("a thrown tutor call does not copy the previous reply forward", async () => {
+  const prior = "What color is the river?";
+  const recorded: { tutor_reply?: string; error?: string }[] = [];
+  const transport: HarnessTransport = {
+    runStatus: async () => ({ status: "running" }),
+    session: async () => session({ messages: [{ role: "assistant", content: prior }] }),
+    speak: async () => session(),
+    answer: async () => {
+      throw new Error("The tutor did not write a reply.");
+    },
+    answerKey: async () => ({}),
+    childText: async () => {
+      throw new Error("script mode should not call the child model");
+    },
+    recordTurn: async (_id, body) => {
+      const after = body.session_after as { tutor_reply?: string; error?: string };
+      recorded.push({ tutor_reply: after.tutor_reply, error: String(after.error || "") });
+      return { stop: "completed", cost_usd: "0", luna_tokens: 0 };
+    },
+    finish: async () => undefined,
+  };
+  await playChat(chat(), transport);
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]?.tutor_reply, "");
+  assert.match(recorded[0]?.error || "", /did not write a reply/);
+});
+
 test("a Cuba recall and a next-move explanation are answered before either nudge", async () => {
   const cuba = "What do you remember about why Cuba ended up in the middle?";
   const origins = "The next move is your own short explanation of the origins.";

@@ -263,6 +263,36 @@ def learner_ready_to_proceed(answer: str, flagged: bool) -> bool:
     return False
 
 
+_QUESTION_STARTS = {"what", "why", "how", "who", "can", "could", "would", "explain", "tell"}
+_CLAUSE_STARTS = {"when", "where"}
+_QUESTION_AUXILIARIES = {
+    "did",
+    "does",
+    "do",
+    "is",
+    "are",
+    "was",
+    "were",
+    "can",
+    "could",
+    "would",
+    "should",
+    "will",
+    "has",
+    "have",
+    "had",
+}
+
+
+def _opens_as_question(words: list[str]) -> bool:
+    """A question word. 'When the government borrows' is a clause, not a question."""
+    if not words:
+        return False
+    if words[0] in _QUESTION_STARTS:
+        return True
+    return words[0] in _CLAUSE_STARTS and len(words) > 1 and words[1] in _QUESTION_AUXILIARIES
+
+
 def learner_asks_question_or_background(answer: str) -> bool:
     """A question or a request for background, not an attempt at the goal."""
     raw = answer or ""
@@ -275,7 +305,7 @@ def learner_asks_question_or_background(answer: str) -> bool:
     if not text:
         return False
     words = text.split()
-    if words[0] in {"what", "why", "how", "when", "where", "who", "can", "could", "would", "explain", "tell"}:
+    if _opens_as_question(words):
         return True
     return "background" in text or "more context" in text or "some context" in text
 
@@ -1287,6 +1317,9 @@ def _resolve_explanation_turn(
         ready = True
     elif on_last:
         ready = False
+    elif explanation_side_remark(block, answer, state, cfg):
+        # This line is a side remark. A pass flag about the previous line does not score it.
+        ready = False
     else:
         flagged = bool(substep_passed) or bool(block_complete) or bool(learner_ready)
         # A reply that already restates this topic moves on. The model does not
@@ -1844,8 +1877,17 @@ def resolve_block_turn(
             note_try()
             return stay(move_attempts, "nudge")
 
-    # The model pass is enough. Literal overlap still needs the model flag.
-    satisfied = model_pass or (literal and bool(substep_passed))
+    # The model pass is enough. Literal overlap still needs the model flag,
+    # except a topic_goal reply that already states the chain: that finishes main.
+    # An unfinished summary is not this step, so a late correct answer can still clear a miss.
+    # "What's next?" is not a real attempt, so it does not pass an open goal.
+    chain_on_main = (
+        btype == "topic_goal"
+        and substep == "main"
+        and literal
+        and learner_gave_real_attempt(block, substep, answer, cfg)
+    )
+    satisfied = model_pass or (literal and bool(substep_passed)) or chain_on_main
     if on_last_task and satisfied:
         note_try()
         # The step divider opens the next block. Do not stop for a summary question.
