@@ -490,6 +490,49 @@ def learner_may_complete_explanation_summary(answer: str) -> bool:
     return learner_ready_to_proceed(answer, False)
 
 
+def explanation_on_last_topic(block: dict, state: dict | None) -> bool:
+    """True on the last explain_topic of an explanatory walkthrough."""
+    if str(block.get("type") or "") != "explanation":
+        return False
+    stored = state if isinstance(state, dict) else {}
+    if str(stored.get("substep") or "explain_topic") != "explain_topic":
+        return False
+    topics = explanation_topics(block)
+    if not topics:
+        return False
+    return explanation_topic_index(block, stored) >= len(topics) - 1
+
+
+def last_topic_question_close(block: dict, state: dict | None, answer: str) -> bool:
+    """A question on the last topic is answered, then the block closes.
+
+    Local check on the child's text, the same one a passed summary uses.
+    Elaborate and tell me more stay on this topic. No extra model call.
+    """
+    if not explanation_on_last_topic(block, state):
+        return False
+    raw = answer or ""
+    if not raw.strip() or learner_wants_recap_elaboration(raw):
+        return False
+    return summary_content_question(raw)
+
+
+def last_topic_closes_block(block: dict, state: dict | None, answer: str) -> bool:
+    """The last explanatory topic ends on this reply.
+
+    A non-question closes, the same rule as a passed summary. A question is
+    answered and then the block closes. The two-extra-turn cap closes too.
+    Elaborate and tell me more stay until one of those is true.
+    """
+    if not explanation_on_last_topic(block, state):
+        return False
+    if explanation_topic_capped("explain_topic", state):
+        return True
+    if summary_ready_signal(answer):
+        return True
+    return last_topic_question_close(block, state, answer)
+
+
 def answer_addresses_substep(
     block: dict,
     substep: str,
@@ -1233,10 +1276,17 @@ def _resolve_explanation_turn(
         substep = "explain_topic"
     state["substep"] = substep
     state["topic_index"] = topic_index
+    on_last = substep == "explain_topic" and bool(topics) and topic_index >= len(topics) - 1
     if substep == "summary_check":
         # The model cannot close this check by setting the flags. A further
         # question stays. A reply that is not a question completes the block.
         ready = learner_may_complete_explanation_summary(answer)
+    elif on_last and last_topic_closes_block(block, state, answer):
+        # One agreement on the last topic is enough. Do not open a summary
+        # that teaches the block again and asks whether to move on.
+        ready = True
+    elif on_last:
+        ready = False
     else:
         flagged = bool(substep_passed) or bool(block_complete) or bool(learner_ready)
         # A reply that already restates this topic moves on. The model does not
@@ -1264,18 +1314,6 @@ def _resolve_explanation_turn(
     if substep == "explain_topic" and topics and topic_index < len(topics) - 1:
         state["topic_index"] = topic_index + 1
         state["substep"] = "explain_topic"
-        return _explanation_stay(
-            state=state,
-            index=index,
-            bid=bid,
-            results=results,
-            met=met,
-            reveals=reveals,
-            move_attempts=0,
-            enrichment_turns=enrichment_turns,
-        )
-    if substep == "explain_topic":
-        state["substep"] = "summary_check"
         return _explanation_stay(
             state=state,
             index=index,

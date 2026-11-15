@@ -177,7 +177,7 @@ def test_got_it_wrong_does_not_advance() -> None:
     assert result.next_block_state["elaboration_turns"] == 1
 
 
-def test_ready_moves_to_the_next_topic_then_the_summary() -> None:
+def test_ready_moves_to_the_next_topic_then_closes() -> None:
     first = _turn("got it", {"substep": "explain_topic", "topic_index": 0, "dialogue_turns": 1, "elaboration_turns": 2})
     assert first.decision == "stay"
     assert first.unit_complete is False
@@ -185,15 +185,13 @@ def test_ready_moves_to_the_next_topic_then_the_summary() -> None:
     assert first.next_block_state["substep"] == "explain_topic"
     assert first.next_block_state["elaboration_turns"] == 0
     second = _turn("Got it — ready for the next topic!", first.next_block_state)
-    assert second.next_block_state["substep"] == "summary_check"
-    assert second.unit_complete is False
-    done = _turn("No final questions — let's continue!", second.next_block_state)
-    assert done.decision == "complete"
-    assert done.unit_complete is True
-    assert done.mark_fragile is False
-    assert done.mark_known is True
-    assert done.block_results[-1]["outcome"] == "engaged"
-    assert done.reveals == 0
+    assert second.decision == "complete"
+    assert second.unit_complete is True
+    assert second.next_block_state.get("substep") != "summary_check"
+    assert second.mark_fragile is False
+    assert second.mark_known is True
+    assert second.block_results[-1]["outcome"] == "engaged"
+    assert second.reveals == 0
 
 
 CYCLE = {
@@ -330,3 +328,168 @@ def test_an_explanatory_restatement_moves_to_the_next_topic() -> None:
     assert "Causes" in teaching
     held = _cycle_turn("Why are there four phases?")
     assert held.next_block_state["topic_index"] == 0
+
+
+LAGS = {
+    "id": "blk_lags",
+    "type": "explanation",
+    "data": {
+        "block_title": "Fiscal policy lags",
+        "topics": [
+            {
+                "id": "top_recognition",
+                "title": "Recognition lag",
+                "explanation": "A recognition lag is the time before anyone sees the economy has turned.",
+                "key_points": "Seeing the turn.",
+                "examples_or_analogies": "",
+            },
+            {
+                "id": "top_decision",
+                "title": "Decision lag",
+                "explanation": "A decision lag is the time lawmakers spend choosing a policy.",
+                "key_points": "Choosing the policy.",
+                "examples_or_analogies": "",
+            },
+            {
+                "id": "top_implementation",
+                "title": "Implementation lag",
+                "explanation": "An implementation lag is the time to put that policy into action.",
+                "key_points": "Putting it into action.",
+                "examples_or_analogies": "",
+            },
+            {
+                "id": "top_impact",
+                "title": "Impact lag",
+                "explanation": "An impact lag is the time before the policy changes spending.",
+                "key_points": "Spending changes later.",
+                "examples_or_analogies": "",
+            },
+        ],
+        "summary_takeaway": "Fiscal policy takes time to recognize, decide, implement, and change spending.",
+    },
+}
+
+WORKED = {
+    "id": "blk_worked",
+    "type": "worked_example",
+    "data": {"problem_statement": "A government cuts taxes during a recession."},
+}
+
+_LAG_STATE = {"substep": "explain_topic", "topic_index": 3, "dialogue_turns": 4, "elaboration_turns": 0}
+
+_OTHER_LAGS = (
+    "A recognition lag is the time before anyone sees the economy has turned.",
+    "A decision lag is the time lawmakers spend choosing a policy.",
+    "An implementation lag is the time to put that policy into action.",
+)
+
+
+def _lags_prompt(answer: str) -> str:
+    student = _student(
+        child_profile={
+            "response_length": "bite_sized",
+            "reading_level": "on_grade",
+            "explanation_style": "concrete_examples",
+        }
+    )
+    return build_kc_prompt(
+        student=student,
+        profile=_profile_for(4),
+        node=_node(blocks=[deepcopy(LAGS), deepcopy(WORKED)]),
+        goal=_goal(),
+        step=0,
+        opening=False,
+        choice_on_screen=False,
+        prerequisite_status="",
+        support_band="ready",
+        course_position="1 of 2",
+        unit_complete=False,
+        course_complete=False,
+        attempts=0,
+        hint_tier="nudge",
+        reveals=0,
+        off_course_count=0,
+        affect="",
+        enrichment_turns=0,
+        help_requested=False,
+        minutes_used=0,
+        component_status="unknown",
+        stability="0",
+        last_answer=answer,
+        last_misconception="",
+        last_messages="",
+        rubric_met=[],
+        redirect_pending=False,
+        fragment=False,
+        others_known=False,
+        active_block_state=dict(_LAG_STATE),
+    )["system_prompt"]
+
+
+def _lags_turn(answer: str, *, substep_passed: bool = False, block_complete: bool = False):
+    return resolve_block_turn(
+        decision="stay",
+        substep_passed=substep_passed,
+        block_complete=block_complete,
+        rubric_met=[],
+        stored_rubric=[],
+        matched_wrong="",
+        blocks=[deepcopy(LAGS), deepcopy(WORKED)],
+        step=0,
+        active_block_state=dict(_LAG_STATE),
+        block_results=[],
+        move_attempts=0,
+        hint_tier="nudge",
+        reveals=0,
+        enrichment_turns=0,
+        cfg=_cfg(),
+        goal=None,
+        last_misconception="",
+        answer=answer,
+    )
+
+
+def test_got_it_move_on_on_the_last_topic_opens_the_next_block() -> None:
+    """The transcript: Got it - move on closes the walkthrough in this same turn."""
+    closed = _lags_turn("Got it - move on", substep_passed=True, block_complete=True)
+    assert closed.advance_block is True
+    assert closed.next_step == 1
+    assert closed.next_block_id == "blk_worked"
+    assert closed.next_block_state["substep"] == "faded_step"
+    assert closed.next_block_state.get("substep") != "summary_check"
+    assert closed.block_results[-1]["block_type"] == "explanation"
+    text = _lags_prompt("Got it - move on")
+    assert "The close is one or two sentences: what the block was, and that they are done." in text
+    assert "Do not restate each topic." in text
+    assert "Do not ask whether to move on." in text
+    assert "Begin the next block in this same reply." in text
+    assert "First line: the worked problem: A government cuts taxes during a recession." in text
+    lowered = text.lower()
+    assert "summarize every topic" not in lowered
+    assert "topics to include in that summary" not in lowered
+    assert "ask one question only: move on, or ask one more question" not in lowered
+    for explanation in _OTHER_LAGS:
+        assert explanation not in text
+    assert "An impact lag is the time before the policy changes spending." not in text
+
+
+def test_a_question_on_the_last_topic_is_answered_then_the_block_closes() -> None:
+    question = "Why does the impact lag take time?"
+    closed = _lags_turn(question, substep_passed=True, block_complete=True)
+    assert closed.advance_block is True
+    assert closed.next_step == 1
+    assert closed.next_block_id == "blk_worked"
+    assert closed.next_block_state["substep"] == "faded_step"
+    text = _lags_prompt(question)
+    assert "Answer the question in one or two sentences, then close the block." in text
+    assert "The close is one or two sentences: what the block was, and that they are done." in text
+    assert "Do not restate each topic." in text
+    assert "Do not ask whether to move on." in text
+    assert "Topic point, for the one-or-two-sentence answer only:" in text
+    assert "An impact lag is the time before the policy changes spending." in text
+    lowered = text.lower()
+    assert "summarize every topic" not in lowered
+    assert "topics to include in that summary" not in lowered
+    assert "ask one question only: move on, or ask one more question" not in lowered
+    for explanation in _OTHER_LAGS:
+        assert explanation not in text
