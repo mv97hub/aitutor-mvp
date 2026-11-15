@@ -20,6 +20,14 @@ export type SessionSnap = {
   safety_flag?: string;
   passed?: boolean;
   loop_decision?: string;
+  loop_result?: {
+    stayed?: boolean;
+    advanced?: boolean;
+    closed?: string;
+    ended_unit?: boolean;
+    attempt_counted?: boolean;
+  } | null;
+  topic_index?: number | null;
 };
 
 export type ClaimedChat = {
@@ -58,6 +66,7 @@ export type HarnessTransport = {
     block_type?: string;
     block_title?: string;
     move_attempts?: number;
+    topic_index?: number | null;
   }>;
   childText: (input: {
     model: string;
@@ -91,11 +100,28 @@ function newTutorReply(before: SessionSnap, after: SessionSnap): string | null {
   return latest;
 }
 
+export function placeKey(blockId: unknown, substep: unknown, topic: unknown): string {
+  const base = `${blockId ?? ""}:${substep ?? ""}`;
+  if (topic === undefined || topic === null || topic === "") return base;
+  return `${base}:${topic}`;
+}
+
+function topicOf(
+  session: SessionSnap,
+  key?: { topic_index?: number | null },
+): number | null | undefined {
+  if (key && "topic_index" in key) return key.topic_index;
+  return session.topic_index;
+}
+
 function placeOf(
   session: SessionSnap,
-  key?: { block_id?: string; block_type?: string; block_title?: string; move_attempts?: number },
+  key?: { block_id?: string; block_type?: string; block_title?: string; move_attempts?: number; topic_index?: number | null },
 ): Record<string, unknown> {
-  return {
+  const topic = topicOf(session, key);
+  const loop = session.loop_result;
+  const accepted = Boolean(loop && loop.closed !== "revealed" && (loop.closed === "passed" || loop.advanced));
+  const row: Record<string, unknown> = {
     status: session.status,
     block_id: key?.block_id || session.block_id || String(session.active_block_index ?? ""),
     block_type: key?.block_type || session.active_block_type || "",
@@ -105,9 +131,12 @@ function placeOf(
     tutor_reply: lastTutor(session),
     prompt: session.prompt || "",
     safety_flag: session.safety_flag || "none",
-    passed: Boolean(session.passed) || session.status === "completed",
+    passed: accepted,
     loop_decision: session.loop_decision || "",
+    loop_result: loop ?? null,
   };
+  if (topic !== undefined) row.topic_index = topic;
+  return row;
 }
 
 export type LiveLine = { chatId: string; role: "tutor" | "child"; text: string };
@@ -189,6 +218,7 @@ export async function playChat(
           answerKey: key,
           lastTutor: tutor,
           interests: chat.child.child_profile?.interests,
+          description: chat.child.description,
         });
     let text = move.text;
     let intent = move.intent;
@@ -226,6 +256,7 @@ export async function playChat(
       onLive({ chatId: chat.id, role: "child", text });
     }
     const before = placeOf(session, { ...key, block_type: answerKey.block_type || session.active_block_type });
+    before.expected = key.expected || "";
     let afterSession = session;
     let error = "";
     let freshReply: string | null = null;
@@ -253,7 +284,7 @@ export async function playChat(
       after.tutor_reply = "";
       after.error = error || "The tutor did not write a new reply.";
     }
-    const place = `${after.block_id}:${after.substep}`;
+    const place = placeKey(after.block_id, after.substep, after.topic_index);
     inner = updateInner(move.inner, {
       traits,
       tutorMessage: tutor,

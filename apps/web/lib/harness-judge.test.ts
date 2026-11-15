@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { acceptJudgeOutput, agreementLabel, judgePrompt, RUBRIC_VERSION } from "./harness-judge.ts";
+import { acceptJudgeOutput, agreementLabel, evaluationFromJudge, judgePrompt, judgedAlready, RUBRIC_VERSION } from "./harness-judge.ts";
 
 const turns = [
   {
@@ -74,6 +74,22 @@ test("an answered side question is not ignored_question", () => {
   );
   assert.equal(kept.tags.length, 1);
   assert.equal(kept.child_realism, null);
+});
+
+test("a failed judge call is stored as not judged", () => {
+  const failed = evaluationFromJudge({ ok: false, error: "The judge failed." });
+  assert.equal(failed.error, "The judge failed.");
+  assert.deepEqual(failed.scores, []);
+  assert.equal(failed.child_realism, null);
+  assert.equal(judgedAlready([{ kind: "judged", error: failed.error, scores: [], child_realism: null }]), false);
+  const scored = evaluationFromJudge({
+    ok: true,
+    scores: [{ dimension: "teaching_quality", score: 4, quote: "Govern means to rule.", turn: 1 }],
+    child_realism: 4,
+    judge_model: "gpt-6.1-sol",
+  });
+  assert.equal(scored.error, "");
+  assert.equal(judgedAlready([{ kind: "judged", ...scored }]), true);
 });
 
 test("agreement is empty until a hand score exists, then names the gap", () => {

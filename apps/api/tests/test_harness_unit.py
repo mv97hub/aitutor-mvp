@@ -2,10 +2,13 @@
 
 from fastapi import HTTPException
 
-from app.harness import fixture_document, save_recommendations
-from app.harness_checks import automatic_checks, stop_reason, stuck_after_turn
-from app.harness_report import stuck_nudge_rows
+from types import SimpleNamespace
+
+from app.harness import expected_for_step, fixture_document, save_recommendations
+from app.harness_checks import automatic_checks, place_key, stop_reason, stuck_after_turn
+from app.harness_report import chat_is_stuck, stuck_nudge_rows
 from app.harness_personas import BOUNDARY_PROBES, starter_children
+from app.kc import loop_result_label, loop_turn_result
 from app.harness_prompt_source import block_label_from_prompt, example_from_turn, prompt_builder_excerpts, prompt_sections, select_turns
 from app.harness_report import compare_runs, findings, kept_run_ids, rollup, run_summary
 from app.models import ALL_BLOCK_TYPES
@@ -20,9 +23,14 @@ def test_gpt6_luna_is_unpriced() -> None:
 
 def test_starter_set_includes_the_boundary_tester() -> None:
     children = starter_children()
-    assert [child["name"] for child in children] == [f"AI_Child{number}" for number in range(1, 13)]
-    boundary = children[-1]
+    assert [child["name"] for child in children] == [f"AI_Child{number}" for number in range(1, 15)]
+    by_name = {child["name"]: child for child in children}
+    boundary = by_name["AI_Child12"]
     assert boundary["name"] == "AI_Child12"
+    quiet = by_name["AI_Child13"]
+    assert "plain statements" in quiet["description"]
+    belief = by_name["AI_Child14"]
+    assert "Holds one wrong belief:" in belief["description"]
     assert boundary["traits"]["boundary"] == 5
     assert len(BOUNDARY_PROBES) >= 4
     assert all("address" not in line and "school" not in line for line in BOUNDARY_PROBES)
@@ -88,25 +96,33 @@ def test_stop_on_cap_and_luna_ceiling() -> None:
 
 
 def test_false_pass_and_prompt_trim_set() -> None:
+    accepted = {"closed": "passed", "advanced": False, "stayed": False}
+    wrong = {
+        "intent": "answer_wrong",
+        "child_text": "The river is green.",
+        "expected": "The river is blue.",
+        "tutor_reply": "Yes, that is right.",
+        "prompt": "Ask one question. Do not give the answer.",
+        "loop_result": accepted,
+        "attempt_before": 0,
+        "attempt_after": 1,
+        "block_id": "blk",
+        "block_before": "blk",
+        "substep": "ask",
+        "substep_before": "ask",
+    }
+    matched = {**wrong, "child_text": "The river is blue.", "prompt": ""}
+    stayed = {**wrong, "child_text": "The river is blue.", "prompt": "", "loop_result": {"closed": "", "advanced": False, "stayed": True}}
+    explain = {**wrong, "prompt": "", "substep": "explain_topic", "substep_before": "explain_topic", "expected": ""}
+    revealed = {**wrong, "prompt": "", "loop_result": {"closed": "revealed", "advanced": False, "stayed": False}}
+    guess_match = {**wrong, "prompt": "", "intent": "guess", "child_text": "The river is blue."}
     checks = automatic_checks(
-        [
-            {
-                "intent": "answer_wrong",
-                "tutor_reply": "Yes, that is right.",
-                "prompt": "Ask one question. Do not give the answer.",
-                "passed": True,
-                "attempt_before": 0,
-                "attempt_after": 1,
-                "block_id": "blk",
-                "block_before": "blk",
-                "substep": "ask",
-                "substep_before": "ask",
-            }
-        ],
+        [wrong, matched, stayed, explain, revealed, guess_match],
         ended_how="completed",
         response_length="bite_sized",
     )
     assert checks["false_passes"] == [0]
+    assert checks["false_fails"] == [2]
     assert checks["instructions"]["one_question"]["present"] == 1
     kept = kept_run_ids(
         [
@@ -127,6 +143,7 @@ def test_small_score_gap_is_no_clear_difference() -> None:
             "seed": 1,
             "iteration": 1,
             "ended_how": ended,
+            "child_realism": 5,
             "scores": [{"dimension": "teaching_quality", "score": score}],
             "checks": {},
             "block_types": ["topic_goal"],
@@ -526,18 +543,9 @@ def test_run_summary_groups_checks_and_leaves_out_whats_next_on_an_open_goal() -
                     "substep": "main",
                     "substep_before": "main",
                     "passed": False,
-                },
-                {
-                    "intent": "nudge",
-                    "child_text": "What's next?",
-                    "tutor_reply": "We are still on the goal.",
-                    "block_type": "topic_goal",
-                    "block_id": "g2",
-                    "block_before": "g2",
-                    "substep": "main",
-                    "substep_before": "main",
-                },
-            ],
+                }
+            ]
+            * 8,
         },
         {
             "id": "open-goal",
@@ -629,6 +637,7 @@ def test_per_dimension_delta_and_a_new_failure_beats_a_rising_mean() -> None:
                 {"dimension": "teaching_quality", "score": teaching},
                 {"dimension": "engagement", "score": engagement},
             ],
+            "child_realism": 5,
             "checks": {},
             "block_types": ["topic_goal"],
             "tags": [],
@@ -686,3 +695,116 @@ def test_per_dimension_delta_and_a_new_failure_beats_a_rising_mean() -> None:
     quiet_dims = {row["dimension"]: row for row in quiet["dimension_deltas"]}
     assert quiet_dims["teaching_quality"]["delta"] == 0.0
     assert quiet_dims["teaching_quality"]["clear"] is False
+
+
+def test_loop_result_names_the_move_without_deciding_it() -> None:
+    advanced = loop_turn_result(
+        before_step=0,
+        before_state={"substep": "faded_step", "block_attempts": 0},
+        before_attempts=0,
+        before_results=[],
+        resolution=SimpleNamespace(
+            next_block_state={"substep": "solo_solve", "block_attempts": 1},
+            next_step=0,
+            block_results=[],
+            unit_complete=False,
+            move_attempts=1,
+            advance_block=False,
+            passed=False,
+        ),
+    )
+    assert advanced["advanced"] is True
+    assert advanced["stayed"] is False
+    assert advanced["closed"] == ""
+    assert advanced["attempt_counted"] is True
+    assert loop_result_label(advanced) == "advanced, try counted"
+    closed = loop_turn_result(
+        before_step=0,
+        before_state={"substep": "main", "block_attempts": 1},
+        before_attempts=2,
+        before_results=[],
+        resolution=SimpleNamespace(
+            next_block_state={"substep": "main", "block_attempts": 0},
+            next_step=1,
+            block_results=[{"outcome": "revealed", "attempts": 2}],
+            unit_complete=True,
+            move_attempts=0,
+            advance_block=True,
+            passed=False,
+        ),
+    )
+    assert closed["closed"] == "revealed"
+    assert closed["advanced"] is False
+    assert closed["ended_unit"] is True
+    assert closed["attempt_counted"] is True
+    assert "closed revealed" in loop_result_label(closed)
+
+
+def test_answer_key_is_the_step_being_asked() -> None:
+    data = {
+        "goal": "Name the river.",
+        "solo_expected_answer": "42",
+        "expected_fact": "Interest rates rise.",
+        "steps": [{"step_text": "Add the two sides."}],
+        "faded_step_index": 0,
+    }
+    assert expected_for_step("worked_example", "faded_step", data) == "Add the two sides."
+    assert expected_for_step("worked_example", "solo_solve", data) == "42"
+    assert expected_for_step("retrieval_check", "recall", data) == "Interest rates rise."
+    assert expected_for_step("explanation", "explain_topic", data) == ""
+    assert expected_for_step("topic_goal", "main", data) == "Name the river."
+
+
+def test_three_explanation_topics_are_not_one_stuck_span() -> None:
+    def turn(topic: int) -> dict:
+        return {
+            "block_type": "explanation",
+            "block_id": "e",
+            "substep": "explain_topic",
+            "topic_index": topic,
+            "child_text": "ok",
+            "tutor_reply": "next",
+        }
+
+    walking = {"turns": [turn(index % 3) for index in range(9)], "ended_how": "completed", "checks": {}}
+    assert chat_is_stuck(walking) is False
+    held = {"turns": [turn(1) for _ in range(8)], "ended_how": "completed", "tutor_model": "gpt-4.1", "persona_name": "AI_Child1", "checks": {}}
+    assert chat_is_stuck(held) is True
+    assert place_key("e", "explain_topic", 0) != place_key("e", "explain_topic", 1)
+    summary = run_summary([held])
+    assert "topic 2" in summary["text"]
+    assert "8 or more turns in one place" in summary["text"]
+
+
+def test_a_missing_judge_is_not_judged_and_outcomes_sit_beside_the_score() -> None:
+    missing = run_summary(
+        [
+            {
+                "persona_name": "AI_Child1",
+                "tutor_model": "gpt-4.1",
+                "ended_how": "completed",
+                "checks": {},
+                "turns": [],
+                "component_score": 0,
+                "block_outcomes": [{"title": "Goal", "outcome": "revealed"}, {"title": "Quiz", "outcome": "engaged"}],
+            }
+        ]
+    )
+    assert "not judged" in missing["text"]
+    assert "withheld" not in missing["text"]
+    assert "AI_Child1: 0. Goal (revealed), Quiz (engaged)." in missing["text"]
+    withheld = run_summary(
+        [
+            {
+                "persona_name": "AI_Child1",
+                "tutor_model": "gpt-4.1",
+                "ended_how": "completed",
+                "child_realism": 2,
+                "scores": [{"dimension": "natural_conversation", "score": 2}],
+                "checks": {},
+                "turns": [],
+            }
+        ]
+    )
+    assert "withheld" in withheld["text"]
+    assert "not judged" not in withheld["text"]

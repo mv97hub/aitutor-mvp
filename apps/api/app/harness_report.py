@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-from app.harness_checks import SIDE_INTENTS, WRONG_INTENTS
+from app.harness_checks import SIDE_INTENTS, WRONG_INTENTS, graded_step, line_matches_key, loop_accepted, turn_place
 
 RUBRIC_VERSION = "2"
 CLEAR_DELTA = 0.3
@@ -122,11 +122,70 @@ def _num(value: object) -> float:
         return 0.0
 
 
+# The cutoff stays at 3. The next judged run should be checked before trusting it.
+# One judged child scored 2, and that single score is not a reason to move the bar.
+REALISM_BAR = 3
+STUCK_SPAN = 8
+
+
+def _judged(chat: dict) -> bool:
+    """A chat the judge scored. A failed call and a missing call are not judged."""
+    if str(chat.get("judge_error") or "").strip():
+        return False
+    if chat.get("child_realism") is None:
+        return False
+    return bool(chat.get("scores"))
+
+
 def _usable(chat: dict) -> bool:
-    realism = chat.get("child_realism")
-    if realism is None:
+    """In the roll-up only when the chat was judged and cleared the realism bar."""
+    if not _judged(chat):
+        return False
+    return int(chat.get("child_realism")) >= REALISM_BAR
+
+
+def _span_turns(turns: list[dict]) -> list[dict]:
+    """The longest run of 8 or more turns in one place. Empty when there is none."""
+    last = ""
+    run: list[dict] = []
+    best: list[dict] = []
+
+    def consider(group: list[dict]) -> None:
+        nonlocal best
+        if len(group) >= STUCK_SPAN and len(group) > len(best):
+            best = list(group)
+
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        place = turn_place(turn)
+        if place == last and run:
+            run.append(turn)
+        else:
+            consider(run)
+            run = [turn]
+            last = place
+    consider(run)
+    return best
+
+
+def chat_is_stuck(chat: dict) -> bool:
+    """One definition: 8 or more turns in one place, topic included.
+
+    Stored turns win. A chat with no turns falls back to the stored span count,
+    then to the end reason, which uses the same place key.
+    """
+    turns = _chat_turns(chat)
+    if turns:
+        return bool(_span_turns(turns))
+    checks = chat.get("checks") if isinstance(chat.get("checks"), dict) else {}
+    try:
+        spans = int(checks.get("stuck_spans") or 0)
+    except (TypeError, ValueError):
+        spans = 0
+    if spans > 0:
         return True
-    return int(realism) >= 3
+    return str(chat.get("ended_how") or "") == "stuck"
 
 
 def _mean(values: list[float]) -> float | None:
@@ -148,7 +207,7 @@ def _group(chats: list[dict], key) -> list[dict]:
                     scores.append(_num(score.get("score")))
         completed = sum(1 for chat in items if chat.get("ended_how") == "completed")
         false_passes = sum(len((chat.get("checks") or {}).get("false_passes") or []) for chat in items)
-        stuck = sum(1 for chat in items if chat.get("ended_how") == "stuck" or (chat.get("checks") or {}).get("stuck_spans"))
+        stuck = sum(1 for chat in items if chat_is_stuck(chat))
         costs = [chat["cost_usd"] for chat in items if chat.get("cost_usd")]
         rows.append(
             {
@@ -167,7 +226,8 @@ def _group(chats: list[dict], key) -> list[dict]:
 
 def rollup(chats: list[dict]) -> dict:
     usable = [chat for chat in chats if _usable(chat)]
-    dropped = len(chats) - len(usable)
+    not_judged = sum(1 for chat in chats if not _judged(chat))
+    dropped = sum(1 for chat in chats if _judged(chat) and not _usable(chat))
     tags: dict[str, list[dict]] = defaultdict(list)
     for chat in usable:
         for tag in chat.get("tags") or []:
@@ -234,6 +294,7 @@ def rollup(chats: list[dict]) -> dict:
     return {
         "chats": len(chats),
         "usable_chats": len(usable),
+        "not_judged": not_judged,
         "low_realism_left_out": dropped,
         "by_child": _group(usable, lambda chat: chat.get("persona_name")),
         "by_course": _group(usable, lambda chat: chat.get("course_title")),
@@ -788,10 +849,6 @@ def _unchanged_reply(turn: dict, previous: dict | None) -> bool:
     return not reply.strip() and bool(previous_reply.strip()) and bool(str(turn.get("error") or "").strip())
 
 
-def _moved(turn: dict) -> bool:
-    return not _stayed(turn)
-
-
 def chat_failures(chat: dict) -> dict[str, list[dict]]:
     turns = _chat_turns(chat)
     checks = chat.get("checks") if isinstance(chat.get("checks"), dict) else {}
@@ -813,16 +870,17 @@ def chat_failures(chat: dict) -> dict[str, list[dict]]:
                 found["false_fail"].append(turns[index])
     else:
         for turn in turns:
-            if leave_out_turn(turn):
+            if leave_out_turn(turn) or not graded_step(turn):
                 continue
-            intent = str(turn.get("intent") or "")
-            if intent in WRONG_INTENTS and bool(turn.get("passed")):
+            matched = line_matches_key(str(turn.get("child_text") or ""), str(turn.get("expected") or ""))
+            accepted = loop_accepted(turn)
+            if not matched and accepted:
                 found["false_pass"].append(turn)
-            if intent == "answer_right" and not bool(turn.get("passed")) and not _moved(turn):
+            if matched and not accepted:
                 found["false_fail"].append(turn)
-    stuck = str(chat.get("ended_how") or "") == "stuck" or bool(checks.get("stuck_spans"))
-    if stuck and turns:
-        example = next((turn for turn in reversed(turns) if not leave_out_turn(turn)), turns[-1])
+    span = _span_turns(turns)
+    if span:
+        example = next((turn for turn in span if not leave_out_turn(turn)), span[0])
         found["stuck"].append(example)
     return found
 
@@ -833,7 +891,7 @@ def failure_groups(chats: list[dict]) -> list[dict]:
         for key, turns in chat_failures(chat).items():
             seen: set[str] = set()
             for turn in turns:
-                block = _turn_block(turn)
+                block = _stuck_block(turn) if key == "stuck" else _turn_block(turn)
                 if block in seen:
                     continue
                 seen.add(block)
@@ -885,15 +943,83 @@ def tone_rows(chats: list[dict]) -> list[dict]:
     return rows
 
 
+def _stuck_block(turn: dict) -> str:
+    block = _turn_block(turn)
+    if str(turn.get("substep") or "") != "explain_topic" or "topic_index" not in turn:
+        return block
+    topic = turn.get("topic_index")
+    if topic is None or topic == "":
+        return block
+    try:
+        number = int(topic) + 1
+    except (TypeError, ValueError):
+        return block
+    return f"{block}, topic {number}"
+
+
+def _tone_value(row: dict, chats: list[dict]) -> str:
+    """A number when the roll-up has scores. Otherwise not judged, or withheld.
+
+    A blank mean is not a withheld score. Withheld is only when every chat was
+    judged and none of them cleared the realism bar.
+    """
+    if row.get("mean") is not None:
+        return str(row["mean"])
+    judged = [chat for chat in chats if _judged(chat)]
+    if judged and len(judged) == len(chats):
+        return "withheld"
+    return "not judged"
+
+
+def _outcome_bits(outcomes: object) -> str:
+    bits = []
+    for item in outcomes if isinstance(outcomes, list) else []:
+        if isinstance(item, dict):
+            title = str(item.get("title") or "block").strip() or "block"
+            outcome = str(item.get("outcome") or "").strip()
+            bits.append(f"{title} ({outcome})" if outcome else title)
+        elif str(item).strip():
+            bits.append(str(item).strip())
+    return ", ".join(bits)
+
+
+def _score_lines(chats: list[dict]) -> list[str]:
+    lines = []
+    for chat in chats:
+        outcomes = chat.get("block_outcomes") or []
+        if "component_score" not in chat and not outcomes:
+            continue
+        score = chat.get("component_score") if "component_score" in chat else None
+        shown = "not finished" if score is None else str(score)
+        beside = _outcome_bits(outcomes) or "no block outcomes"
+        name = str(chat.get("persona_name") or "Chat")
+        lines.append(f"{name}: {shown}. {beside}.")
+    return lines
+
+
 def _shown_score(value: float) -> str:
     if float(value).is_integer():
         return str(int(value))
     return str(value)
 
 
-def _summary_text(chats: int, completed: int, stuck: int, models: list[str], groups: list[dict], tone: list[dict]) -> str:
+def _summary_text(
+    chats: int,
+    completed: int,
+    stuck: int,
+    ended_stuck: int,
+    models: list[str],
+    groups: list[dict],
+    tone: list[dict],
+    source: list[dict],
+) -> str:
     tutors = ", ".join(models) if models else "none"
-    lines = [f"Run: {chats} chats, {completed} completed, {stuck} stuck. Tutors: {tutors}.", ""]
+    lines = [
+        f"Run: {chats} chats, {completed} completed, {stuck} stuck (8 or more turns in one place). Tutors: {tutors}.",
+        "",
+    ]
+    if ended_stuck != stuck:
+        lines.insert(1, f"{ended_stuck} ended as stuck.")
     if not groups:
         lines.append("Automatic checks: none of these failures.")
         lines.append("")
@@ -905,9 +1031,14 @@ def _summary_text(chats: int, completed: int, stuck: int, models: list[str], gro
         lines.append("")
     lines.append("Tone")
     for row in tone:
-        mean = "—" if row["mean"] is None else row["mean"]
+        mean = _tone_value(row, source)
         lowest = ", ".join(f"{item['child']} {_shown_score(item['score'])}" for item in row["lowest"]) or "none"
         lines.append(f"{row['label']}: mean {mean}. Lowest: {lowest}.")
+    scores = _score_lines(source)
+    if scores:
+        lines.append("")
+        lines.append("Scores")
+        lines.extend(scores)
     return "\n".join(lines).strip()
 
 
@@ -915,15 +1046,31 @@ def run_summary(chats: list[dict]) -> dict:
     """A short, copyable account of how the run ended and which checks failed."""
     models = sorted({str(chat.get("tutor_model") or "") for chat in chats if str(chat.get("tutor_model") or "").strip()})
     completed = sum(1 for chat in chats if chat.get("ended_how") == "completed")
-    stuck = sum(1 for chat in chats if chat.get("ended_how") == "stuck")
+    stuck = sum(1 for chat in chats if chat_is_stuck(chat))
+    ended_stuck = sum(1 for chat in chats if str(chat.get("ended_how") or "") == "stuck")
     groups = failure_groups(chats)
     tone = tone_rows(chats)
+    block_scores = []
+    for chat in chats:
+        outcomes = chat.get("block_outcomes") or []
+        if "component_score" not in chat and not outcomes:
+            continue
+        block_scores.append(
+            {
+                "chat_id": chat.get("id"),
+                "child": str(chat.get("persona_name") or ""),
+                "score": chat.get("component_score") if "component_score" in chat else None,
+                "outcomes": _outcome_bits(outcomes),
+            }
+        )
     return {
         "chats": len(chats),
         "completed": completed,
         "stuck": stuck,
+        "ended_stuck": ended_stuck,
         "tutor_models": models,
         "groups": groups,
         "tone": tone,
-        "text": _summary_text(len(chats), completed, stuck, models, groups, tone),
+        "block_scores": block_scores,
+        "text": _summary_text(len(chats), completed, stuck, ended_stuck, models, groups, tone, chats),
     }

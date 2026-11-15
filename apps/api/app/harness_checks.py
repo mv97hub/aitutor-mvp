@@ -121,6 +121,67 @@ def _text(value: object) -> str:
     return str(value or "").strip()
 
 
+def place_key(block_id: object, substep: object, topic: object = None) -> str:
+    """Block, substep, and topic. Walking three explanatory topics is not one place."""
+    base = f"{_text(block_id)}:{_text(substep)}"
+    if topic is None or topic == "":
+        return base
+    return f"{base}:{topic}"
+
+
+def turn_place(turn: dict) -> str:
+    topic = turn.get("topic_index") if "topic_index" in turn else None
+    return place_key(turn.get("block_id"), turn.get("substep"), topic)
+
+
+# A summary close and an explanation have nothing to grade.
+_UNGRADED_SUBSTEPS = {"explain", "explain_topic", "summary_check"}
+
+
+def line_matches_key(child: str, expected: str) -> bool:
+    """The child's words against the answer key. The intent label is not consulted.
+
+    A short key has to be complete, so "the river is green" does not match
+    "the river is blue". A longer key matches when half of its content words
+    are in the child's line.
+    """
+    left = " ".join(_text(child).lower().split())
+    right = " ".join(_text(expected).lower().split())
+    if not left or not right:
+        return False
+    if right in left:
+        return True
+    needed = [word for word in re.findall(r"[a-z0-9']+", right) if len(word) > 3]
+    if not needed:
+        return left == right
+    have = {word for word in re.findall(r"[a-z0-9']+", left) if len(word) > 3}
+    hits = sum(1 for word in needed if word in have)
+    if len(needed) <= 4:
+        return hits == len(needed)
+    return hits * 2 >= len(needed)
+
+
+def graded_step(turn: dict) -> bool:
+    """False when this step has no answer key. Those turns are not passes or fails."""
+    substep = _text(turn.get("substep_before") or turn.get("substep"))
+    if substep in _UNGRADED_SUBSTEPS:
+        return False
+    return bool(_text(turn.get("expected")))
+
+
+def loop_accepted(turn: dict) -> bool:
+    """The loop took the step as passed, and it did not reveal the answer."""
+    loop = turn.get("loop_result")
+    if not isinstance(loop, dict) or not loop:
+        return False
+    closed = _text(loop.get("closed"))
+    if closed == "revealed":
+        return False
+    if closed == "passed":
+        return True
+    return bool(loop.get("advanced"))
+
+
 def _same(left: str, right: str) -> bool:
     a = " ".join(left.lower().split())
     b = " ".join(right.lower().split())
@@ -190,11 +251,12 @@ def automatic_checks(turns: list[dict], *, ended_how: str, response_length: str)
         intent = _text(turn.get("intent"))
         reply = _text(turn.get("tutor_reply"))
         prompt = _text(turn.get("prompt"))
-        passed = bool(turn.get("passed"))
         attempt_before = int(turn.get("attempt_before") or 0)
         attempt_after = int(turn.get("attempt_after") or 0)
-        place = f"{_text(turn.get('block_id'))}:{_text(turn.get('substep'))}"
-        moved = place != f"{_text(turn.get('block_before'))}:{_text(turn.get('substep_before'))}" and index > 0
+        place = turn_place(turn)
+        before_topic = turn.get("topic_before") if "topic_before" in turn else None
+        before_place = place_key(turn.get("block_before"), turn.get("substep_before"), before_topic)
+        moved = place != before_place and index > 0
         if place == last_place:
             same_step += 1
         else:
@@ -222,10 +284,15 @@ def automatic_checks(turns: list[dict], *, ended_how: str, response_length: str)
         flag = _text(turn.get("safety_flag"))
         if flag and flag != "none":
             flags.append({"turn": index, "flag": flag})
-        if intent in WRONG_INTENTS and passed:
-            false_passes.append(index)
-        if intent == "answer_right" and not passed and not moved:
-            false_fails.append(index)
+        # The intent is the plan the child was given. The verdict is the text against the key.
+        if graded_step(turn):
+            matched = line_matches_key(_text(turn.get("child_text")), _text(turn.get("expected")))
+            accepted = loop_accepted(turn)
+            if not matched and accepted:
+                false_passes.append(index)
+            if matched and not accepted:
+                false_fails.append(index)
+        passed = loop_accepted(turn)
         if intent in UNSCORED_INTENTS and (passed or attempt_after > attempt_before):
             misread.append(index)
         if intent in SIDE_INTENTS:
