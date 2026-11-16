@@ -346,11 +346,35 @@ def learner_done_with_explanation(answer: str) -> bool:
 
     Got it - move on, a typed reply that means move on, and a typed reply that
     means they do not want to learn more all take this path. Tell me more does not.
+    A bare yes is handled on the topic-goal explain step only.
     """
     text = _proceed_text(answer)
     if any(phrase in text for phrase in _STOP_EXPLAINING):
         return True
     return learner_ready_to_proceed(answer, False)
+
+
+def move_on_agreement(answer: str) -> bool:
+    """The whole line is agreement to move on. yes, or a short let's move on.
+
+    A real answer is not this. A question that is not that agreement is not this.
+    """
+    raw = answer or ""
+    text = _proceed_text(raw)
+    if not text:
+        return False
+    if text == "yes":
+        return "?" not in raw
+    if "?" in raw and not _is_proceed_question(text):
+        return False
+    words = text.split()
+    if len(words) > 8:
+        return False
+    if words[0] in {"what", "why", "how", "when", "where", "who", "can", "could", "would", "explain", "tell"}:
+        return False
+    if any(token in words for token in ("not", "dont", "wrong", "confused")):
+        return False
+    return "move on" in text
 
 
 _DEEPEN_EXACT = {
@@ -1364,8 +1388,9 @@ def explain_step_turn(
     raw = answer or ""
     side = stay_on_course_enabled(cfg) and unanswered_side_turn(block, "explain", raw, state, cfg)
     clarifying = learner_asks_clarification(raw)
+    bare_yes = _proceed_text(raw) == "yes" and "?" not in raw
     if not side:
-        if learner_done_with_explanation(raw) and not clarifying:
+        if (learner_done_with_explanation(raw) or bare_yes) and not clarifying:
             return "ask"
         if answers_during_explanation(block, raw, state, cfg):
             return "attempt"
@@ -1679,11 +1704,22 @@ def _unscored_stay(
 
 
 def reply_is_unreadable(reply: str) -> bool:
-    """An empty reply, or one that is only dots, is not something the child can read."""
-    text = (reply or "").strip()
+    """An empty reply, or one that is only dots, is not something the child can read.
+
+    Empty text, whitespace, invisible characters, and a dots-only line are the
+    same. The child hears the fixed line, and the try is not counted.
+    """
+    import unicodedata
+
+    visible = [
+        ch
+        for ch in (reply or "")
+        if not ch.isspace() and unicodedata.category(ch) not in {"Cf", "Cc"}
+    ]
+    text = "".join(visible)
     if not text:
         return True
-    compact = text.replace(".", "").replace("…", "").replace("·", "").strip()
+    compact = text.replace(".", "").replace("…", "").replace("·", "").replace("。", "")
     return not compact
 
 
@@ -2408,8 +2444,42 @@ def tutor_read_correct_choice(block: dict, state: dict | None, prior_tutor: str)
     return True
 
 
+def _worked_answer_and_reason(block: dict) -> tuple[str, str]:
+    """The faded step's answer and its reason. Empty unless both are stored apart."""
+    if str(block.get("type") or "").strip() != "worked_example":
+        return "", ""
+    data = _data(block)
+    steps = data.get("steps") if isinstance(data.get("steps"), list) else []
+    try:
+        index = int(data.get("faded_step_index") or 0)
+    except (TypeError, ValueError):
+        index = 0
+    step = steps[index] if 0 <= index < len(steps) and isinstance(steps[index], dict) else {}
+    answer = str(step.get("step_text") or "").strip()
+    reason = str(step.get("rationale") or "").strip()
+    folded_answer = _folded(answer)
+    folded_reason = _folded(reason)
+    if not folded_answer or not folded_reason:
+        return "", ""
+    if folded_answer == folded_reason or folded_reason in folded_answer or folded_answer in folded_reason:
+        return "", ""
+    return answer, reason
+
+
+def tutor_stated_answer_and_reason(block: dict, prior_tutor: str) -> bool:
+    """The tutor already said who wins and why. That line is a giveaway.
+
+    Stating the required chain with no reason, and with no ask to repeat it,
+    is not this.
+    """
+    answer, reason = _worked_answer_and_reason(block)
+    if not answer:
+        return False
+    return _matches(prior_tutor, answer) and _matches(prior_tutor, reason)
+
+
 def tutor_gave_away_answer(block: dict, state: dict | None, substep: str, prior_tutor: str) -> bool:
-    """The tutor read the correct choice, or stated the required chain and asked for it back.
+    """The tutor read the correct choice, stated the answer and the reason, or asked for the chain back.
 
     A later correct line does not undo this. The stored outcome stays revealed.
     """
@@ -2417,6 +2487,8 @@ def tutor_gave_away_answer(block: dict, state: dict | None, substep: str, prior_
     if stored.get("answer_given_away"):
         return True
     if tutor_read_correct_choice(block, stored, prior_tutor):
+        return True
+    if tutor_stated_answer_and_reason(block, prior_tutor):
         return True
     task = substep
     if substep == "summary_check":
