@@ -1037,6 +1037,15 @@ def _learner_sentence(
     )
 
 
+def _agreement_close(summary_begin: bool, worked_close: str, last_answer: str) -> bool:
+    """A passed block, and the child line is only yes or let's move on."""
+    if not summary_begin or worked_close == "affirm":
+        return False
+    from app.kc_loop import move_on_agreement
+
+    return move_on_agreement(last_answer)
+
+
 def _close_summary_sentence(close_depth: str, kind: str) -> str:
     if kind == "time_boxed" or close_depth == "concise":
         return "Keep the unit close to one or two concise sentences."
@@ -1522,6 +1531,7 @@ def _ending(
     is_final_block_and_substep: bool,
     summary_stay: bool = False,
     side_question: bool = False,
+    omit_recap: bool = False,
 ) -> str:
     if summary_stay and side_question and not unit_complete and not course_complete:
         return (
@@ -1549,17 +1559,20 @@ def _ending(
         )
     length = _close_summary_sentence(close_depth, kind)
     close = _close_body()
-    summary = (
-        "Summarize what the learner can now do. Name what was strong and what to practice. "
-        "Do not ask a new question."
-    )
+    summary = ""
+    if not omit_recap:
+        summary = (
+            "Summarize what the learner can now do. Name what was strong and what to practice. "
+            "Do not ask a new question."
+        )
     if course_complete:
         lead = "Close Contract: End the unit and the course in this reply."
     elif unit_complete:
         lead = "Close Contract: End the unit in this reply."
     else:
         lead = "Close Contract: When the decision ends the unit on this final substep, include the unit close."
-    close = " ".join((close, summary))
+    if summary:
+        close = " ".join((close, summary))
     outro = _outro_sentence(others_known, course_title, required=course_complete)
     return " ".join(part for part in (lead, length, close, outro) if part)
 
@@ -1747,6 +1760,11 @@ def _this_turn(
         lines.append(_GOAL_START_CLARIFY)
     elif goal_start == "ask":
         lines.append(_GOAL_START_ASK)
+        if _proceed_text_is_yes(last_answer) and "?" not in (last_answer or ""):
+            lines.append(
+                "A bare yes does not start a new lesson. Do not explain the topic. "
+                "Ask the opening question only."
+            )
     elif goal_start == "cap":
         lines.append(_GOAL_START_CAP)
     if early_answer:
@@ -1807,6 +1825,7 @@ def _this_turn(
             f"This reply opens {label} only. Do not praise what came before. "
             "Do not ask a question about what came before."
         )
+    agreement = _agreement_close(summary_begin, worked_close, last_answer)
     if presenting and turn_kind in {"orient", "ask"}:
         lines.append(
             "Turn Stance: Give a short lead-in for the choice card. Do not ask the multiple-choice question in the reply."
@@ -1816,7 +1835,7 @@ def _this_turn(
             lines.append(_OPENING_ASK)
         elif str(block.get("type") or "") != "explanation":
             lines.append(_OPENING_HOLD)
-    elif turn_kind in {"orient", "ask"} and goal_start not in {"explain", "deepen", "clarify", "aside"}:
+    elif turn_kind in {"orient", "ask"} and goal_start not in {"explain", "deepen", "clarify", "aside"} and not agreement:
         if instructional_stance == "direct_instruction_first":
             lines.append(
                 "Turn Stance (direct_instruction_first): Model the key rule or idea concisely before asking the block question."
@@ -1829,7 +1848,7 @@ def _this_turn(
             lines.append(
                 "Turn Stance (guided_discovery): Pair a short concrete anchor with a guiding question."
             )
-    elif turn_kind in {"nudge", "scaffold"} and not side_question:
+    elif turn_kind in {"nudge", "scaffold"} and not side_question and not agreement:
         if scaffolding_escalation == "socratic_probing":
             lines.append(
                 "Turn Escalation (socratic_probing): Ask targeted diagnostic questions to help the learner spot the gap themselves."
@@ -1846,7 +1865,7 @@ def _this_turn(
             lines.append(
                 "Reassurance on miss (challenge_appetite=needs_reassurance): Soften this miss transition, normalize the effort warmly, and keep stakes low."
             )
-    if turn_kind in {"nudge", "scaffold", "reveal"} and not side_question:
+    if turn_kind in {"nudge", "scaffold", "reveal"} and not side_question and not agreement:
         lines.append(
             "Humor guardrail: suppress jokes and banter on this turn "
             "(an incorrect attempt (nudge/scaffold/reveal)); stay clear, earnest, and supportive."
@@ -1858,6 +1877,7 @@ def _this_turn(
         not opening
         and not side_question
         and not topic_feedback_here
+        and not agreement
         and turn_kind in {"pass", "nudge", "scaffold"}
     ):
         if encouragement_style == "matter_of_fact_confirm":
@@ -1923,6 +1943,7 @@ def _this_turn(
             side_question=(
                 side_question and stay_on and not learner_wants_recap_elaboration(last_answer)
             ),
+            omit_recap=agreement,
         )
     )
     elaborating = _summary_elaboration(block, substep, last_answer)
@@ -2440,7 +2461,12 @@ def _what_to_teach(
     ev_id = block_evidence_id(block, step_index, substep)
     lines: list[str] = [f"Active block type: {btype} ({BLOCK_LABELS.get(btype, btype)})."]
 
-    if btype == "topic_goal":
+    if _agreement_close(summary_begin, worked_close, last_answer):
+        lines.append(
+            "The learner agreed to move on. Close in one sentence. "
+            "Do not teach a new lesson. Do not praise. Do not recap. Do not ask a question."
+        )
+    elif btype == "topic_goal":
         topic = str(data.get("topic") or node.title).strip()
         goal = str(data.get("goal") or node.core_truth).strip()
         criteria = str(data.get("acceptance_criteria") or goal).strip()
@@ -2460,6 +2486,8 @@ def _what_to_teach(
         )
         if phase in {"ask", "cap"}:
             lines.append("Ask the opening question for this goal now. Do not give the answer.")
+            if phase == "ask" and _proceed_text_is_yes(last_answer) and "?" not in (last_answer or ""):
+                lines.append("A bare yes does not start a new lesson. Do not explain the topic.")
         elif phase == "aside":
             lines.append(
                 "Answer the learner's side remark in one or two sentences, then one line back to this lesson. "
@@ -3128,6 +3156,9 @@ def _how_to_teach(
     summary_begin: bool = False,
     has_next: bool = False,
 ) -> list[str]:
+    if _agreement_close(summary_begin, worked_close, last_answer):
+        return ["Do not teach a new lesson. Do not praise. Do not recap."]
+
     over = cfg.get("overarching") or {}
     orient_mode = str(over.get("orient_framing") or "elaborate_outline")
     stance = str(over.get("instructional_stance") or "guided_discovery")
