@@ -1815,6 +1815,28 @@ def resolve_block_turn(
         btype == "worked_example"
         and substep == "faded_step"
         and "solo_solve" in substeps
+        and bool(state.get("revealed_substep"))
+    ):
+        # The faded answer was given on an earlier turn. This reply asks the solo problem.
+        state["faded_answer_given"] = True
+        state["revealed_substep"] = False
+        state["substep"] = "solo_solve"
+        held = [dict(row) for row in (block_results or []) if isinstance(row, dict)]
+        return _unscored_stay(
+            hint="nudge",
+            move_attempts=0,
+            reveals=reveals,
+            enrichment_turns=enrichment_turns,
+            rubric=met,
+            index=index,
+            bid=bid,
+            state=state,
+            results=held,
+        )
+    if (
+        btype == "worked_example"
+        and substep == "faded_step"
+        and "solo_solve" in substeps
         and rubric_covers_substep(block, index, "faded_step", _clean_ids(list(stored_rubric)))
     ):
         # The faded step already passed. Grade this reply against the solo problem.
@@ -2309,7 +2331,8 @@ def resolve_block_turn(
         note_try()
         # The step divider opens the next block. Do not stop for a summary question.
         if btype == "worked_example":
-            outcome = "revealed" if state.get("revealed_substep") else "passed"
+            given = bool(state.get("revealed_substep") or state.get("faded_answer_given"))
+            outcome = "revealed" if given else "passed"
             return finish(outcome, int(state.get("block_attempts") or 1), reveals)
         return _enter_summary(revealed=False)
 
@@ -2340,8 +2363,9 @@ def resolve_block_turn(
                 state["substep"] = task_steps[position + 1]
                 return stay(0, "reveal", reveals_now=reveals + 1)
         if btype == "worked_example" and substep == "faded_step" and "solo_solve" in substeps:
-            state["substep"] = "solo_solve"
+            # State the faded answer and stop. The solo problem waits for a later turn.
             state["revealed_substep"] = True
+            state["faded_answer_given"] = True
             return stay(0, "reveal", reveals_now=reveals + 1)
         if btype == "retrieval_check" and substep == "recall" and "elaborate_why" in substeps:
             # The fact is shown. The why question still has to be asked. The unit stays open.
@@ -2587,6 +2611,7 @@ class SpokenTurn:
     revealed: bool
     next_substep: str
     decision: str
+    reveal_stop: bool = False
 
 
 @dataclass(frozen=True)
@@ -2617,6 +2642,15 @@ def _spoken_turn(resolution: BlockResolution, *, before_substep: str, before_top
         speech = "advance"
     else:
         speech = "stay"
+    # A faded-step reveal stays on that step. It is not an advance to the solo problem.
+    reveal_stop = (
+        speech == "stay"
+        and resolution.hint_tier == "reveal"
+        and substep == "faded_step"
+        and substep == before_substep
+        and not resolution.unit_complete
+        and not resolution.advance_block
+    )
     return SpokenTurn(
         speech=speech,
         unit_complete=bool(resolution.unit_complete),
@@ -2624,6 +2658,7 @@ def _spoken_turn(resolution: BlockResolution, *, before_substep: str, before_top
         revealed=revealed,
         next_substep=substep,
         decision=str(resolution.decision or "stay"),
+        reveal_stop=reveal_stop,
     )
 
 
@@ -2634,6 +2669,7 @@ def _same_speech(left: SpokenTurn, right: SpokenTurn) -> bool:
         and left.advance_block == right.advance_block
         and left.revealed == right.revealed
         and left.next_substep == right.next_substep
+        and left.reveal_stop == right.reveal_stop
     )
 
 
