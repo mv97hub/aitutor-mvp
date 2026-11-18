@@ -1848,7 +1848,12 @@ def _this_turn(
             lines.append(
                 "Turn Stance (guided_discovery): Pair a short concrete anchor with a guiding question."
             )
-    elif turn_kind in {"nudge", "scaffold"} and not side_question and not agreement:
+    elif (
+        turn_kind in {"nudge", "scaffold"}
+        and not side_question
+        and not agreement
+        and not _worked_reveal_known(forecast)
+    ):
         if scaffolding_escalation == "socratic_probing":
             lines.append(
                 "Turn Escalation (socratic_probing): Ask targeted diagnostic questions to help the learner spot the gap themselves."
@@ -2065,6 +2070,23 @@ def _forecast_known_close(forecast: object | None) -> bool:
     return bool(chosen is not None and chosen.speech == "close")
 
 
+def _turn_reveal_stop(turn: object | None) -> bool:
+    return bool(getattr(turn, "reveal_stop", False))
+
+
+def _worked_reveal_stop(forecast: object | None) -> bool:
+    """A miss on this turn reveals the faded step and does not open the solo problem."""
+    if not _forecast_applies(forecast):
+        return False
+    if getattr(forecast, "depends_on_model", False):
+        return _turn_reveal_stop(getattr(forecast, "if_not", None))
+    return _turn_reveal_stop(getattr(forecast, "chosen", None))
+
+
+def _worked_reveal_known(forecast: object | None) -> bool:
+    return _worked_reveal_stop(forecast) and not getattr(forecast, "depends_on_model", False)
+
+
 def _decision_sentence(turn: object, label: str) -> str:
     """One reply instruction. The order matches the speech.
 
@@ -2073,6 +2095,12 @@ def _decision_sentence(turn: object, label: str) -> str:
     """
     speech = str(getattr(turn, "speech", "stay"))
     prefix = f"{label}: " if label else "Decision: "
+    if _turn_reveal_stop(turn):
+        body = (
+            "This is the last allowed try. Give the answer and say plainly that you gave it. "
+            "Ask no question. Do not open the next step."
+        )
+        return f"{prefix}stay. Set decision to stay. {body}"
     if getattr(turn, "unit_complete", False):
         order = "Set decision to complete."
         body = "This reply ends the unit. Close it. Ask no question. Do not open the next part."
@@ -2215,6 +2243,8 @@ def _align_this_turn(lines: list[str], forecast: object | None, *, ready_check: 
 
 
 def _teach_outcome(turn: object) -> str:
+    if _turn_reveal_stop(turn):
+        return "State the answer and ask no question. Do not open the next step."
     if getattr(turn, "unit_complete", False):
         return "This reply ends the unit. Close it. Ask no question."
     if str(getattr(turn, "speech", "")) == "close":
@@ -2623,14 +2653,27 @@ def _what_to_teach(
                 else:
                     shown.append(f"Step {idx + 1}: {st_text}" + (f" ({st_rat})" if st_rat else ""))
             lines.append("Worked steps: " + " | ".join(shown))
-            lines.append(
-                f"Active substep (faded_step): Ask the learner to supply the missing Step {faded_idx + 1}. "
-                f"Expected missing step (withhold until pass or reveal): {_finish(target_step)}"
-            )
-            if solo_prob:
+            if _worked_reveal_known(forecast):
                 lines.append(
-                    f"When the faded step is solved (substep_passed=true) or revealed, present the solo problem in your reply: {_finish(solo_prob)}"
+                    f"Active substep (faded_step): State the missing Step {faded_idx + 1}. "
+                    f"The missing step is: {_finish(target_step)} "
+                    "Ask no question. Do not present the solo problem."
                 )
+            else:
+                lines.append(
+                    f"Active substep (faded_step): Ask the learner to supply the missing Step {faded_idx + 1}. "
+                    f"Expected missing step (withhold until pass or reveal): {_finish(target_step)}"
+                )
+                if solo_prob:
+                    lines.append(
+                        "When the faded step is solved (substep_passed=true), "
+                        f"present the solo problem in your reply: {_finish(solo_prob)}"
+                    )
+                if _worked_reveal_stop(forecast):
+                    lines.append(
+                        "When this turn reveals the faded step, state the missing step and ask no question. "
+                        "Do not present the solo problem."
+                    )
         elif worked_close == "affirm":
             lines.append(
                 "The learner just gave the correct solo answer. "
@@ -3155,6 +3198,7 @@ def _how_to_teach(
     active_block_state: dict | None = None,
     summary_begin: bool = False,
     has_next: bool = False,
+    forecast: object | None = None,
 ) -> list[str]:
     if _agreement_close(summary_begin, worked_close, last_answer):
         return ["Do not teach a new lesson. Do not praise. Do not recap."]
@@ -3173,6 +3217,31 @@ def _how_to_teach(
     challenge_appetite = str(cp.get("challenge_appetite") or "steady")
 
     lines = _block_config_rules(block, substep, cfg, goal)
+    if _worked_reveal_stop(forecast):
+        rewritten: list[str] = []
+        for line in lines:
+            lowered = line.lower()
+            if lowered.startswith("hide one step") or lowered.startswith("hide two steps"):
+                if _worked_reveal_known(forecast):
+                    rewritten.append(
+                        "The faded step is revealed on this turn. State the missing step. Ask no question."
+                    )
+                else:
+                    rewritten.append(
+                        line
+                        + " If this turn reveals the faded step, state the missing step instead of asking for it."
+                    )
+                continue
+            if "missing step" in lowered and ("do not show" in lowered or "without showing" in lowered):
+                rewritten.append(
+                    "On a wrong step before the last try, do not show the missing step. "
+                    "When this turn reveals the faded step, state the missing step and ask no question. "
+                    "Do not present the solo problem."
+                )
+            else:
+                rewritten.append(line)
+        lines = rewritten
+    known_reveal = _worked_reveal_known(forecast)
     steps = substeps_for_block(block, cfg)
     on_summary_step = bool(steps) and steps[-1] == "summary_check" and (
         substep == "summary_check"
@@ -3301,6 +3370,11 @@ def _how_to_teach(
         )
     elif worked_close in {"affirm", "continue"}:
         lines.append("On this worked-example close the stance does not ask. Do not add a guiding question.")
+    elif known_reveal:
+        lines.append(
+            "On this faded-step reveal the stance does not ask. State the missing step. "
+            "Do not add a guiding question."
+        )
     elif stance == "direct_instruction_first":
         lines.append(
             "Instructional stance (direct_instruction_first): model the key rule briefly, then ask."
@@ -3313,6 +3387,11 @@ def _how_to_teach(
         lines.append(
             "Instructional stance (guided_discovery): one short concrete anchor, then a guiding question."
         )
+    if _worked_reveal_stop(forecast) and not known_reveal:
+        lines.append(
+            "If this turn reveals the faded step, do not add that question. "
+            "State the missing step and stop."
+        )
     if goal_start in {"explain", "deepen"}:
         lines.append("On this goal-start turn that stance does not ask. Teach only. Do not ask yet.")
     elif goal_start == "clarify":
@@ -3321,7 +3400,7 @@ def _how_to_teach(
             "Set help_requested=true."
         )
 
-    if not side_question and not aside and not restated and not moving and not closing:
+    if not side_question and not aside and not restated and not moving and not closing and not known_reveal:
         if escalation == "socratic_probing":
             lines.append(
                 "Scaffolding escalation (socratic_probing): on misses, ask targeted diagnostic questions to help the learner spot the gap themselves."
@@ -3457,8 +3536,14 @@ def _how_to_teach(
         elif elaborating_last:
             lines.append("Elaborate this topic only. Do not restate the other topics.")
     elif not choice_on_screen and not presenting_dynamic_mcq:
-        if summary_begin or worked_close in {"affirm", "continue"} or move_on_close:
+        if summary_begin or worked_close in {"affirm", "continue"} or move_on_close or known_reveal:
             pass
+        elif _worked_reveal_stop(forecast):
+            lines.append(
+                "End a teaching or probing turn with a single clear question, "
+                "except when this turn reveals the faded step. "
+                "A faded-step reveal states the answer and asks no question."
+            )
         elif goal_start == "aside":
             lines.append(
                 "Answer the side remark in one or two sentences, then one line back to the active lesson. "
@@ -4084,6 +4169,20 @@ def build_kc_prompt(
         and forecast.chosen is not None
         and forecast.chosen.unit_complete
     )
+    teach_substep = substep
+    teach_state = state_dict
+    if (
+        not opening
+        and btype == "worked_example"
+        and substep == "faded_step"
+        and bool(state_dict.get("revealed_substep"))
+    ):
+        # The answer was given last turn. This reply asks the solo problem.
+        teach_substep = "solo_solve"
+        teach_state = dict(state_dict)
+        teach_state["substep"] = "solo_solve"
+        teach_state["revealed_substep"] = False
+        turn_kind = "ask"
 
     prompt = _blocks_text(
         [
@@ -4098,7 +4197,7 @@ def build_kc_prompt(
                     block=active_block,
                     step_index=index,
                     total_blocks=len(blocks),
-                    substep=substep,
+                    substep=teach_substep,
                     opening=opening,
                     orient_framing=str(over.get("orient_framing") or "elaborate_outline"),
                     unit_complete=unit_complete or ends_unit,
@@ -4126,7 +4225,7 @@ def build_kc_prompt(
                     challenge_appetite=str(cp.get("challenge_appetite") or "steady"),
                     learning_support=str(cp.get("learning_support") or "none"),
                     communication_tone=str(cp.get("communication_tone") or "warm_and_encouraging"),
-                    active_block_state=state_dict,
+                    active_block_state=teach_state,
                     close_block_only=close_block_only,
                     summary_phase=summary_phase,
                     summary_stay=summary_phase == "check" and is_last_block,
@@ -4146,8 +4245,8 @@ def build_kc_prompt(
                 node=node,
                 block=active_block,
                 step_index=index,
-                substep=substep,
-                active_block_state=state_dict,
+                substep=teach_substep,
+                active_block_state=teach_state,
                 next_block=blocks[index + 1] if (close_block_only or summary_begin or bool(last_topic_close)) and has_next else None,
                 opening=opening,
                 last_answer=last_answer,
@@ -4195,6 +4294,7 @@ def build_kc_prompt(
                     active_block_state=state_dict,
                     summary_begin=summary_begin,
                     has_next=has_next,
+                    forecast=forecast,
                 ),
             ),
             ("How to sound", _how_to_sound(profile=profile, student=student, turn_kind=turn_kind)),
