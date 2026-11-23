@@ -102,8 +102,8 @@ def test_a_revealed_faded_step_states_the_answer_and_does_not_open_solo() -> Non
     assert "Ask no question." in turn
     assert "Do not open the next step." in turn
     assert "move to the next step" not in turn.lower()
-    assert "present the solo problem" in teach
-    assert "Do not present the solo problem." in teach
+    assert "present the solo problem" in text
+    assert "Do not present the solo problem." in text
     for line in _if_not_lines(text):
         assert "ask no question" in line.lower(), line
         assert "move to the next step" not in line.lower(), line

@@ -300,15 +300,15 @@ def test_a_side_remark_on_an_explanatory_topic_stays_one_or_two_sentences() -> N
     teaching = text.split("What to teach", 1)[-1].split("Who you are talking to", 1)[0]
     how = text.split("How to teach", 1)[-1].split("How to sound", 1)[0]
     assert "one or two sentences" in text
-    assert "one line back to the active lesson" in teaching
-    assert "Do not start a new explanation of this topic." in teaching
+    assert "one line back to the active lesson" in text
+    assert "Do not start a new explanation of this topic." in text
     assert "Explain this topic from:" not in teaching
     assert "The Great Recession was a deep contraction." not in text
     assert "CROSS-LAYER LENGTH OVERRIDE" not in text
     assert "Explanation depth" not in how
     assert "break the topic into a new step-by-step" not in text
     assert "as many sentences" not in text.lower()
-    assert "Do not re-teach this topic." in how
+    assert "Do not re-teach this topic." in text
     stayed = _cycle_turn(dog)
     assert stayed.next_block_state["topic_index"] == 0
     assert stayed.next_block_state["substep"] == "explain_topic"

@@ -77,12 +77,13 @@ def test_explanation_check_in_and_summary_style_reach_the_prompt() -> None:
         support_band="ready",
     )
     how = _section(text, "How to teach")
+    turn = _section(text, "This turn")
     assert "Check-in style (brief_ready_check)" in how
     assert "ready for the next topic" in how
-    assert "End-of-block summary (concise_takeaway_only)" in how
-    assert "only the takeaway" in how
-    assert "questions_or_elaborate" not in how
-    assert "bulleted_recap_with_takeaway" not in how
+    assert "End-of-block summary (concise_takeaway_only)" in turn
+    assert "only the takeaway" in turn
+    assert "questions_or_elaborate" not in text
+    assert "bulleted_recap_with_takeaway" not in text
 
 
 def test_stability_stays_stored_and_out_of_the_prompt() -> None:

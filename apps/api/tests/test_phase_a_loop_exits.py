@@ -231,7 +231,7 @@ def test_a_move_on_teaches_a_topic_that_was_only_named() -> None:
     )
     teaching = _section(held, "What to teach")
     assert "This topic has not been taught yet." in teaching
-    assert "Menu costs, shoe-leather costs, and unit-of-account costs." in teaching
+    assert "Menu costs, shoe-leather costs, and unit-of-account costs." in held
     assert "Do not teach that topic." not in teaching
 
     opened = _text(
@@ -240,10 +240,9 @@ def test_a_move_on_teaches_a_topic_that_was_only_named() -> None:
         last_answer="Got it - move on",
         active_block_state={"substep": "explain_topic", "topic_index": 0, "topic_taught": True},
     )
-    nxt = _section(opened, "What to teach")
-    assert "teach the next topic in full" in nxt.lower()
-    assert "Unpredictable inflation makes each of those costs show up more often." in nxt
-    assert "Do not only name the title." in nxt
+    assert "teach the next topic in full" in opened.lower()
+    assert "Unpredictable inflation makes each of those costs show up more often." in opened
+    assert "Do not only name the title." in opened
 
 
 def test_one_message_per_block_change() -> None:

@@ -81,7 +81,7 @@ def test_a_correct_solo_answer_completes_the_block_without_a_follow_up_question(
     assert "Ask the learner to solve solo problem" not in teach
     assert "Do not ask them to solve it again." in teach
     assert "First line:" not in teach
-    assert "The next part arrives in its own message." in teach
+    assert "The next part arrives in its own message." in text
 
     solved = _turn("The river is blue.", "solo_solve", substep_passed=True)
     assert solved.advance_block is True

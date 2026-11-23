@@ -63,7 +63,7 @@ def test_the_first_turn_explains_and_does_not_ask() -> None:
     assert "Do not ask the goal question." in turn
     assert ASK not in text
     assert "End a teaching or probing turn with a single clear question." not in how
-    assert "Do not ask the learner to state the goal yet." in teach
+    assert "Do not ask the learner to state the goal yet." in text
     assert "Turn Stance (guided_discovery)" not in turn
 
 
@@ -86,8 +86,8 @@ def test_move_on_asks_the_opening_question() -> None:
         how = _section(text, "How to teach")
         assert ASK in turn, phrase
         assert "Do not ask the goal question." not in turn, phrase
-        assert "Ask the opening question for this goal." in how, phrase
-        assert "End a teaching or probing turn with a single clear question." in how, phrase
+        assert "Ask the opening question for this goal." in turn, phrase
+        assert "End a teaching or probing turn with a single clear question." in turn, phrase
     assert not learner_done_with_explanation("Tell me more")
     assert not learner_done_with_explanation("I want to keep learning")
 

@@ -200,6 +200,15 @@ def _audience(stmt, audience: str, *, joined: bool):
     return stmt.where(Student.is_test.is_(audience == "test"))
 
 
+def cache_hit_rate(cached_tokens: int, input_tokens: int) -> float:
+    """Share of input tokens served from the prefix cache. Cached tokens cannot exceed input."""
+    incoming = int(input_tokens or 0)
+    if incoming <= 0:
+        return 0.0
+    cached = min(int(cached_tokens or 0), incoming)
+    return round(cached / incoming, 4)
+
+
 def usage_report(
     db: Session,
     *,
@@ -302,6 +311,7 @@ def usage_report(
             "total_tokens": int(row[4] or 0),
             "calls": int(row[5] or 0),
             "cost_usd": _model_cost(row[0], int(row[6] or 0), int(row[7] or 0), int(row[2] or 0)),
+            "cache_hit_rate": cache_hit_rate(int(row[3] or 0), int(row[1] or 0)),
         }
         for row in db.execute(model_stmt)
     ]
@@ -321,6 +331,7 @@ def usage_report(
             "output_tokens": int(totals[1] or 0),
             "cached_tokens": int(totals[2] or 0),
             "total_tokens": int(totals[3] or 0),
+            "cache_hit_rate": cache_hit_rate(int(totals[2] or 0), int(totals[0] or 0)),
         },
         "cost_usd": cost_usd,
         "unpriced_models": unpriced_models,

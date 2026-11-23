@@ -684,13 +684,13 @@ def test_topic_goal_ask_nudge_and_scaffold_praise_only_an_earned_step() -> None:
         turn = _section(text, "This turn")
         teach = _section(text, "How to teach")
         assert f"Active turn kind: {kind}." in turn
-        assert _EARNED_PRAISE in teach
-        assert _MISS_NUDGE in teach
-        assert _NO_FALSE_PRAISE in teach
-        assert "This holds on the first reply to an answer and on later nudge and scaffold turns." in teach
+        assert _EARNED_PRAISE in turn
+        assert _MISS_NUDGE in turn
+        assert _NO_FALSE_PRAISE in turn
+        assert "This holds on the first reply to an answer and on later nudge and scaffold turns." in turn
         assert text.count(_EARNED_PRAISE) == 1
-        assert _EARNED_PRAISE not in turn
-        assert "name the specific reasoning move the learner made" in teach
+        assert _EARNED_PRAISE not in teach
+        assert "name the specific reasoning move the learner made" in turn
         assert _UNCONDITIONAL_PRAISE not in text
         assert "warm and encouraging" in text
 
@@ -704,7 +704,7 @@ def test_a_finished_topic_goal_still_uses_process_praise() -> None:
     turn = _section(text, "This turn")
     assert "Active turn kind: pass." in turn
     assert _UNCONDITIONAL_PRAISE in turn
-    assert _EARNED_PRAISE in _section(text, "How to teach")
+    assert _EARNED_PRAISE in turn
 
 
 def test_a_non_topic_block_still_praises_on_a_nudge() -> None:
@@ -1031,12 +1031,11 @@ def test_praise_only_when_the_reply_meets_the_goal() -> None:
         last_answer="The river is blue.",
         active_block_state={"substep": "main"},
     )
-    teach = _section(text, "How to teach")
-    assert "Praise only a reply that meets the goal." in teach
-    assert "When the reply meets the goal, name the specific reasoning move the learner made." in teach
-    assert "names a real step toward it" not in text
-    assert "Asking a question, asking for background, or asking to move on is not noteworthy work." in teach
     turn = _section(text, "This turn")
+    assert "Praise only a reply that meets the goal." in turn
+    assert "When the reply meets the goal, name the specific reasoning move the learner made." in turn
+    assert "names a real step toward it" not in text
+    assert "Asking a question, asking for background, or asking to move on is not noteworthy work." in turn
     assert "Close in one sentence." in turn
     assert "Ask no question." in turn
     assert "Do not praise." in turn
