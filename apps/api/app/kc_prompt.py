@@ -688,6 +688,25 @@ def _lower_first(text: str) -> str:
     return cleaned[0].lower() + cleaned[1:]
 
 
+def _teach_back_misconception_guard(node: KcNode) -> str:
+    """Name this node's wrong move, or a domain-neutral guard when none is stored."""
+    wrongs = _wrong_moves(node)
+    if wrongs:
+        named = "; ".join(wrongs)
+        return (
+            f"Misconception guard: do not tag \"{named}\" "
+            "when the learner's explanation shows the idea still applies, "
+            "or when the learner is answering the follow-up example prompt. "
+            "An example that answers the follow-up is the explanation they were asked for, not that misconception."
+        )
+    return (
+        "Misconception guard: do not tag a stored wrong move "
+        "when the learner's explanation shows the idea still applies, "
+        "or when the learner is answering the follow-up example prompt. "
+        "An example that answers the follow-up is the explanation they were asked for."
+    )
+
+
 def _wrong_moves(node: KcNode) -> list[str]:
     found: list[str] = []
     for item in node.misconceptions or []:
@@ -2736,13 +2755,7 @@ def _what_to_teach(
                 "Active substep (initial_explanation): Roleplay the confused peer and invite the learner's explanation. "
                 f"If follow-up is needed after their first explanation, ask: {_finish(follow)}"
             )
-        lines.append(
-            "Misconception guard: do not tag \"Thinking scarcity only applies to money or poor people\" "
-            "when the learner is explaining why rich people or everyone are affected, including through prices or inflation, "
-            "or when the learner is answering the follow-up example prompt. "
-            "A money example that shows the idea still applies to wealthy people is not that misconception, "
-            "and a follow-up example such as time, kids, or hobbies is the explanation they were asked for."
-        )
+        lines.append(_teach_back_misconception_guard(node))
 
     elif btype == "retrieval_check":
         recall_p = str(data.get("recall_prompt") or "").strip()
@@ -2842,6 +2855,42 @@ def _retry_sentence(count: int, subject: str) -> str:
 def _depth_sentence(depth: int) -> str:
     bounded = min(5, max(1, int(depth or 3)))
     return _EXPLAIN.get(bounded, _EXPLAIN[3])
+
+
+def _check_in_line(style: str) -> str:
+    lines = {
+        "curiosity_invitation": (
+            "Check-in style (curiosity_invitation): after each topic, invite a curiosity or what-if question, "
+            "and offer to elaborate or move on."
+        ),
+        "brief_ready_check": (
+            "Check-in style (brief_ready_check): after each topic, ask a short check-in. "
+            "Any questions on this part, or are you ready for the next topic?"
+        ),
+    }
+    return lines.get(
+        style,
+        "Check-in style (questions_or_elaborate): after each topic, ask whether they have questions "
+        "or would like you to elaborate before the next part.",
+    )
+
+
+def _summary_style_line(style: str) -> str:
+    lines = {
+        "connected_narrative_synthesis": (
+            "End-of-block summary (connected_narrative_synthesis): on the summary step, "
+            "weave the topics into one connected narrative, then ask if they have any final questions."
+        ),
+        "concise_takeaway_only": (
+            "End-of-block summary (concise_takeaway_only): on the summary step, "
+            "give only the takeaway in a sentence or two, then ask if they have any final questions."
+        ),
+    }
+    return lines.get(
+        style,
+        "End-of-block summary (bulleted_recap_with_takeaway): on the summary step, "
+        "recap the topics as short bullets with one takeaway, then ask if they have any final questions.",
+    )
 
 
 def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> list[str]:
@@ -3119,7 +3168,8 @@ def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> l
                 "Do not repeat the same paragraph.",
             )
         )
-        del check_in, summary_style
+        lines.append(_check_in_line(check_in))
+        lines.append(_summary_style_line(summary_style))
         if counts:
             lines.append(
                 "Completing this walkthrough counts toward whether the component is known. "
