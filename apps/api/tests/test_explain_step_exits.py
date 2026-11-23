@@ -202,13 +202,13 @@ def test_the_ready_flag_does_not_override_tell_me_more_or_a_later_step() -> None
 def test_an_on_topic_answer_that_passes_is_scored_in_the_same_turn() -> None:
     assert answers_during_explanation(APPLE, REAL_APPLE, _state(), _apple_cfg())
     passed = _turn(REAL_APPLE, substep_passed=True, rubric_met=["apple"])
-    assert passed.next_block_state["substep"] == "summary_check"
-    assert passed.next_block_state["block_attempts"] == 1
+    assert passed.advance_block is True
+    assert passed.next_step == 1
+    assert passed.block_results[-1]["outcome"] == "passed"
+    assert passed.block_results[-1]["attempts"] == 1
     assert passed.rubric_met == ["kept", "apple"]
     assert passed.move_attempts == 0
-    # The block is not finished until the summary check closes it.
-    assert passed.advance_block is False
-    assert passed.block_results == []
+    assert passed.next_block_state.get("substep") != "summary_check"
 
 
 def test_an_on_topic_answer_that_misses_opens_the_question_and_counts_as_a_try() -> None:
@@ -245,23 +245,26 @@ def test_the_goal_must_still_be_passed_after_an_early_miss() -> None:
         last_misconception="",
         answer=REAL_APPLE,
     )
-    assert answered.next_block_state["substep"] == "summary_check"
-    assert answered.next_block_state["block_attempts"] == 2
-    assert answered.advance_block is False
+    assert answered.advance_block is True
+    assert answered.next_step == 1
+    assert answered.block_results[-1]["outcome"] == "passed"
+    assert answered.block_results[-1]["attempts"] == 2
 
 
 def test_an_early_answer_gets_the_goal_question_prompt() -> None:
-    for answer in (REAL_APPLE, WRONG_APPLE):
-        text = _prompt(answer)
-        turn = _section(text, "This turn")
-        assert EARLY_LINE in turn, answer
-        assert "If it does not pass, acknowledge what they said, then ask the opening question for this goal." in turn
-        assert "Active substep: main." in _section(text, "What just happened"), answer
-        assert "If this answer satisfies the substep, set substep_passed=true" in turn, answer
-        assert "Goal start:" not in text, answer
-        assert "Do not ask the learner to state the goal yet." not in text, answer
-        assert NO_TURN_LINE not in text, answer
-        assert "1-2 word fragment" not in text, answer
+    text = _prompt(WRONG_APPLE)
+    turn = _section(text, "This turn")
+    assert EARLY_LINE in turn
+    assert "If it does not pass, acknowledge what they said, then ask the opening question for this goal." in turn
+    assert "Active substep: main." in _section(text, "What just happened")
+    assert "Goal start:" not in text
+    assert "Do not ask the learner to state the goal yet." not in text
+    assert NO_TURN_LINE not in text
+    assert "1-2 word fragment" not in text
+    matched = _section(_prompt(REAL_APPLE), "This turn")
+    assert "Close in one sentence." in matched
+    assert "Ask no question." in matched
+    assert "Goal start:" not in _prompt(REAL_APPLE)
 
 
 def test_remarks_questions_and_requests_are_not_early_answers() -> None:
@@ -341,7 +344,9 @@ def test_the_cap_does_not_block_the_button_or_an_answer() -> None:
     assert explain_step_turn(APPLE, "Got it - move on", spent, cfg) == "ask"
     assert explain_step_turn(APPLE, REAL_APPLE, spent, cfg) == "attempt"
     passed = _turn(REAL_APPLE, spent, substep_passed=True, rubric_met=["apple"])
-    assert passed.next_block_state["substep"] == "summary_check"
+    assert passed.advance_block is True
+    assert passed.next_step == 1
+    assert passed.block_results[-1]["outcome"] == "passed"
 
 
 def test_leaving_the_explanation_clears_the_extra_turn_counts() -> None:
@@ -361,7 +366,7 @@ def test_the_prompt_and_the_loop_read_each_message_the_same_way() -> None:
     cases = (
         ("Got it - move on", _state(), "ask", "main"),
         ("I don't want to learn more", _state(), "ask", "main"),
-        (REAL_APPLE, _state(), "attempt", "summary_check"),
+        (REAL_APPLE, _state(), "attempt", "explain", True),
         ("Tell me more", _state(), "deepen", "explain"),
         ("ok", _state(), "deepen", "explain"),
         ("arsenal are great", _state(), "aside", "explain"),
@@ -376,15 +381,22 @@ def test_the_prompt_and_the_loop_read_each_message_the_same_way() -> None:
         "aside": SIDE_LINE,
         "cap": CAP_LINE,
     }
-    for answer, state, kind, landed in cases:
+    for answer, state, kind, landed, *rest in cases:
+        advances = bool(rest and rest[0])
         assert explain_step_turn(APPLE, answer, state, cfg) == kind, answer
         turn = _section(_prompt(answer, state), "This turn")
         for name, marker in markers.items():
+            if advances and name == "attempt":
+                continue
             assert (marker in turn) == (name == kind), (answer, name)
         result = _turn(answer, state, substep_passed=True, rubric_met=["apple"])
         assert result.next_block_state["substep"] == landed, answer
-        assert result.next_step == 0, answer
-        assert result.advance_block is False, answer
+        if advances:
+            assert result.advance_block is True, answer
+            assert result.next_step == 1, answer
+        else:
+            assert result.next_step == 0, answer
+            assert result.advance_block is False, answer
 
 
 def test_the_tutor_says_it_is_the_learners_turn_only_when_the_step_changes() -> None:

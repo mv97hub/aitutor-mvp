@@ -1037,9 +1037,11 @@ def test_praise_only_when_the_reply_meets_the_goal() -> None:
     assert "names a real step toward it" not in text
     assert "Asking a question, asking for background, or asking to move on is not noteworthy work." in teach
     turn = _section(text, "This turn")
-    assert "Congratulate the learner once." in turn
-    assert "Ask one question only: move on, or ask one more question." in turn
-    assert "Do not offer one more example." in turn
+    assert "Close in one sentence." in turn
+    assert "Ask no question." in turn
+    assert "Do not praise." in turn
+    assert "Congratulate the learner once." not in turn
+    assert "Ask one question only: move on, or ask one more question." not in turn
 
 
 _CONGRATULATE = "Congratulate the learner once."
@@ -1236,8 +1238,10 @@ def test_lets_go_after_a_passed_goal_opens_the_next_block() -> None:
         last_misconception="",
         answer="Scarcity is the central problem because wants exceed resources.",
     )
-    assert passed.advance_block is False
-    assert passed.next_block_state["substep"] == "summary_check"
+    assert passed.advance_block is True
+    assert passed.next_step == 1
+    assert passed.block_results[-1]["outcome"] == "passed"
+    assert passed.next_block_state.get("substep") != "summary_check"
 
     phrase = "lets go to the next block"
     assert summary_ready_signal(phrase)

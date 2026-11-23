@@ -101,12 +101,22 @@ def explanation_topic_index(block: dict, state: dict | None) -> int:
     return min(max(index, 0), len(topics) - 1)
 
 
-def initial_block_state(block: dict, cfg: dict | None = None) -> dict:
+def topic_goal_follows_explanation(block: dict, previous: dict | None) -> bool:
+    """True when this topic and goal sits immediately after an explanation on the same component."""
+    if str((block or {}).get("type") or "").strip() != "topic_goal":
+        return False
+    return str((previous or {}).get("type") or "").strip() == "explanation"
+
+
+def initial_block_state(block: dict, cfg: dict | None = None, *, previous: dict | None = None) -> dict:
     """State written when a block is entered."""
     state = {"substep": default_substep_for_block(block, cfg), "dialogue_turns": 0}
     if str(block.get("type") or "").strip() == "explanation":
         state["topic_index"] = 0
         state["elaboration_turns"] = 0
+    if topic_goal_follows_explanation(block, previous):
+        # The explanation already taught the concept. Open on the goal question.
+        state["substep"] = "main"
     return state
 
 
@@ -1718,6 +1728,7 @@ def _this_turn(
     has_next: bool = False,
     forecast: object | None = None,
     ready_check: bool = False,
+    ask_goal_now: bool = False,
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -1746,7 +1757,12 @@ def _this_turn(
         cfg=cfg,
         state=active_block_state,
     )
-    if goal_start == "explain":
+    if ask_goal_now:
+        lines.append(
+            "Goal question: This concept was just taught. Ask the opening question for this goal. "
+            "Do not teach the concept again. One question, and it comes last. Do not answer it."
+        )
+    elif goal_start == "explain":
         lines.append(_GOAL_START_EXPLAIN)
         if opening and step_index == 0 and outline:
             lines.append(
@@ -1830,6 +1846,8 @@ def _this_turn(
         lines.append(
             "Turn Stance: Give a short lead-in for the choice card. Do not ask the multiple-choice question in the reply."
         )
+    elif ask_goal_now:
+        lines.append("Ask the opening question for this goal. Do not teach the concept again.")
     elif opening and not presenting:
         if str(block.get("type") or "") in {"retrieval_check", "mcq"}:
             lines.append(_OPENING_ASK)
@@ -2484,6 +2502,7 @@ def _what_to_teach(
     summary_begin: bool = False,
     has_next: bool = False,
     forecast: object | None = None,
+    ask_goal_now: bool = False,
 ) -> list[str]:
     """Strict block isolation: injects ONLY the currently active block and its active substep."""
     btype = str(block.get("type") or "topic_goal").strip()
@@ -2501,10 +2520,14 @@ def _what_to_teach(
         goal = str(data.get("goal") or node.core_truth).strip()
         criteria = str(data.get("acceptance_criteria") or goal).strip()
         notes = str(data.get("teaching_notes") or "").strip()
-        lines.append(f"Topic to introduce: {_finish(topic)}")
-        lines.append(f"Learning goal the learner must explain in their own words: {_finish(goal)}")
+        if ask_goal_now:
+            lines.append(f"Topic, already taught: {_finish(topic)}")
+            lines.append(f"Learning goal to ask now: {_finish(goal)}")
+        else:
+            lines.append(f"Topic to introduce: {_finish(topic)}")
+            lines.append(f"Learning goal the learner must explain in their own words: {_finish(goal)}")
         lines.append(f"Acceptance criteria to check ( withhold until pass or reveal ): {_finish(criteria)}")
-        if notes:
+        if notes and not ask_goal_now:
             lines.append(f"Teaching notes: {_finish(notes)}")
         phase = _goal_start_mode(
             block,
@@ -2514,7 +2537,11 @@ def _what_to_teach(
             cfg=cfg,
             state=active_state if active_state is not None else active_block_state,
         )
-        if phase in {"ask", "cap"}:
+        if ask_goal_now:
+            lines.append(
+                "Ask the opening question for this goal now. Do not teach the concept again. Do not give the answer."
+            )
+        elif phase in {"ask", "cap"}:
             lines.append("Ask the opening question for this goal now. Do not give the answer.")
             if phase == "ask" and _proceed_text_is_yes(last_answer) and "?" not in (last_answer or ""):
                 lines.append("A bare yes does not start a new lesson. Do not explain the topic.")
@@ -3199,6 +3226,7 @@ def _how_to_teach(
     summary_begin: bool = False,
     has_next: bool = False,
     forecast: object | None = None,
+    ask_goal_now: bool = False,
 ) -> list[str]:
     if _agreement_close(summary_begin, worked_close, last_answer):
         return ["Do not teach a new lesson. Do not praise. Do not recap."]
@@ -3367,6 +3395,10 @@ def _how_to_teach(
         lines.append(
             "The learner already restated this point. Name anything missed in one sentence. "
             "Do not re-teach the whole topic."
+        )
+    elif ask_goal_now:
+        lines.append(
+            "This concept was just taught. Ask the opening question for this goal. Do not teach the concept again."
         )
     elif worked_close in {"affirm", "continue"}:
         lines.append("On this worked-example close the stance does not ask. Do not add a guiding question.")
@@ -4020,6 +4052,12 @@ def build_kc_prompt(
         substep = "main"
         state_dict["substep"] = substep
         fragment = False
+    previous_block = blocks[index - 1] if index > 0 else None
+    ask_goal_now = bool(
+        opening
+        and substep == "main"
+        and topic_goal_follows_explanation(active_block, previous_block)
+    )
     substeps = substeps_for_block(active_block, cfg)
     is_last_block = index >= len(blocks) - 1
     is_last_substep = substep == substeps[-1] if substeps else True
@@ -4237,6 +4275,7 @@ def build_kc_prompt(
                     has_next=has_next,
                     forecast=forecast,
                     ready_check=ready_check,
+                    ask_goal_now=ask_goal_now,
                 ),
             ),
             (
@@ -4256,6 +4295,7 @@ def build_kc_prompt(
                 summary_begin=summary_begin,
                 has_next=has_next,
                 forecast=forecast,
+                ask_goal_now=ask_goal_now,
             ),
             ),
             (
@@ -4295,6 +4335,7 @@ def build_kc_prompt(
                     summary_begin=summary_begin,
                     has_next=has_next,
                     forecast=forecast,
+                    ask_goal_now=ask_goal_now,
                 ),
             ),
             ("How to sound", _how_to_sound(profile=profile, student=student, turn_kind=turn_kind)),

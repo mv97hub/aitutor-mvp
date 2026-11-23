@@ -116,10 +116,12 @@ def test_move_on_opens_the_question_and_does_not_finish_the_goal() -> None:
 
 def test_a_goal_answer_during_the_explanation_is_scored_as_the_first_try() -> None:
     answered = _turn("The river is blue.")
-    assert answered.next_block_state["substep"] == "summary_check"
-    assert answered.next_block_state["block_attempts"] == 1
-    assert answered.advance_block is False
+    assert answered.advance_block is True
+    assert answered.next_step == 1
     assert answered.unit_complete is False
+    assert answered.block_results[-1]["outcome"] == "passed"
+    assert answered.block_results[-1]["attempts"] == 1
+    assert answered.next_block_state.get("substep") != "summary_check"
 
 
 def test_the_question_phase_still_checks_the_goal() -> None:
@@ -242,10 +244,11 @@ def test_tell_me_more_on_the_apple_intro_still_deepens() -> None:
 
 def test_a_real_apple_attempt_is_scored_and_move_on_opens_the_question() -> None:
     answered = _apple_turn(REAL_APPLE)
-    assert answered.next_block_state["substep"] == "summary_check"
-    assert answered.next_block_state["elaboration_turns"] == 0
+    assert answered.advance_block is True
+    assert answered.next_step == 1
+    assert answered.block_results[-1]["outcome"] == "passed"
     assert answered.rubric_met == ["kept", "apple"]
-    assert answered.advance_block is False
+    assert answered.next_block_state.get("substep") != "summary_check"
     assert "Do not start a new explanation of this topic." not in _apple_prompt(REAL_APPLE)
     opened = _apple_turn("Got it - move on")
     assert opened.next_block_state["substep"] == "main"
