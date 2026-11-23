@@ -148,7 +148,9 @@ def test_a_side_question_on_another_substep_is_not_an_attempt() -> None:
 
 def test_a_real_attempt_and_a_move_on_keep_today_behavior() -> None:
     answered = _turn("Pompey led the senate's armies.", "main", rubric_met=[], stored_rubric=[])
-    assert answered.next_block_state["substep"] == "summary_check"
+    assert answered.advance_block is True
+    assert answered.next_step == 1
+    assert answered.block_results[-1]["outcome"] == "passed"
     assert answered.passed is False
 
     closed = _turn("move on", "main", substep_passed=False, block_complete=False, rubric_met=[], stored_rubric=[])

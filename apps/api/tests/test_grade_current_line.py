@@ -180,10 +180,10 @@ def test_a_side_question_is_graded_instead_of_the_previous_line() -> None:
 
 def test_a_topic_goal_answer_that_states_the_chain_finishes_main() -> None:
     finished = _goal_turn(CHAIN, substep_passed=False)
-    assert finished.next_block_state["substep"] == "summary_check"
+    assert finished.advance_block is True
+    assert finished.next_step == 1
+    assert finished.block_results[-1]["outcome"] == "passed"
     assert finished.next_block_state.get("revealed_substep") is not True
-    assert finished.advance_block is False
-    assert finished.next_step == 0
 
 
 def test_whats_next_on_an_open_goal_does_not_pass() -> None:

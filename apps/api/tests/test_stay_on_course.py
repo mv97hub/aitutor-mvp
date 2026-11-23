@@ -103,7 +103,7 @@ def test_the_same_lines_are_not_forced_to_stay_when_the_setting_is_off() -> None
     for phrase in (TELL, STORY):
         assert unscored_side_request(TOPIC, "main", phrase, {"substep": "main"}, _cfg("exploratory")), phrase
         left = _turn(phrase, mode="exploratory", move_attempts=2)
-        assert left.next_block_state["substep"] == "summary_check", phrase
+        assert left.advance_block or left.next_block_state["substep"] == "summary_check", phrase
         assert left.move_attempts != 2 or left.next_block_state["substep"] != "main", phrase
         text = _prompt(phrase, mode="exploratory")
         assert FOLLOW in text, phrase
@@ -119,8 +119,9 @@ def test_a_real_answer_a_wrong_try_and_move_on_keep_todays_path() -> None:
     assert "then repeat the active question" not in _prompt(WRONG)
 
     answered = _turn(GOAL, move_attempts=0)
-    assert answered.next_block_state["substep"] == "summary_check"
-    assert answered.advance_block is False
+    assert answered.advance_block is True
+    assert answered.next_step == 1
+    assert answered.block_results[-1]["outcome"] == "passed"
 
     moved = _turn("move on", substep_passed=False, block_complete=False, move_attempts=0)
     assert moved.advance_block is True

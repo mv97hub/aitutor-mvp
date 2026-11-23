@@ -5235,10 +5235,18 @@ def clean_model_component(
     other_codes: list[str] | None = None,
     allowed_block_types: list[str] | None = None,
     audience: str = "",
+    course_title: str = "",
+    course_description: str = "",
+    archetype: str = "",
 ) -> tuple[dict, list[BrokenKcRepair], MixRepair | None]:
     if not isinstance(raw, dict):
         raise HTTPException(status_code=422, detail="The model reply could not be read.")
-    from app.kc_model import clean_allowed_block_types, derive_rubric_from_blocks, draft_scoped_blocks
+    from app.kc_model import (
+        clean_allowed_block_types,
+        component_archetype,
+        derive_rubric_from_blocks,
+        draft_scoped_blocks,
+    )
 
     title = str(raw.get("title") or "").strip()
     if not title:
@@ -5246,7 +5254,16 @@ def clean_model_component(
     allowed = clean_allowed_block_types(allowed_block_types)
     blocks = _clean_model_blocks(raw.get("blocks"), allowed)
     source = str(getattr(node, "description", "") or "").strip() or str(raw.get("description") or "").strip()
-    blocks = draft_scoped_blocks(source, audience, allowed, blocks)
+    named = str(archetype or "").strip() or component_archetype(node)
+    blocks = draft_scoped_blocks(
+        source,
+        audience,
+        allowed,
+        blocks,
+        course_title=course_title,
+        course_description=course_description,
+        archetype=named,
+    )
     shaped = {
         "kind": "component",
         "id": str(node.id),
@@ -5361,6 +5378,8 @@ def accept_model_turn(
         _other_codes(db, node, ordered),
         clean_allowed_block_types(scope),
         audience=goal.audience,
+        course_title=goal.title,
+        course_description=goal.description,
     )
     record_repairs(node, goal, repairs, mix_repair)
     _add_creator_message(db, node, "user", cleaned)

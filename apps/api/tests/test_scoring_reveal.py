@@ -118,9 +118,10 @@ def test_topic_goal_paraphrase_then_move_on_passes() -> None:
     assert answer_addresses_substep(TOPIC, "main", TOPIC_PARAPHRASE, {"substep": "main"}, CFG) is False
 
     awarded = _turn(TOPIC, TOPIC_PARAPHRASE, "main", rubric_met=["tg1"])
-    assert awarded.advance_block is False
-    assert awarded.next_block_state["substep"] == "summary_check"
-    assert not awarded.next_block_state.get("revealed_substep")
+    assert awarded.advance_block is True
+    assert awarded.next_step == 1
+    assert awarded.block_results[-1]["outcome"] == "passed"
+    assert not _revealed(awarded)
     assert awarded.reveals == 0
     assert "tg1" in awarded.rubric_met
 
@@ -128,8 +129,8 @@ def test_topic_goal_paraphrase_then_move_on_passes() -> None:
         TOPIC,
         "move on",
         "summary_check",
-        stored_rubric=awarded.rubric_met,
-        state=awarded.next_block_state,
+        stored_rubric=["tg1"],
+        state={"substep": "summary_check", "last_task_substep": "main", "revealed_substep": False, "block_attempts": 1},
     )
     assert closed.advance_block is True
     assert closed.block_results[-1]["outcome"] == "passed"
@@ -137,8 +138,10 @@ def test_topic_goal_paraphrase_then_move_on_passes() -> None:
     assert not _revealed(closed)
 
     flagged = _turn(TOPIC, TOPIC_PARAPHRASE, "main", substep_passed=True)
-    assert flagged.next_block_state["substep"] == "summary_check"
-    assert not flagged.next_block_state.get("revealed_substep")
+    assert flagged.advance_block is True
+    assert flagged.next_step == 1
+    assert flagged.block_results[-1]["outcome"] == "passed"
+    assert not _revealed(flagged)
 
     # The transcript bug: evidence is already met, but the substep was left on main.
     stuck = _turn(TOPIC, "move on", "main", stored_rubric=["tg1"], move_attempts=1)
@@ -290,8 +293,9 @@ def test_teach_back_follow_up_example_passes_instead_of_revealing() -> None:
     )
     assert follow.reveals == 0
     assert not _revealed(follow)
-    assert follow.next_block_state["substep"] == "summary_check"
-    assert not follow.next_block_state.get("revealed_substep")
+    assert follow.advance_block is True
+    assert follow.next_step == 1
+    assert follow.block_results[-1]["outcome"] == "passed"
 
     # The model kept the explanation id while scoring the follow-up example.
     same_id = _turn(
@@ -303,7 +307,9 @@ def test_teach_back_follow_up_example_passes_instead_of_revealing() -> None:
     )
     assert same_id.reveals == 0
     assert not _revealed(same_id)
-    assert same_id.next_block_state["substep"] == "summary_check"
+    assert same_id.advance_block is True
+    assert same_id.next_step == 1
+    assert same_id.block_results[-1]["outcome"] == "passed"
 
 
 def test_teach_back_prompt_does_not_tag_a_fair_price_or_follow_up_example() -> None:

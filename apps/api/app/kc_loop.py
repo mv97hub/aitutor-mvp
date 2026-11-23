@@ -2183,6 +2183,20 @@ def resolve_block_turn(
             return "engaged"
         return "passed"
 
+    def _clean_mid_pass() -> bool:
+        """A passed final step in the middle of the component skips the summary check.
+
+        A reveal, a giveaway, and the last block still stop for summary_check.
+        forecast_this_turn calls resolve_block_turn, so it takes this same branch.
+        """
+        if index >= len(blocks) - 1:
+            return False
+        if state.get("revealed_substep") or state.get("recall_revealed"):
+            return False
+        if state.get("answer_given_away") or state.get("giveaway_counted"):
+            return False
+        return True
+
     def _enter_summary(*, revealed: bool) -> BlockResolution:
         state["last_task_substep"] = substep
         state["substep"] = "summary_check"
@@ -2252,6 +2266,8 @@ def resolve_block_turn(
             if need_why:
                 state["substep"] = "awaiting_why"
                 return stay(0, "nudge")
+            if _clean_mid_pass():
+                return finish("passed", int(state.get("block_attempts") or 1), reveals)
             return _enter_summary(revealed=False)
         eliminated = list(mcq_state.get("eliminated_indices") or [])
         if picked is not None and picked not in eliminated:
@@ -2334,6 +2350,8 @@ def resolve_block_turn(
             given = bool(state.get("revealed_substep") or state.get("faded_answer_given"))
             outcome = "revealed" if given else "passed"
             return finish(outcome, int(state.get("block_attempts") or 1), reveals)
+        if _clean_mid_pass():
+            return finish(_summary_outcome(), int(state.get("block_attempts") or 1), reveals)
         return _enter_summary(revealed=False)
 
     if addressed:
@@ -2553,7 +2571,7 @@ def _advance_or_close_component(
             misconception=misconception,
             next_step=next_idx,
             next_block_id=next_id,
-            next_block_state=initial_block_state(next_blk, cfg),
+            next_block_state=initial_block_state(next_blk, cfg, previous=blocks[index]),
             block_results=results,
             mark_known=False,
             mark_fragile=False,

@@ -660,6 +660,8 @@ def test_a_reading_description_drafts_one_passage_when_the_scope_includes_it() -
         [],
         ["topic_goal", "mcq", "passage_ela"],
         audience="12-14",
+        course_title="Grade 6 ELA",
+        course_description="Reading comprehension",
     )
     passages = [block for block in shaped["blocks"] if block["type"] == "passage_ela"]
     assert len(passages) == 1
@@ -684,7 +686,13 @@ def test_a_reading_description_drafts_one_passage_when_the_scope_includes_it() -
     assert low_words <= len(data["passage_text"].split()) <= high_words
 
     for audience, paragraphs in (("6-8", (1, 2)), ("9-11", (1, 2)), ("15-17", (3, 4))):
-        block = draft_scoped_blocks(READING, audience, ["passage_ela"])
+        block = draft_scoped_blocks(
+            READING,
+            audience,
+            ["passage_ela"],
+            course_title="Grade 6 ELA",
+            course_description="Reading comprehension",
+        )
         assert len(block) == 1 and block[0]["type"] == "passage_ela"
         text = block[0]["data"]["passage_text"]
         assert paragraphs[0] <= len(passage_paragraphs(text)) <= paragraphs[1]
@@ -718,6 +726,8 @@ def test_a_reading_description_drafts_one_passage_when_the_scope_includes_it() -
         "12-14",
         ["worked_example", "passage_ela"],
         blocks=[worked, placeholder],
+        course_title="Grade 6 ELA",
+        course_description="Reading comprehension",
     )
     assert replaced[0] == worked
     assert [block["type"] for block in replaced].count("passage_ela") == 1

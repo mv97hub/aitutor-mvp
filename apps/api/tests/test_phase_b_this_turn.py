@@ -103,7 +103,7 @@ def test_move_on_stay_and_model_dependent_turns_each_have_one_branch() -> None:
     assert "Decision: close." not in pending
     assert "Decision: stay." not in pending
     speeches = {pending_forecast.if_correct.speech, pending_forecast.if_not.speech}
-    assert speeches == {"advance", "stay"}
+    assert speeches == {"close", "stay"}
     _consistent(pending_text)
 
 
@@ -120,7 +120,7 @@ def test_advance_prompt_does_not_say_stay_and_stay_prompt_does_not_say_advance()
     assert "Set decision to stay" not in advanced_text
     advanced_branch = _branches(advanced)
     assert len(advanced_branch) == 1
-    assert advanced_branch[0].startswith("Decision: advance.")
+    assert advanced_branch[0].startswith("Decision: close.")
     assert "stay" not in advanced_branch[0].lower()
     assert "Set decision to advance." in advanced_branch[0]
 
@@ -136,7 +136,7 @@ def test_advance_prompt_does_not_say_stay_and_stay_prompt_does_not_say_advance()
     _pending_text, pending = _turn(guess, {"substep": "main"})
     correct = next(line for line in pending.splitlines() if line.startswith("If correct:"))
     missed = next(line for line in pending.splitlines() if line.startswith("If not:"))
-    assert correct.startswith("If correct: advance.")
+    assert correct.startswith("If correct: close.")
     assert "stay" not in correct.lower()
     assert missed.startswith("If not: stay.")
     assert "advance" not in missed.lower()

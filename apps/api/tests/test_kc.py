@@ -4103,15 +4103,19 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
         "data": {"topic": "River color", "goal": "The river is blue.", "acceptance_criteria": "The river is blue."},
     }
     passed = run(topic, "main", "The river is blue.", substep_passed=True)
-    assert passed.advance_block is False
-    assert passed.next_block_state["substep"] == "summary_check"
-    assert passed.next_block_state["last_task_substep"] == "main"
-    assert not passed.next_block_state.get("revealed_substep")
+    assert passed.advance_block is True
+    assert passed.next_step == 1
+    assert passed.block_results[-1]["outcome"] == "passed"
     closed = run(
         topic,
         "summary_check",
         "move on",
-        state=passed.next_block_state,
+        state={
+            "substep": "summary_check",
+            "last_task_substep": "main",
+            "revealed_substep": False,
+            "block_attempts": 1,
+        },
         block_complete=True,
     )
     assert closed.advance_block is True
@@ -4171,7 +4175,9 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
         substep_passed=True,
         tutor_cfg=socratic_cfg,
     )
-    assert talked.next_block_state["substep"] == "summary_check"
+    assert talked.advance_block is True
+    assert talked.next_step == 1
+    assert talked.block_results[-1]["outcome"] == "passed"
 
     case = {
         "id": "cases",
@@ -4179,7 +4185,9 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
         "data": {"invariant_principle": "Blue water reflects the sky.", "case_a": "Morning", "case_b": "Evening"},
     }
     contrasted = run(case, "contrast_and_rule", "Blue water reflects the sky.", substep_passed=True)
-    assert contrasted.next_block_state["substep"] == "summary_check"
+    assert contrasted.advance_block is True
+    assert contrasted.next_step == 1
+    assert contrasted.block_results[-1]["outcome"] == "passed"
 
     teach = {
         "id": "peer",
@@ -4187,7 +4195,9 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
         "data": {"peer_persona_prompt": "A friend", "required_concepts": ["blue water"]},
     }
     taught = run(teach, "peer_follow_up", "I told them about blue water.", substep_passed=True)
-    assert taught.next_block_state["substep"] == "summary_check"
+    assert taught.advance_block is True
+    assert taught.next_step == 1
+    assert taught.block_results[-1]["outcome"] == "passed"
 
     curiosity = {
         "id": "wonder",
@@ -4195,7 +4205,9 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
         "data": {"phenomenon_hook": "Why is the river blue?", "prediction_question": "Guess."},
     }
     wondered = run(curiosity, "hook_and_predict", "I wonder why.", substep_passed=True)
-    assert wondered.next_block_state["substep"] == "summary_check"
+    assert wondered.advance_block is True
+    assert wondered.next_step == 1
+    assert wondered.block_results[-1]["outcome"] == "engaged"
     wonder_done = resolve_block_turn(
         decision="stay",
         substep_passed=False,
@@ -4205,7 +4217,12 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
         matched_wrong="",
         blocks=[curiosity],
         step=0,
-        active_block_state=wondered.next_block_state,
+        active_block_state={
+            "substep": "summary_check",
+            "last_task_substep": "hook_and_predict",
+            "revealed_substep": False,
+            "block_attempts": 1,
+        },
         block_results=[],
         move_attempts=0,
         hint_tier="nudge",
@@ -4233,12 +4250,15 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
         },
     }
     picked = run(quiz, "choice", "Blue water", substep_passed=True)
-    assert picked.next_block_state["substep"] == "summary_check"
-    assert picked.advance_block is False
+    assert picked.advance_block is True
+    assert picked.next_step == 1
+    assert picked.block_results[-1]["outcome"] == "passed"
     why = run(quiz, "choice", "Blue water", move_attempts=1, substep_passed=True)
     assert why.next_block_state["substep"] == "awaiting_why"
     explained = run(quiz, "awaiting_why", "Blue water reflects the sky.", substep_passed=True)
-    assert explained.next_block_state["substep"] == "summary_check"
+    assert explained.advance_block is True
+    assert explained.next_step == 1
+    assert explained.block_results[-1]["outcome"] == "passed"
     missed_quiz = run(quiz, "choice", "Red water", move_attempts=1)
     assert missed_quiz.next_block_state["substep"] == "summary_check"
     assert missed_quiz.next_block_state["revealed_substep"] is True
@@ -4271,7 +4291,9 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
         "The flaw is the river is red. The river is blue.",
         substep_passed=True,
     )
-    assert critiqued.next_block_state["substep"] == "summary_check"
+    assert critiqued.advance_block is True
+    assert critiqued.next_step == 1
+    assert critiqued.block_results[-1]["outcome"] == "passed"
     missed_flaw = run(flaw, "critique", "Looks fine to me.", move_attempts=1)
     assert missed_flaw.next_block_state["revealed_substep"] is True
 
@@ -4281,7 +4303,9 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
         "data": {"recall_prompt": "What color?", "expected_fact": "The river is blue.", "expected_why_rationale": "It reflects the sky."},
     }
     elaborated = run(recall, "elaborate_why", "It reflects the sky.", substep_passed=True)
-    assert elaborated.next_block_state["substep"] == "summary_check"
+    assert elaborated.advance_block is True
+    assert elaborated.next_step == 1
+    assert elaborated.block_results[-1]["outcome"] == "passed"
     missed_recall = run(recall, "elaborate_why", "I forget.", move_attempts=1)
     assert missed_recall.next_block_state["substep"] == "summary_check"
     assert missed_recall.next_block_state["revealed_substep"] is True
@@ -4497,8 +4521,8 @@ def test_a_ready_signal_ends_the_opening_explanation_over_http() -> None:
             "The hull pushes aside water that weighs more than the boat, so it floats.",
             substep_passed=True,
         )
-        assert summary["active_substep"] == "summary_check"
-        assert summary["step"] == 0
+        assert summary["step"] == 1
+        assert summary["active_substep"] != "summary_check"
     finally:
         _wipe_zz()
 

@@ -18,7 +18,7 @@ from app.block_catalog import (
     PASSAGE_LENGTH_GUIDELINES,
 )
 from app.kc_blocks import clean_passage_ela_data, passage_ela_gap, passage_paragraphs
-from app.kc_pipeline import passage_ela_generation_lines
+from app.kc_pipeline import course_is_ela, passage_ela_generation_lines
 from app.models import (
     ALL_BLOCK_TYPES,
     DEFAULT_TUTOR_MODEL,
@@ -457,6 +457,32 @@ def _passage_groups(subject: str) -> list[list[str]]:
     ]
 
 
+TEXTUAL_INTERPRETIVE = "textual_interpretive"
+
+
+def component_archetype(node: object) -> str:
+    """The archetype stored on a component, when one is present."""
+    direct = str(getattr(node, "archetype", "") or "").strip()
+    if direct:
+        return direct
+    fields = getattr(node, "type_fields", None)
+    if isinstance(fields, dict):
+        named = str(fields.get("archetype") or "").strip()
+        if named:
+            return named
+    spec = getattr(node, "mastery_spec", None)
+    if isinstance(spec, dict):
+        return str(spec.get("archetype") or "").strip()
+    return ""
+
+
+def passage_draft_allowed(*parts: object, archetype: str = "") -> bool:
+    """A passage is drafted for an ELA course or a textual interpretive component."""
+    if str(archetype or "").strip() == TEXTUAL_INTERPRETIVE:
+        return True
+    return course_is_ela(*parts)
+
+
 def draft_passage_ela_block(description: str, audience: str, block_id: str = "blk_passage") -> dict:
     """One filled passage_ela block written from the topic description."""
     subject = passage_subject(description)
@@ -513,11 +539,20 @@ def draft_scoped_blocks(
     audience: str,
     allowed_block_types: list[str] | None,
     blocks: list[dict] | None = None,
+    *,
+    course_title: str = "",
+    course_description: str = "",
+    archetype: str = "",
 ) -> list[dict]:
-    """Keep the other blocks. Add one passage_ela block when that type is in scope."""
+    """Keep the other blocks. Draft one passage only for ELA or textual interpretive work."""
     allowed = clean_allowed_block_types(allowed_block_types)
     incoming = [block for block in (blocks or []) if isinstance(block, dict)]
-    if "passage_ela" not in allowed:
+    eligible = "passage_ela" in allowed and passage_draft_allowed(
+        course_title,
+        course_description,
+        archetype=archetype,
+    )
+    if not eligible:
         return [block for block in incoming if str(block.get("type") or "") != "passage_ela"]
     kept: list[dict] = []
     placed = False
@@ -542,8 +577,19 @@ def draft_scoped_blocks(
     return kept
 
 
-def _passage_scope_lines(allowed: list[str], audience: str) -> list[str]:
-    if "passage_ela" not in allowed:
+def _passage_scope_lines(
+    allowed: list[str],
+    audience: str,
+    *,
+    course_title: str = "",
+    course_description: str = "",
+    archetype: str = "",
+) -> list[str]:
+    if "passage_ela" not in allowed or not passage_draft_allowed(
+        course_title,
+        course_description,
+        archetype=archetype,
+    ):
         return []
     low, high = passage_paragraph_bounds(audience)
     low_words, high_words = passage_word_bounds(audience)
@@ -592,6 +638,7 @@ def creator_bundle(
     previous: dict | None,
     message: str,
     model: str,
+    archetype: str = "",
 ) -> dict:
     chosen = checked_model(model)
     allowed = clean_allowed_block_types(allowed_block_types)
@@ -677,7 +724,13 @@ def creator_bundle(
             "Do not generate any other block type.",
             "Allowed block type specifications:",
             allowed_rules,
-            *_passage_scope_lines(allowed, audience),
+            *_passage_scope_lines(
+                allowed,
+                audience,
+                course_title=course_title,
+                course_description=course_description,
+                archetype=archetype,
+            ),
             "Return an ordered blocks[] array of 1 to 6 blocks using only the allowed block types, "
             "the outline in the outline field, the core_truth, misconceptions, prerequisites, and encompasses.",
             _creator_links(other_codes),
