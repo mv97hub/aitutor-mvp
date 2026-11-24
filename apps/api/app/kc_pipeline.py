@@ -12,6 +12,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from app.mastery import MASTERY_SPEC_SCHEMA, PLAN_RULES, UNIT_MASTERY_RULES, assign_mastery_spec, parse_mastery_spec
 from app.kc_standards import (
     STANDARDS,
     component_standards,
@@ -125,9 +126,10 @@ _BLUEPRINT_COMPONENT = {
         "ref": {"type": "string"},
         "title": {"type": "string"},
         "summary": {"type": "string"},
+        "mastery_spec": MASTERY_SPEC_SCHEMA,
         "prerequisites": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["ref", "title", "summary", "prerequisites"],
+    "required": ["ref", "title", "summary", "mastery_spec", "prerequisites"],
 }
 
 BLUEPRINT_SCHEMA = {
@@ -224,9 +226,10 @@ def unit_schema(codes: list[str]) -> dict:
                     "additionalProperties": False,
                     "properties": {
                         "code": {"type": "string", "enum": list(codes)},
+                        "mastery_spec": MASTERY_SPEC_SCHEMA,
                         "description": _STRING,
                     },
-                    "required": ["code", "description"],
+                    "required": ["code", "mastery_spec", "description"],
                 },
             }
         },
@@ -728,6 +731,7 @@ def blueprint_bundle(*, course: dict, brief: str, model: str) -> dict:
     )
     lines = [
         BLUEPRINT_RULES,
+        PLAN_RULES,
         INSTRUCTION_RULES,
         _count_text(low, high),
         (
@@ -903,6 +907,7 @@ def _blueprint_unit_calls(
         ref += count
         lines = [
             "You plan one unit of a children's course. The other units are planned in their own calls.",
+            PLAN_RULES,
             INSTRUCTION_RULES,
             f"Return exactly {count} {'component' if count == 1 else 'components'} in this unit.",
             f"Course topic: {course['title']}",
@@ -950,6 +955,19 @@ def _blueprint_unit_calls(
             }
         )
     return calls
+
+
+def _mastery_mark(item: dict) -> str:
+    spec = item.get("mastery_spec")
+    if not isinstance(spec, dict) or not spec.get("archetype"):
+        return ""
+    claims = spec.get("claims") if isinstance(spec.get("claims"), list) else []
+    text = "; ".join(
+        f"{row.get('id')}: {row.get('statement')}"
+        for row in claims
+        if isinstance(row, dict) and str(row.get("statement") or "").strip()
+    )
+    return f" [mastery {spec.get('archetype')}, level {spec.get('target_level')}; {text}]"
 
 
 def _standard_mark(item: dict) -> str:
@@ -1068,6 +1086,23 @@ def _check_blueprint(blueprint: dict) -> None:
         seen_codes.add(row["code"])
 
 
+def _assign_component_specs(units: list[dict], course_text: str) -> None:
+    """Write archetype and claims onto each component. No block list is stored."""
+    rows = [item for unit in units for item in unit["components"]]
+    last = len(rows) - 1
+    index = 0
+    for item in rows:
+        raw = item.pop("_mastery_raw", None)
+        item["mastery_spec"] = assign_mastery_spec(
+            raw,
+            title=str(item.get("title") or ""),
+            summary=str(item.get("summary") or ""),
+            course_text=course_text,
+            capstone=index == last and last >= 0,
+        )
+        index += 1
+
+
 def assemble_blueprint(
     result: object,
     *,
@@ -1077,6 +1112,7 @@ def assemble_blueprint(
     statements: list[dict] | None = None,
     matched: bool = False,
     intake: dict | None = None,
+    course_text: str = "",
 ) -> dict:
     """Turn the model blueprint (refs) into the stored blueprint (codes)."""
     if not isinstance(result, dict):
@@ -1134,9 +1170,11 @@ def assemble_blueprint(
                     "prerequisites": prerequisites,
                     "standards": covered,
                     "extension": extension,
+                    "_mastery_raw": raw.get("mastery_spec"),
                 }
             )
         units.append({"title": title, "summary": _clean_text(raw_unit.get("summary")), "components": components})
+    _assign_component_specs(units, course_text)
     blueprint = {"outcomes": outcomes, "units": units}
     _check_blueprint(blueprint)
     total = len(components_of(blueprint))
@@ -1209,16 +1247,17 @@ def clean_blueprint_edit(
                 if key and key not in cleaned:
                     cleaned.append(key)
             covered, extension = component_standards(raw_item.get("standards"), statements, name)
-            components.append(
-                {
-                    "code": code,
-                    "title": name,
-                    "summary": _clean_text(raw_item.get("summary")),
-                    "prerequisites": cleaned,
-                    "standards": covered,
-                    "extension": extension,
-                }
-            )
+            entry = {
+                "code": code,
+                "title": name,
+                "summary": _clean_text(raw_item.get("summary")),
+                "prerequisites": cleaned,
+                "standards": covered,
+                "extension": extension,
+            }
+            if "mastery_spec" in raw_item:
+                entry["mastery_spec"] = parse_mastery_spec(raw_item.get("mastery_spec"))
+            components.append(entry)
         units.append({"title": title, "summary": _clean_text(raw_unit.get("summary")), "components": components})
     if not units:
         raise ValueError("Add at least one unit.")
@@ -1243,11 +1282,13 @@ def unit_bundle(
     now = [
         f"- {item['code']}: {item['title']} (needs: {', '.join(item['prerequisites']) or 'none'}) - {item['summary']}"
         + _standard_mark(item)
+        + _mastery_mark(item)
         for item in unit["components"]
     ]
     titles = "\n".join(f"{index}. {item['title']}" for index, item in enumerate(units, start=1))
     lines = [
         UNIT_RULES,
+        UNIT_MASTERY_RULES,
         INSTRUCTION_RULES,
         f"Course topic: {course['title']}",
         f"Age band: {course['audience']}",
@@ -1326,6 +1367,42 @@ def clean_unit(result: object, codes: list[str]) -> dict[str, str]:
     if missing:
         raise ValueError(f"Describe every component in this unit. Missing: {', '.join(missing)}.")
     return found
+
+
+def apply_unit_mastery(blueprint: dict, result: object) -> dict:
+    """Store mastery specs a unit reply confirmed. Descriptions and blocks stay put."""
+    if not isinstance(result, dict) or not isinstance(blueprint, dict):
+        return blueprint
+    sent: dict[str, object] = {}
+    for row in result.get("components") or []:
+        if isinstance(row, dict) and isinstance(row.get("mastery_spec"), dict):
+            sent[_clean_text(row.get("code"))] = row.get("mastery_spec")
+    if not sent:
+        return blueprint
+    units: list[dict] = []
+    changed = False
+    for unit in blueprint.get("units") or []:
+        if not isinstance(unit, dict):
+            units.append(unit)
+            continue
+        components = []
+        for item in unit.get("components") or []:
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            code = _clean_text(row.get("code"))
+            if code in sent:
+                row["mastery_spec"] = assign_mastery_spec(
+                    sent[code],
+                    title=str(row.get("title") or ""),
+                    summary=str(row.get("summary") or ""),
+                )
+                changed = True
+            components.append(row)
+        units.append({**unit, "components": components})
+    if not changed:
+        return blueprint
+    return {**blueprint, "units": units}
 
 
 def _review_schema(statements: list[dict]) -> dict:
@@ -1575,6 +1652,11 @@ def apply_review(
             "prerequisites": [_clean_text(needed) for needed in item.get("prerequisites") or [] if _clean_text(needed)],
             "standards": covered,
             "extension": extension,
+            "mastery_spec": assign_mastery_spec(
+                item.get("mastery_spec"),
+                title=title,
+                summary=summary,
+            ),
         }
         for unit in units:
             codes = [row["code"] for row in unit["components"]]
@@ -1609,6 +1691,7 @@ def final_components(blueprint: dict, descriptions: dict[str, str]) -> list[dict
             "prerequisite_codes": list(row["prerequisites"]),
             "standards": list(row.get("standards") or []),
             "extension": bool(row.get("extension")),
+            "mastery_spec": row.get("mastery_spec") if isinstance(row.get("mastery_spec"), dict) else {},
             "unit": row["unit"],
             "position": row["position"],
         }
@@ -1630,8 +1713,9 @@ def _chat_schema(statements: list[dict]) -> dict:
             "prerequisites": {"type": "array", "items": {"type": "string"}},
             "standards": standards,
             "description": _nullable(_STRING),
+            "mastery_spec": _nullable(MASTERY_SPEC_SCHEMA),
         },
-        "required": ["code", "title", "summary", "prerequisites", "standards", "description"],
+        "required": ["code", "title", "summary", "prerequisites", "standards", "description", "mastery_spec"],
     }
     return {
         "type": "object",
@@ -1854,6 +1938,37 @@ def merge_chat_patch(blueprint: dict, result: dict, *, locked_count: int | None 
     return {"outcomes": list(outcomes or []), "units": units}
 
 
+def _retain_mastery(proposed: dict, previous: dict) -> None:
+    """Keep a stored spec when a chat reply leaves it out. A new component gets one."""
+    old_rows = {row["code"]: row for row in components_of(previous or {})}
+    rows = [item for unit in proposed.get("units") or [] for item in unit.get("components") or []]
+    last = len(rows) - 1
+    for index, item in enumerate(rows):
+        if not isinstance(item, dict):
+            continue
+        current = item.get("mastery_spec") if "mastery_spec" in item else None
+        if isinstance(current, dict) and current:
+            item["mastery_spec"] = assign_mastery_spec(
+                current,
+                title=str(item.get("title") or ""),
+                summary=str(item.get("summary") or ""),
+                capstone=index == last,
+            )
+            continue
+        previous_row = old_rows.get(item.get("code"))
+        stored = previous_row.get("mastery_spec") if isinstance(previous_row, dict) else None
+        if isinstance(stored, dict) and stored:
+            item["mastery_spec"] = stored
+            continue
+        if previous_row is None:
+            item["mastery_spec"] = assign_mastery_spec(
+                None,
+                title=str(item.get("title") or ""),
+                summary=str(item.get("summary") or ""),
+                capstone=index == last,
+            )
+
+
 def interpret_chat(
     result: object,
     *,
@@ -1882,6 +1997,7 @@ def interpret_chat(
     merged = merge_chat_patch(blueprint or {}, result, locked_count=locked_count)
     raw_rows = _raw_components(merged)
     proposed = clean_blueprint_edit(merged, taken=taken, make_code=make_code, statements=statements, matched=matched)
+    _retain_mastery(proposed, blueprint or {})
     cleaned_rows = components_of(proposed)
     if len(raw_rows) != len(cleaned_rows):
         raise ValueError("Each component needs a title.")

@@ -411,6 +411,27 @@ def load_patches(db: Session, targets: list[KcNode]) -> list[KcNode]:
 def _block_summary(blocks: list[dict]) -> str:
     return block_summary_label(blocks)
 
+def _blueprint_spec(goal: KcGoal, code: str) -> dict:
+    from app.kc_pipeline import components_of
+    from app.mastery import parse_mastery_spec
+
+    blueprint = goal.blueprint if isinstance(goal.blueprint, dict) else {}
+    for row in components_of(blueprint):
+        if row.get("code") != code:
+            continue
+        try:
+            return parse_mastery_spec(row.get("mastery_spec"))
+        except ValueError:
+            return {}
+    return {}
+
+
+def _stored_spec(node: KcNode) -> dict:
+    from app.mastery import stored_spec
+
+    return stored_spec(node)
+
+
 def _public_blocks(node: KcNode | None) -> list[dict]:
     if node is None:
         return []
@@ -422,7 +443,13 @@ def _public_blocks(node: KcNode | None) -> list[dict]:
         if kind not in ALL_BLOCK_TYPES:
             continue
         data = item.get("data") if isinstance(item.get("data"), dict) else {}
-        blocks.append({"id": str(item.get("id") or ""), "type": kind, "data": dict(data)})
+        block = {"id": str(item.get("id") or ""), "type": kind, "data": dict(data)}
+        from app.mastery import claim_ids_of
+
+        claim_ids = claim_ids_of(item)
+        if claim_ids:
+            block["claim_ids"] = claim_ids
+        blocks.append(block)
     return blocks
 
 
@@ -491,6 +518,7 @@ def _detail(node: KcNode, *, target: bool, codes: set[str]) -> dict:
             "prerequisite_codes": list(node.prerequisite_codes or []),
             "encompasses_codes": list(node.encompasses_codes or []),
             "type_fields": dict(node.type_fields or {}),
+            "mastery_spec": _stored_spec(node),
             "blocks": _public_blocks(node),
             "marked_complete": bool(node.marked_complete),
             "missing": gaps_for(node, codes),
@@ -850,6 +878,7 @@ def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
             code = slug_code(title, set(by_code))
             node = None
         description, outline, topics, write_fields = _course_topic_fields(item)
+        spec = _pushed_spec(item)
         if node is None:
             node = KcNode(
                 code=code,
@@ -857,7 +886,8 @@ def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
                 description=description,
                 outline=outline,
                 topics=topics,
-                blocks=_blocks_from_pairs(topics),
+                blocks=_blocks_for_new_component(goal, title, description, topics, spec),
+                mastery_spec=spec,
                 standards=_pushed_standards(goal, item),
             )
             db.add(node)
@@ -870,6 +900,8 @@ def push_course(db: Session, goal: KcGoal, components: list[dict]) -> KcGoal:
             if write_fields:
                 node.outline = outline
                 node.topics = topics
+            if "mastery_spec" in item:
+                node.mastery_spec = spec
             node.standards = _pushed_standards(goal, item)
             node.updated_at = _now()
         _ensure_topic_blocks(node)
@@ -1022,6 +1054,35 @@ def _authored_blocks(raw: object) -> list[dict]:
     return kept
 
 
+def _pushed_spec(item: dict) -> dict:
+    from app.mastery import parse_mastery_spec
+
+    if "mastery_spec" not in item:
+        return {}
+    try:
+        return parse_mastery_spec(item.get("mastery_spec"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _blocks_for_new_component(goal: KcGoal, title: str, description: str, topics: list, spec: dict) -> list[dict]:
+    """A new component with a spec gets the recipe. An empty spec keeps today's pairs."""
+    from app.mastery import actionable_spec, draft_recipe_blocks
+
+    if actionable_spec(spec):
+        drafted = draft_recipe_blocks(
+            spec,
+            description=description or title,
+            audience=goal.audience,
+            allowed=list(goal.allowed_block_types or []),
+            course_title=goal.title,
+            course_description=goal.description or "",
+        )
+        if drafted:
+            return drafted
+    return _blocks_from_pairs(topics)
+
+
 def _blocks_from_pairs(pairs: object) -> list[dict]:
     """Topic and goal are stored on a topic_goal block, not as a lesson field of their own."""
     from app.kc_model import clean_pairs
@@ -1054,8 +1115,27 @@ def apply_component(db: Session, node: KcNode, body: dict) -> KcNode:
     real_blocks = [
         item for item in _authored_blocks(body.get("blocks")) if str(item.get("type") or "") in ALL_BLOCK_TYPES
     ]
+    if isinstance(body.get("mastery_spec"), dict):
+        from app.mastery import parse_mastery_spec
+
+        try:
+            node.mastery_spec = parse_mastery_spec(body.get("mastery_spec"))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not real_blocks:
-        real_blocks = _blocks_from_pairs(body.get("topics"))
+        from app.mastery import actionable_spec
+
+        if actionable_spec(getattr(node, "mastery_spec", None)) and not _authored_blocks(node.blocks):
+            goal, _ordered = course_of_node(db, node)
+            real_blocks = _blocks_for_new_component(
+                goal,
+                str(body.get("title") or node.title),
+                str(body.get("description") or node.description or ""),
+                body.get("topics") if isinstance(body.get("topics"), list) else [],
+                node.mastery_spec,
+            )
+        else:
+            real_blocks = _blocks_from_pairs(body.get("topics"))
     if "title" in body and str(body.get("title") or "").strip():
         node.title = str(body["title"]).strip()
     _assign_topic_fields(node, body)
@@ -4941,6 +5021,9 @@ def creator_prompt_for(
     from app.kc_pipeline import position_text
 
     goal, ordered = course_of_node(db, node)
+    from app.mastery import spec_for_draft
+
+    spec = spec_for_draft(None, getattr(node, "mastery_spec", None)) or _blueprint_spec(goal, node.code)
     siblings = _sibling_rows(db, goal, node, ordered)
     by_code = {item["code"]: item for item in siblings}
     previous = _latest_draft(_creator_rows(db, node.id))
@@ -4975,6 +5058,8 @@ def creator_prompt_for(
             previous=previous,
             message=message,
             model=model,
+            archetype=str(spec.get("archetype") or ""),
+            mastery_spec=spec or None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -5241,12 +5326,8 @@ def clean_model_component(
 ) -> tuple[dict, list[BrokenKcRepair], MixRepair | None]:
     if not isinstance(raw, dict):
         raise HTTPException(status_code=422, detail="The model reply could not be read.")
-    from app.kc_model import (
-        clean_allowed_block_types,
-        component_archetype,
-        derive_rubric_from_blocks,
-        draft_scoped_blocks,
-    )
+    from app.kc_model import clean_allowed_block_types, component_archetype, derive_rubric_from_blocks
+    from app.mastery import blocks_for_draft, spec_for_draft
 
     title = str(raw.get("title") or "").strip()
     if not title:
@@ -5255,11 +5336,14 @@ def clean_model_component(
     blocks = _clean_model_blocks(raw.get("blocks"), allowed)
     source = str(getattr(node, "description", "") or "").strip() or str(raw.get("description") or "").strip()
     named = str(archetype or "").strip() or component_archetype(node)
-    blocks = draft_scoped_blocks(
-        source,
-        audience,
-        allowed,
+    spec = spec_for_draft(raw.get("mastery_spec"), getattr(node, "mastery_spec", None))
+    blocks = blocks_for_draft(
+        spec,
         blocks,
+        regenerate=True,
+        description=source,
+        audience=audience,
+        allowed=allowed,
         course_title=course_title,
         course_description=course_description,
         archetype=named,
@@ -5272,6 +5356,7 @@ def clean_model_component(
         "description": str(raw.get("description") or "").strip(),
         "outline": str(raw.get("outline") or "").strip(),
         "core_truth": str(raw.get("core_truth") or "").strip(),
+        "mastery_spec": spec,
         "blocks": blocks,
         "rubric": derive_rubric_from_blocks(blocks),
         "prerequisite_codes": _clean_codes(raw.get("prerequisite_codes") or []),
@@ -5372,6 +5457,13 @@ def accept_model_turn(
 
     goal, ordered = course_of_node(db, node)
     scope = allowed_block_types if allowed_block_types is not None else goal.allowed_block_types
+    from app.mastery import actionable_spec, spec_for_draft
+
+    draft_spec = spec_for_draft(draft.get("mastery_spec") if isinstance(draft, dict) else None, getattr(node, "mastery_spec", None))
+    if not draft_spec:
+        draft_spec = _blueprint_spec(goal, node.code)
+        if draft_spec and isinstance(draft, dict):
+            draft = {**draft, "mastery_spec": draft_spec}
     shaped, repairs, mix_repair = clean_model_component(
         node,
         draft,
@@ -5380,7 +5472,10 @@ def accept_model_turn(
         audience=goal.audience,
         course_title=goal.title,
         course_description=goal.description,
+        archetype=str(draft_spec.get("archetype") or ""),
     )
+    if actionable_spec(shaped.get("mastery_spec")):
+        node.mastery_spec = shaped["mastery_spec"]
     record_repairs(node, goal, repairs, mix_repair)
     _add_creator_message(db, node, "user", cleaned)
     _add_creator_message(

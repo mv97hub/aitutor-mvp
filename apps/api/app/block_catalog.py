@@ -426,3 +426,51 @@ BLOCK_DATA_SCHEMAS: dict[str, dict] = {
         },
     ),
 }
+
+
+# Five component archetypes. A recipe is the block order for a new or regenerated
+# component. The course's allowed block types filter it. An empty mastery spec
+# does not use these lists.
+ARCHETYPES: tuple[str, ...] = (
+    "procedural_conceptual",
+    "causal_systems",
+    "textual_interpretive",
+    "factual_terminological",
+    "normative_synthesis",
+)
+
+# The eight thinking skills a component can feed. This slice stores the keys.
+# It does not score them.
+SKILL_KEYS: tuple[str, ...] = (
+    "evidence",
+    "perspectives",
+    "causes",
+    "inquiry",
+    "errors",
+    "transfer",
+    "explaining",
+    "calibration",
+)
+
+ARCHETYPE_RECIPES: dict[str, tuple[str, ...]] = {
+    "procedural_conceptual": ("curiosity", "explanation", "worked_example", "spot_the_flaw", "mcq"),
+    "causal_systems": ("curiosity", "explanation", "case_study", "spot_the_flaw", "teach_back"),
+    "textual_interpretive": ("curiosity", "passage_ela", "case_study", "socratic", "teach_back"),
+    "factual_terminological": ("curiosity", "explanation", "mcq", "retrieval_check"),
+    "normative_synthesis": ("case_study", "socratic", "teach_back"),
+}
+
+
+def recipe_block_types(archetype: str, allowed: list[str] | None = None) -> list[str]:
+    """The recipe order, limited to the course's allowed block types."""
+    recipe = ARCHETYPE_RECIPES.get(str(archetype or "").strip())
+    if not recipe:
+        return []
+    if allowed is None:
+        return list(recipe)
+    allowed_set = {str(item or "").strip() for item in allowed}
+    chosen: list[str] = []
+    for kind in recipe:
+        if kind in allowed_set and kind not in chosen:
+            chosen.append(kind)
+    return chosen

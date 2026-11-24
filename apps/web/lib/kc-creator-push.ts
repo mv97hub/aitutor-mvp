@@ -12,6 +12,7 @@ export function creatorPushPayload(draft: KcComponentDraft, component: KcCompone
     encompasses_codes: string[];
     blocks: NonNullable<KcComponentDraft["blocks"]>;
     rubric?: string[];
+    mastery_spec?: KcComponentDraft["mastery_spec"];
   } = {
     description: draft.description ?? component.description,
     outline: draft.outline ?? component.outline,
@@ -22,6 +23,7 @@ export function creatorPushPayload(draft: KcComponentDraft, component: KcCompone
     encompasses_codes: draft.encompasses_codes,
     blocks: draft.blocks ?? [],
   };
+  if (draft.mastery_spec) payload.mastery_spec = draft.mastery_spec;
   if (!draft.blocks?.length && draft.rubric) {
     payload.rubric = draft.rubric;
   }

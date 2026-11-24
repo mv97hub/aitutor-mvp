@@ -13,10 +13,20 @@ export type KcBlockType =
   | "explanation"
   | "passage_ela";
 
+export type KcMasteryClaim = { id: string; statement: string };
+
+export type KcMasterySpec = {
+  archetype: string;
+  claims: KcMasteryClaim[];
+  target_level: number;
+  skills: string[];
+};
+
 export type KcBlock = {
   id: string;
   type: KcBlockType;
   data: Record<string, unknown>;
+  claim_ids?: string[];
 };
 
 export type KcBlockProgress = {
@@ -50,6 +60,7 @@ export type KcComponent = {
   prerequisite_codes: string[];
   encompasses_codes: string[];
   type_fields: Record<string, unknown>;
+  mastery_spec?: KcMasterySpec;
   blocks?: KcBlock[];
   marked_complete: boolean;
   missing: string[];
@@ -108,6 +119,7 @@ export type KcComponentDraft = {
   prerequisite_codes: string[];
   encompasses_codes: string[];
   type_fields?: Record<string, unknown>;
+  mastery_spec?: KcMasterySpec;
   blocks?: KcBlock[];
 };
 
@@ -119,6 +131,7 @@ export type KcCourseDraft = {
     description: string;
     prerequisite_codes: string[];
     standards?: string[];
+    mastery_spec?: KcMasterySpec;
     extension?: boolean;
     unit?: string;
     position?: number;
@@ -177,6 +190,7 @@ export type KcBlueprintComponent = {
   summary: string;
   prerequisites: string[];
   standards?: string[];
+  mastery_spec?: KcMasterySpec;
   extension?: boolean;
 };
 

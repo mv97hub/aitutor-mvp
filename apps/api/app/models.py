@@ -978,6 +978,7 @@ class KcNode(Base):
     outline: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     topics: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     blocks: Mapped[list] = mapped_column(BlockList, nullable=False, default=list, server_default="[]")
+    mastery_spec: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     core_truth: Mapped[str] = mapped_column(Text, nullable=False, default="")
     rubric: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     misconceptions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)

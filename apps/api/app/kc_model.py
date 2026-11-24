@@ -614,6 +614,12 @@ def _passage_scope_lines(
     ]
 
 
+def _mastery_lines(spec: dict | None, allowed: list[str]) -> list[str]:
+    from app.mastery import mastery_prompt_lines
+
+    return mastery_prompt_lines(spec, allowed)
+
+
 def creator_bundle(
     *,
     course_title: str,
@@ -639,6 +645,7 @@ def creator_bundle(
     message: str,
     model: str,
     archetype: str = "",
+    mastery_spec: dict | None = None,
 ) -> dict:
     chosen = checked_model(model)
     allowed = clean_allowed_block_types(allowed_block_types)
@@ -731,6 +738,7 @@ def creator_bundle(
                 course_description=course_description,
                 archetype=archetype,
             ),
+            *(_mastery_lines(mastery_spec, allowed)),
             "Return an ordered blocks[] array of 1 to 6 blocks using only the allowed block types, "
             "the outline in the outline field, the core_truth, misconceptions, prerequisites, and encompasses.",
             _creator_links(other_codes),

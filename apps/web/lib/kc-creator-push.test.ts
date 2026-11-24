@@ -51,4 +51,18 @@ test("the push payload sends draft blocks and does not require topic pairs", () 
   assert.equal("topics" in payload, false);
   assert.equal("kc_type" in payload, false);
   assert.equal("type_fields" in payload, false);
+  assert.equal("mastery_spec" in payload, false);
+
+  const spec = {
+    archetype: "causal_systems",
+    claims: [
+      { id: "c1", statement: "Explain the river in their own words." },
+      { id: "c2", statement: "Use the river on a new example." },
+    ],
+    target_level: 2,
+    skills: ["causes", "explaining"],
+  };
+  const tagged = creatorPushPayload({ ...draft, mastery_spec: spec, blocks }, saved);
+  assert.deepEqual(tagged.mastery_spec, spec);
+  assert.deepEqual(tagged.blocks, blocks);
 });
