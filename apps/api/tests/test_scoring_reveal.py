@@ -331,6 +331,7 @@ def test_teach_back_prompt_does_not_tag_a_fair_price_or_follow_up_example() -> N
     )
     teach = _section(text, "What to teach")
     assert "Thinking scarcity only applies to money or poor people" in teach
-    assert "prices or inflation" in teach
     assert "follow-up example prompt" in teach
-    assert "wealthy people" in teach
+    assert "prices or inflation" not in teach
+    assert "wealthy people" not in teach
+    assert "shows the idea still applies" in teach

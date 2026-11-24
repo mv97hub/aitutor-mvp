@@ -92,9 +92,8 @@ def test_agreement_after_a_passed_block_closes_in_one_sentence() -> None:
     assert "Summarize what the learner can now do" not in menu
     assert "what to practice" not in menu
     assert "Praise the specific strategy" not in turn
-    assert "What is a menu cost?" not in teach
-    assert "Do not teach a new lesson." in teach
-    assert "Do not teach a new lesson." in how
+    assert "Do not teach a new lesson." in turn
+    assert "Do not teach a new lesson." not in how
     assert "Close in one sentence." not in how
 
     goal = {
@@ -116,13 +115,12 @@ def test_agreement_after_a_passed_block_closes_in_one_sentence() -> None:
         last_answer="yes",
         active_block_state={"substep": "summary_check", "last_task_substep": "main", "revealed_substep": False},
     )
-    agreed_teach = _section(agreed, "What to teach")
-    assert "Close in one sentence." in _section(agreed, "This turn")
+    agreed_turn = _section(agreed, "This turn")
+    assert "Close in one sentence." in agreed_turn
     assert "Do not praise." in agreed
     assert "Do not recap." in agreed
-    assert "Do not teach a new lesson." in agreed_teach
-    assert "anticipated" not in agreed_teach.lower()
-    assert "How to explain this goal" not in _section(agreed, "How to teach")
+    assert "Do not teach a new lesson." in agreed_turn
+    assert "The learner agreed to move on." in agreed_turn
     assert "from a fresh angle" not in agreed
 
     bare = _text(

@@ -449,16 +449,16 @@ def test_the_lesson_text_clarification_reaches_a_side_remark_turn_once() -> None
         assert text.count(CLARIFICATION) == 1, phrase
         assert CLARIFICATION in _section(text, "This turn"), phrase
         how = _section(text, "How to teach")
+        turn = _section(text, "This turn")
         assert CLARIFICATION not in how, phrase
         assert (
             "On this goal-start turn, answer the side remark in one or two sentences, "
             "then one line back to the lesson. Do not start a new explanation."
-        ) in how, phrase
+        ) in turn, phrase
         assert (
-            "Answer the side remark in one or two sentences, then one line back to the active lesson. "
-            "Do not start a new explanation of this topic. "
-            "The goal question waits until the learner moves on."
-        ) in how, phrase
+            "On this goal-start turn, answer the side remark in one or two sentences, "
+            "then one line back to the lesson. Do not start a new explanation."
+        ) not in how, phrase
     assert CLARIFICATION not in _prompt("Tell me more")
 
 

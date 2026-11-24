@@ -688,6 +688,25 @@ def _lower_first(text: str) -> str:
     return cleaned[0].lower() + cleaned[1:]
 
 
+def _teach_back_misconception_guard(node: KcNode) -> str:
+    """Name this node's wrong move, or a domain-neutral guard when none is stored."""
+    wrongs = _wrong_moves(node)
+    if wrongs:
+        named = "; ".join(wrongs)
+        return (
+            f"Misconception guard: do not tag \"{named}\" "
+            "when the learner's explanation shows the idea still applies, "
+            "or when the learner is answering the follow-up example prompt. "
+            "An example that answers the follow-up is the explanation they were asked for, not that misconception."
+        )
+    return (
+        "Misconception guard: do not tag a stored wrong move "
+        "when the learner's explanation shows the idea still applies, "
+        "or when the learner is answering the follow-up example prompt. "
+        "An example that answers the follow-up is the explanation they were asked for."
+    )
+
+
 def _wrong_moves(node: KcNode) -> list[str]:
     found: list[str] = []
     for item in node.misconceptions or []:
@@ -2515,7 +2534,7 @@ def _what_to_teach(
             "The learner agreed to move on. Close in one sentence. "
             "Do not teach a new lesson. Do not praise. Do not recap. Do not ask a question."
         )
-    elif btype == "topic_goal":
+    if btype == "topic_goal":
         topic = str(data.get("topic") or node.title).strip()
         goal = str(data.get("goal") or node.core_truth).strip()
         criteria = str(data.get("acceptance_criteria") or goal).strip()
@@ -2736,13 +2755,7 @@ def _what_to_teach(
                 "Active substep (initial_explanation): Roleplay the confused peer and invite the learner's explanation. "
                 f"If follow-up is needed after their first explanation, ask: {_finish(follow)}"
             )
-        lines.append(
-            "Misconception guard: do not tag \"Thinking scarcity only applies to money or poor people\" "
-            "when the learner is explaining why rich people or everyone are affected, including through prices or inflation, "
-            "or when the learner is answering the follow-up example prompt. "
-            "A money example that shows the idea still applies to wealthy people is not that misconception, "
-            "and a follow-up example such as time, kids, or hobbies is the explanation they were asked for."
-        )
+        lines.append(_teach_back_misconception_guard(node))
 
     elif btype == "retrieval_check":
         recall_p = str(data.get("recall_prompt") or "").strip()
@@ -2842,6 +2855,42 @@ def _retry_sentence(count: int, subject: str) -> str:
 def _depth_sentence(depth: int) -> str:
     bounded = min(5, max(1, int(depth or 3)))
     return _EXPLAIN.get(bounded, _EXPLAIN[3])
+
+
+def _check_in_line(style: str) -> str:
+    lines = {
+        "curiosity_invitation": (
+            "Check-in style (curiosity_invitation): after each topic, invite a curiosity or what-if question, "
+            "and offer to elaborate or move on."
+        ),
+        "brief_ready_check": (
+            "Check-in style (brief_ready_check): after each topic, ask a short check-in. "
+            "Any questions on this part, or are you ready for the next topic?"
+        ),
+    }
+    return lines.get(
+        style,
+        "Check-in style (questions_or_elaborate): after each topic, ask whether they have questions "
+        "or would like you to elaborate before the next part.",
+    )
+
+
+def _summary_style_line(style: str) -> str:
+    lines = {
+        "connected_narrative_synthesis": (
+            "End-of-block summary (connected_narrative_synthesis): on the summary step, "
+            "weave the topics into one connected narrative, then ask if they have any final questions."
+        ),
+        "concise_takeaway_only": (
+            "End-of-block summary (concise_takeaway_only): on the summary step, "
+            "give only the takeaway in a sentence or two, then ask if they have any final questions."
+        ),
+    }
+    return lines.get(
+        style,
+        "End-of-block summary (bulleted_recap_with_takeaway): on the summary step, "
+        "recap the topics as short bullets with one takeaway, then ask if they have any final questions.",
+    )
 
 
 def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> list[str]:
@@ -3119,7 +3168,8 @@ def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> l
                 "Do not repeat the same paragraph.",
             )
         )
-        del check_in, summary_style
+        lines.append(_check_in_line(check_in))
+        lines.append(_summary_style_line(summary_style))
         if counts:
             lines.append(
                 "Completing this walkthrough counts toward whether the component is known. "
@@ -3229,7 +3279,10 @@ def _how_to_teach(
     ask_goal_now: bool = False,
 ) -> list[str]:
     if _agreement_close(summary_begin, worked_close, last_answer):
-        return ["Do not teach a new lesson. Do not praise. Do not recap."]
+        # The close sentence is a this-turn branch. The section underneath stays stable.
+        lines = ["Do not teach a new lesson. Do not praise. Do not recap."]
+    else:
+        lines = []
 
     over = cfg.get("overarching") or {}
     orient_mode = str(over.get("orient_framing") or "elaborate_outline")
@@ -3244,7 +3297,7 @@ def _how_to_teach(
     expl_style = str(cp.get("explanation_style") or "concrete_examples")
     challenge_appetite = str(cp.get("challenge_appetite") or "steady")
 
-    lines = _block_config_rules(block, substep, cfg, goal)
+    lines.extend(_block_config_rules(block, substep, cfg, goal))
     if _worked_reveal_stop(forecast):
         rewritten: list[str] = []
         for line in lines:
@@ -3958,12 +4011,172 @@ def _fit_prompt_sections(
     return ordered
 
 
+# Lines whose wording depends on this child line. They move into This turn so the
+# prefix before that section stays the same on close, reveal, blank, and side questions.
+_TURN_BRANCH_PREFIXES = (
+    "A tangent is not the score.",
+    "Active substep (faded_step):",
+    "Answer a tangent in one sentence",
+    "Answer that request inside the safety rules",
+    "Answer the learner's question first",
+    "Answer the learner's side question",
+    "Answer the learner's side remark",
+    "Answer the side remark",
+    "Ask the opening question for this goal.",
+    "Do not end this turn with a question.",
+    "Do not praise this reply.",
+    "Do not teach a new lesson.",
+    "End a teaching or probing turn with a single clear question",
+    "End-of-block summary (",
+    "Explanation depth ",
+    "Explain what this topic is and why it matters.",
+    "If correct:",
+    "If the learner's response finishes this part",
+    "Example or analogy to use:",
+    "Explain the topic clearly, then",
+    "Explain this topic from:",
+    "Hide one step of the worked solution",
+    "Hide two steps of the worked solution",
+    "If the answer is only one or two words, ask for the idea in a full sentence",
+    "If the learner asks a question or wants elaboration, set substep_passed",
+    "If the learner is good to proceed",
+    "If this turn reveals the faded step",
+    "Instructional stance (",
+    "Length override is on.",
+    "Key points to weave in:",
+    "Name anything missed in one sentence.",
+    "On a wrong step",
+    "On this faded-step reveal",
+    "On this goal-start turn",
+    "On this last-topic close",
+    "On this turn set substep_passed=true.",
+    "On this worked-example close",
+    "Scaffolding escalation (",
+    "Set help_requested=true.",
+    "The faded step is revealed on this turn.",
+    "The first teaching of this topic stays",
+    "The learner agreed to move on.",
+    "The learner already restated this point.",
+    "The response_length sentence cap applies ONLY",
+    "They asked to hear more.",
+    "This concept was just taught.",
+    "This is the last topic.",
+    "This is the opening turn.",
+    "This reply closes in one sentence",
+    "This reply is one short closing line",
+    "This typed line is unscored help.",
+    "Topic/goal feedback:",
+    "Topic point, already said",
+    "Topic point, for the one-or-two-sentence",
+    "When you encourage,",
+    "When the faded step is solved",
+    "When the learner asks a question or wants elaboration",
+    "When this turn reveals the faded step",
+)
+
+
+def _turn_branch(line: str) -> bool:
+    text = line.strip()
+    return any(text.startswith(prefix) for prefix in _TURN_BRANCH_PREFIXES)
+
+
+def _stay_branch_prefixes(forecast: object | None) -> tuple[str, ...]:
+    """Labels of the stay branch. A question-repeat belongs on that branch only."""
+    if not _forecast_applies(forecast):
+        return ()
+    depends = bool(getattr(forecast, "depends_on_model", False))
+    chosen = getattr(forecast, "chosen", None)
+    if depends:
+        labels: list[str] = []
+        if _speech_of(getattr(forecast, "if_not", None)) == "stay":
+            labels.append("If not:")
+        if _speech_of(getattr(forecast, "if_correct", None)) == "stay":
+            labels.append("If correct:")
+        return tuple(labels)
+    if _speech_of(chosen) == "stay":
+        return ("Decision: stay.",)
+    return ()
+
+
+def _fold_parked_stay_lines(
+    this_turn: list[str],
+    parked: list[str],
+    forecast: object | None,
+) -> tuple[list[str], list[str]]:
+    """A parked repeat-the-question line joins the stay branch. It does not sit beside an advance."""
+    ready = any(line.startswith("Ready check:") for line in this_turn)
+    labels = () if ready else _stay_branch_prefixes(forecast)
+    if not labels:
+        kept = [line for line in parked if not _repeats_the_question(line)]
+        return this_turn, kept
+    stay_lines = [line for line in parked if _repeats_the_question(line)]
+    rest = [line for line in parked if not _repeats_the_question(line)]
+    if not stay_lines:
+        return this_turn, rest
+    extra = " ".join(stay_lines)
+    folded: list[str] = []
+    for line in this_turn:
+        if any(line.startswith(label) for label in labels):
+            folded.append(f"{line} {extra}")
+        else:
+            folded.append(line)
+    return folded, rest
+
+
+def _park_turn_branches(
+    sections: list[tuple[str, list[str]]],
+    forecast: object | None = None,
+) -> list[tuple[str, list[str]]]:
+    """Move this-turn wording out of the stable prefix and into This turn."""
+    parked: list[str] = []
+    moved: list[tuple[str, list[str]]] = []
+    for title, lines in sections:
+        if title in {"This turn", "What just happened"}:
+            moved.append((title, lines))
+            continue
+        kept: list[str] = []
+        for line in lines:
+            if _turn_branch(line):
+                parked.append(line)
+            else:
+                kept.append(line)
+        moved.append((title, kept))
+    if not parked:
+        return moved
+    this_turn = next((lines for title, lines in moved if title == "This turn"), [])
+    this_turn, parked = _fold_parked_stay_lines(this_turn, parked, forecast)
+    blob = "\n".join(this_turn)
+    already = {line.strip() for line in this_turn}
+    fresh: list[str] = []
+    for line in parked:
+        text = line.strip()
+        if text in already or text in blob:
+            continue
+        # This turn already has the way-back sentence. Do not copy it again.
+        if "then one line back to the active lesson" in text and "then one line back to the active lesson" in blob:
+            continue
+        fresh.append(text)
+        already.add(text)
+    placed: list[tuple[str, list[str]]] = []
+    seen_turn = False
+    for title, lines in moved:
+        if title == "This turn":
+            placed.append((title, [*this_turn, *fresh]))
+            seen_turn = True
+        else:
+            placed.append((title, lines))
+    if fresh and not seen_turn:
+        placed.append(("This turn", fresh))
+    return placed
+
+
 def _blocks_text(sections: list[tuple[str, list[str]]], forecast: object | None = None) -> str:
     include_generated_mcq = any(
         "populate generated_mcq" in line for _, lines in sections for line in lines
     )
     sections = _fit_prompt_sections(sections, include_generated_mcq=include_generated_mcq)
     sections = _drop_praise_conflict(sections, forecast)
+    sections = _park_turn_branches(sections, forecast)
     chunks: list[str] = []
     for title, lines in sections:
         body = [line.strip() for line in lines if line and line.strip()]

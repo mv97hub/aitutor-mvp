@@ -121,6 +121,9 @@ def test_a_bare_yes_closes_in_one_sentence_and_does_not_say_block() -> None:
     assert "What was strong:" not in happened
     spoken = "\n".join(line for line in turn.splitlines() if not line.startswith("Active step:"))
     spoken = spoken.replace("Never say the word block to the learner.", "")
+    spoken = spoken.replace("Never say the word block.", "")
+    spoken = spoken.replace("before this block can pass.", "")
+    spoken = spoken.replace("return to this block.", "")
     spoken = spoken.replace("block_complete", "")
     assert re.search(r"\bblock\b", spoken, re.I) is None
 
