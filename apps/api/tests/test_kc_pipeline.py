@@ -183,7 +183,7 @@ def test_blueprint_prompt_carries_the_count_the_rules_and_the_schema() -> None:
     assert "observable verbs" in prompt
     assert "A brief about triangles." in prompt
     unit = bundle["schema"]["properties"]["units"]["items"]["properties"]["components"]["items"]
-    assert unit["required"] == ["ref", "title", "summary", "prerequisites"]
+    assert unit["required"] == ["ref", "title", "summary", "mastery_spec", "prerequisites"]
     exact = blueprint_bundle(course=_course(intake=clean_intake({"component_count": 7})), brief="B" * 50, model="gpt-4.1")
     assert "Return exactly 7 components total across all units (including the final capstone component)." in exact["system_prompt"]
 
@@ -690,7 +690,7 @@ def test_a_pasted_standard_is_the_authority_and_a_gap_is_marked() -> None:
     planned = blueprint_bundle(course=course, brief="B" * 50, model="gpt-4.1")
     assert "3.NF.A.5" in planned["system_prompt"]
     required = planned["schema"]["properties"]["units"]["items"]["properties"]["components"]["items"]["required"]
-    assert required == ["ref", "title", "summary", "prerequisites", "standards"]
+    assert required == ["ref", "title", "summary", "mastery_spec", "prerequisites", "standards"]
     built = assemble_blueprint(_five_plan(), bounds=(4, 6), taken=set(), make_code=_slug, statements=statements)
     matrix = coverage_matrix(statements, built)
     assert matrix["gaps"] == ["3.NF.A.5"]

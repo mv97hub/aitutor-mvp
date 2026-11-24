@@ -192,6 +192,7 @@ class ComponentIn(BaseModel):
     outline: str | None = None
     topics: list | None = None
     blocks: list[dict] = Field(default_factory=list)
+    mastery_spec: dict | None = None
     kc_type: str | None = None
     type_fields: dict = Field(default_factory=dict)
     core_truth: str = ""

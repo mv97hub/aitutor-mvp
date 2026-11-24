@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.kc import (
+    _blocks_for_new_component,
     _nodes_by_code,
     _now,
     _sync_edges,
@@ -18,9 +19,11 @@ from app.kc import (
     load_targets,
     slug_code,
 )
+from app.mastery import parse_mastery_spec
 from app.kc_model import checked_model
 from app.kc_pipeline import (
     apply_review,
+    apply_unit_mastery,
     assemble_blueprint,
     blueprint_bundle,
     brief_bundle,
@@ -228,6 +231,7 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
                 statements=statements,
                 matched=is_matched_curriculum(intake, statements),
                 intake=intake,
+                course_text=f"{goal.title}\n{goal.description or ''}",
             )
             goal.drafting = {
                 "questions": [],
@@ -247,6 +251,7 @@ def store_stage(db: Session, goal: KcGoal, stage: str, result: object, unit: int
             drafting["units"] = {**dict(drafting.get("units") or {}), **written}
             drafting["units_done"] = done + 1
             goal.drafting = drafting
+            goal.blueprint = apply_unit_mastery(blueprint, result)
         else:
             if int(drafting.get("units_done") or 0) < len(blueprint.get("units") or []):
                 raise _fail(409, "Write every unit before the review.")
@@ -411,6 +416,15 @@ def _chat_brief(goal: KcGoal, blueprint: dict) -> str:
     )
 
 
+def _row_spec(row: dict) -> dict:
+    if not isinstance(row.get("mastery_spec"), dict):
+        return {}
+    try:
+        return parse_mastery_spec(row.get("mastery_spec"))
+    except ValueError:
+        return {}
+
+
 def _sync_chat_components(db: Session, goal: KcGoal, blueprint: dict, descriptions: dict[str, str], changed: set[str]) -> None:
     """Create nodes for new components and update only the components the chat changed."""
     by_code = {node.code: node for node in load_targets(db, goal)}
@@ -419,13 +433,17 @@ def _sync_chat_components(db: Session, goal: KcGoal, blueprint: dict, descriptio
     for row in components_of(blueprint):
         code = row["code"]
         node = by_code.get(code)
+        spec = _row_spec(row)
         if node is None:
+            description = descriptions.get(code, "")
             node = KcNode(
                 code=code,
                 title=row["title"],
-                description=descriptions.get(code, ""),
+                description=description,
                 standards=list(row.get("standards") or []),
                 prerequisite_codes=list(row.get("prerequisites") or []),
+                mastery_spec=spec,
+                blocks=_blocks_for_new_component(goal, row["title"], description, [], spec),
             )
             db.add(node)
             db.flush()
@@ -437,6 +455,8 @@ def _sync_chat_components(db: Session, goal: KcGoal, blueprint: dict, descriptio
                 node.description = descriptions[code]
             node.standards = list(row.get("standards") or [])
             node.prerequisite_codes = list(row.get("prerequisites") or [])
+            if spec:
+                node.mastery_spec = spec
             node.updated_at = _now()
             _sync_edges(db, node)
         seen.add(code)

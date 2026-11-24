@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.block_catalog import BLOCK_AUTHORING_RULES, BLOCK_FIELDS
+from app.mastery import claim_ids_of, parse_mastery_spec
 from app.kc_blocks import clean_passage_ela_data
 from app.kc_pipeline import passage_ela_generation_lines
 from app.kc import (
@@ -21,6 +22,7 @@ from app.kc import (
     _nodes_by_code,
     _now,
     _public_blocks,
+    _stored_spec,
     _sync_edges,
     clear_course_components,
     create_course,
@@ -143,7 +145,11 @@ def normalize_blocks(raw: object) -> list[dict]:
         if block_id in seen:
             block_id = f"{block_id}-{index}"
         seen.add(block_id)
-        cleaned.append({"id": block_id, "type": kind, "data": kept})
+        block = {"id": block_id, "type": kind, "data": kept}
+        claim_ids = claim_ids_of(item)
+        if claim_ids:
+            block["claim_ids"] = claim_ids
+        cleaned.append(block)
     return cleaned
 
 
@@ -190,6 +196,7 @@ def _clean_component(raw: object, statements: list[dict[str, str]]) -> dict:
         "standards": standards,
         "prerequisite_codes": _string_list(raw.get("prerequisite_codes"), f"{title} prerequisites"),
         "encompasses_codes": _string_list(raw.get("encompasses_codes"), f"{title} encompasses"),
+        "mastery_spec": parse_mastery_spec(raw.get("mastery_spec")),
         "blocks": normalize_blocks(raw.get("blocks")),
     }
 
@@ -318,6 +325,7 @@ def _blueprint(units: list[dict], outcomes: list[str], statements: list[dict]) -
                     "prerequisites": list(item["prerequisite_codes"]),
                     "standards": list(item["standards"]),
                     "extension": bool(known) and not item["standards"],
+                    "mastery_spec": item.get("mastery_spec") if isinstance(item.get("mastery_spec"), dict) else {},
                 }
             )
         built.append({"title": unit["title"], "summary": unit["summary"], "components": components})
@@ -376,6 +384,7 @@ def _write_node(db: Session, item: dict, by_code: dict[str, KcNode], on_course: 
     node.standards = item["standards"]
     node.prerequisite_codes = list(item["prerequisite_codes"])
     node.encompasses_codes = list(item["encompasses_codes"])
+    node.mastery_spec = item.get("mastery_spec") if isinstance(item.get("mastery_spec"), dict) else {}
     node.blocks = item["blocks"]
     node.updated_at = _now()
     return node
@@ -653,6 +662,9 @@ def _export_component(item: dict, node: KcNode | None, description: str) -> dict
         "standards": [str(code) for code in standards if str(code).strip()],
         "prerequisite_codes": [str(code) for code in prerequisites if str(code).strip()],
         "encompasses_codes": [str(code) for code in ((node.encompasses_codes if node is not None else []) or []) if str(code).strip()],
+        "mastery_spec": _stored_spec(node) if node is not None else (
+            item.get("mastery_spec") if isinstance(item.get("mastery_spec"), dict) else {}
+        ),
         "blocks": _public_blocks(node),
     }
 
