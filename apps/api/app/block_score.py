@@ -14,7 +14,9 @@ from dataclasses import replace
 
 from app.kc_loop import (
     BlockResolution,
+    _FILLER_ANCHORS,
     _gives_up,
+    _words,
     explain_step_turn,
     learner_ready_to_proceed,
     mcq_payload,
@@ -493,7 +495,59 @@ _DENIES_EXPLANATION = re.compile(
 )
 
 
-def remember_tutor_disclosures(block: dict, state: dict, reply: str) -> dict:
+_CLUE_FILLERS = _FILLER_ANCHORS | {
+    "and", "are", "but", "can", "clue", "did", "for", "had", "has", "her", "him", "his",
+    "how", "its", "not", "our", "she", "the", "was", "who", "why", "you",
+}
+
+
+def _clue_words(text: str) -> set[str]:
+    """Distinct content words. Keep short evidence words such as 'bag'."""
+    return {
+        word for word in _words(text)
+        if len(word) >= 3 and word.isalpha() and word not in _CLUE_FILLERS
+    }
+
+
+def _highlighted_reason_clues(stem: str, reason: str, choice: str, reply: str) -> list[dict]:
+    """Identify the particular part of the authored rationale called out in feedback."""
+    # Reading the complete question again leaves the learner to find the clue.
+    # Additional feedback accompanying that reading can still point one out.
+    def normalize(text: str) -> str:
+        return " ".join(text.casefold().replace("’", "'").replace("“", '"').replace("”", '"').split())
+
+    stem, reply = normalize(stem), normalize(reply)
+    if stem:
+        reply = reply.replace(stem, " ")
+    sentences = re.split(r'(?<=[.!?])["\']?\s+', stem)
+    question_words = set().union(*(_clue_words(s) for s in sentences if s.endswith("?")))
+    evidence = _clue_words(reason) - _clue_words(choice) - question_words
+    story = [_clue_words(s) & evidence for s in sentences if not s.endswith("?")]
+    clues = []
+    for line in re.split(r'(?<=[.!?])["\']?\s+', reply):
+        mentioned = _clue_words(line) & evidence
+        if len(mentioned) < 2 or _DENIES_EXPLANATION.search(line):
+            continue
+        # Naming an object can point to an authored observation about it.
+        # Only extend a cue when it identifies a single statement in the story.
+        matches = [sentence for sentence in story if len(mentioned & sentence) >= 2]
+        context = mentioned | matches[0] if len(matches) == 1 else mentioned
+        clues.append({"mentioned": sorted(mentioned), "context": sorted(context)})
+    return clues
+
+
+def _used_reason_clue(state: dict, answer: str) -> bool:
+    words = _clue_words(answer)
+    for clue in state.get("reason_clues") or []:
+        shared = len(words.intersection(clue["context"]))
+        # A common topic word alone is not an explanation. Most of the
+        # learner's own substantive words must point back to the same clue.
+        if words.intersection(clue["mentioned"]) and shared >= 2 and shared * 2 > len(words):
+            return True
+    return False
+
+
+def remember_tutor_disclosures(block: dict, state: dict, reply: str, *, feedback: bool = False) -> dict:
     """Keep supplied evidence on the open item without counting a learner attempt."""
     kind = block.get("type")
     step = state.get("substep")
@@ -516,6 +570,14 @@ def remember_tutor_disclosures(block: dict, state: dict, reply: str) -> dict:
         reason = str(generated.get("correct_explanation") or block.get("data", {}).get("correct_explanation") or "")
         offered_texts = [choice["text"].casefold().replace("’", "'").rstrip(".") for choice in choices]
         menu = len(offered_texts) > 1 and all(text and text in reply.casefold() for text in offered_texts)
+        if feedback and not menu:
+            stem = str(generated.get("question_stem") or block.get("data", {}).get("question_stem") or "")
+            clues = list(state.get("reason_clues") or [])
+            for clue in _highlighted_reason_clues(stem, reason, correct_text, reply):
+                if clue not in clues:
+                    clues.append(clue)
+            if clues:
+                state = {**state, "reason_clues": clues}
         statements = []
         explains = False
         for sentence in re.split(r"(?<=[.!?])\s+", reply):
@@ -765,7 +827,8 @@ def _advance(
     revealed = _revealed(kind, before_sub, before_state, after_state, new_outcome, resolution) or (
         new_outcome == "revealed" and not accepted
     )
-    if revealed or giveaway:
+    used_clue = accepted and kind == "mcq" and key == "why" and _used_reason_clue(before_state, answer)
+    if revealed or giveaway or used_clue:
         observation = "assisted"
     elif accepted:
         observation = "independent"

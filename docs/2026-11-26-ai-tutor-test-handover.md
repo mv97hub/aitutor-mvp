@@ -137,6 +137,23 @@ Use the existing requirement-level record to remember a full disclosure when it 
 
 Extend the existing question, prompt-branch, disclosure and block-close tests with these dialogue pairs. An assertion that a prompt contains a phrase alone cannot establish that the server awarded the right credit. [Question tests][qtests] · [Prompt tests][prompttests] · [Giveaway tests][giveawaytests] · [Scoring tests][scoretests]
 
+### Follow-up rehearsal · Choosing an answer and explaining it
+
+In a fresh multiple-choice question, Evie pointed to a bat in the sky while Noah looked in his baseball bag. The operator selected the flying animal first. The tutor pointed out that Noah looked in his baseball bag. The operator then selected the bat used to hit a ball. When asked for the clue, the operator answered “The fact he looks in his bag.”
+
+The original local scorer recorded the corrected choice as independent on attempt two and the explanation as independent on attempt one. Trishan chose **correct, with a hint** for the explanation. The choice and explanation have separate records: check each one when replaying the case.
+
+| Replay the same question with this feedback | Expected credit for a correct choice | Expected credit for a correct explanation |
+| --- | --- | --- |
+| “Take another look.” The learner identifies the bag. | Independent | Independent |
+| The tutor singles out the bag. The learner uses that clue. | Independent | Assisted |
+| The tutor singles out the bag. The learner explains another valid clue in the story. | Independent | Independent |
+| The tutor gives the correct choice and its full reason. The learner repeats them. | Assisted | Assisted |
+
+The local replays submit turns through the tutor API, control the model’s judgment about correctness, and read the resulting observations from PostgreSQL. Rereading the whole question or asking “Which detail helped you?” leaves the child to find the evidence. Pointing directly to the bag, including in a question, gives a hint. A rejected explanation that repeats words from a hint still needs another try. A second lesson tests the same distinction with webbed footprints.
+
+The scorer compares words from the tutor’s cue, the authored reason, and the learner’s explanation. A one-word answer or a paraphrase with entirely different vocabulary can escape detection. For a future profile test, pair a child who repeats the clue with one who accurately explains it in their own words and inspect both records. [Scoring follow-up and verification #215](https://github.com/mv97hub/aitutor-mvp/pull/215)
+
 ## 3. Give each fact-dependent task an authoritative answer
 
 **Evidence.** In `df4690ba` turns 11–12 the tutor treated Juliet’s words about being satisfied when she sees Romeo as part of her exchange with Paris. In the play she is speaking to Lady Capulet. The learner followed the hint and passed. In `8e8153d3` turns 2–3 the task required evidence from the balcony scene but accepted a quotation from Act 1, scene 5. In `719c1ae3` turns 18–19 the tutor said Juliet was arranging a secret marriage to Romeo in the Friar scene. They were already married. These are at least three affected Shakespeare chats out of 14. [Folger, Act 3.5][act35] · [Act 1.5][act15] · [Act 4.1][act41]
