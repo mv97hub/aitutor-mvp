@@ -334,6 +334,7 @@ function fieldsFor(type: KcBlockType): TextField[] {
       { key: "expected_central_idea", label: "Expected central idea", kind: "text" },
       { key: "distractor_detail", label: "Distractor detail", kind: "text" },
       { key: "evidence_prompt", label: "Evidence prompt", kind: "text" },
+      { key: "evidence_context", label: "Source attribution and meaning (optional)", kind: "text" },
       { key: "verbatim_evidence_quotes", label: "Verbatim evidence quotes, one per line", kind: "lines" },
       {
         key: "analysis_focus",

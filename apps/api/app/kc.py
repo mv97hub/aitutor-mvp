@@ -47,6 +47,7 @@ from app.block_score import (
     freeze_requirements,
     offered_actions,
     parent_text,
+    remember_tutor_disclosures,
     score_supported_turn,
     scoring_version_for_blocks,
     verdict_from_results,
@@ -4693,6 +4694,8 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     generated = body.get("generated_mcq")
     if isinstance(generated, dict) and generated.get("choices") and resolution.next_step == index:
         next_state["generated_mcq"] = generated
+    if supported and resolution.next_step == index and not resolution.unit_complete:
+        next_state = remember_tutor_disclosures(_block, next_state, reply)
     session.active_block_state = next_state
     session.block_results = list(resolution.block_results)
     if supported:
@@ -4983,6 +4986,11 @@ def record_speech(
         flag = normalize_safety_flag(safety_flag)
     except AiSafetyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if flag == "none" and int(session.scoring_version or 1) >= REQUIREMENT_SCORE:
+        blocks = stored_blocks(_node_or_404(db, session.kc_id))
+        index = int(session.step or 0)
+        if 0 <= index < len(blocks):
+            session.active_block_state = remember_tutor_disclosures(blocks[index], session.active_block_state or {}, text)
     stored = _add_message(db, session, "assistant", text)
     child_message = next((message.content for message in reversed(messages) if message.role == "user"), "")
     if flag != "none":

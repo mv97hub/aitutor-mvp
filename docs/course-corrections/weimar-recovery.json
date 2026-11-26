@@ -1,0 +1,167 @@
+{
+  "schema": "KcCourseExportV1",
+  "review": {
+    "original_component_sha256": "4f4eb87cfe235f03aaf1134755aa2f88f8d089c333351a951782e69d9900012f"
+  },
+  "unit": {
+    "title": "Components",
+    "summary": "",
+    "components": [
+      {
+        "code": "weimar-recovery-and-its-limits-1924-29",
+        "title": "Weimar Recovery and Its Limits, 1924–29",
+        "description": "Assesses economic, diplomatic, social and cultural recovery under Stresemann and his successors.",
+        "summary": "",
+        "outline": "1. Economic recovery: Currency stabilisation, Dawes and Young Plans, American loans, uneven prosperity.\n2. International rehabilitation: Stresemann’s diplomacy, Locarno, League of Nations, Kellogg–Briand Pact, limitations.\n3. Social and cultural change: Living standards, women’s roles, art, architecture, cinema, opposition to change.\n4. Political stability: Underlying weaknesses, unresolved issues, and the fragility of the Weimar Republic.",
+        "core_truth": "The apparent recovery of Weimar Germany in the mid-1920s was real but fragile, relying on foreign loans, diplomatic agreements, and cultural vibrancy, yet masking deep economic, social, and political vulnerabilities.",
+        "rubric": [
+          "Explain the measures taken to stabilise the German economy between 1924 and 1929 and assess the extent and limits of this recovery.",
+          "Explain how Stresemann’s diplomacy improved Germany’s international position and identify the limitations of these achievements.",
+          "Explain the developments in living standards, women’s experiences, and cultural life, and identify opposition to these changes.",
+          "Assess whether the recovery period resolved the underlying weaknesses of the Weimar Republic.",
+          "Economic recovery was uneven and dependent on external support; groups not directly benefiting from industrial growth remained vulnerable.",
+          "While the years 1924–29 saw significant progress, the term 'golden age' overlooks the fragility and unevenness of recovery, as well as unresolved political and economic problems."
+        ],
+        "misconceptions": [
+          {
+            "wrong_move": "Assuming all Germans benefited equally from the economic recovery.",
+            "broken_kc": "women-young-people-work-and-living-stand"
+          },
+          {
+            "wrong_move": "Believing that Stresemann’s diplomacy completely ended Germany’s international isolation.",
+            "broken_kc": "versailles-political-violence-and-the-cr"
+          },
+          {
+            "wrong_move": "Thinking that the Weimar Republic was politically secure after 1924.",
+            "broken_kc": "creating-the-nazi-dictatorship-1933-34"
+          },
+          {
+            "wrong_move": "Assuming cultural change was universally welcomed and uncontroversial.",
+            "broken_kc": "racial-ideology-exclusion-and-persecutio"
+          }
+        ],
+        "standards": [],
+        "prerequisite_codes": [
+          "germany-s-defeat-and-the-birth-of-weimar",
+          "versailles-political-violence-and-the-cr"
+        ],
+        "encompasses_codes": [],
+        "mastery_spec": {},
+        "blocks": [
+          {
+            "id": "tg1",
+            "type": "topic_goal",
+            "data": {
+              "topic": "Economic recovery",
+              "goal": "Explain the stabilisation that began in 1923 and assess the extent and limits of economic recovery in 1924–29.",
+              "acceptance_criteria": "Student can describe the Dawes and Young Plans, the introduction of the Rentenmark, and the role of American loans, and can explain why prosperity was uneven.",
+              "teaching_notes": "The Rentenmark was first issued on 15 November 1923. The Reichsmark followed in 1924. Highlight the dependence on foreign loans and the sectors/regions that did not benefit equally."
+            }
+          },
+          {
+            "id": "rentenmark-issue",
+            "type": "mcq",
+            "data": {
+              "mode": "static",
+              "question_stem": "In which year were Rentenmark notes first issued?",
+              "choices": [
+                {
+                  "id": "a",
+                  "text": "1924",
+                  "is_correct": false,
+                  "distractor_rationale": "1924 is the year of the Reichsmark, a later currency."
+                },
+                {
+                  "id": "b",
+                  "text": "1923",
+                  "is_correct": true
+                }
+              ],
+              "correct_explanation": "The Rentenmark was first issued on 15 November 1923. The Reichsmark followed in 1924."
+            }
+          },
+          {
+            "id": "tg2",
+            "type": "topic_goal",
+            "data": {
+              "topic": "International rehabilitation",
+              "goal": "Explain how Stresemann’s diplomacy improved Germany’s international position and identify the limitations of these achievements.",
+              "acceptance_criteria": "Student can describe the Locarno Treaties, League of Nations membership, and the Kellogg–Briand Pact, and can point to continued resentment and restrictions.",
+              "teaching_notes": "Emphasise the distinction between diplomatic success and domestic perceptions."
+            }
+          },
+          {
+            "id": "tg3",
+            "type": "topic_goal",
+            "data": {
+              "topic": "Social and cultural change",
+              "goal": "Explain the developments in living standards, women’s experiences, and cultural life, and identify opposition to these changes.",
+              "acceptance_criteria": "Student can discuss improvements in wages, housing, women’s rights, and the flourishing of art and cinema, as well as conservative backlash.",
+              "teaching_notes": "Use examples from Berlin and rural areas to illustrate contrasts."
+            }
+          },
+          {
+            "id": "tg4",
+            "type": "topic_goal",
+            "data": {
+              "topic": "Political stability",
+              "goal": "Assess whether the recovery period resolved the underlying weaknesses of the Weimar Republic.",
+              "acceptance_criteria": "Student can explain the persistence of political extremism, coalition instability, and public distrust.",
+              "teaching_notes": "Encourage debate about the term 'golden years' and its appropriateness."
+            }
+          },
+          {
+            "id": "cs1",
+            "type": "case_study",
+            "data": {
+              "case_a": "Urban industrial workers in Berlin experienced wage increases, improved housing, and access to new cultural opportunities.",
+              "case_b": "Rural farmers in eastern Germany faced falling agricultural prices, mounting debts, and little benefit from economic recovery.",
+              "prediction_prompt": "If the US withdrew its loans in 1928, which group would be more vulnerable and why?",
+              "invariant_principle": "Economic recovery was uneven and dependent on external support; groups not directly benefiting from industrial growth remained vulnerable.",
+              "transfer_prompt": "How might these differences in experience affect political attitudes in urban versus rural areas during the late 1920s?",
+              "transfer_expected": "Rural discontent could fuel support for extremist parties, while urban areas might be more supportive of the republic, at least temporarily."
+            }
+          },
+          {
+            "id": "ex1",
+            "type": "explanation",
+            "data": {
+              "block_title": "Connecting Economic and Diplomatic Recovery",
+              "topics": [
+                {
+                  "id": "econ1",
+                  "title": "Currency Stabilisation and the Dawes Plan",
+                  "explanation": "Hyperinflation was ended by introducing the Rentenmark in 1923 and the Reichsmark in 1924. The Dawes Plan (1924) restructured reparations and brought in US loans, stabilising the economy but creating dependence on foreign capital.",
+                  "key_points": "Rentenmark, Dawes Plan, US loans, economic dependence",
+                  "examples_or_analogies": "Like a business taking a large loan to avoid bankruptcy, Germany’s recovery was strong but risky."
+                },
+                {
+                  "id": "dip1",
+                  "title": "Diplomatic Rehabilitation",
+                  "explanation": "Stresemann’s policies led to the Locarno Treaties (1925), Germany joining the League of Nations (1926), and the Kellogg–Briand Pact (1928), improving Germany’s international standing but not removing all Treaty of Versailles restrictions.",
+                  "key_points": "Locarno, League of Nations, Kellogg–Briand Pact, Versailles limits",
+                  "examples_or_analogies": "Germany was like a student allowed back into school clubs but still under probation."
+                }
+              ],
+              "summary_takeaway": "Germany’s economic and diplomatic recovery were closely linked and impressive, but both were fragile and incomplete."
+            }
+          },
+          {
+            "id": "soc1",
+            "type": "socratic",
+            "data": {
+              "central_dilemma": "Was the period 1924–29 truly a 'golden age' for Weimar Germany?",
+              "initial_probe": "What evidence supports the idea that these years were a time of prosperity and stability?",
+              "counterexamples": [
+                "Many farmers and small business owners faced hardship and did not share in the prosperity.",
+                "Political extremism and violence, though reduced, did not disappear.",
+                "The recovery was heavily reliant on foreign loans, which could be withdrawn."
+              ],
+              "target_synthesis": "While the years 1924–29 saw significant progress, the term 'golden age' overlooks the fragility and unevenness of recovery, as well as unresolved political and economic problems."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

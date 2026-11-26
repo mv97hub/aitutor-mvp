@@ -33,7 +33,7 @@ PASSAGE_SUBSTEPS = (
 
 PASSAGE_CAP_RULE = (
     "Include the full Passage text verbatim (preserving paragraph breaks) before asking the question. "
-    "The response_length sentence cap (2 to 4 sentences) applies ONLY to your coaching and question below the passage, never to the passage text itself."
+    "The response_length sentence cap applies ONLY to your coaching and question below the passage, never to the passage text itself."
 )
 
 _TOKEN = re.compile(r"\S+")
@@ -168,6 +168,7 @@ def clean_passage_ela_data(data: dict | None) -> dict:
         "expected_central_idea": _text(raw.get("expected_central_idea")),
         "distractor_detail": _text(raw.get("distractor_detail")),
         "evidence_prompt": _text(raw.get("evidence_prompt")),
+        **({"evidence_context": _text(raw["evidence_context"])} if _text(raw.get("evidence_context")) else {}),
         "verbatim_evidence_quotes": clean_evidence_quotes(raw.get("verbatim_evidence_quotes"), passage_text),
         "analysis_focus": clean_analysis_focus(raw.get("analysis_focus")),
         "analysis_question": _text(raw.get("analysis_question")),
