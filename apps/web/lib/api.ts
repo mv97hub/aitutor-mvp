@@ -34,6 +34,15 @@ function fetchTimedOut(err: unknown): boolean {
   return err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const server = typeof window === "undefined";
   let response: Response;
@@ -60,12 +69,12 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     try {
       body = JSON.parse(text) as unknown;
     } catch {
-      if (!response.ok) throw new Error(text.trim() || `Request failed (${response.status})`);
+      if (!response.ok) throw new ApiError(text.trim() || `Request failed (${response.status})`, response.status);
       throw new Error("The tutor service sent a response that could not be read.");
     }
   }
   if (!response.ok) {
-    throw new Error(detailFrom(body, text || `Request failed (${response.status})`));
+    throw new ApiError(detailFrom(body, text || `Request failed (${response.status})`), response.status);
   }
   return body as T;
 }

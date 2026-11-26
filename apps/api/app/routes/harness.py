@@ -19,6 +19,7 @@ from app.harness import (
     create_run,
     create_suite,
     delete_run,
+    dispatch_harness_turn,
     download_chat,
     download_run,
     ensure_fixture,
@@ -32,7 +33,9 @@ from app.harness import (
     list_runs,
     list_suites,
     pause_run,
+    pending_answer_result,
     plan_preview,
+    prepare_harness_turn,
     record_turn,
     resume_run,
     run_again,
@@ -190,6 +193,21 @@ def get_answer_key(chat_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return answer_key(db, chat_id)
 
 
+@router.get("/kc/harness/chats/{chat_id}/pending-turn/{turn_id}")
+def get_pending_answer(chat_id: uuid.UUID, turn_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    return pending_answer_result(db, chat_id, turn_id)
+
+
+@router.post("/kc/harness/chats/{chat_id}/pending-turn")
+def post_pending_turn(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
+    return prepare_harness_turn(db, chat_id, body)
+
+
+@router.post("/kc/harness/chats/{chat_id}/pending-turn/{turn_id}/dispatch")
+def post_dispatch_turn(chat_id: uuid.UUID, turn_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
+    return dispatch_harness_turn(db, chat_id, turn_id, body.get("claim_generation"))
+
+
 @router.post("/kc/harness/chats/{chat_id}/turns")
 def post_turn(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
     return record_turn(db, chat_id, body)
@@ -197,7 +215,7 @@ def post_turn(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> 
 
 @router.post("/kc/harness/chats/{chat_id}/finish")
 def post_finish(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
-    return finish_chat(db, chat_id, str(body.get("reason") or "completed"))
+    return finish_chat(db, chat_id, str(body.get("reason") or "completed"), body.get("claim_generation"))
 
 
 @router.post("/kc/harness/chats/{chat_id}/evaluations")
