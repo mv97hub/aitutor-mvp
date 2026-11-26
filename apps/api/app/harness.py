@@ -62,6 +62,7 @@ from app.models import (
     KcNode,
     KcSession,
     KcState,
+    KcTurnReceipt,
     Student,
     TutorProfile,
     normalize_child_profile,
@@ -667,6 +668,13 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
             db.flush()
             body = chat_out(chat)
             body["session"] = {"id": str(existing.id), "status": existing.status}
+            body["pending_turn"] = chat.pending_turn
+            last = db.scalar(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id)
+                             .order_by(HarnessTurn.seq.desc()).limit(1))
+            if last is not None:
+                after = _as_dict(last.session_after)
+                body["last_inner_state"] = last.inner_state
+                body["last_place"] = place_key(after.get("block_id"), after.get("substep"), after.get("topic_index"))
             return body
     goal = db.get(KcGoal, chat.course_id)
     node = db.get(KcNode, chat.component_id)
@@ -826,6 +834,7 @@ def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
 
         probes = list(BOUNDARY_PROBES)
     return {
+        "revision": int(session.revision or 0),
         "block_index": index,
         "block_id": str(block.get("id") or "") if isinstance(block, dict) else "",
         "block_type": str(block.get("type") or "") if isinstance(block, dict) else "",
@@ -966,18 +975,102 @@ def _same_place(turns: list[HarnessTurn]) -> int:
     return run
 
 
-def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
+def _locked_chat(db: Session, chat_id: uuid.UUID) -> HarnessChat:
     chat = db.scalar(select(HarnessChat).where(HarnessChat.id == chat_id).with_for_update())
     if chat is None:
         raise HTTPException(status_code=404, detail="That chat was not found.")
+    return chat
+
+
+def _check_turn_owner(chat: HarnessChat, body: dict) -> None:
+    if body.get("claim_generation") != chat.claim_generation or chat.status != "running":
+        raise HTTPException(status_code=409, detail="This worker no longer owns the chat.")
+
+
+def prepare_harness_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
+    """Checkpoint the exact generated move before the worker contacts the tutor."""
+    chat = _locked_chat(db, chat_id)
+    _check_turn_owner(chat, body)
+    submission = _as_dict(body.get("submission"))
+    seq = body.get("seq")
+    turn_id = _uuid(submission.get("turn_id"))
+    if turn_id is None or str(turn_id) != submission["turn_id"]:
+        raise HTTPException(status_code=422, detail="A canonical turn UUID is required.")
+    text = submission.get("child_text")
+    if not isinstance(text, str) or not text.strip() or len(text) > 2000:
+        raise HTTPException(status_code=422, detail="The submitted answer must be 1–2000 characters.")
+    if type(seq) is not int or submission.get("seq") != seq or seq != chat.turn_count + 1:
+        raise HTTPException(status_code=409, detail="The next harness turn has changed.")
+    pending = chat.pending_turn
+    if pending:
+        if pending != submission:
+            raise HTTPException(status_code=409, detail="Another submission is already pending.")
+        return {"submission": pending}
+    session = db.get(KcSession, chat.session_id) if chat.session_id else None
+    if session is None or type(submission.get("revision")) is not int or submission["revision"] != session.revision:
+        raise HTTPException(status_code=409, detail="The tutor session has changed.")
+    if db.get(HarnessTurn, turn_id) is not None or _answer_receipt(db, chat, str(turn_id)) is not None:
+        raise HTTPException(status_code=409, detail="This turn ID was already used.")
+    chat.pending_turn = submission
+    chat.updated_at = _now()
+    db.flush()
+    return {"submission": submission}
+
+
+def _answer_receipt(db: Session, chat: HarnessChat, turn_id: str) -> KcTurnReceipt | None:
+    return db.scalar(select(KcTurnReceipt).where(
+        KcTurnReceipt.session_id == chat.session_id, KcTurnReceipt.route == "answer",
+        KcTurnReceipt.client_turn_id == turn_id,
+    ))
+
+
+def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
+    chat = _locked_chat(db, chat_id)
+    turn_id = _uuid(body.get("turn_id"))
+    pending = chat.pending_turn
+    after = _as_dict(body.get("session_after"))
+    if "turn_id" in body or pending is not None:
+        if turn_id is None:
+            raise HTTPException(status_code=409, detail="The prepared turn ID is required.")
+        stored = db.get(HarnessTurn, turn_id)
+        if stored is not None:
+            if stored.chat_id != chat_id or stored.seq != body.get("seq") or stored.child_text != body.get("child_text"):
+                raise HTTPException(status_code=409, detail="This turn ID belongs to a different submission.")
+            return {"turn": stored.seq, "stop": chat.ended_how, "replayed": True,
+                    "pending_nudges": chat.pending_nudges, "stuck_answers": chat.stuck_answers,
+                    "cost_usd": chat.cost_usd, "luna_tokens": chat.luna_tokens}
+        _check_turn_owner(chat, body)
+        if not pending or any(body.get(key) != pending.get(key) for key in ("turn_id", "seq", "child_text")):
+            raise HTTPException(status_code=409, detail="The result does not match the prepared submission.")
+        receipt = _answer_receipt(db, chat, str(turn_id))
+        committed = receipt is not None and receipt.status == "committed"
+        if after.get("delivery_status") == "unknown":
+            if committed and not body.get("defer"):
+                return {"turn": body["seq"], "stop": "", "recover": True, "pending": True}
+            # A timed-out request may still commit. Keep the move across Resume even if
+            # no receipt was visible when this transaction inspected the tutor session.
+            pause_run(db, chat.run_id)
+            db.flush()
+            return {"turn": body["seq"], "stop": "awaiting_retry", "pending": True}
+        if not committed:
+            raise HTTPException(status_code=409, detail="The tutor has not committed this submission.")
+        if after.get("delivery_status") not in {"delivered", "recovered", "committed_empty"}:
+            raise HTTPException(status_code=422, detail="The delivery status is missing.")
+        # The preparation owns the learner input and its cost. Only the actual
+        # reply and resulting state are supplied by a resumed worker.
+        body = {**body, **{key: pending.get(key) for key in (
+            "intent", "child_text", "child_prompt", "child_tokens", "session_before"
+        )}}
+        after = {**after, "turn_id": str(turn_id), "receipt_status": "committed"}
+        chat.pending_turn = None
     if chat.status not in {"running", "paused"}:
         raise HTTPException(status_code=422, detail="That chat is not running.")
     run = db.get(HarnessRun, chat.run_id)
     seq = int(db.scalar(select(func.max(HarnessTurn.seq)).where(HarnessTurn.chat_id == chat.id)) or 0) + 1
-    after = body.get("session_after") if isinstance(body.get("session_after"), dict) else {}
     before = body.get("session_before") if isinstance(body.get("session_before"), dict) else {}
     tokens = body.get("child_tokens") if isinstance(body.get("child_tokens"), dict) else {}
     turn = HarnessTurn(
+        id=turn_id or uuid.uuid4(),
         chat_id=chat.id,
         seq=seq,
         intent=str(body.get("intent") or "")[:40],
@@ -1116,10 +1209,12 @@ def _finish(db: Session, chat: HarnessChat, reason: str) -> None:
             run.updated_at = _now()
 
 
-def finish_chat(db: Session, chat_id: uuid.UUID, reason: str) -> dict:
-    chat = db.get(HarnessChat, chat_id)
-    if chat is None:
-        raise HTTPException(status_code=404, detail="That chat was not found.")
+def finish_chat(db: Session, chat_id: uuid.UUID, reason: str, claim_generation: int | None = None) -> dict:
+    chat = _locked_chat(db, chat_id)
+    if claim_generation is not None:
+        _check_turn_owner(chat, {"claim_generation": claim_generation})
+    if chat.pending_turn:
+        raise HTTPException(status_code=409, detail="Recover the pending submission before closing the chat.")
     allowed = {"completed", "quit", "turn_limit", "stuck", "cap", "luna_ceiling", "route_error", "safety", "cancelled"}
     chosen = reason if reason in allowed else "completed"
     _refresh_chat_cost(db, chat)
@@ -1328,6 +1423,13 @@ def _llm_calls(db: Session, chat: HarnessChat, prompts: list[dict]) -> list[dict
 
 def _download_payload(db: Session, chat: HarnessChat) -> dict:
     body = chat_detail(db, chat)
+    if chat.pending_turn:
+        pending = chat.pending_turn
+        receipt = _answer_receipt(db, chat, pending["turn_id"])
+        body["pending_delivery"] = {
+            "turn_id": pending["turn_id"], "seq": pending["seq"], "child_text": pending["child_text"],
+            "receipt_status": receipt.status if receipt else "unknown",
+        }
     body["llm_calls"] = _llm_calls(db, chat, body["model_prompts"])
     return body
 

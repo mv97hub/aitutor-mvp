@@ -212,10 +212,9 @@ export async function POST(req: Request) {
     const message = error instanceof Error ? error.message : "Could not apply that decision.";
     return new Response(message, { status: error instanceof ApiError && error.status === 409 ? 409 : 502 });
   }
-  // A concurrent submission can commit while our model call is running.
-  if (session.replayed) return Response.json(session);
-
-  const messageId = newTutorMessageId(bundle.messages, session.messages);
+  // Two in-flight calls can finish together. Record actual provider usage for
+  // both, attaching only the winning decision to the saved learner turn.
+  const messageId = session.replayed ? null : newTutorMessageId(bundle.messages, session.messages);
   const stored = captured ?? {
     system_prompt: bundle.system_prompt,
     messages: [{ role: "user", content: childLine }],
@@ -233,8 +232,8 @@ export async function POST(req: Request) {
         misconception: decision.misconception,
         decision: {
           ...decision,
-          loop_result: session.loop_result ?? null,
-          loop_decision: session.loop_decision || "",
+          loop_result: session.replayed ? null : session.loop_result ?? null,
+          loop_decision: session.replayed ? "" : session.loop_decision || "",
         },
       }),
     });
@@ -248,6 +247,7 @@ export async function POST(req: Request) {
       }),
     });
   });
+  if (saved.replayed) return Response.json(saved);
   return Response.json({
     ...saved,
     loop_result: saved.loop_result ?? null,

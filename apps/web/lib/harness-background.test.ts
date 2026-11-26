@@ -73,6 +73,7 @@ test("chats run side by side, and one chat takes its turns one at a time", async
   let inFlight = 0;
   let peak = 0;
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => {
@@ -124,6 +125,7 @@ test("stop ends the loop before another chat is claimed", async () => {
   let claims = 0;
   let answers = 0;
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ status: "completed", messages: [] }),
     speak: async () => session(),
@@ -154,6 +156,7 @@ test("stop ends the loop before another chat is claimed", async () => {
 
 function flightTransport(onTurn: (id: string) => Promise<void>): HarnessTransport {
   return {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => session(),
@@ -202,15 +205,15 @@ test("a dropped worker is replaced and the run still fills the requested concurr
   const want = 4;
   let inFlight = 0;
   let peak = 0;
-  let dropped = false;
+  let drops = 0;
   const played: string[] = [];
   const queue = ["chat-a", "chat-b", "chat-c", "chat-d", "chat-e"].map((id) => chat(id));
   await driveRun(
     "run-replace",
     async () => queue.shift() ?? null,
     flightTransport(async (id) => {
-      if (!dropped) {
-        dropped = true;
+      if (id === "chat-a") {
+        drops++;
         throw new Error("The turn call failed.");
       }
       inFlight += 1;
@@ -221,7 +224,7 @@ test("a dropped worker is replaced and the run still fills the requested concurr
     }),
     want,
   );
-  assert.equal(dropped, true);
+  assert.equal(drops, 2); // Both attempts failed, so a replacement worker was needed.
   assert.equal(queue.length, 0);
   assert.equal(peak, want);
   assert.equal(played.length, want);

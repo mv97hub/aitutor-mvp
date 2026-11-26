@@ -1,9 +1,11 @@
 """Retry answer receipts through the real turn and decision endpoints, with a controlled grader."""
 
+from uuid import UUID, uuid4
+
 from sqlalchemy import select
 
 from app.database import SessionLocal
-from app.models import KcTurnReceipt
+from app.models import HarnessChat, HarnessRun, KcTurnReceipt
 from app.turn_receipt import payload_hash
 from tests.test_block_close import (
     CONTINUE, RECALL, WHY, _by_key, _course, _grade, _messages, _open, _receipt_count, _session, client,
@@ -14,6 +16,7 @@ from tests.test_kc import _wipe_zz
 
 def test_retry_after_final_answer_commits_returns_the_original_closed_session():
     course = _course("zz-lost-final", [RECALL])
+    run_id = uuid4()
     try:
         opened = _open(course, "zz-lost-final-a")
         path = f"/kc/tutor/sessions/{opened['id']}"
@@ -21,14 +24,47 @@ def test_retry_after_final_answer_commits_returns_the_original_closed_session():
         first = _grade(opened["id"], "idk", 0)
         second = _grade(opened["id"], "idk", first["revision"])
         why = _grade(opened["id"], WHY, second["revision"], passed=True)
-        final = _grade(opened["id"], CONTINUE, why["revision"])
+        # Create a harness chat at the last step, then lose the successful HTTP
+        # response. A new worker must recover it even though the unit is closed.
+        with SessionLocal.begin() as db:
+            db.add(HarnessRun(id=run_id, status="running"))
+            db.flush()
+            chat = HarnessChat(run_id=run_id, session_id=UUID(opened["id"]), status="running", claim_generation=1)
+            db.add(chat)
+            db.flush()
+            harness_path = f"/kc/harness/chats/{chat.id}"
+        submit = {"answer": CONTINUE, "turn_id": str(uuid4()), "revision": why["revision"]}
+        prepared = {"turn_id": submit["turn_id"], "seq": 1, "child_text": CONTINUE, "intent": "continue",
+                    "revision": why["revision"], "session_before": {"substep": "summary_check"}}
+        check = client.post(f"{harness_path}/pending-turn", json={
+            "submission": prepared, "seq": 1, "claim_generation": 1})
+        assert check.status_code == 200, check.text
+        assert client.post(f"{path}/turn", json=submit).status_code == 200
+        committed = client.post(f"{path}/decision", json={"turn_id": submit["turn_id"], "reply": "All done.",
+                                                         "decision": "stay", "substep_passed": False})
+        assert committed.status_code == 200, committed.text
+        final = committed.json()
         assert final["status"] == "completed"
-        submit = {"answer": CONTINUE, "turn_id": final.pop("_turn_id"), "revision": why["revision"]}
+        run_path = f"/kc/harness/runs/{run_id}"
+        assert client.post(f"{run_path}/resume").status_code == 200
+        claim = client.post(f"{run_path}/claim").json()["chat"]
+        assert claim["claim_generation"] == 2 and claim["pending_turn"] == prepared
         replay = client.post(f"{path}/turn", json=submit)
         assert replay.status_code == 200, replay.text
         body = replay.json()
         assert body.pop("replayed") is True
         assert body == final
+        stored = {**prepared, "claim_generation": 2, "session_after": {
+            "status": body["status"], "tutor_reply": body["reply"], "delivery_status": "recovered",
+            "tutor_message_id": body["messages"][-1]["id"]}}
+        written = client.post(f"{harness_path}/turns", json=stored)
+        assert written.status_code == 200, written.text
+        assert written.json()["stop"] == "completed"
+        duplicate_write = client.post(f"{harness_path}/turns", json=stored)
+        assert duplicate_write.status_code == 200 and duplicate_write.json()["replayed"]
+        chat = client.get(harness_path).json()
+        assert chat["turn_count"] == len(chat["turns"]) == 1
+        assert chat["turns"][0]["session_after"]["turn_id"] == submit["turn_id"]
         # A late duplicate decision has no second opportunity to score or write a reply.
         duplicate = client.post(f"{path}/decision", json={"turn_id": submit["turn_id"], "decision": "stay", "reply": "Again?"})
         assert duplicate.status_code == 200
@@ -44,6 +80,10 @@ def test_retry_after_final_answer_commits_returns_the_original_closed_session():
         assert _receipt_count(opened["id"], "answer") == 4
         assert [m.content for m in _messages(opened["id"]) if m.role == "user"] == ["idk", "idk", WHY, CONTINUE]
     finally:
+        with SessionLocal.begin() as db:
+            run = db.get(HarnessRun, run_id)
+            if run is not None:
+                db.delete(run)
         _wipe_zz()
 
 

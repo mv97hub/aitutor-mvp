@@ -33,6 +33,7 @@ from app.harness import (
     list_suites,
     pause_run,
     plan_preview,
+    prepare_harness_turn,
     record_turn,
     resume_run,
     run_again,
@@ -190,6 +191,11 @@ def get_answer_key(chat_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return answer_key(db, chat_id)
 
 
+@router.post("/kc/harness/chats/{chat_id}/pending-turn")
+def post_pending_turn(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
+    return prepare_harness_turn(db, chat_id, body)
+
+
 @router.post("/kc/harness/chats/{chat_id}/turns")
 def post_turn(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
     return record_turn(db, chat_id, body)
@@ -197,7 +203,7 @@ def post_turn(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> 
 
 @router.post("/kc/harness/chats/{chat_id}/finish")
 def post_finish(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
-    return finish_chat(db, chat_id, str(body.get("reason") or "completed"))
+    return finish_chat(db, chat_id, str(body.get("reason") or "completed"), body.get("claim_generation"))
 
 
 @router.post("/kc/harness/chats/{chat_id}/evaluations")
