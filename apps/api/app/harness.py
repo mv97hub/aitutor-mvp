@@ -20,7 +20,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.ai_safety import read_ai_safety
-from app.block_score import LEGACY_OUTCOMES, classify_stored_outcome
+from app.block_score import LEGACY_OUTCOMES, REQUIREMENT_SCORE, classify_stored_outcome
 from app.flow import unique_student_slug
 from app.harness_download import render_download, reply_message_id
 from app.harness_checks import (
@@ -1613,20 +1613,34 @@ def _block_score(db: Session, chat: HarnessChat) -> tuple[int | None, list[dict]
     session = db.get(KcSession, chat.session_id)
     if session is None:
         return None, []
+    modern = session.scoring_version >= REQUIREMENT_SCORE
     outcomes = []
     for row in session.block_results or []:
         if not isinstance(row, dict):
             continue
         stored = str(row.get("outcome") or "").strip()
         verdict = str(row.get("verdict") or "").strip()
-        if (verdict or stored) in {"known", "fragile", "unassessed"}:
-            outcome, _ = classify_stored_outcome(row)
+        # An older loop label may survive an interrupted requirement-score write.
+        # A raw pass needs independent evidence; bare engagement and reveal are observations.
+        requirements = row.get("requirements")
+        recover_verdict = modern and not verdict and (
+            stored == "passed" or (
+                stored in {"", "revealed", "engaged"} and isinstance(requirements, list) and bool(requirements)
+            )
+        )
+        if (verdict or stored) in {"known", "fragile", "unassessed"} or recover_verdict:
+            outcome, _ = classify_stored_outcome(row, session.scoring_version)
         elif not verdict and stored in LEGACY_OUTCOMES:
             outcome = stored
         else:
             outcome = "unknown"
         title = str(row.get("title") or row.get("block_type") or "block").strip() or "block"
-        outcomes.append({"title": title, "outcome": outcome})
+        result = {"title": title, "outcome": outcome}
+        if modern and stored in LEGACY_OUTCOMES and outcome not in {stored, "unknown"}:
+            result["stored_outcome"] = stored
+        if row.get("revealed") is True:
+            result["revealed"] = True
+        outcomes.append(result)
     return session.score, outcomes
 
 

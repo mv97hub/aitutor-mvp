@@ -995,6 +995,10 @@ def _outcome_bits(outcomes: object) -> str:
         if isinstance(item, dict):
             title = str(item.get("title") or "block").strip() or "block"
             outcome = str(item.get("outcome") or "").strip()
+            if outcome != "revealed" and (item.get("revealed") or item.get("stored_outcome") == "revealed"):
+                outcome += ", answer revealed"
+            elif outcome != "engaged" and item.get("stored_outcome") == "engaged":
+                outcome += ", participated"
             bits.append(f"{title} ({outcome})" if outcome else title)
         elif str(item).strip():
             bits.append(str(item).strip())
