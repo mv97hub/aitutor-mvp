@@ -202,11 +202,12 @@ def _decide(
     *,
     flag: str,
     reply: str,
+    answer: str = "The river is blue.",
     decision: str = "complete",
     substep_passed: bool = True,
     block_complete: bool = True,
 ) -> dict:
-    answered = client.post(f"/kc/tutor/sessions/{session_id}/turn", json={"answer": "The river is blue."})
+    answered = client.post(f"/kc/tutor/sessions/{session_id}/turn", json={"answer": answer})
     assert answered.status_code == 200, answered.text
     done = client.post(
         f"/kc/tutor/sessions/{session_id}/decision",
@@ -254,21 +255,29 @@ def test_settings_defaults_invalid_values_and_events() -> None:
 
         session_id = _open(storm.id, code)
         before = _event_count(session_id)
+        question = _decide(
+            session_id, flag="none", answer="Got it - move on", reply="What color is the river?",
+            decision="stay", substep_passed=False, block_complete=False,
+        )
+        assert question["active_substep"] == "main"
+        assert question["loop_result"]["attempt_counted"] is False
         quiet = _decide(
             session_id,
             flag="none",
-            reply="Yes. The river is blue.",
+            reply="Yes. The river is blue. Do you have a final question?",
             decision="stay",
-            substep_passed=False,
+            substep_passed=True,
             block_complete=False,
         )
         assert quiet.get("safety_flag", "none") == "none"
         assert _event_count(session_id) == before
         attempts, score, status = _attempts(session_id)
-        assert attempts >= 1
+        assert quiet["loop_result"]["attempt_counted"] is True
+        assert attempts == 1
 
         flagged = _decide(session_id, flag="distress", reply="I am glad you told me. Please tell a trusted adult.")
         assert flagged["safety_flag"] == "distress"
+        assert flagged["loop_result"]["attempt_counted"] is False
         assert flagged["unit_complete"] is False
         assert flagged["passed"] is False
         held_attempts, held_score, held_status = _attempts(session_id)
