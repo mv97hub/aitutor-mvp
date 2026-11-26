@@ -1,6 +1,6 @@
 import { generateText, jsonSchema, Output, wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { KcTutorSession } from "@/lib/kc";
 import { languageModel } from "@/lib/language-model";
 import { isKcModel, kcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
@@ -12,6 +12,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type TurnBundle = KcTutorSession & {
+  replayed?: boolean;
   system_prompt: string;
   response_schema: Record<string, unknown>;
   temperature: number;
@@ -46,7 +47,7 @@ type StoredCall = {
 
 function replyUnreadable(reply: string, errorMessage = ""): boolean {
   const text = reply.trim();
-  if (!text || /^[.…·\s]+$/.test(text)) return true;
+  if (!errorMessage) return !text || /^[.…·\s]+$/.test(text);
   const low = errorMessage.toLowerCase();
   return (
     low.includes("no object generated") ||
@@ -136,12 +137,8 @@ export async function POST(req: Request) {
   }
   const modelName = called && isKcModel(called) ? called : kcModel(prior.tutor_model);
   const missingKey = missingKeyMessage(modelName);
-  if (missingKey) {
-    return new Response(missingKey, {
-      status: 503,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-    });
-  }
+  // A legacy unkeyed claim immediately writes the learner message.
+  if (!turnId && missingKey) return new Response(missingKey, { status: 503 });
 
   let bundle: TurnBundle;
   try {
@@ -151,8 +148,10 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not store the answer.";
-    return new Response(message, { status: 502 });
+    return new Response(message, { status: error instanceof ApiError && error.status === 409 ? 409 : 502 });
   }
+  if (bundle.replayed) return Response.json(bundle);
+  if (missingKey) return new Response(missingKey, { status: 503 });
 
   let captured: StoredCall | null = null;
   const captureRequest: LanguageModelMiddleware = {
@@ -200,7 +199,7 @@ export async function POST(req: Request) {
     decision = blankDecision();
   }
 
-  let session: KcTutorSession & { loop_result?: Record<string, unknown> | null; loop_decision?: string };
+  let session: KcTutorSession & { replayed?: boolean; loop_result?: Record<string, unknown> | null; loop_decision?: string };
   try {
     session = await api<KcTutorSession & { loop_result?: Record<string, unknown> | null; loop_decision?: string }>(
       `/kc/tutor/sessions/${sessionId}/decision`,
@@ -211,10 +210,11 @@ export async function POST(req: Request) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not apply that decision.";
-    return new Response(message, { status: 502 });
+    return new Response(message, { status: error instanceof ApiError && error.status === 409 ? 409 : 502 });
   }
-
-  const messageId = newTutorMessageId(bundle.messages, session.messages);
+  // Two in-flight calls can finish together. Record actual provider usage for
+  // both, attaching only the winning decision to the saved learner turn.
+  const messageId = session.replayed ? null : newTutorMessageId(bundle.messages, session.messages);
   const stored = captured ?? {
     system_prompt: bundle.system_prompt,
     messages: [{ role: "user", content: childLine }],
@@ -232,8 +232,8 @@ export async function POST(req: Request) {
         misconception: decision.misconception,
         decision: {
           ...decision,
-          loop_result: session.loop_result ?? null,
-          loop_decision: session.loop_decision || "",
+          loop_result: session.replayed ? null : session.loop_result ?? null,
+          loop_decision: session.replayed ? "" : session.loop_decision || "",
         },
       }),
     });
@@ -247,6 +247,7 @@ export async function POST(req: Request) {
       }),
     });
   });
+  if (saved.replayed) return Response.json(saved);
   return Response.json({
     ...saved,
     loop_result: saved.loop_result ?? null,
