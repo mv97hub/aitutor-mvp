@@ -137,7 +137,12 @@ def test_transfer_answer_and_follow_up_use_the_current_transfer_requirement():
     assert "Do not score this message" not in text
 
 
-def test_graded_paraphrase_with_confirmation_tag_can_use_entirely_different_words():
+@pytest.mark.parametrize("answer", [
+    "It sleeps all day and wakes up at night, right?",
+    "It sleeps all day and wakes up at night?",
+    "Is it a creature that is awake at night?",
+])
+def test_graded_paraphrase_can_use_entirely_different_words(answer):
     block = {
         "id": "recall",
         "type": "retrieval_check",
@@ -147,7 +152,6 @@ def test_graded_paraphrase_with_confirmation_tag_can_use_entirely_different_word
             "elaborative_why_prompt": "Why might that be useful?",
         },
     }
-    answer = "It sleeps all day and wakes up at night, right?"
     text, forecast, result, reqs = _replay(block, "recall", answer, True)
     assert "This typed line is unscored help" not in text
     assert forecast.if_correct.next_substep == result.next_block_state["substep"] == "elaborate_why"
@@ -176,3 +180,20 @@ def test_a_short_proposed_symbol_can_be_graded_against_a_spelled_out_fact():
     assert forecast.if_correct.next_substep == result.next_block_state["substep"] == "elaborate_why"
     assert reqs["recall"]["observation"] == "independent"
     assert "This typed line is unscored help" not in text
+
+@pytest.mark.parametrize("answer", [
+    "Can you explain what active means?",
+    "Is it possible to have some help with the word active?",
+    "Is it true that all wolves are active?",
+])
+@pytest.mark.parametrize("passed", [True, False])
+def test_fact_background_questions_are_unscored_even_with_key_words(answer, passed):
+    block = {
+        "id": "recall", "type": "retrieval_check",
+        "data": {"recall_prompt": "What does nocturnal mean?", "expected_fact": "Active after sunset.",
+                 "elaborative_why_prompt": "Why might that help?"},
+    }
+    text, _, result, reqs = _replay(block, "recall", answer, passed)
+    assert "This typed line is unscored help" in text
+    assert result.next_block_state["substep"] == "recall"
+    assert (reqs["recall"]["observation"], reqs["recall"]["attempts"]) == ("open", 0)

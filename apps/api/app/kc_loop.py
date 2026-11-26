@@ -1084,7 +1084,7 @@ def proposed_step_answer(block: dict, substep: str, answer: str) -> str | None:
     if not words or _opens_as_question(words) or words[0] in _QUESTION_AUXILIARIES:
         return ""
     if words[0] in {"possible", "okay", "ok"} or re.search(
-        r"\b(?:a hint|some help|more context)\b", candidate, re.I
+        r"^true that\b|\b(?:a hint|some help|more context|you want me to)\b", candidate, re.I
     ):
         return ""
     # A declarative statement checked with "..., right?" may paraphrase every word in the key.
@@ -1097,7 +1097,11 @@ def proposed_step_answer(block: dict, substep: str, answer: str) -> str | None:
     # Mentioning the subject of a formula does not propose a calculation.
     if formula:
         return candidate if _MATH_OPERATOR.search(candidate) else ""
-    # Short terms (CPI), units and numbers can be meaningful parts of a proposal.
+    # A paraphrase can share no words with the key. Let the grader evaluate a
+    # stated answer or an explicit proposal rather than requiring a vocabulary match.
+    if opened or _statement_before_question(first):
+        return candidate
+    # Short terms, units and numbers can be meaningful parts of a proposal.
     anchors = {w for w in _words(target) if (len(w) >= 3 or w.isdigit()) and w not in _FILLER_ANCHORS}
     anchors.difference_update({"the", "and", "for", "are", "was", "its", "has", "but"})
     return candidate.strip() if anchors.intersection(words) else ""
