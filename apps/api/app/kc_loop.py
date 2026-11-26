@@ -1564,6 +1564,25 @@ def learner_points_at_span(answer: str, data: dict) -> bool:
     return any(cue in text for cue in cues)
 
 
+def _contextual_citation_met(data: dict, answer: str, bcfg: dict, passed: bool) -> bool:
+    """Wording can establish the passage; the grader checks the speaker and meaning."""
+    if not passed:
+        return False
+    quoted = re.findall(r"""["“]([^"”]+)["”]|(?:^|\s)[‘'](.+?)[’'](?=\s|[.,!?]|$)""", answer)
+    fragments = [double or single for double, single in quoted]
+    mode = bcfg.get("passage_ela_evidence_mode", "quote_or_close_paraphrase")
+    if mode == "paragraph_reference":
+        return _passage_answer_met(data, "cite_evidence", answer, bcfg)
+    if fragments:
+        # Learners may omit the edition's punctuation when typing a quoted line.
+        passage = " ".join(_words(str(data.get("passage_text") or "")))
+        return any(quote_in_text(" ".join(_words(line)), passage) for line in fragments)
+    if mode == "exact_quote_required":
+        # Without quote marks an authored quotation can still identify the exact span.
+        return any(quote_in_text(quote, answer) for quote in _passage_quotes(data))
+    return bool(answer.strip())
+
+
 def _passage_answer_met(data: dict, substep: str, answer: str, bcfg: dict) -> bool:
     if substep == "cite_evidence":
         quotes = _passage_quotes(data)
@@ -2194,6 +2213,10 @@ def resolve_block_turn(
         bool(substep_passed) or rubric_covers_substep(block, index, substep, fresh)
     ):
         model_pass = True
+    contextual_citation = btype == "passage_ela" and substep == "cite_evidence" and bool(data.get("evidence_context"))
+    if contextual_citation:
+        literal = False
+        model_pass = _contextual_citation_met(data, answer, bcfg, bool(substep_passed))
     # Keyword overlap is only the fallback. A model pass on a real answer stands.
     addressed = model_pass or literal
     if btype == "socratic" and substep == "counterexample_probe" and _repeats_thesis(answer, state):
@@ -2291,7 +2314,7 @@ def resolve_block_turn(
         if policy == "free_reprint":
             return stay(move_attempts, tier)
 
-    if btype == "passage_ela" and substep == "cite_evidence" and learner_points_at_span(answer, data):
+    if btype == "passage_ela" and substep == "cite_evidence" and not contextual_citation and learner_points_at_span(answer, data):
         # Pointing at the span settles citation as assisted and leaves the other steps alone.
         state["citation_assisted"] = True
         note_try()
