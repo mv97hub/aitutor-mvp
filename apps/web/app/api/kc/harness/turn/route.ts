@@ -1,4 +1,4 @@
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { judgeFinishedChat } from "@/lib/harness-judge-run";
 
 export const runtime = "nodejs";
@@ -14,7 +14,7 @@ export async function POST(req: Request) {
   }
   const chatId = body.chatId || "";
   if (!chatId || !body.turn) return new Response("chatId and turn are required.", { status: 400 });
-  let recorded: { stop?: string };
+  let recorded: { stop?: string; pending?: boolean; recover?: boolean; replayed?: boolean };
   try {
     recorded = await api(`/kc/harness/chats/${chatId}/turns`, {
       method: "POST",
@@ -22,9 +22,9 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not store the turn.";
-    return new Response(message, { status: 502 });
+    return new Response(message, { status: error instanceof ApiError ? error.status : 502 });
   }
-  if (recorded.stop) {
+  if (recorded.stop && !recorded.pending && !recorded.recover && !recorded.replayed) {
     try {
       await judgeFinishedChat(chatId);
     } catch {

@@ -7,6 +7,8 @@ This module stores the plan, the child's intent, and the reviews.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import os
 import uuid
 from collections import Counter
@@ -44,6 +46,8 @@ from app.harness_report import (
     run_summary,
     stuck_nudge_rows,
 )
+from app.harness_scenario_fixture import SCENARIO_FIXTURE_CODE, scenario_fixture_document
+from app.kc_blocks import passage_paragraphs
 from app.kc import course_out, load_targets, mark_ready, open_session
 from app.kc import _block_context
 from app.kc_course_io import SCHEMA, _BLOCK_EXAMPLES, import_new_course
@@ -62,6 +66,7 @@ from app.models import (
     KcNode,
     KcSession,
     KcState,
+    KcTurnReceipt,
     Student,
     TutorProfile,
     normalize_child_profile,
@@ -278,6 +283,11 @@ def normalize_plan(raw: dict) -> dict:
         "luna_token_ceiling": int(raw.get("luna_token_ceiling") or DEFAULT_LUNA_TOKEN_CEILING),
         "script": [str(line).strip() for line in script if str(line).strip()][:80],
         "seed": int(raw.get("seed") or 0),
+        "pair_tutor_seeds": raw.get("pair_tutor_seeds") is True,
+        "scenario": str(raw.get("scenario") or "")[:100],
+        "scenario_group": str(raw.get("scenario_group") or "")[:100],
+        "seed_from_run": str(raw.get("seed_from_run") or ""),
+        "seed_from_profile": str(raw.get("seed_from_profile") or ""),
     }
 
 
@@ -381,19 +391,47 @@ def plan_preview(db: Session, raw: dict) -> dict:
     }
 
 
-def _snapshot(row: HarnessPersona) -> dict:
+def scenario_seed(run_seed: int, persona, course, component, model: str, profile: str,
+                  iteration: int, *, scenario: str = "", group: str = "", paired: bool = False) -> int:
+    """Reordering the run grid cannot change a learner's scenario or shift its turn stream."""
+    parts = [int(run_seed), str(persona), str(course), str(component), int(iteration)]
+    parts.append(group if paired and group else scenario)
+    if not paired:
+        parts.extend([model, profile])
+    payload = json.dumps(parts, separators=(",", ":")).encode()
+    return int.from_bytes(hashlib.blake2s(payload, digest_size=8).digest(), "big") % 2_000_000_000
+
+
+def _recorded_seeds(db: Session, run_id, *, source_profile=None, target_profile=None) -> dict:
+    stmt = select(HarnessChat).where(HarnessChat.run_id == run_id)
+    if source_profile:
+        stmt = stmt.where(HarnessChat.tutor_profile_id == source_profile)
+    return {(c.persona_id, c.course_id, c.component_id, c.tutor_model, target_profile or c.tutor_profile_id, c.iteration): c.seed
+            for c in db.scalars(stmt)}
+
+
+def _snapshot(row: HarnessPersona, behavior: str, scenario: str) -> dict:
+    role = "script" if behavior == "script" else "learner"
+    if behavior == "rule" and row.number in (13, 14):
+        role = "answer_key_control"
+    child_profile = dict(row.child_profile or {})
+    reader_lengths = {"reread-short": "bite_sized", "reread-detail": "detailed"}
+    if role == "script" and row.number in (2, 8) and scenario in reader_lengths:
+        child_profile["response_length"] = reader_lengths[scenario]
     return {
         "id": str(row.id),
         "number": row.number,
         "name": row.name,
         "description": row.description,
         "age": row.age,
-        "child_profile": dict(row.child_profile or {}),
+        "child_profile": child_profile,
         "traits": dict(row.traits or {}),
+        "simulation_role": role,
+        "policy_version": "visible-v1",
     }
 
 
-def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, seeds: list[int] | None = None) -> dict:
+def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, seeds: dict | None = None) -> dict:
     plan = normalize_plan(raw)
     if not plan["tutor_models"]:
         raise HTTPException(status_code=422, detail="Choose a tutor model.")
@@ -411,20 +449,30 @@ def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, see
     )
     db.add(run)
     db.flush()
-    index = 0
+    if seeds is None and (source_run := _uuid(plan["seed_from_run"])) and len(profiles) == 1 and plan["seed_from_profile"]:
+        seeds = _recorded_seeds(db, source_run, source_profile=plan["seed_from_profile"], target_profile=profiles[0].id)
     for child in children:
         for goal, node in components:
             for model in plan["tutor_models"]:
                 for profile in profiles:
                     for iteration in range(1, plan["iterations"] + 1):
-                        seed = seeds[index] if seeds and index < len(seeds) else (plan["seed"] + index * 997) % 2_000_000_000
-                        index += 1
+                        identity = child.id, goal.id, node.id, model, profile.id, iteration
+                        seed = (seeds or {}).get(identity)
+                        if seed is None:
+                            seed = scenario_seed(
+                                plan["seed"], *identity, scenario=plan["scenario"], group=plan["scenario_group"],
+                                paired=plan["pair_tutor_seeds"],
+                            )
                         db.add(
                             HarnessChat(
                                 run_id=run.id,
                                 status="queued",
                                 persona_id=child.id,
-                                child_snapshot=_snapshot(child),
+                                child_snapshot={
+                                    **_snapshot(child, plan["behavior"], plan["scenario"]), "scenario": plan["scenario"],
+                                    "seed_profile": plan["seed_from_profile"] or profile.id,
+                                    "paired_seeds": plan["pair_tutor_seeds"],
+                                },
                                 course_id=goal.id,
                                 component_id=node.id,
                                 tutor_model=model,
@@ -446,6 +494,11 @@ def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, see
     return run_out(db, run)
 
 
+def _run_cap_reached(run: HarnessRun) -> bool:
+    cap = (run.plan or {}).get("run_cap_cents")
+    return bool(cap and int((run.totals or {}).get("priced_cents") or 0) >= int(cap))
+
+
 def run_out(db: Session, run: HarnessRun) -> dict:
     chats = db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id).order_by(HarnessChat.created_at)).all()
     done = sum(1 for chat in chats if chat.status in {"completed", "cancelled", "failed"})
@@ -453,6 +506,7 @@ def run_out(db: Session, run: HarnessRun) -> dict:
         "id": run.id,
         "status": run.status,
         "plan": _as_dict(run.plan),
+        "run_cap_reached": _run_cap_reached(run),
         "totals": _as_dict(run.totals),
         "code_version": run.code_version,
         "suite_id": run.suite_id,
@@ -560,7 +614,7 @@ def resume_run(db: Session, run_id: uuid.UUID) -> dict:
         run.status = "running"
         run.updated_at = _now()
         running = db.scalars(
-            select(HarnessChat).where(HarnessChat.run_id == run.id, HarnessChat.status == "running")
+            select(HarnessChat).where(HarnessChat.run_id == run.id, HarnessChat.status.in_(("running", "paused")))
         ).all()
         for chat in running:
             # Queue the chat so the open tab can continue it. Do not clear session_id.
@@ -604,11 +658,9 @@ def delete_run(db: Session, run_id: uuid.UUID) -> dict:
 
 def run_again(db: Session, run_id: uuid.UUID) -> dict:
     run = _run_or_404(db, run_id)
-    chats = db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id).order_by(HarnessChat.created_at)).all()
     plan = dict(run.plan or {})
     plan["seed"] = int(plan.get("seed") or 1)
-    created = create_run(db, plan, suite_id=run.suite_id, seeds=[chat.seed for chat in chats])
-    return created
+    return create_run(db, plan, suite_id=run.suite_id, seeds=_recorded_seeds(db, run.id))
 
 
 def _settings_copy(db: Session, profile: TutorProfile, node: KcNode) -> dict:
@@ -628,34 +680,29 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
         return None
     if run.status == "queued":
         run.status = "running"
-    plan = dict(run.plan or {})
-    run_cap = plan.get("run_cap_cents")
-    totals = dict(run.totals or {})
-    if run_cap and int(totals.get("priced_cents") or 0) >= int(run_cap):
-        for chat in db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id, HarnessChat.status == "queued")).all():
+    queued = select(HarnessChat).where(HarnessChat.run_id == run.id, HarnessChat.status == "queued")
+    if _run_cap_reached(run):
+        # Never open a fresh session at the cap. A previously submitted answer can
+        # still settle after its HTTP request timed out, so keep those chats claimable.
+        unused = db.scalars(queued.where(HarnessChat.pending_turn.is_(None)).with_for_update(skip_locked=True)).all()
+        for chat in unused:
             chat.status = "cancelled"
             chat.ended_how = "run_cap"
             chat.updated_at = _now()
-        run.status = "completed"
-        run.updated_at = _now()
-        return None
+            _close_session(db, chat)
+        if unused:
+            _refresh_totals(db, run)
+            db.flush()
+        queued = queued.where(HarnessChat.pending_turn.is_not(None))
     # LIMIT 1 so each parallel claim locks a different queued chat.
     chat = db.scalar(
-        select(HarnessChat)
-        .where(HarnessChat.run_id == run.id, HarnessChat.status == "queued")
+        queued
         .order_by(HarnessChat.created_at)
         .limit(1)
         .with_for_update(skip_locked=True)
     )
     if chat is None:
-        open_count = db.scalar(
-            select(func.count()).select_from(HarnessChat).where(
-                HarnessChat.run_id == run.id, HarnessChat.status.in_(("queued", "running"))
-            )
-        )
-        if not open_count:
-            run.status = "completed"
-            run.updated_at = _now()
+        _settle_inactive_run(db, run)
         return None
     if not claim_opens_session(chat.session_id):
         existing = db.get(KcSession, chat.session_id)
@@ -667,6 +714,13 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
             db.flush()
             body = chat_out(chat)
             body["session"] = {"id": str(existing.id), "status": existing.status}
+            body["pending_turn"] = chat.pending_turn
+            last = db.scalar(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id)
+                             .order_by(HarnessTurn.seq.desc()).limit(1))
+            if last is not None:
+                after = _as_dict(last.session_after)
+                body["last_inner_state"] = last.inner_state
+                body["last_place"] = place_key(after.get("block_id"), after.get("substep"), after.get("topic_index"))
             return body
     goal = db.get(KcGoal, chat.course_id)
     node = db.get(KcNode, chat.component_id)
@@ -794,6 +848,14 @@ def _topic_number(state: dict | None) -> int | None:
         return None
 
 
+def seen_passage(text: str, messages, block_index: int) -> str:
+    """Only repeat authored paragraphs the tutor has actually displayed in this block."""
+    shown = [" ".join(message.content.split()) for message in messages
+             if message.step == block_index and message.role == "assistant"]
+    paragraphs = passage_paragraphs(text)
+    return "\n\n".join(p for p in paragraphs if any(" ".join(p.split()) in line for line in shown))
+
+
 def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
     chat = db.get(HarnessChat, chat_id)
     if chat is None or chat.session_id is None:
@@ -802,7 +864,7 @@ def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
     node = db.get(KcNode, session.kc_id) if session is not None else None
     if session is None or node is None:
         raise HTTPException(status_code=404, detail="That session was not found.")
-    _profile, _goal, _messages, _fragment, _cfg, _blocks, index, block, state = _block_context(db, session, node)
+    _profile, _goal, messages, _fragment, _cfg, _blocks, index, block, state = _block_context(db, session, node)
     data = block.get("data") if isinstance(block, dict) and isinstance(block.get("data"), dict) else {}
     choices = []
     correct = ""
@@ -826,6 +888,7 @@ def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
 
         probes = list(BOUNDARY_PROBES)
     return {
+        "revision": int(session.revision or 0),
         "block_index": index,
         "block_id": str(block.get("id") or "") if isinstance(block, dict) else "",
         "block_type": str(block.get("type") or "") if isinstance(block, dict) else "",
@@ -837,6 +900,8 @@ def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
             str(state.get("substep") or ""),
             data,
         ),
+        "visible_passage": seen_passage(str(data.get("passage_text") or ""), messages, index)
+        if block and block.get("type") == "passage_ela" else "",
         "correct_choice_id": correct,
         "choices": choices,
         "misconceptions": misconceptions,
@@ -881,8 +946,13 @@ def _chat_priced_cost(db: Session, chat: HarnessChat) -> tuple[str | None, int]:
             if part is None:
                 continue
             priced = _add_money(priced, part)
-    for turn in db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id)).all():
-        tokens = turn.child_tokens if isinstance(turn.child_tokens, dict) else {}
+    # Generation is billed even if the tutor never receives the child's answer.
+    child_usage = list(db.scalars(select(HarnessTurn.child_tokens).where(HarnessTurn.chat_id == chat.id)))
+    for checkpoint in (chat.pending_turn, _as_dict(chat.tokens).get("unsent_child")):
+        if checkpoint:
+            child_usage.append(checkpoint.get("child_tokens"))
+    for usage in child_usage:
+        tokens = _as_dict(usage)
         model = str(tokens.get("model") or chat.child_model or "")
         incoming = int(tokens.get("input_tokens") or tokens.get("input") or 0)
         outgoing = int(tokens.get("output_tokens") or tokens.get("output") or 0)
@@ -919,7 +989,19 @@ def _refresh_chat_cost(db: Session, chat: HarnessChat) -> None:
     chat.luna_tokens = luna
 
 
+def refresh_harness_session_cost(db: Session, session_id: uuid.UUID) -> None:
+    # A retried provider call can report usage after the harness records its
+    # final turn. Use the same chat-then-run lock order as the turn recorder.
+    chat = db.scalar(select(HarnessChat).where(HarnessChat.session_id == session_id).with_for_update())
+    if chat is not None:
+        _refresh_chat_cost(db, chat)
+        _refresh_totals(db, _run_or_404(db, chat.run_id))
+
+
 def _refresh_totals(db: Session, run: HarnessRun) -> None:
+    # Parallel workers write separate chats. Serialize the aggregate so the last
+    # writer includes every earlier committed cost before deciding on more calls.
+    db.scalar(select(HarnessRun.id).where(HarnessRun.id == run.id).with_for_update())
     chats = db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id)).all()
     cents = 0
     luna = 0
@@ -934,6 +1016,26 @@ def _refresh_totals(db: Session, run: HarnessRun) -> None:
         "cost_usd": None if cents == 0 and luna else format(Decimal(cents) / Decimal(100), "f"),
     }
     run.updated_at = _now()
+
+
+def _settle_inactive_run(db: Session, run: HarnessRun) -> None:
+    if run.status != "running":
+        return
+    if _run_cap_reached(run):
+        # Two capped workers can pause their own chats at the same time. The
+        # last one must see its sibling's commit before settling the run.
+        stored_status = db.scalar(select(HarnessRun.status).where(HarnessRun.id == run.id).with_for_update())
+        if stored_status != "running":
+            return
+    active = db.scalar(select(func.count()).select_from(HarnessChat).where(
+        HarnessChat.run_id == run.id, HarnessChat.status.in_(("queued", "running"))
+    ))
+    if not active:
+        paused = db.scalar(select(HarnessChat.id).where(
+            HarnessChat.run_id == run.id, HarnessChat.status == "paused"
+        ).limit(1))
+        run.status = "paused" if paused else "completed"
+        run.updated_at = _now()
 
 
 def _close_open_session(db: Session, session_id: object) -> None:
@@ -966,18 +1068,158 @@ def _same_place(turns: list[HarnessTurn]) -> int:
     return run
 
 
-def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
+def _locked_chat(db: Session, chat_id: uuid.UUID) -> HarnessChat:
     chat = db.scalar(select(HarnessChat).where(HarnessChat.id == chat_id).with_for_update())
     if chat is None:
         raise HTTPException(status_code=404, detail="That chat was not found.")
+    return chat
+
+
+def _check_turn_owner(chat: HarnessChat, body: dict) -> None:
+    if body.get("claim_generation") != chat.claim_generation or chat.status != "running":
+        raise HTTPException(status_code=409, detail="This worker no longer owns the chat.")
+
+
+def prepare_harness_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
+    """Checkpoint the exact generated move before the worker contacts the tutor."""
+    chat = _locked_chat(db, chat_id)
+    _check_turn_owner(chat, body)
+    submission = _as_dict(body.get("submission"))
+    seq = body.get("seq")
+    turn_id = _uuid(submission.get("turn_id"))
+    if turn_id is None or str(turn_id) != submission["turn_id"]:
+        raise HTTPException(status_code=422, detail="A canonical turn UUID is required.")
+    text = submission.get("child_text")
+    if not isinstance(text, str) or not text.strip() or len(text) > 2000:
+        raise HTTPException(status_code=422, detail="The submitted answer must be 1–2000 characters.")
+    if type(seq) is not int or submission.get("seq") != seq or seq != chat.turn_count + 1:
+        raise HTTPException(status_code=409, detail="The next harness turn has changed.")
+    pending = chat.pending_turn
+    if pending:
+        if pending != submission:
+            raise HTTPException(status_code=409, detail="Another submission is already pending.")
+        return {"submission": pending}
+    if "dispatch_state" in submission and submission["dispatch_state"] != "prepared":
+        raise HTTPException(status_code=422, detail="A new submission must start as prepared.")
+    session = db.get(KcSession, chat.session_id) if chat.session_id else None
+    if session is None or type(submission.get("revision")) is not int or submission["revision"] != session.revision:
+        raise HTTPException(status_code=409, detail="The tutor session has changed.")
+    if db.get(HarnessTurn, turn_id) is not None or _answer_receipt(db, chat, str(turn_id)) is not None:
+        raise HTTPException(status_code=409, detail="This turn ID was already used.")
+    chat.pending_turn = submission
+    chat.updated_at = _now()
+    db.flush()
+    _refresh_chat_cost(db, chat)
+    _refresh_totals(db, _run_or_404(db, chat.run_id))
+    return {"submission": submission}
+
+
+def _answer_receipt(db: Session, chat: HarnessChat, turn_id: str) -> KcTurnReceipt | None:
+    return db.scalar(select(KcTurnReceipt).where(
+        KcTurnReceipt.session_id == chat.session_id, KcTurnReceipt.route == "answer",
+        KcTurnReceipt.client_turn_id == turn_id,
+    ))
+
+
+def pending_answer_result(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID) -> dict:
+    """Read a saved decision without claiming the turn or contacting a model."""
+    chat = db.get(HarnessChat, chat_id)
+    if chat is None or (chat.pending_turn or {}).get("turn_id") != str(turn_id):
+        raise HTTPException(status_code=409, detail="This submission is no longer pending.")
+    receipt = _answer_receipt(db, chat, str(turn_id))
+    return {"result": receipt.result if receipt and receipt.status == "committed" else None}
+
+
+def dispatch_harness_turn(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID, generation: int | None) -> dict:
+    """Authorize delivery before network I/O. A missing historical marker means delivery is uncertain."""
+    chat = _locked_chat(db, chat_id)
+    unsent = _as_dict(_as_dict(chat.tokens).get("unsent_child"))
+    if unsent.get("turn_id") == str(turn_id) and chat.ended_how == "run_cap":
+        return {"action": "run_cap"}
+    _check_turn_owner(chat, {"claim_generation": generation})
+    pending = _as_dict(chat.pending_turn)
+    if pending.get("turn_id") != str(turn_id):
+        raise HTTPException(status_code=409, detail="This submission is no longer pending.")
+    run = db.scalar(select(HarnessRun).where(HarnessRun.id == chat.run_id).with_for_update()
+                    .execution_options(populate_existing=True))
+    if run.status != "running":
+        return {"action": "paused"}
+    prepared = pending.get("dispatch_state") == "prepared"
+    if _run_cap_reached(run):
+        if not prepared or _answer_receipt(db, chat, str(turn_id)) is not None:
+            return {"action": "read_receipt"}
+        # Closing this chat does not create a fictitious learner or harness turn.
+        chat.tokens = {**_as_dict(chat.tokens), "unsent_child": {
+            "turn_id": str(turn_id), "child_tokens": pending.get("child_tokens") or {},
+        }}
+        chat.pending_turn = None
+        _finish(db, chat, "run_cap")
+        return {"action": "run_cap"}
+    if prepared:
+        chat.pending_turn = {**pending, "dispatch_state": "dispatched"}
+        db.flush()
+    return {"action": "send"}
+
+
+def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
+    chat = _locked_chat(db, chat_id)
+    turn_id = _uuid(body.get("turn_id"))
+    pending = chat.pending_turn
+    after = _as_dict(body.get("session_after"))
+    if "turn_id" in body or pending is not None:
+        if turn_id is None:
+            raise HTTPException(status_code=409, detail="The prepared turn ID is required.")
+        stored = db.get(HarnessTurn, turn_id)
+        if stored is not None:
+            if stored.chat_id != chat_id or stored.seq != body.get("seq") or stored.child_text != body.get("child_text"):
+                raise HTTPException(status_code=409, detail="This turn ID belongs to a different submission.")
+            return {"turn": stored.seq, "stop": chat.ended_how, "replayed": True,
+                    "pending_nudges": chat.pending_nudges, "stuck_answers": chat.stuck_answers,
+                    "cost_usd": chat.cost_usd, "luna_tokens": chat.luna_tokens}
+        matches = pending and all(body.get(key) == pending.get(key) for key in ("turn_id", "seq", "child_text"))
+        if (matches and chat.status == "paused" and body.get("claim_generation") == chat.claim_generation
+                and after.get("delivery_status") == "unknown"):
+            return {"turn": body["seq"], "stop": "awaiting_retry", "pending": True}
+        _check_turn_owner(chat, body)
+        if not matches:
+            raise HTTPException(status_code=409, detail="The result does not match the prepared submission.")
+        receipt = _answer_receipt(db, chat, str(turn_id))
+        committed = receipt is not None and receipt.status == "committed"
+        if after.get("delivery_status") == "unknown":
+            if committed and not body.get("defer"):
+                return {"turn": body["seq"], "stop": "", "recover": True, "pending": True}
+            # A timed-out request may still commit. Keep the move across Resume even if
+            # no receipt was visible when this transaction inspected the tutor session.
+            run = _run_or_404(db, chat.run_id)
+            if _run_cap_reached(run):
+                # Other already-paid submissions must still be able to drain.
+                chat.status = "paused"
+                chat.updated_at = _now()
+                db.flush()
+                _settle_inactive_run(db, run)
+            else:
+                pause_run(db, chat.run_id)
+            db.flush()
+            return {"turn": body["seq"], "stop": "awaiting_retry", "pending": True}
+        if not committed:
+            raise HTTPException(status_code=409, detail="The tutor has not committed this submission.")
+        if after.get("delivery_status") not in {"delivered", "recovered", "committed_empty"}:
+            raise HTTPException(status_code=422, detail="The delivery status is missing.")
+        # The preparation owns the learner input and its cost. Only the actual
+        # reply and resulting state are supplied by a resumed worker.
+        body = {**body, **{key: pending.get(key) for key in (
+            "intent", "child_text", "child_prompt", "child_tokens", "session_before"
+        )}}
+        after = {**after, "turn_id": str(turn_id), "receipt_status": "committed"}
+        chat.pending_turn = None
     if chat.status not in {"running", "paused"}:
         raise HTTPException(status_code=422, detail="That chat is not running.")
     run = db.get(HarnessRun, chat.run_id)
     seq = int(db.scalar(select(func.max(HarnessTurn.seq)).where(HarnessTurn.chat_id == chat.id)) or 0) + 1
-    after = body.get("session_after") if isinstance(body.get("session_after"), dict) else {}
     before = body.get("session_before") if isinstance(body.get("session_before"), dict) else {}
     tokens = body.get("child_tokens") if isinstance(body.get("child_tokens"), dict) else {}
     turn = HarnessTurn(
+        id=turn_id or uuid.uuid4(),
         chat_id=chat.id,
         seq=seq,
         intent=str(body.get("intent") or "")[:40],
@@ -1030,10 +1272,12 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     )
     chat.pending_nudges = pending
     chat.stuck_answers = answers
+    if run is not None and not reason:
+        _refresh_totals(db, run)
+        if _run_cap_reached(run):
+            reason = "run_cap"
     if reason:
         _finish(db, chat, reason)
-    elif run is not None:
-        _refresh_totals(db, run)
     db.flush()
     return {
         "turn": seq,
@@ -1047,6 +1291,11 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
 
 
 def _turns_for_checks(db: Session, chat: HarnessChat) -> list[dict]:
+    passages = {
+        block.get("id"): _as_dict(block.get("data")).get("passage_text")
+        for block in _as_list(_as_dict(chat.settings_copy).get("blocks"))
+        if isinstance(block, dict) and block.get("type") == "passage_ela" and block.get("id")
+    }
     rows = []
     for turn in db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id).order_by(HarnessTurn.seq)).all():
         after = turn.session_after if isinstance(turn.session_after, dict) else {}
@@ -1056,6 +1305,7 @@ def _turns_for_checks(db: Session, chat: HarnessChat) -> list[dict]:
                 "intent": turn.intent,
                 "child_text": turn.child_text,
                 "tutor_reply": after.get("tutor_reply") or "",
+                "passage_text": passages.get(before.get("block_id")),
                 "prompt": after.get("prompt") or "",
                 "passed": bool(after.get("passed")),
                 "loop_result": after.get("loop_result") if isinstance(after.get("loop_result"), dict) else {},
@@ -1106,21 +1356,17 @@ def _finish(db: Session, chat: HarnessChat, reason: str) -> None:
     run = db.get(HarnessRun, chat.run_id)
     if run is not None:
         _refresh_totals(db, run)
-        remaining = db.scalar(
-            select(func.count()).select_from(HarnessChat).where(
-                HarnessChat.run_id == run.id, HarnessChat.status.in_(("queued", "running"))
-            )
-        )
-        if not remaining and run.status == "running":
-            run.status = "completed"
-            run.updated_at = _now()
+        db.flush()
+        _settle_inactive_run(db, run)
 
 
-def finish_chat(db: Session, chat_id: uuid.UUID, reason: str) -> dict:
-    chat = db.get(HarnessChat, chat_id)
-    if chat is None:
-        raise HTTPException(status_code=404, detail="That chat was not found.")
-    allowed = {"completed", "quit", "turn_limit", "stuck", "cap", "luna_ceiling", "route_error", "safety", "cancelled"}
+def finish_chat(db: Session, chat_id: uuid.UUID, reason: str, claim_generation: int | None = None) -> dict:
+    chat = _locked_chat(db, chat_id)
+    if claim_generation is not None:
+        _check_turn_owner(chat, {"claim_generation": claim_generation})
+    if chat.pending_turn:
+        raise HTTPException(status_code=409, detail="Recover the pending submission before closing the chat.")
+    allowed = {"completed", "quit", "turn_limit", "stuck", "cap", "luna_ceiling", "route_error", "safety", "cancelled", "run_cap"}
     chosen = reason if reason in allowed else "completed"
     _refresh_chat_cost(db, chat)
     _finish(db, chat, chosen)
@@ -1245,6 +1491,7 @@ def chat_detail(db: Session, chat: HarnessChat) -> dict:
     reply_ids = [reply_message_id(turn.session_before, turn.session_after) for turn in turns]
     reply_counts = Counter(reply_ids)
     body = chat_out(chat)
+    body["run_cap_reached"] = _run_cap_reached(_run_or_404(db, chat.run_id))
     body["model_prompts"] = [
         {"id": str(row.id), "message_id": str(row.message_id) if row.message_id else None,
          "seq": row.seq, "model": row.model, "system_prompt": row.system_prompt} for row in prompts
@@ -1328,12 +1575,21 @@ def _llm_calls(db: Session, chat: HarnessChat, prompts: list[dict]) -> list[dict
 
 def _download_payload(db: Session, chat: HarnessChat) -> dict:
     body = chat_detail(db, chat)
+    if chat.pending_turn:
+        pending = chat.pending_turn
+        receipt = _answer_receipt(db, chat, pending["turn_id"])
+        body["pending_delivery"] = {
+            "turn_id": pending["turn_id"], "seq": pending["seq"], "child_text": pending["child_text"],
+            "receipt_status": receipt.status if receipt else "unknown",
+        }
     body["llm_calls"] = _llm_calls(db, chat, body["model_prompts"])
     return body
 
 
 def _run_stamp(run: HarnessRun) -> dict:
-    return {"id": str(run.id), "status": run.status, "code_version": run.code_version}
+    plan = dict(run.plan or {})
+    return {"id": str(run.id), "status": run.status, "code_version": run.code_version,
+            "seed": plan.get("seed"), "pair_tutor_seeds": plan.get("pair_tutor_seeds")}
 
 
 def download_chat(db: Session, chat_id: uuid.UUID) -> str:
@@ -1481,6 +1737,12 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
                 "block_label": block_label(typed),
                 "block_id": str(after.get("block_id") or ""),
                 "block_before": str(before.get("block_id") or ""),
+                "block_type_before": str(before.get("block_type") or blocks_by_id.get(str(before.get("block_id") or ""), "")),
+                "planned_intent": before.get("planned_intent"),
+                "scenario_exercised": before.get("scenario_exercised"),
+                "simulation_role": before.get("simulation_role"),
+                "learner_observation": after.get("learner_observation"),
+                "choice_fallback": before.get("choice_fallback") is True,
                 "substep": str(after.get("substep") or ""),
                 "substep_before": str(before.get("substep") or ""),
                 "passed": bool(after.get("passed")),
@@ -1497,6 +1759,10 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
     return {
         "id": str(chat.id),
         "persona_name": snapshot.get("name") or "",
+        "simulation_role": snapshot.get("simulation_role"),
+        "seed_profile": snapshot.get("seed_profile") or chat.tutor_profile_id,
+        "paired_seeds": snapshot.get("paired_seeds") is True,
+        "scenario": snapshot.get("scenario"),
         "traits": snapshot.get("traits") or {},
         "course_title": goal.title if goal is not None else "",
         "component_title": node.title if node is not None else "",
@@ -1613,12 +1879,17 @@ def fixture_document() -> dict:
 
 
 def ensure_fixture(db: Session) -> dict:
-    existing = db.scalar(select(KcGoal).where(KcGoal.code == FIXTURE_CODE))
-    if existing is None:
-        existing = import_new_course(db, fixture_document())
-    if not existing.ready:
-        mark_ready(db, existing)
-    body = course_out(db, existing)
+    def load(code, document):
+        course = db.scalar(select(KcGoal).where(KcGoal.code == code))
+        if course is None:
+            course = import_new_course(db, document())
+        if not course.ready:
+            mark_ready(db, course)
+        return course
+
+    base = load(FIXTURE_CODE, fixture_document)
+    load(SCENARIO_FIXTURE_CODE, scenario_fixture_document)
+    body = course_out(db, base)
     body["fixture"] = True
     return body
 
@@ -1804,6 +2075,8 @@ def trial_profile(db: Session, card_id: uuid.UUID) -> dict:
         if run is not None:
             plan = dict(run.plan or {})
             plan["tutor_profile_ids"] = [created.id]
+            plan["seed_from_run"] = str(run.id)
+            plan["seed_from_profile"] = source.id
     return {"recommendation": recommendation_out(row), "trial_profile_id": created.id, "plan": plan}
 
 

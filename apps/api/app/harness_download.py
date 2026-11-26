@@ -119,8 +119,20 @@ def _turn_lines(turn: dict, marks: list[dict], call: dict | None) -> list[str]:
         if _block_key(place):
             lines.append(f"Block {label}: {_mark_label(place)} ({_block_key(place)})")
     lines.append(f"Intent: {_text(turn.get('intent')) or 'not stored'}")
+    before = _dict(turn.get("session_before"))
+    if before.get("simulation_role"):
+        lines.append(f"Simulation role: {before['simulation_role']}")
+        lines.append(f"Planned action: {_text(before.get('planned_intent')) or 'unknown'}")
+        lines.append(f"Observed tutor outcome: {_text(after.get('learner_observation')) or 'unknown'}")
+        if isinstance(before.get("scenario_exercised"), bool):
+            lines.append("Scripted scenario: " + ("exercised" if before["scenario_exercised"] else "setup"))
+        if before.get("choice_fallback"):
+            lines.append("The generated choice was invalid. The runner selected a displayed option.")
     lines.append(f"Child: {turn.get('child_text') or ''}")
     lines.append(f"Tutor: {reply}")
+    if after.get("turn_id") and after.get("receipt_status") and after.get("delivery_status"):
+        lines.extend([f"Submission: {after['turn_id']}", f"Tutor receipt: {after['receipt_status']}",
+                      f"Delivery: {after['delivery_status']}"])
     if error or not reply:
         lines.append(f"Error: {error or 'The tutor did not write a reply.'}")
     loop = after.get("loop_result") if reply and not error else None
@@ -165,6 +177,12 @@ def _chat_lines(chat: dict) -> list[str]:
         f"Ended: {_text(chat.get('ended_how')) or 'still open'}",
         f"Tutor model: {_text(chat.get('tutor_model')) or 'unknown'}",
         f"Child model: {_text(chat.get('child_model')) or 'unknown'}",
+        f"Simulation role: {_text(child.get('simulation_role')) or 'historical mode unknown'}",
+        f"Scenario: {_text(child.get('scenario')) or 'unspecified'}",
+        f"Policy: {_text(child.get('policy_version')) or 'historical version unknown'}",
+        f"Behavior: {_text(chat.get('behavior')) or 'unknown'}",
+        f"Chat seed: {chat.get('seed') if chat.get('seed') is not None else 'unknown'}",
+        f"Iteration: {chat.get('iteration') or 'unknown'}",
         f"Cost: {_cost(chat.get('cost_usd'))}",
         f"Luna tokens: {int(chat.get('luna_tokens') or 0)}",
         "",
@@ -188,6 +206,17 @@ def _chat_lines(chat: dict) -> list[str]:
             call = {**calls[index], "kind": "answer"}
             rendered.add(index)
         lines.extend(_turn_lines(turn, marks, call))
+    pending = _dict(chat.get("pending_delivery"))
+    unsent = _dict(_dict(chat.get("tokens")).get("unsent_child"))
+    if unsent:
+        lines.extend(["### Child response stopped before submission", "",
+                      "The run reached its spending cap before the tutor was contacted.",
+                      f"Submission: {unsent['turn_id']}",
+                      f"Child tokens: {_tokens(_dict(unsent.get('child_tokens')))}", ""])
+    if pending:
+        lines.extend([f"### Pending submission for turn {pending['seq']}", "",
+                      f"Child: {pending['child_text']}", f"Submission: {pending['turn_id']}",
+                      f"Tutor receipt: {pending['receipt_status']}", "Delivery: unconfirmed", ""])
     remaining = [call for index, call in enumerate(calls) if index not in rendered]
     if remaining:
         lines.extend(["### Tutor records without a verified turn", "",
@@ -243,6 +272,11 @@ def render_download(run: dict, chats: list[dict]) -> str:
         f"Status: {_text(run.get('status')) or 'unknown'}",
         "",
     ]
+    if run.get("seed") is not None:
+        lines.extend([f"Run seed: {run['seed']}", ""])
+    if isinstance(run.get("pair_tutor_seeds"), bool):
+        paired = "shared within explicit pairs" if run["pair_tutor_seeds"] else "independent"
+        lines.extend([f"Scenario seeds: {paired}", ""])
     if not chats:
         lines.append("No chats stored.")
         lines.append("")

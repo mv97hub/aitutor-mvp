@@ -47,6 +47,7 @@ from app.block_score import (
     freeze_requirements,
     offered_actions,
     parent_text,
+    remember_tutor_disclosures,
     score_supported_turn,
     scoring_version_for_blocks,
     verdict_from_results,
@@ -98,6 +99,7 @@ from app.models import (
     KcRequirement,
     KcSession,
     KcState,
+    KcTurnReceipt,
     KcVisit,
     Student,
     TutorProfile,
@@ -4455,40 +4457,47 @@ def turn(
     revision: int | None = None,
 ) -> dict:
     """Return the layer bundle. A turn id claims the answer and leaves the line for the decision."""
-    if session.status == "completed":
-        raise HTTPException(status_code=422, detail="This component session is already finished.")
     cleaned = answer.strip()
     if not cleaned:
         raise HTTPException(status_code=422, detail="Write an answer first.")
-    node = db.get(KcNode, session.kc_id)
-    _profile, _goal, messages, _fragment, cfg, _blocks, _index, block, state = _block_context(db, session, node)
-    substep = str(state.get("substep") or "")
-    choice = None
-    if block is not None and not _needs_speech(session, messages):
-        choice = on_screen_choice(block, substep, state, cfg)
-    content = _choice_answer_text(cleaned, choice) if choice else cleaned
+
+    def legacy_payload(receipt: KcTurnReceipt) -> str:
+        # Older receipts hashed the transcript (including the choices). Reconstruct
+        # it from the screen at the original revision, never from a later question.
+        if session.revision == receipt.revision:
+            screen = session_out(db, session)
+        else:
+            screen = db.scalar(select(KcTurnReceipt.result).where(
+                KcTurnReceipt.session_id == session.id,
+                KcTurnReceipt.revision == receipt.revision - 1,
+                KcTurnReceipt.status == "committed",
+            )) or {}
+        choice = screen.get("choice")
+        return _choice_answer_text(cleaned, choice) if choice else cleaned
+
+    claimed = None
     if str(turn_id or "").strip():
         claimed = claim_answer(
-            db,
-            session,
-            turn_id=str(turn_id),
-            revision=revision,
-            answer=content,
+            db, session, turn_id=str(turn_id), revision=revision, answer=cleaned, legacy_payload=legacy_payload,
         )
-        if claimed.get("replayed"):
-            return claimed["result"]
-        session.updated_at = _now()
-        body = session_out(db, session)
-        body.update(prompt_for(db, session, content))
-        body["reply"] = ""
-        body["passed"] = False
-        body["unit_complete"] = False
-        body["course_complete"] = False
-        return body
-    _add_message(db, session, "user", content)
-    session.updated_at = _now()
+        if claimed["replayed"]:
+            return {**claimed["result"], "replayed": True}
+    elif session.status == "completed":
+        raise HTTPException(status_code=422, detail="This component session is already finished.")
+
     body = session_out(db, session)
-    body.update(prompt_for(db, session))
+    choice = body["choice"]
+    content = _choice_answer_text(cleaned, choice) if choice else cleaned
+    if claimed is not None:
+        receipt = claimed["receipt"]
+        if claimed["created"]:
+            receipt.payload = content
+        body.update(prompt_for(db, session, receipt.payload))
+    else:
+        _add_message(db, session, "user", content)
+        body = session_out(db, session)
+        body.update(prompt_for(db, session))
+    session.updated_at = _now()
     body["reply"] = ""
     body["passed"] = False
     body["unit_complete"] = False
@@ -4504,7 +4513,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     if turn_id:
         prepared = prepare_answer_commit(db, session, turn_id)
         if prepared.get("replay"):
-            return prepared["replay"]
+            return {**prepared["replay"], "replayed": True}
         pending = prepared.get("pending")
         receipt = prepared.get("receipt")
     if session.status == "completed":
@@ -4685,6 +4694,8 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     generated = body.get("generated_mcq")
     if isinstance(generated, dict) and generated.get("choices") and resolution.next_step == index:
         next_state["generated_mcq"] = generated
+    if supported and resolution.next_step == index and not resolution.unit_complete:
+        next_state = remember_tutor_disclosures(_block, next_state, reply)
     session.active_block_state = next_state
     session.block_results = list(resolution.block_results)
     if supported:
@@ -4898,6 +4909,9 @@ def append_kc_model_prompt(
     if not stored_model:
         student = db.get(Student, session.student_id)
         stored_model = effective_child_profile(student)["tutor_model"]
+    # Concurrent attempts on one answer may both have real provider calls to log.
+    # Serialize this short insert so each call gets its own prompt sequence.
+    db.scalar(select(KcSession.id).where(KcSession.id == session.id).with_for_update())
     seq = db.scalar(select(func.max(KcModelPrompt.seq)).where(KcModelPrompt.session_id == session.id))
     row = KcModelPrompt(
         session_id=session.id,
@@ -4972,6 +4986,11 @@ def record_speech(
         flag = normalize_safety_flag(safety_flag)
     except AiSafetyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if flag == "none" and int(session.scoring_version or 1) >= REQUIREMENT_SCORE:
+        blocks = stored_blocks(_node_or_404(db, session.kc_id))
+        index = int(session.step or 0)
+        if 0 <= index < len(blocks):
+            session.active_block_state = remember_tutor_disclosures(blocks[index], session.active_block_state or {}, text)
     stored = _add_message(db, session, "assistant", text)
     child_message = next((message.content for message in reversed(messages) if message.role == "user"), "")
     if flag != "none":

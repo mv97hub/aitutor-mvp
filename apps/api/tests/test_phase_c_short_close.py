@@ -6,7 +6,7 @@ from app.harness_checks import automatic_checks
 from app.kc import loop_turn_result
 from app.kc_loop import SAY_THAT_AGAIN, hold_for_blank_reply, reply_is_unreadable
 from tests.test_explanation_block import _profile_for, _prompt
-from tests.test_kc_prompt import _section, _text, _topic_node
+from tests.test_kc_prompt import _section, _student, _text, _topic_node
 
 
 def test_a_bite_sized_first_teaching_keeps_the_childs_length() -> None:
@@ -19,23 +19,36 @@ def test_a_bite_sized_first_teaching_keeps_the_childs_length() -> None:
     assert "5 to 8 sentences" not in text
 
 
-def test_tell_me_more_unlocks_the_longer_explanation() -> None:
-    text = _prompt(
-        profile=_profile_for(4),
-        opening=False,
-        last_answer="Tell me more",
-        active_block_state={
-            "substep": "explain_topic",
-            "topic_index": 0,
-            "dialogue_turns": 1,
-            "elaboration_turns": 0,
-        },
-    )
-    who = _section(text, "Who you are talking to")
-    assert "CROSS-LAYER LENGTH OVERRIDE" not in who
-    assert "Keep response length bite-sized" in who
-    assert "They asked to hear more" in text
-    assert "may run longer than their response_length" in text
+def test_more_adds_one_short_example_for_an_early_reader():
+    def prompt(length):
+        return _prompt(
+            student=_student(age=6, child_profile={"reading_level": "emerging", "response_length": length}),
+            profile=_profile_for(4), opening=False, last_answer="Tell me more",
+            active_block_state={"substep": "explain_topic", "topic_index": 0, "dialogue_turns": 1},
+        )
+
+    short = prompt("bite_sized")
+    assert "one new example or one next step" in short
+    assert "1 to 2 short sentences" in short and "shorter sentences and simpler examples" in short
+    assert "may run longer" not in short and "5 to 8 sentences" not in short
+    assert "Length override is on" not in short
+    balanced = prompt("balanced")
+    assert "2 to 4 sentences" in balanced and "5 to 8 sentences" not in balanced
+    detailed = prompt("detailed")
+    assert "They asked to hear more" in detailed and "5 to 8 sentences" in detailed
+    assert "one new example or one next step" not in detailed
+
+
+def test_bite_sized_coaching_is_counted_separately_from_an_assigned_passage():
+    passage = "Rain fell all night. The river rose. " * 12
+    def reply(coaching):
+        return {"tutor_reply": passage + coaching, "passage_text": passage.strip()}
+
+    turns = [reply("Watch the bank. Where did the water go?"),
+             reply("Watch the bank. See the mud. Where did the water go?"),
+             {"tutor_reply": "A 6.48% rise is about six percent. Does that help?"}]
+    assert automatic_checks(turns, ended_how="completed", response_length="bite_sized")["too_long"] == [1]
+    assert automatic_checks(turns, ended_how="completed", response_length="detailed")["too_long"] == []
 
 
 def test_a_blank_reply_stays_without_counting_a_try() -> None:

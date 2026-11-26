@@ -209,7 +209,7 @@ export const BLOCK_CONFIG_FIELDS: Record<KcBlockType, ConfigField[]> = {
     BOOL(
       "allow_depth_override_student_length",
       "Allow depth to override length",
-      "When depth is 3 or more, or the learner asks to elaborate, the explanation may run longer than the child's response length.",
+      "Allows fuller elaboration for detailed responses. Bite-sized and balanced coaching keep the child's sentence limit on every turn.",
     ),
     ENUM("elaboration_style_on_question", "Elaboration style", "How a follow-up question on the same topic is answered.", [
       ["fresh_analogy_and_example", "Fresh analogy and example"],

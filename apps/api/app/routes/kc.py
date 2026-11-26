@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.harness import refresh_harness_session_cost
 from app.kc import (
     _course_or_404,
     _node_or_404,
@@ -743,18 +744,15 @@ def post_kc_model_prompt(
 def post_token_usage(
     session_id: uuid.UUID, body: TokenUsageIn, db: Session = Depends(get_db)
 ) -> dict:
-    return usage_out(
-        record_token_usage(
-            db,
-            _session_or_404(db, session_id),
-            kind=body.kind,
-            model=body.model,
-            input_tokens=body.input_tokens,
-            output_tokens=body.output_tokens,
-            cached_tokens=body.cached_tokens,
-            message_id=body.message_id,
-        )
+    row = record_token_usage(
+        db, _session_or_404(db, session_id),
+        kind=body.kind, model=body.model,
+        input_tokens=body.input_tokens, output_tokens=body.output_tokens,
+        cached_tokens=body.cached_tokens, message_id=body.message_id,
     )
+    if body.kind == "answer":
+        refresh_harness_session_cost(db, session_id)
+    return usage_out(row)
 
 
 @router.get("/kc/token-usage")

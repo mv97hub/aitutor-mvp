@@ -5,7 +5,9 @@ from __future__ import annotations
 import re
 from difflib import SequenceMatcher
 
-CHECKS_VERSION = "1"
+from app.kc_blocks import passage_paragraphs
+
+CHECKS_VERSION = "2"
 DEFAULT_CHAT_CAP_CENTS = 40
 DEFAULT_TURN_LIMIT = 40
 DEFAULT_STUCK_LIMIT = 8
@@ -630,7 +632,16 @@ def automatic_checks(turns: list[dict], *, ended_how: str, response_length: str)
             opening = reply.lower().split(",", 1)[0][:24]
             if any(opening.startswith(word) for word in _PRAISE):
                 praise_open += 1
-            if len(reply) > limit:
+            # Exclude only text actually printed from the assigned passage. A
+            # paraphrase or additional explanation still counts as tutor coaching.
+            coaching = reply
+            passage = _text(turn.get("passage_text"))
+            if passage:
+                for paragraph in passage_paragraphs(passage):
+                    coaching = coaching.replace(paragraph, "", 1)
+            sentences = re.split(r"""[.!?]+["'”’)]*(?:\s+|$)""", coaching.strip())
+            over_sentence_cap = response_length == "bite_sized" and sum(bool(part.strip()) for part in sentences) > 2
+            if len(coaching.strip()) > limit or over_sentence_cap:
                 too_long.append(index)
             if _LEAK.search(reply):
                 leaks.append(index)

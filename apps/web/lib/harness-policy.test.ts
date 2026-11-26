@@ -365,3 +365,24 @@ test("a Cuba recall question and a next-move explanation are answered before a n
   assert.equal(nudgeAllowed({ pending: 0, answersGiven: 0, tutor: cuba }), false);
   assert.equal(nudgeAllowed({ pending: 2, answersGiven: 0, tutor: "Tell me more.", choices: 2 }), false);
 });
+
+test("the child model sees the complete question and receives hidden grading only in the explicit control", () => {
+  const tutor = "First read this paragraph. ".repeat(46) + "Which clue changes your mind?";
+  const fields = {
+    description: "Eager reader", traits: middle, intent: "answer_right" as const, expected: "EVALUATOR_MARKER",
+    wrongMove: "WRONG_MARKER", lastTutor: tutor,
+    visible: { passage: "Visible river passage", recent: [{ role: "user", content: "May I reread it?" }],
+      canType: true, choices: [], buttons: [], previousHelpRequests: 1 },
+  };
+  const learner = childPrompt({ ...fields, role: "learner" });
+  assert.ok(learner.includes(tutor));
+  assert.match(learner, /May I reread it\?/);
+  assert.match(learner, /Visible river passage/);
+  assert.match(learner, /asked for help on this topic 1 time/);
+  assert.doesNotMatch(learner, /EVALUATOR_MARKER|WRONG_MARKER/);
+  assert.match(childPrompt({ ...fields, role: "answer_key_control" }), /EVALUATOR_MARKER/);
+  const corrected = childPrompt({ ...fields, role: "learner", intent: "answer_wrong",
+    description: "Holds one wrong belief: Higher prices always mean higher income. A slow reader." });
+  assert.match(corrected, /Consider corrections about this topic/);
+  assert.doesNotMatch(corrected, /do not give it up|still answer the question wrongly/);
+});
