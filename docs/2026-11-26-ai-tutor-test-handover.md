@@ -2,7 +2,24 @@
 
 Myuran, run `c2bf3bcf-4558-49b6-9328-f6e572103d74` was created at **2:05:57 p.m. US Eastern on 26 November 2026**. It paired **AI_Child1 through AI_Child14** with four knowledge-component (KC) lessons using tutor model `~deepseek/deepseek-flash-latest`. This review covers all **56 synthetic conversations and 1,338 recorded child turns**, including failed deliveries, and the matching code revision `f545497`. The run selected child actions in rule mode and used `gpt-6-luna` to word some of them. [Original handover][handover] · [Tested source][source] · [Runs screen][runs]
 
-## Decisions requested
+## Implementation update for Myuran · 26 November, after review
+
+Three changes are on `main`. Reports now include fragile and unassessed outcomes, correlate a tutor reply with its recorded call, and give a correct tentative answer the same scoring opportunity as a statement. Review of the tentative-answer change also caught a correct paraphrase that shared no words with the answer key. [Outcome export #203](https://github.com/mv97hub/aitutor-mvp/pull/203) · [Call attribution #204](https://github.com/mv97hub/aitutor-mvp/pull/204) · [Tentative answers #205](https://github.com/mv97hub/aitutor-mvp/pull/205)
+
+The remaining changes are in draft PRs for review. Each PR includes reproduction steps. The numbered sections below preserve the original conversation evidence.
+
+| Priority | Draft for approval | What to check |
+| --- | --- | --- |
+| 1 | [Recover a lost response #206](https://github.com/mv97hub/aitutor-mvp/pull/206) | Lose the final response and resume. The original tutor reply, one learner attempt and one harness turn should survive. At the spending cap, collecting a saved reply uses no model call. Apply the additive database migration before starting updated workers. |
+| 2 | [Track what the tutor supplied #207](https://github.com/mv97hub/aitutor-mvp/pull/207) | Reveal option B, with and without its reason. Inspect the two pieces of credit individually. Then give a fresh problem and check for independent credit. |
+| 3 | [Correct three lessons #209](https://github.com/mv97hub/aitutor-mvp/pull/209) | Try the wrong-scene quotation, the change from CPI 108 to 115, and the 1923 currency question. The PR contains three prepared unit files and a rehearsal guide. Myuran can decide when to import each correction into a live course. |
+| 4 | [Respect reading and length settings #208](https://github.com/mv97hub/aitutor-mvp/pull/208) | Ask for more on the same task with bite-sized and detailed profiles. Check the coaching separately from any reproduced passage. |
+| 5 | [Extend automated learner profiles #211](https://github.com/mv97hub/aitutor-mvp/pull/211) | Use a fixed seed with the tentative and declarative CPI presets. Check whether each target was actually reached. The 24 variants span eight families and use the existing child IDs. This branch builds on #206. |
+| 6 | [Clarify the final invitation #210](https://github.com/mv97hub/aitutor-mvp/pull/210) | Compare “Yes please”, a specific question, and Continue. Acceptance should leave room for the learner to ask. Continue should close exactly once. |
+
+**Combined local verification.** Codex tested the six draft code revisions together on a disposable PostgreSQL database with controlled model replies. The 66 focused API tests and 230 web tests passed, as did TypeScript. The full API suite had 480 passes and the same 18 failing test IDs as `main` at `58f6a3e`. The production build generated all 29 pages. Its first invocation exited on the existing Next.js 16.4.3 security advisory and the repeat succeeded. The dependency still carries the advisory. The local browser check reached a one-chat preview for AI_Child5 with the CPI fixture, seed 2611 and paired draws. No paid evaluation or live course import was run.
+
+## Original decisions requested
 
 **Recommended order.** Start with the export and scoring fixes. The current report hides assisted work, and in real exchanges the tutor both withheld credit for a correct answer and awarded credit for an answer it supplied. Correct the verified course errors alongside that work. Then tune age-specific coaching and broaden the simulated journeys.
 
