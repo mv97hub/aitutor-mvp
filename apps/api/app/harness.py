@@ -946,8 +946,13 @@ def _chat_priced_cost(db: Session, chat: HarnessChat) -> tuple[str | None, int]:
             if part is None:
                 continue
             priced = _add_money(priced, part)
-    for turn in db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id)).all():
-        tokens = turn.child_tokens if isinstance(turn.child_tokens, dict) else {}
+    # Generation is billed even if the tutor never receives the child's answer.
+    child_usage = list(db.scalars(select(HarnessTurn.child_tokens).where(HarnessTurn.chat_id == chat.id)))
+    for checkpoint in (chat.pending_turn, _as_dict(chat.tokens).get("unsent_child")):
+        if checkpoint:
+            child_usage.append(checkpoint.get("child_tokens"))
+    for usage in child_usage:
+        tokens = _as_dict(usage)
         model = str(tokens.get("model") or chat.child_model or "")
         incoming = int(tokens.get("input_tokens") or tokens.get("input") or 0)
         outgoing = int(tokens.get("output_tokens") or tokens.get("output") or 0)
@@ -982,6 +987,15 @@ def _refresh_chat_cost(db: Session, chat: HarnessChat) -> None:
     priced, luna = _chat_priced_cost(db, chat)
     chat.cost_usd = priced
     chat.luna_tokens = luna
+
+
+def refresh_harness_session_cost(db: Session, session_id: uuid.UUID) -> None:
+    # A retried provider call can report usage after the harness records its
+    # final turn. Use the same chat-then-run lock order as the turn recorder.
+    chat = db.scalar(select(HarnessChat).where(HarnessChat.session_id == session_id).with_for_update())
+    if chat is not None:
+        _refresh_chat_cost(db, chat)
+        _refresh_totals(db, _run_or_404(db, chat.run_id))
 
 
 def _refresh_totals(db: Session, run: HarnessRun) -> None:
@@ -1085,6 +1099,8 @@ def prepare_harness_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
         if pending != submission:
             raise HTTPException(status_code=409, detail="Another submission is already pending.")
         return {"submission": pending}
+    if "dispatch_state" in submission and submission["dispatch_state"] != "prepared":
+        raise HTTPException(status_code=422, detail="A new submission must start as prepared.")
     session = db.get(KcSession, chat.session_id) if chat.session_id else None
     if session is None or type(submission.get("revision")) is not int or submission["revision"] != session.revision:
         raise HTTPException(status_code=409, detail="The tutor session has changed.")
@@ -1093,6 +1109,8 @@ def prepare_harness_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     chat.pending_turn = submission
     chat.updated_at = _now()
     db.flush()
+    _refresh_chat_cost(db, chat)
+    _refresh_totals(db, _run_or_404(db, chat.run_id))
     return {"submission": submission}
 
 
@@ -1110,6 +1128,37 @@ def pending_answer_result(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID) -
         raise HTTPException(status_code=409, detail="This submission is no longer pending.")
     receipt = _answer_receipt(db, chat, str(turn_id))
     return {"result": receipt.result if receipt and receipt.status == "committed" else None}
+
+
+def dispatch_harness_turn(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID, generation: int | None) -> dict:
+    """Authorize delivery before network I/O. A missing historical marker means delivery is uncertain."""
+    chat = _locked_chat(db, chat_id)
+    unsent = _as_dict(_as_dict(chat.tokens).get("unsent_child"))
+    if unsent.get("turn_id") == str(turn_id) and chat.ended_how == "run_cap":
+        return {"action": "run_cap"}
+    _check_turn_owner(chat, {"claim_generation": generation})
+    pending = _as_dict(chat.pending_turn)
+    if pending.get("turn_id") != str(turn_id):
+        raise HTTPException(status_code=409, detail="This submission is no longer pending.")
+    run = db.scalar(select(HarnessRun).where(HarnessRun.id == chat.run_id).with_for_update()
+                    .execution_options(populate_existing=True))
+    if run.status != "running":
+        return {"action": "paused"}
+    prepared = pending.get("dispatch_state") == "prepared"
+    if _run_cap_reached(run):
+        if not prepared or _answer_receipt(db, chat, str(turn_id)) is not None:
+            return {"action": "read_receipt"}
+        # Closing this chat does not create a fictitious learner or harness turn.
+        chat.tokens = {**_as_dict(chat.tokens), "unsent_child": {
+            "turn_id": str(turn_id), "child_tokens": pending.get("child_tokens") or {},
+        }}
+        chat.pending_turn = None
+        _finish(db, chat, "run_cap")
+        return {"action": "run_cap"}
+    if prepared:
+        chat.pending_turn = {**pending, "dispatch_state": "dispatched"}
+        db.flush()
+    return {"action": "send"}
 
 
 def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:

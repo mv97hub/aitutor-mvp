@@ -1,19 +1,51 @@
 """Retry answer receipts through the real turn and decision endpoints, with a controlled grader."""
 
 from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
 from threading import Barrier
+from time import monotonic, sleep
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 
 from app.database import SessionLocal
-from app.models import HarnessChat, HarnessRun, KcTurnReceipt
+from app.kc import append_kc_model_prompt
+from app.models import HarnessChat, HarnessRun, KcSession, KcTurnReceipt
 from app.turn_receipt import payload_hash
 from tests.test_block_close import (
     CONTINUE, RECALL, WHY, _by_key, _course, _grade, _messages, _open, _receipt_count, _session, client,
 )
 from tests.test_block_close_stage4 import MCQ
 from tests.test_kc import _wipe_zz
+
+
+def test_concurrent_provider_calls_keep_both_prompt_records():
+    course = _course("zz-lost-prompt-history", [RECALL])
+    try:
+        session_id = UUID(_open(course, "zz-lost-prompt-history-a")["id"])
+        pid = Queue()
+
+        def second_call():
+            with SessionLocal.begin() as second:
+                pid.put(second.scalar(select(func.pg_backend_pid())))
+                return append_kc_model_prompt(second, second.get(KcSession, session_id), "retry", [], "model").seq
+
+        with SessionLocal() as first, ThreadPoolExecutor(max_workers=1) as executor:
+            first_pid = first.scalar(select(func.pg_backend_pid()))
+            initial = append_kc_model_prompt(first, first.get(KcSession, session_id), "original", [], "model").seq
+            delayed = executor.submit(second_call)
+            try:
+                # Hold the first insert open until the retry is waiting in PostgreSQL.
+                other_pid = pid.get(timeout=5)
+                deadline = monotonic() + 5
+                while first_pid not in first.scalar(text("select pg_blocking_pids(:pid)"), {"pid": other_pid}):
+                    assert monotonic() < deadline, "second write never waited on the first"
+                    sleep(0.01)
+            finally:
+                first.commit()
+            assert delayed.result(timeout=5) == initial + 1
+    finally:
+        _wipe_zz()
 
 
 def test_two_simultaneous_decisions_commit_one_answer_and_return_the_same_reply():
@@ -112,6 +144,15 @@ def test_retry_after_final_answer_commits_returns_the_original_closed_session():
         assert _by_key(session.block_results[0]["requirements"])["recall"]["attempts"] == 2
         assert _receipt_count(opened["id"], "answer") == 4
         assert [m.content for m in _messages(opened["id"]) if m.role == "user"] == ["idk", "idk", WHY, CONTINUE]
+        # Two providers finished one accepted submission. The loser's usage can
+        # arrive after the final harness turn and its optional judge have finished.
+        for index, message_id in enumerate([final["messages"][-1]["id"], None], start=1):
+            usage = client.post(f"/kc/sessions/{opened['id']}/token-usage", json={
+                "kind": "answer", "model": "gpt-4o-mini", "message_id": message_id,
+                "input_tokens": 1_000_000, "output_tokens": 0,
+            })
+            assert usage.status_code == 200, usage.text
+            assert client.get(run_path).json()["totals"]["priced_cents"] == index * 15
     finally:
         with SessionLocal.begin() as db:
             run = db.get(HarnessRun, run_id)

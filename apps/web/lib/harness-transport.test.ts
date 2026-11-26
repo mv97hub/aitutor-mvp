@@ -117,14 +117,20 @@ test("prepared transport uses the original revision and committed transcript eve
   let preparations = 0;
   let persisted: SessionSnap | null = null;
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    if (String(url).endsWith(`/pending-turn/${pending.turn_id}/dispatch`)) {
+      assert.equal(init.method, "POST");
+      assert.deepEqual(JSON.parse(String(init.body)), { claim_generation: 6 });
+      return Response.json({ action: "send" });
+    }
     if (String(url).endsWith(`/pending-turn/${pending.turn_id}`)) {
       assert.equal(init.method ?? "GET", "GET");
       return Response.json({ result: persisted });
     }
     assert.ok(String(url).endsWith("/kc/harness/chats/chat/pending-turn"));
-    assert.deepEqual(JSON.parse(String(init.body)), { claim_generation: 6, seq: pending.seq, submission: pending });
+    const checkpoint = { ...pending, dispatch_state: "prepared" };
+    assert.deepEqual(JSON.parse(String(init.body)), { claim_generation: 6, seq: pending.seq, submission: checkpoint });
     preparations++;
-    return Response.json({ submission: pending });
+    return Response.json({ submission: checkpoint });
   });
   const bodies: unknown[] = [];
   const answer: RoutePost = async (req) => {
@@ -136,6 +142,8 @@ test("prepared transport uses the original revision and committed transcript eve
     { session: async (_id, saved) => { assert.deepEqual(saved, completed); return saved!; },
       answerKey: async () => ({}), runStatus: async () => ({ status: "running" }) });
   const saved = await transport.prepareTurn("chat", 6, pending);
+  assert.equal(saved.dispatch_state, "prepared");
+  assert.equal(await transport.dispatchTurn("chat", saved.turn_id, 6), "send");
   await assert.rejects(transport.answer("session", saved, "model"), /lost/);
   const replay = await transport.answer("session", saved, "model");
   assert.equal(replay.response_message_id, final.id);

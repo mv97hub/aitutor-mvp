@@ -70,6 +70,7 @@ export type ClaimedChat = {
 };
 
 export type PreparedTurn = {
+  dispatch_state?: "prepared" | "dispatched";
   turn_id: string;
   revision: number;
   seq: number;
@@ -98,6 +99,7 @@ export type HarnessTransport = {
   session: (sessionId: string) => Promise<SessionSnap>;
   speak: (sessionId: string, model: string) => Promise<SessionSnap>;
   prepareTurn: (chatId: string, generation: number, turn: PreparedTurn) => Promise<PreparedTurn>;
+  dispatchTurn: (chatId: string, turnId: string, generation: number) => Promise<"send" | "read_receipt" | "run_cap" | "paused">;
   answer: (sessionId: string, turn: PreparedTurn, model: string, receiptOnlyChatId?: string) => Promise<SessionSnap>;
   answerKey: (chatId: string) => Promise<{
     revision?: number;
@@ -408,6 +410,15 @@ export async function playChat(
       if (run.plan?.run_cap_cents) continue;
     }
     const before = pending.session_before;
+    let receiptOnly = Boolean(run.run_cap_reached);
+    if (pending.dispatch_state === "prepared") {
+      const turnId = pending.turn_id;
+      const action = await writeWithRetry(() => transport.dispatchTurn(chat.id, turnId, generation ?? 0));
+      if (action === "paused") return "paused";
+      if (action === "run_cap") return "done";
+      receiptOnly = action === "read_receipt";
+      pending = { ...pending, dispatch_state: "dispatched" };
+    }
     if (onLive && !seen.has(`child:${pending.child_text}`)) {
       seen.add(`child:${pending.child_text}`);
       onLive({ chatId: chat.id, role: "child", text: pending.child_text });
@@ -416,8 +427,8 @@ export async function playChat(
     let afterSession: SessionSnap | null = null;
     let error = "";
     try {
-      if (run.run_cap_reached) recovering = true;
-      afterSession = await transport.answer(chat.session_id, pending, chat.tutor_model, run.run_cap_reached ? chat.id : undefined);
+      if (receiptOnly) recovering = true;
+      afterSession = await transport.answer(chat.session_id, pending, chat.tutor_model, receiptOnly ? chat.id : undefined);
     } catch (err) {
       if (attempts === 1) {
         recovering = true;

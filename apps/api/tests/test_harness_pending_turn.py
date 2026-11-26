@@ -165,3 +165,76 @@ def test_run_cap_reconciles_committed_siblings_and_preserves_uncertain_submissio
         assert claim_chat(db, run.id)["id"] == second[0].id
         assert write(second, "recovered")["stop"] == "run_cap"
         assert run.status == "completed" and second[0].turn_count == 1
+
+
+@pytest.mark.parametrize("already_dispatched", [False, True])
+def test_saved_child_usage_and_dispatch_state_survive_restart_at_cap(already_dispatched, request):
+    from app import harness
+
+    turn_id = uuid.uuid4()
+    tokens = {"model": "gpt-4o-mini", "input_tokens": 1_000_000, "output_tokens": 0}
+    turn = {"turn_id": str(turn_id), "seq": 1, "revision": 0, "child_text": "yes",
+            "child_tokens": tokens, "dispatch_state": "prepared"}
+    with SessionLocal.begin() as db:
+        code = uuid.uuid4().hex
+        goal, node = KcGoal(code=code, title="Test"), KcNode(code=code, title="Test")
+        run = HarnessRun(status="running", plan={"run_cap_cents": 16})
+        student = Student(slug=code, display_name="Test", is_test=True)
+        db.add_all([goal, node, run, student])
+        db.flush()
+        session = KcSession(student_id=student.id, goal_id=goal.id, kc_id=node.id, revision=0)
+        db.add(session)
+        db.flush()
+        chat = HarnessChat(run_id=run.id, student_id=student.id, session_id=session.id, status="running", claim_generation=1)
+        sibling = HarnessChat(run_id=run.id, status="completed", cost_usd="0")
+        db.add_all([chat, sibling])
+        db.flush()
+        chat_id, run_id, goal_id, node_id, sibling_id = chat.id, run.id, goal.id, node.id, sibling.id
+
+    def cleanup():
+        with SessionLocal.begin() as db:
+            harness.delete_run(db, run_id)
+            db.execute(delete(KcGoal).where(KcGoal.id == goal_id))
+            db.execute(delete(KcNode).where(KcNode.id == node_id))
+    request.addfinalizer(cleanup)
+    with SessionLocal.begin() as db:
+        envelope = {"claim_generation": 1, "seq": 1, "submission": turn}
+        for _ in range(2):
+            assert prepare_harness_turn(db, chat_id, envelope)["submission"] == turn
+        assert db.get(HarnessRun, run_id).totals["priced_cents"] == 15
+        harness.pause_run(db, run_id)
+        db.flush()
+        assert harness.dispatch_harness_turn(db, chat_id, turn_id, 1)["action"] == "paused"
+        assert db.get(HarnessChat, chat_id).pending_turn["dispatch_state"] == "prepared"
+        resume_run(db, run_id)
+        db.flush()
+        assert claim_chat(db, run_id)["claim_generation"] == 2
+        if already_dispatched:
+            assert harness.dispatch_harness_turn(db, chat_id, turn_id, 2)["action"] == "send"
+        # A sibling finishes a paid call before any response reaches this worker.
+        db.get(HarnessChat, sibling_id).cost_usd = "0.01"
+        db.flush()
+        harness._refresh_totals(db, db.get(HarnessRun, run_id))
+    with SessionLocal.begin() as db:
+        resume_run(db, run_id)
+        db.flush()
+        resumed = claim_chat(db, run_id)
+        assert resumed["pending_turn"]["dispatch_state"] == ("dispatched" if already_dispatched else "prepared")
+        assert resumed["claim_generation"] == 3
+        for _ in range(2):  # An acknowledgement from the dispatch API may itself be lost.
+            action = harness.dispatch_harness_turn(db, chat_id, turn_id, 3)["action"]
+            assert action == ("read_receipt" if already_dispatched else "run_cap")
+    with SessionLocal() as db:
+        chat = db.get(HarnessChat, chat_id)
+        assert chat.turn_count == 0
+        assert db.scalar(select(func.count()).select_from(KcTurnReceipt).where(KcTurnReceipt.session_id == chat.session_id)) == 0
+        assert db.get(HarnessRun, run_id).totals["priced_cents"] == 16
+        if already_dispatched:
+            assert chat.pending_turn is not None and chat.status == "running"
+        else:
+            assert chat.pending_turn is None and chat.ended_how == "run_cap"
+            assert db.get(HarnessRun, run_id).status == "completed"
+            assert chat.tokens["unsent_child"]["child_tokens"] == tokens
+            assert "Child tokens: 1000000 in, 0 out" in download_chat(db, chat_id)
+            harness._refresh_chat_cost(db, chat)
+            assert chat.cost_usd == "0.15"

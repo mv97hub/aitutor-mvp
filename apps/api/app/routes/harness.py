@@ -19,6 +19,7 @@ from app.harness import (
     create_run,
     create_suite,
     delete_run,
+    dispatch_harness_turn,
     download_chat,
     download_run,
     ensure_fixture,
@@ -200,6 +201,11 @@ def get_pending_answer(chat_id: uuid.UUID, turn_id: uuid.UUID, db: Session = Dep
 @router.post("/kc/harness/chats/{chat_id}/pending-turn")
 def post_pending_turn(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
     return prepare_harness_turn(db, chat_id, body)
+
+
+@router.post("/kc/harness/chats/{chat_id}/pending-turn/{turn_id}/dispatch")
+def post_dispatch_turn(chat_id: uuid.UUID, turn_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
+    return dispatch_harness_turn(db, chat_id, turn_id, body.get("claim_generation"))
 
 
 @router.post("/kc/harness/chats/{chat_id}/turns")
