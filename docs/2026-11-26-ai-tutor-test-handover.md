@@ -2,6 +2,53 @@
 
 Myuran, run `c2bf3bcf-4558-49b6-9328-f6e572103d74` was created at **2:05:57 p.m. US Eastern on 26 November 2026**. It paired **AI_Child1 through AI_Child14** with four knowledge-component (KC) lessons using tutor model `~deepseek/deepseek-flash-latest`. This review covers all **56 synthetic conversations and 1,338 recorded child turns**, including failed deliveries, and the matching code revision `f545497`. The run selected child actions in rule mode and used `gpt-6-luna` to word some of them. [Original handover][handover] · [Tested source][source] · [Runs screen][runs]
 
+## Handback to Myuran · 26 November, after the merges
+
+PRs [#203](https://github.com/mv97hub/aitutor-mvp/pull/203) through [#211](https://github.com/mv97hub/aitutor-mvp/pull/211) are on main. The original 56-conversation run remains the baseline. Its conclusions, examples and test instructions are below.
+
+**Start with a lost reply.** After the server saves an answer, the network can drop before the child sees the response. The worker must recover that same reply. The PostgreSQL rehearsal interrupted both CPI variants at that point, then resumed each through the worker. Each session kept one child message, one committed decision and one harness turn. A separate test covers recovery at the spending cap. These are the checks to repeat after a future change to scoring, delivery or billing. [Retry and test evidence](https://github.com/mv97hub/aitutor-mvp/pull/206) · [Paired worker rehearsal](https://github.com/mv97hub/aitutor-mvp/pull/211)
+
+**Deployment evidence.** The live test-children page contained the new CPI and reading presets. Reading the original 56-chat run succeeded through the updated API, which loads the new pending-turn database column. A newly created synthetic run recorded API revision `65305c2e2d9108e82387c102405936972e290eb1`. Before the course imports, at 22:18 UTC, the production API reported commit `4a05fc2f622acd7605d2c179fe5af3bde4b5e2a5` and the connected database reported `046_harness_pending_turn`. Operators can repeat the same read-only check after any rollout. [Live API and database revision](https://aitutor-mvp.onrender.com/health/revision). [Migration](../apps/api/alembic/versions/046_harness_pending_turn.py) · [Live harness](https://aitutor-mvp-web.onrender.com/kc-test-children)
+
+### The two hosted CPI conversations
+
+Trishan approved two sequential, one-turn chats on the synthetic CPI fixture with AI_Child5, the default tutor and seed 2611. The paired setting resolved both draws to 530923610. Both used scripted learner wording and a live `gpt-4.1-mini` tutor and judge. Each chat and its single-chat run had a 10¢ stop threshold.
+
+| Learner's exact words | What the tutor did next | Saved outcome |
+| --- | --- | --- |
+| “Is it the change in CPI divided by the old CPI, times 100?” | Confirmed the formula and asked why the learner divided by the old CPI. | One counted attempt. Advanced from recall to the explanation of why. [Chat download](https://aitutor-mvp-web.onrender.com/api/kc/harness/runs/6c0f39b7-1cca-4ae1-a9a2-867ef4fed73c/download) |
+| “The change in CPI divided by the old CPI, times 100.” | Replied “That's right!” and asked why the learner divided by the old CPI. | One counted attempt. Advanced to the same step. [Chat download](https://aitutor-mvp-web.onrender.com/api/kc/harness/runs/ac1509cb-1e57-49e6-9d89-f7c2a55d30d0/download) |
+
+Both runs reached the intended question, delivered one reply and stopped at the turn limit. The two tutor-call estimates were $0.0021760 and $0.0020872, or **$0.0042632 combined**. The original run totals rounded both to zero cents and omitted the final judge cost. The automatic checks flagged no false passes or false failures. The judge awarded the tentative exchange 5/5 for correctness and scoring fairness. Its declarative evaluation retained no tutor-dimension grades, so use the saved answer, tutor reply and progression for that comparison. These observations cover one matched pair on one model. The pricing PR records the post-deployment reconciliation of the two original chats, including the judge tokens. [Spending-cap fix and production evidence #214](https://github.com/mv97hub/aitutor-mvp/pull/214)
+
+**Spending limits.** In the hosted runs, the old accounting rounded each individual chat to whole cents before adding them. Several small charges could disappear from a run total. The fix adds exact decimal costs first and includes each new judge result immediately. On a one-cent run limit, $0.00999 stayed open and $0.01000 stopped new work. A two-writer database test produced $0.021 and tripped a two-cent limit. A provider call already in flight can still finish. [Accounting tests and review #214](https://github.com/mv97hub/aitutor-mvp/pull/214)
+
+**Web dependency.** At 22:12 UTC the JavaScript served by the hosted web app identified itself as Next.js 16.4.5. Its previous version was 16.4.3. Updating cleared the seven advisories reported by npm and built all 29 pages. All 230 web tests and TypeScript passed. [Security update #212](https://github.com/mv97hub/aitutor-mvp/pull/212)
+
+### Three live-course corrections
+
+The courses reviewed for import were **Scenes with Hidden Meanings** (4 blocks), **Price Indices and Inflation** (6 blocks), and **Weimar Recovery and Its Limits** (8 blocks). Fresh production exports still matched the prepared corrections. All three live previews showed one component. The exact-copy rehearsal also caught the older importer changing unit grouping, course outcomes and component order despite this preview. The repaired importer passed a full before-and-after export comparison for all three while preserving the existing rubrics and completion flags. [Reviewed packages and operating procedure](course-corrections/README.md) · [Importer repair #213](https://github.com/mv97hub/aitutor-mvp/pull/213)
+
+**Applied and verified in production.** Trishan confirmed all three courses were idle. Codex backed up, imported and republished each course separately. A second read of the live courses verified that the full document matched its expected after-export, only the named component’s blocks changed, and all three courses were ready for learners.
+
+| Course | Live verification (UTC) | What changed | Preserved |
+| --- | --- | --- | --- |
+| Romeo and Juliet | 22:18:29 | Sourced passages distinguish the balcony scene from the feast and correctly identify the speakers. | All 12 components in order, existing rubric and completion flags. |
+| AP Macroeconomics | 22:18:43 | The CPI example distinguishes a 7-point increase from about 6.48% inflation when the index rises from 108 to 115. | All 42 components in order, existing rubric and completion flags. |
+| GCSE History | 22:18:54 | The currency question distinguishes the 1923 Rentenmark from the 1924 Reichsmark. | All 47 components in order, existing rubric and completion flags. |
+
+### What the API regression repairs change for a learner
+
+| Case | Expected result and how to verify |
+| --- | --- |
+| The learner answers during the opening explanation. | Submit a correct, substantive response before pressing Continue. The progress board should show one independent attempt. Start a second session and press Continue without supplying an answer. Opening the question spends zero attempts. |
+| The learner repeats a stored misconception. | Give the same wrong triangle-congruence rule twice. The tutor should reveal the block and continue according to the configured policy. The progress board should retain the fragile outcome and show the reveal. The prerequisite remains available for practice. |
+| The tutor supplies a choice. | After a wrong response, have the tutor disclose the correct choice. Select that choice and give a fresh, valid reason. Inspect the two outcomes separately. The choice was assisted, the reason was independent, and the unit remains fragile. |
+| The child has forgotten or denies a flaw. | On a recall prompt enter “I forget.” On a spot-the-flaw prompt enter “Looks fine to me.” Both answer the current task. The scorer records a miss without giving independent credit. |
+| An interrupted session has a block marked finished but no requirement evidence. | Compare a legacy session with a requirement-scored session containing the same old-style result. The older record retains its historical treatment. In the newer one, the tutor board and parent report must agree that the missing evidence cannot support mastery or a first-try bonus. |
+
+Verification of the combined change started from an empty PostgreSQL database, applied the complete migration chain and loaded the repository seed. **All 541 API tests passed.** All 230 web tests, TypeScript and the 29-page production build passed on the patched web source. The live API schema, previously returning HTTP 500, returned HTTP 200 on the repaired release and described the current creator pipeline. The regression suite also checks that a safety intervention consumes zero attempts after an ordinary answer consumed one, the parent-data migration chain and foreign keys exist, switching the Studio model reaches the actual prompt, and usage reports include the cache hit rate. A retired creator route broke the live API schema. The route was a leftover from the switch to the course pipeline and had no callable implementation. The automated test now retrieves the schema and checks the current pipeline is present. [API repair #213](https://github.com/mv97hub/aitutor-mvp/pull/213)
+
 ## Implementation update for Myuran · 26 November, after review
 
 The first three PRs restored fragile and unassessed outcomes in reports, linked tutor replies to their calls, and gave a correct tentative answer the same scoring opportunity as a statement. Review of the tentative-answer change also caught a correct paraphrase that shared no words with the answer key. [Outcome export #203](https://github.com/mv97hub/aitutor-mvp/pull/203) · [Call attribution #204](https://github.com/mv97hub/aitutor-mvp/pull/204) · [Tentative answers #205](https://github.com/mv97hub/aitutor-mvp/pull/205)
@@ -175,7 +222,7 @@ python -m pytest -q tests/test_kc.py::test_one_further_question_closes_the_summa
 
 For a later model run, agree the model aliases, persona and lesson versions, seeds, repetitions and spend ceiling with Myuran first. Compare the same scenarios before and after. Report wrongly rejected correct answers per independently labelled correct answer, wrongly awarded independent passes per assisted or wrong answer, and delivered replies per submitted turn. Report stuck, capped and error endings separately and show the denominator for each profile and block. Inspect transcripts where a metric changed. A small set of held-out phrasings and fresh problems helps distinguish a general improvement from memorizing a fixture.
 
-**Status on 26 November.** The findings and proposed tests are ready for Myuran’s review. The observed counts above describe the original run. This handover adds documentation only.
+**Original review scope.** The 56-chat counts describe the original run. The handback at the top records subsequent verification and live changes.
 
 [handover]: https://github.com/mv97hub/aitutor-mvp/blob/d6d2848105dae95216ddc52e91b4caf9243a5ab5/docs/handover_2611.MD
 [source]: https://github.com/mv97hub/aitutor-mvp/tree/f545497d0ac5ae14f97abfa66a21768f9ea24d93
