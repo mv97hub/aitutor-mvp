@@ -47,7 +47,7 @@ type StoredCall = {
 
 function replyUnreadable(reply: string, errorMessage = ""): boolean {
   const text = reply.trim();
-  if (!text || /^[.…·\s]+$/.test(text)) return true;
+  if (!errorMessage) return !text || /^[.…·\s]+$/.test(text);
   const low = errorMessage.toLowerCase();
   return (
     low.includes("no object generated") ||

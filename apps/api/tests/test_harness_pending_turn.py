@@ -1,10 +1,12 @@
 """Recover submissions across claims, tutor commits and lost acknowledgements."""
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.database import SessionLocal
 from app.harness import claim_chat, download_chat, prepare_harness_turn, record_turn, resume_run
@@ -76,3 +78,90 @@ def test_pending_answer_survives_reclaim_and_counts_once():
         assert db.scalar(select(func.count()).select_from(HarnessTurn).where(HarnessTurn.chat_id == chat.id)) == 2
         assert db.scalar(select(func.count()).select_from(HarnessEvaluation).where(HarnessEvaluation.chat_id == chat.id)) == 1
         assert "Delivery: recovered" in download_chat(db, chat.id)
+
+
+def test_run_cap_reconciles_committed_siblings_and_preserves_uncertain_submissions(request):
+    from app import harness
+
+    with SessionLocal() as db:
+        code = uuid.uuid4().hex
+        goal, node = KcGoal(code=code, title="Test"), KcNode(code=code, title="Test")
+        run = HarnessRun(status="paused", plan={"run_cap_cents": 10}, totals={"priced_cents": 10})
+        db.add_all([goal, node, run])
+        db.flush()
+        paid = HarnessChat(run_id=run.id, status="completed", cost_usd="0.10")
+        fresh = HarnessChat(run_id=run.id, status="queued")
+        db.add_all([paid, fresh])
+        pending = []
+        for index in range(2):
+            student = Student(slug=f"{code}{index}", display_name="Test", is_test=True)
+            db.add(student)
+            db.flush()
+            session = KcSession(student_id=student.id, goal_id=goal.id, kc_id=node.id, revision=1)
+            db.add(session)
+            db.flush()
+            turn = {"seq": 1, "turn_id": str(uuid.uuid4()), "revision": 1, "child_text": "yes",
+                    "session_before": {}, "child_tokens": {}, "intent": "continue"}
+            chat = HarnessChat(run_id=run.id, status="running", student_id=student.id, session_id=session.id,
+                               claim_generation=1, pending_turn=turn)
+            db.add(chat)
+            db.flush()
+            pending.append((chat, turn))
+        first, second = pending
+        reply = {"revision": 2, "status": "in_progress", "messages": []}
+        receipt = KcTurnReceipt(session_id=first[0].session_id, client_turn_id=first[1]["turn_id"],
+                                route="answer", revision=1, status="committed", payload="yes", result=reply)
+        db.add(receipt)
+        db.flush()
+
+        resume_run(db, run.id)
+        run_id, goal_id, node_id = run.id, goal.id, node.id
+        db.commit()
+
+        def clean_up():
+            with SessionLocal.begin() as cleanup:
+                harness.delete_run(cleanup, run_id)
+                cleanup.execute(delete(KcGoal).where(KcGoal.id == goal_id))
+                cleanup.execute(delete(KcNode).where(KcNode.id == node_id))
+
+        request.addfinalizer(clean_up)
+        starts = Barrier(2)
+
+        def worker():
+            with SessionLocal.begin() as connection:
+                starts.wait(timeout=5)
+                return claim_chat(connection, run_id)
+
+        # Separate transactions race to claim the same queue. A third idle worker
+        # must not close a run while the two winners are reconciling receipts.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            workers = [pool.submit(worker) for _ in range(2)]
+            claims = [worker.result(timeout=10) for worker in workers]
+        assert all(claims), "both checkpoints must still be claimable at the cap"
+        assert {c["id"] for c in claims} == {first[0].id, second[0].id}
+        assert claim_chat(db, run.id) is None and run.status == "running"
+        assert fresh.status == "cancelled" and fresh.session_id is None
+        assert harness.pending_answer_result(db, first[0].id, uuid.UUID(first[1]["turn_id"]))["result"] == reply
+        assert harness.pending_answer_result(db, second[0].id, uuid.UUID(second[1]["turn_id"]))["result"] is None
+
+        def write(pair, delivery):
+            chat, turn = pair
+            return record_turn(db, chat.id, {**turn, "claim_generation": chat.claim_generation,
+                "session_after": {"status": "in_progress", "delivery_status": delivery, "tutor_reply": "Try another."}})
+
+        assert write(second, "unknown")["pending"]
+        assert write(second, "unknown")["pending"]  # lost pause acknowledgement
+        assert run.status == "running" and second[0].status == "paused"
+        assert write(first, "recovered")["stop"] == "run_cap"
+        assert write(first, "recovered")["replayed"]
+        assert first[0].turn_count == 1 and run.status == "paused"
+        assert second[0].turn_count == 0 and second[0].pending_turn == second[1]
+        # A late receipt can still be reconciled when the operator resumes the capped run.
+        db.add(KcTurnReceipt(session_id=second[0].session_id, client_turn_id=second[1]["turn_id"],
+                             route="answer", revision=1, status="committed", payload="yes", result=reply))
+        db.flush()
+        resume_run(db, run.id)
+        db.flush()
+        assert claim_chat(db, run.id)["id"] == second[0].id
+        assert write(second, "recovered")["stop"] == "run_cap"
+        assert run.status == "completed" and second[0].turn_count == 1

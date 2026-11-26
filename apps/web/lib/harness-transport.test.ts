@@ -115,7 +115,12 @@ test("prepared transport uses the original revision and committed transcript eve
     move_intent: "choice", move_inner: { boredom: 0, frustration: 0, confusion: 0, hints: 0 },
   };
   let preparations = 0;
+  let persisted: SessionSnap | null = null;
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    if (String(url).endsWith(`/pending-turn/${pending.turn_id}`)) {
+      assert.equal(init.method ?? "GET", "GET");
+      return Response.json({ result: persisted });
+    }
     assert.ok(String(url).endsWith("/kc/harness/chats/chat/pending-turn"));
     assert.deepEqual(JSON.parse(String(init.body)), { claim_generation: 6, seq: pending.seq, submission: pending });
     preparations++;
@@ -137,6 +142,11 @@ test("prepared transport uses the original revision and committed transcript eve
   assert.equal(preparations, 1);
   assert.deepEqual(bodies[0], { sessionId: "session", answer: "B", model: "model", turnId: pending.turn_id, revision: 4 });
   assert.deepEqual(bodies[0], bodies[1]);
+  await assert.rejects(transport.answer("session", pending, "model", "chat"), /has not committed/);
+  persisted = completed;
+  const capped = await transport.answer("session", pending, "model", "chat");
+  assert.deepEqual(capped, replay);
+  assert.equal(bodies.length, 2, "receipt-only recovery never enters the tutor route");
 });
 
 test("recording the same final turn twice or pausing for delivery does not start another judge", async (t) => {
@@ -147,7 +157,8 @@ test("recording the same final turn twice or pausing for delivery does not start
         : next(specifier, context);
     },
   });
-  const { POST } = await import("../app/api/kc/harness/turn/route.ts").finally(() => hooks.deregister());
+  const { POST } = await import("../app/api/kc/harness/turn/route.ts");
+  const { judgeFinishedChat } = await import("./harness-judge-run.ts").finally(() => hooks.deregister());
   const stored = [
     { stop: "completed" }, { stop: "completed", replayed: true }, { stop: "awaiting_retry", pending: true },
   ];
@@ -155,10 +166,12 @@ test("recording the same final turn twice or pausing for delivery does not start
   t.mock.method(globalThis, "fetch", async (url: string) => {
     const path = new URL(url).pathname;
     if (path === "/kc/harness/chats/chat/turns") return Response.json(stored.shift());
+    if (path === "/kc/harness/chats/capped") return Response.json({ run_cap_reached: true, evaluations: [] });
     assert.equal(path, "/kc/harness/chats/chat");
     judgeReads++;
     return Response.json({ evaluations: [{ kind: "judged", child_realism: 4 }] });
   });
+  assert.equal(await judgeFinishedChat("capped"), null, "no judge or evaluation write after hitting the cap");
   for (let index = 0; index < 3; index++) {
     const res = await POST(new Request("http://harness.local/api/kc/harness/turn", {
       method: "POST", body: JSON.stringify({ chatId: "chat", turn: { turn_id: "stable" } }),

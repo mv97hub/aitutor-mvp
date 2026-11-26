@@ -1,5 +1,7 @@
 """Retry answer receipts through the real turn and decision endpoints, with a controlled grader."""
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -12,6 +14,37 @@ from tests.test_block_close import (
 )
 from tests.test_block_close_stage4 import MCQ
 from tests.test_kc import _wipe_zz
+
+
+def test_two_simultaneous_decisions_commit_one_answer_and_return_the_same_reply():
+    course = _course("zz-lost-concurrent", [RECALL])
+    try:
+        opened = _open(course, "zz-lost-concurrent-a")
+        path = f"/kc/tutor/sessions/{opened['id']}"
+        submission = {"turn_id": str(uuid4()), "answer": "idk", "revision": 0}
+        assert client.post(f"{path}/turn", json=submission).status_code == 200
+        both_ready = Barrier(2)
+
+        def decide(reply):
+            both_ready.wait(timeout=10)
+            response = client.post(f"{path}/decision", json={
+                "turn_id": submission["turn_id"], "decision": "stay", "reply": reply,
+            })
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(decide, ["Think of a restaurant.", "Think of a shop."]))
+        assert sum(result.pop("replayed", False) for result in results) == 1
+        assert results[0] == results[1]
+        assert results[0]["revision"] == 1
+        messages = _messages(opened["id"])
+        assert [message.content for message in messages if message.role == "user"] == ["idk"]
+        assert sum(message.content == results[0]["reply"] for message in messages) == 1
+        assert _receipt_count(opened["id"], "answer") == 1
+        assert _session(opened["id"]).move_attempts == 1
+    finally:
+        _wipe_zz()
 
 
 def test_retry_after_final_answer_commits_returns_the_original_closed_session():

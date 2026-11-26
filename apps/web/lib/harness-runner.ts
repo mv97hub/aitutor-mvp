@@ -10,6 +10,8 @@ import {
 
 export type RunStatus = {
   status: string;
+  run_cap_reached?: boolean;
+  plan?: { run_cap_cents?: number | null };
   chat_rows?: { id: string; claim_generation?: number }[];
 };
 
@@ -96,7 +98,7 @@ export type HarnessTransport = {
   session: (sessionId: string) => Promise<SessionSnap>;
   speak: (sessionId: string, model: string) => Promise<SessionSnap>;
   prepareTurn: (chatId: string, generation: number, turn: PreparedTurn) => Promise<PreparedTurn>;
-  answer: (sessionId: string, turn: PreparedTurn, model: string) => Promise<SessionSnap>;
+  answer: (sessionId: string, turn: PreparedTurn, model: string, receiptOnlyChatId?: string) => Promise<SessionSnap>;
   answerKey: (chatId: string) => Promise<{
     revision?: number;
     expected?: string;
@@ -377,6 +379,10 @@ export async function playChat(
     if (run.status === "paused" || run.status === "cancelled") return "paused";
     if (run.status === "completed") return "done";
     if (!claimStillOwns(run, chat.id, generation)) return "paused";
+    if (run.run_cap_reached && !pending) {
+      await transport.finish(chat.id, session.status === "completed" ? "completed" : "run_cap", generation);
+      return "done";
+    }
     if (!pending && session.needs_speech) {
       try {
         session = await transport.speak(session.id, chat.tutor_model);
@@ -398,6 +404,8 @@ export async function playChat(
     if (!pending) {
       const planned = await planSubmission(chat, transport, session, turn, inner, nudgesLeft, stuckAnswers);
       pending = await writeWithRetry(() => transport.prepareTurn(chat.id, generation ?? 0, planned));
+      // Child generation can take long enough for another chat to exhaust the budget.
+      if (run.plan?.run_cap_cents) continue;
     }
     const before = pending.session_before;
     if (onLive && !seen.has(`child:${pending.child_text}`)) {
@@ -408,7 +416,8 @@ export async function playChat(
     let afterSession: SessionSnap | null = null;
     let error = "";
     try {
-      afterSession = await transport.answer(chat.session_id, pending, chat.tutor_model);
+      if (run.run_cap_reached) recovering = true;
+      afterSession = await transport.answer(chat.session_id, pending, chat.tutor_model, run.run_cap_reached ? chat.id : undefined);
     } catch (err) {
       if (attempts === 1) {
         recovering = true;
