@@ -72,6 +72,17 @@ def test_a_detail_shared_with_the_expected_answer_is_still_practice(reader):
     assert _state(reader)["requirements"] == requirements
 
 
+def test_help_after_an_earlier_reveal_cannot_award_an_assisted_citation(reader):
+    _decide(reader, "I do not know yet.", reply=QUESTION)
+    revealed = _decide(reader, "I do not know yet.", reply="Rivers help towns move things. Which line shows that?")
+    assert revealed["active_substep"] == "cite_evidence"
+    requirements = _state(reader)["requirements"]
+    _decide(reader, "Tell me more", substep_passed=True, reply=EXAMPLE)
+    assert _state(reader)["requirements"] == requirements
+    _decide(reader, "Pears!", substep_passed=True, reply="That could fit in a boat. Which line talks about food?")
+    assert _state(reader)["requirements"] == requirements
+
+
 def test_rereading_ends_example_practice(reader):
     _decide(reader, "Tell me more", reply=EXAMPLE)
     _decide(reader, "Show me the passage again", reply=f"{BLOCK['data']['passage_text']}\n\n{QUESTION}")
