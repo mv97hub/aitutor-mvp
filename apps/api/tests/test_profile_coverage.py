@@ -91,6 +91,37 @@ def test_profile_roles_and_historical_seeds_survive_reordering_on_run_again():
         assert all(row["child"]["simulation_role"] == "script" for row in script["chat_rows"])
 
 
+def test_paired_reader_variants_change_only_the_temporary_learners_response_length():
+    from sqlalchemy import select
+    from app.database import SessionLocal
+    from app.harness_scenario_fixture import SCENARIO_FIXTURE_CODE
+    from app.models import HarnessChat, HarnessPersona, KcGoal, Student
+
+    with SessionLocal() as db:
+        personas = {row["number"]: row for row in harness.add_starter_set(db)}
+        harness.ensure_fixture(db)
+        course = db.scalar(select(KcGoal).where(KcGoal.code == SCENARIO_FIXTURE_CODE))
+        river = next(n for n in harness.load_targets(db, course) if n.code == "harness-scenario-river")
+        for num in (2, 8):
+            persona = db.get(HarnessPersona, personas[num]["id"])
+            original = dict(persona.child_profile)
+            seeds = set()
+            for scenario, length in [("reread-short", "bite_sized"), ("reread-detail", "detailed")]:
+                run = harness.create_run(db, {
+                    "persona_ids": [str(persona.id)], "component_ids": [str(river.id)],
+                    "scenario": scenario, "scenario_group": "reader", "behavior": "script",
+                    "iterations": 1, "seed": 2611, "pair_tutor_seeds": True, "tutor_models": ["gpt-4.1-mini"],
+                })
+                claimed = harness.claim_chat(db, run["id"])
+                assert claimed["child"]["child_profile"] == {**original, "response_length": length}
+                learner = db.get(Student, db.get(HarnessChat, claimed["id"]).student_id)
+                assert learner.child_profile["response_length"] == length
+                seeds.add(claimed["seed"])
+            db.refresh(persona)
+            assert persona.child_profile == original
+            assert len(seeds) == 1
+
+
 def test_known_boundary_situations_count_wordings_together_and_setup_separately():
     cases = [{"persona_name": "AI_Child12", "scenario": "aside", "simulation_role": "script", "report_turns": [
         {"child_text": "my dog biscuit sleeps on my bed", "block_type_before": "curiosity", "scenario_exercised": True},

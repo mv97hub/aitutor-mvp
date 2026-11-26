@@ -161,12 +161,12 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
     },
   }, {
     id: "reader", label: "Reading support", personas: [2, 8], blockTypes: ["passage_ela"], fixture: "Short informational passage · River roads, or Difficulty stress case · Hamlet",
-    context: "At the central-idea question, request the same passage again and vary the explanation length. Use the short River roads passage for the ordinary comparison. The separate stress variant requires the displayed Shakespeare line “To be, or not to be”.",
-    variants: [{id: "reread-short", label: "Reread with a short explanation"}, {id: "reread-detail", label: "Reread with a detailed explanation"}, {id: "reread-stress", label: "Difficulty stress case · Hamlet"}],
+    context: "Both variants ask to reread River roads in the same words. The simulated learner’s response-length setting changes for this run only. The separate difficulty test uses the displayed Hamlet passage.",
+    variants: [{id: "reread-short", label: "Reread · bite-sized setting"}, {id: "reread-detail", label: "Reread · detailed setting"}, {id: "reread-stress", label: "Difficulty stress case · Hamlet"}],
     respond(id, input) {
       if (input.substep !== "central_idea" || !/central idea|main idea|mostly about/i.test(prompt(input))) return;
       if (id === "reread-stress" && !tutorLines(input).some(line => /to be,? or not to be/i.test(line))) return;
-      return typedOnce(input, id === "reread-detail" ? "Can I read the whole passage again and get a detailed explanation?" : "Can I read the whole passage again and get the explanation in one sentence?");
+      return typedOnce(input, "Can I read the whole passage again and get an explanation?");
     },
   }, {
     id: "disclosure", label: "Recall after disclosure and fresh transfer", personas: [11], blockTypes: CPI_FORMULA_TYPES, fixture: "Inflation formula, practice and a new topic",

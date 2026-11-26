@@ -410,17 +410,21 @@ def _recorded_seeds(db: Session, run_id, *, source_profile=None, target_profile=
             for c in db.scalars(stmt)}
 
 
-def _snapshot(row: HarnessPersona, behavior: str) -> dict:
+def _snapshot(row: HarnessPersona, behavior: str, scenario: str) -> dict:
     role = "script" if behavior == "script" else "learner"
     if behavior == "rule" and row.number in (13, 14):
         role = "answer_key_control"
+    child_profile = dict(row.child_profile or {})
+    reader_lengths = {"reread-short": "bite_sized", "reread-detail": "detailed"}
+    if role == "script" and row.number in (2, 8) and scenario in reader_lengths:
+        child_profile["response_length"] = reader_lengths[scenario]
     return {
         "id": str(row.id),
         "number": row.number,
         "name": row.name,
         "description": row.description,
         "age": row.age,
-        "child_profile": dict(row.child_profile or {}),
+        "child_profile": child_profile,
         "traits": dict(row.traits or {}),
         "simulation_role": role,
         "policy_version": "visible-v1",
@@ -465,7 +469,7 @@ def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, see
                                 status="queued",
                                 persona_id=child.id,
                                 child_snapshot={
-                                    **_snapshot(child, plan["behavior"]), "scenario": plan["scenario"],
+                                    **_snapshot(child, plan["behavior"], plan["scenario"]), "scenario": plan["scenario"],
                                     "seed_profile": plan["seed_from_profile"] or profile.id,
                                     "paired_seeds": plan["pair_tutor_seeds"],
                                 },

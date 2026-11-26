@@ -39,8 +39,11 @@ test("attachment expression variants and reader support require their own visibl
   assert.equal(move("attachment-short", {...inference, tutor: "Give an example of avoidant behavior."}), undefined);
   const passage = {personaNumber: 2, blockType: "passage_ela", substep: "central_idea",
     tutor: "What is the central idea of the passage?"};
-  assert.match(move("reread-short", passage)!, /one sentence/);
-  assert.match(move("reread-detail", {...passage, personaNumber: 8})!, /detail/);
+  for (const personaNumber of [2, 8]) {
+    const request = move("reread-short", {...passage, personaNumber});
+    assert.match(request!, /read the whole passage again/i);
+    assert.equal(move("reread-detail", {...passage, personaNumber}), request);
+  }
   assert.equal(move("reread-stress", passage), undefined);
   assert.ok(move("reread-stress", {...passage, history: [{role: "assistant", content: "To be, or not to be, that is the question", step: 2}]}));
 });
