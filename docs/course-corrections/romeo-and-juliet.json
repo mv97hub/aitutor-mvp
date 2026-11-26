@@ -1,0 +1,150 @@
+{
+  "schema": "KcCourseExportV1",
+  "review": {
+    "original_component_sha256": "8988c69c844857e7062e079a5f15a1ab231f75bf9754439eb78192778f5be327"
+  },
+  "unit": {
+    "title": "Components",
+    "summary": "",
+    "components": [
+      {
+        "code": "a-scene-in-romeo-and-juliet-that-only-se",
+        "title": "Scenes with Hidden Meanings in Romeo and Juliet",
+        "description": "Investigates scenes with hidden meanings or double interpretations in Romeo and Juliet, focusing on subtext and ambiguity.",
+        "summary": "",
+        "outline": "1. Introduction to subtext and ambiguity in drama.\n2. Analysis of the balcony scene: literal vs. symbolic meanings.\n3. Examination of Juliet’s conversation with Paris: identifying ambiguity and double meanings in dialogue.\n4. Practice: Spotting double meanings in selected extracts.\n5. Reflection: Why does Shakespeare use ambiguity and subtext?",
+        "core_truth": "Some scenes in Romeo and Juliet only seem to say one thing, but actually contain hidden meanings or can be interpreted in multiple ways. Shakespeare uses subtext and ambiguity to add depth and complexity to his characters and themes.",
+        "rubric": [
+          "Explain how the balcony scene can be read both as a literal conversation between lovers and as a symbol of the barriers between them.",
+          "In the balcony scene, what does the balcony most strongly symbolize?",
+          "Identify how Juliet’s words to Paris can be interpreted in more than one way.",
+          "When Juliet says to Paris, 'I will confess to you that I love him,' what is the double meaning?"
+        ],
+        "misconceptions": [
+          {
+            "wrong_move": "Assuming every scene means only what is said on the surface.",
+            "broken_kc": "what-the-language-of-romeo-and-juliet-is"
+          },
+          {
+            "wrong_move": "Taking Juliet’s words to Paris at face value, missing her hidden meaning.",
+            "broken_kc": "the-character-who-misreads-romeo-and-jul"
+          }
+        ],
+        "standards": [],
+        "prerequisite_codes": [
+          "what-the-language-of-romeo-and-juliet-is"
+        ],
+        "encompasses_codes": [],
+        "mastery_spec": {},
+        "blocks": [
+          {
+            "id": "balcony-scene-topic",
+            "type": "passage_ela",
+            "data": {
+              "passage_title": "Romeo and Juliet, Act 2, scene 2 · Capulet’s orchard",
+              "passage_text": "Juliet speaks above the orchard while Romeo listens below, initially unheard. Two excerpts from Juliet’s speech follow.\n\nJULIET\nDeny thy father and refuse thy name,\n[…]\n’Tis but thy name that is my enemy.",
+              "central_idea_question": "What separates these two people, besides where they are standing?",
+              "expected_central_idea": "Romeo and Juliet love each other, but their feuding family names stand between them.",
+              "distractor_detail": "Romeo is below Juliet.",
+              "evidence_prompt": "Use a line or a close paraphrase from this orchard scene. Who says it, and what does it show about the two families?",
+              "evidence_context": "Juliet is speaking. Romeo listens below. Juliet questions the importance of Romeo’s family name. The line about love springing from hate belongs to the Capulets’ feast in Act 1, scene 5. If it is offered here, identify the feast and ask for orchard evidence.",
+              "verbatim_evidence_quotes": [
+                "Deny thy father and refuse thy name,",
+                "’Tis but thy name that is my enemy."
+              ],
+              "analysis_question": "How does the physical distance reinforce the conflict about names?",
+              "expected_analysis": "Their positions separate them physically, as the family feud separates them socially. Juliet questions whether the name should keep them apart.",
+              "passage_genre": "literary",
+              "analysis_focus": "inference"
+            }
+          },
+          {
+            "id": "balcony-scene-mcq",
+            "type": "mcq",
+            "data": {
+              "mode": "static",
+              "question_stem": "In the balcony scene, what does the balcony most strongly symbolize?",
+              "choices": [
+                {
+                  "id": "a",
+                  "text": "The physical distance between Romeo and Juliet",
+                  "is_correct": false,
+                  "distractor_rationale": "This is a literal interpretation, not a symbolic one.",
+                  "misconception_code": "what-the-language-of-romeo-and-juliet-is"
+                },
+                {
+                  "id": "b",
+                  "text": "The social and familial barriers that keep the lovers apart",
+                  "is_correct": true,
+                  "distractor_rationale": null,
+                  "misconception_code": null
+                },
+                {
+                  "id": "c",
+                  "text": "A place for Juliet to get fresh air",
+                  "is_correct": false,
+                  "distractor_rationale": "This is a surface-level reading, missing the deeper meaning.",
+                  "misconception_code": "what-the-language-of-romeo-and-juliet-is"
+                }
+              ],
+              "correct_explanation": "The balcony symbolizes the social and familial barriers that separate Romeo and Juliet, not just the physical distance."
+            }
+          },
+          {
+            "id": "juliet-paris-topic",
+            "type": "passage_ela",
+            "data": {
+              "passage_title": "Romeo and Juliet, Act 4, scene 1 · Friar Lawrence’s cell",
+              "passage_text": "Paris expects to marry Juliet. Juliet is already married to Romeo. At Friar Lawrence’s cell, Paris speaks to Juliet in the Friar’s presence.\n\nPARIS\nDo not deny to him that you love me.\n\nJULIET\nI will confess to you that I love him.",
+              "central_idea_question": "Why can Juliet’s reply sound different to Paris and to an audience that knows about Romeo?",
+              "expected_central_idea": "Juliet avoids saying that she loves Paris. Paris expects her agreement while the audience knows of her marriage and love for Romeo.",
+              "distractor_detail": "The Friar is present.",
+              "evidence_prompt": "Use the displayed exchange. Who speaks to whom, and which wording lets Juliet avoid declaring love for Paris?",
+              "evidence_context": "Paris makes the demand. Juliet replies to Paris, in the Friar’s presence. She is already married to Romeo. Accept a supported reading of the ambiguous pronoun. If the learner cites being satisfied with Romeo, identify that as Juliet addressing Lady Capulet in Act 3, scene 5 and return to this exchange.",
+              "verbatim_evidence_quotes": [
+                "Do not deny to him that you love me.",
+                "I will confess to you that I love him."
+              ],
+              "analysis_question": "What might Paris think Juliet means, and what can the audience hear instead?",
+              "expected_analysis": "Paris expects a declaration of love for himself. Juliet avoids naming him as the person she loves, allowing the audience to hear her loyalty to Romeo.",
+              "passage_genre": "literary",
+              "analysis_focus": "inference"
+            }
+          },
+          {
+            "id": "juliet-paris-mcq",
+            "type": "mcq",
+            "data": {
+              "mode": "static",
+              "question_stem": "When Juliet says to Paris, 'I will confess to you that I love him,' what is the double meaning?",
+              "choices": [
+                {
+                  "id": "a",
+                  "text": "She is openly declaring her love for Paris.",
+                  "is_correct": false,
+                  "distractor_rationale": "Juliet never directly confesses love for Paris; this misreads her ambiguity.",
+                  "misconception_code": "the-character-who-misreads-romeo-and-jul"
+                },
+                {
+                  "id": "b",
+                  "text": "She is speaking truthfully about her love for Romeo, but Paris thinks she means him.",
+                  "is_correct": true,
+                  "distractor_rationale": null,
+                  "misconception_code": null
+                },
+                {
+                  "id": "c",
+                  "text": "She is refusing to confess anything at all.",
+                  "is_correct": false,
+                  "distractor_rationale": "Juliet is confessing, but her words are ambiguous.",
+                  "misconception_code": "the-character-who-misreads-romeo-and-jul"
+                }
+              ],
+              "correct_explanation": "Juliet speaks to Paris in Friar Lawrence’s cell. Paris expects agreement about their marriage. Juliet can speak of love without naming its object. The audience knows she has already married Romeo."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

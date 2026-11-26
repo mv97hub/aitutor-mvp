@@ -1,0 +1,200 @@
+{
+  "schema": "KcCourseExportV1",
+  "review": {
+    "original_component_sha256": "4d28f2804e75a0b125ffd71a83d17dd6aa3bba38411e6286d17110383a063525",
+    "cpi": {
+      "previous": 108,
+      "current": 115
+    }
+  },
+  "unit": {
+    "title": "Components",
+    "summary": "",
+    "components": [
+      {
+        "code": "price-indices-and-inflation",
+        "title": "Price Indices and Inflation",
+        "description": "This lesson explains how economists use price indices, such as the Consumer Price Index (CPI), to measure changes in the general price level over time. It covers the calculation and interpretation of inflation, the significance of distinguishing between nominal and real values, and the limitations of price indices. Students will gain the tools to understand how inflation is tracked and why it matters for economic decision-making.",
+        "summary": "",
+        "outline": "1. Introduction to price indices and their purpose\n2. Construction and calculation of a price index (CPI)\n3. Definition and calculation of inflation rate\n4. Interpretation and limitations of price indices\n5. Practice problems and applications",
+        "core_truth": "Price indices allow economists to measure changes in the overall price level, making it possible to track inflation and compare economic values over time.",
+        "rubric": [
+          "Explain why economists use price indices and how a basic price index like the CPI is constructed.",
+          "New basket cost: (2 × $3) + (3 × $4) = $6 + $12 = $18. New CPI = ($18 / $8) × 100 = 225. Inflation rate = [(225 - 162.5) / 162.5] × 100 ≈ 38.5%.",
+          "Which of the following best explains why price indices are important in macroeconomics?",
+          "[(CPI in current year - CPI in previous year) / CPI in previous year] × 100"
+        ],
+        "misconceptions": [
+          {
+            "wrong_move": "Assuming that price indices measure the price change of a single good rather than the overall price level.",
+            "broken_kc": "demand"
+          },
+          {
+            "wrong_move": "Believing that the CPI perfectly reflects the cost of living for all individuals.",
+            "broken_kc": "limitations-of-gdp"
+          },
+          {
+            "wrong_move": "Thinking that inflation can be calculated by simply subtracting last year's price index from this year's, without finding the percentage change.",
+            "broken_kc": "real-vs-nominal-gdp"
+          }
+        ],
+        "standards": [
+          "2.4"
+        ],
+        "prerequisite_codes": [
+          "unemployment"
+        ],
+        "encompasses_codes": [],
+        "mastery_spec": {},
+        "blocks": [
+          {
+            "id": "topic-goal-1",
+            "type": "topic_goal",
+            "data": {
+              "topic": "Purpose and construction of price indices",
+              "goal": "Explain why economists use price indices and how a basic price index like the CPI is constructed.",
+              "acceptance_criteria": "Student can describe the need for price indices and outline the steps to build a simple CPI.",
+              "teaching_notes": "The index change is 115 − 108 = 7 index points. The inflation rate is 100 × (115 − 108) / 108 = 6.48% to two decimal places."
+            }
+          },
+          {
+            "id": "explanation-1",
+            "type": "explanation",
+            "data": {
+              "block_title": "How Price Indices and Inflation Work",
+              "topics": [
+                {
+                  "id": "what-is-a-price-index",
+                  "title": "What is a Price Index?",
+                  "explanation": "A price index is a statistical measure that tracks changes in the prices of a selected group of goods and services over time. It allows economists to summarize price changes with a single number, making it easier to compare the cost of living across years.",
+                  "key_points": "Summarizes price changes; tracks a 'basket' of goods.",
+                  "examples_or_analogies": "Like tracking the average score of a sports team over a season instead of each individual game."
+                },
+                {
+                  "id": "constructing-the-cpi",
+                  "title": "Constructing the Consumer Price Index (CPI)",
+                  "explanation": "The CPI is built by selecting a 'market basket' of goods and services that a typical consumer buys, recording their prices in a base year, and then comparing the cost of this basket in other years.",
+                  "key_points": "Uses a fixed basket; compares cost over time.",
+                  "examples_or_analogies": "Imagine making a shopping list and checking how much it costs each year."
+                },
+                {
+                  "id": "calculating-inflation",
+                  "title": "Calculating the Inflation Rate",
+                  "explanation": "Inflation is the percentage increase in the overall price level from one period to another, usually measured annually. It is calculated by finding the percentage change in the price index.",
+                  "key_points": "Inflation = % change in price index.",
+                  "examples_or_analogies": "The index change is 115 − 108 = 7 index points. The inflation rate is 100 × (115 − 108) / 108 = 6.48% to two decimal places."
+                },
+                {
+                  "id": "limitations-of-price-indices",
+                  "title": "Limitations of Price Indices",
+                  "explanation": "Price indices may not perfectly reflect the cost of living because they use a fixed basket, ignore changes in quality, and may not capture new products or changes in consumer behavior.",
+                  "key_points": "Fixed basket, quality changes, new goods.",
+                  "examples_or_analogies": "If smartphones get better but cost the same, the CPI may not show the improvement."
+                }
+              ],
+              "summary_takeaway": "Price indices like the CPI help us measure inflation, but they have limitations and must be interpreted carefully."
+            }
+          },
+          {
+            "id": "worked-example-1",
+            "type": "worked_example",
+            "data": {
+              "problem_statement": "Suppose a simple economy's market basket consists of 2 loaves of bread and 3 gallons of milk. In the base year, bread costs $1 and milk costs $2. In the current year, bread costs $2 and milk costs $3. Calculate the CPI for the current year (base year CPI = 100) and the inflation rate.",
+              "steps": [
+                {
+                  "step_text": "Calculate the total cost of the basket in the base year: (2 × $1) + (3 × $2) = $2 + $6 = $8.",
+                  "rationale": "Find the cost of all items in the base year."
+                },
+                {
+                  "step_text": "Calculate the total cost of the basket in the current year: (2 × $2) + (3 × $3) = $4 + $9 = $13.",
+                  "rationale": "Find the cost of all items in the current year."
+                },
+                {
+                  "step_text": "Calculate the CPI for the current year: (Current year basket cost / Base year basket cost) × 100 = ($13 / $8) × 100 = 162.5.",
+                  "rationale": "CPI formula compares current to base year."
+                },
+                {
+                  "step_text": "Calculate the inflation rate: [(CPI current year - CPI base year) / CPI base year] × 100 = [(162.5 - 100) / 100] × 100 = 62.5%.",
+                  "rationale": "Inflation is the percent change in the CPI."
+                }
+              ],
+              "faded_step_index": 3,
+              "solo_problem": "If the next year, bread costs $3 and milk costs $4, what is the new CPI (base year CPI = 100) and the inflation rate from the previous year?",
+              "solo_expected_answer": "New basket cost: (2 × $3) + (3 × $4) = $6 + $12 = $18. New CPI = ($18 / $8) × 100 = 225. Inflation rate = [(225 - 162.5) / 162.5] × 100 ≈ 38.5%."
+            }
+          },
+          {
+            "id": "mcq-1",
+            "type": "mcq",
+            "data": {
+              "mode": "static",
+              "question_stem": "Which of the following best explains why price indices are important in macroeconomics?",
+              "choices": [
+                {
+                  "id": "a",
+                  "text": "They allow economists to measure changes in the overall price level and track inflation.",
+                  "is_correct": true,
+                  "distractor_rationale": null,
+                  "misconception_code": null
+                },
+                {
+                  "id": "b",
+                  "text": "They show how much individual goods have increased in price.",
+                  "is_correct": false,
+                  "distractor_rationale": "Price indices measure the overall price level, not individual goods.",
+                  "misconception_code": "demand"
+                },
+                {
+                  "id": "c",
+                  "text": "They are used to calculate GDP directly.",
+                  "is_correct": false,
+                  "distractor_rationale": "GDP is calculated using output, not price indices.",
+                  "misconception_code": "gross-domestic-product-gdp"
+                }
+              ],
+              "correct_explanation": "Price indices summarize changes in the overall price level, which is essential for tracking inflation."
+            }
+          },
+          {
+            "id": "checked-cpi-rate",
+            "type": "mcq",
+            "data": {
+              "mode": "static",
+              "question_stem": "The same CPI series goes from 108 to 115 in one year. Which answer gives the inflation rate, with the correct unit?",
+              "choices": [
+                {
+                  "id": "a",
+                  "text": "7 index points",
+                  "is_correct": false,
+                  "distractor_rationale": "That describes the difference between the index readings. Divide the change by the starting index to get the rate."
+                },
+                {
+                  "id": "b",
+                  "text": "6.48%",
+                  "is_correct": true
+                },
+                {
+                  "id": "c",
+                  "text": "7 dollars",
+                  "is_correct": false,
+                  "distractor_rationale": "An index reading measures relative prices. Its change does not give a dollar amount."
+                }
+              ],
+              "correct_explanation": "The index change is 115 − 108 = 7 index points. The inflation rate is 100 × (115 − 108) / 108 = 6.48% to two decimal places."
+            }
+          },
+          {
+            "id": "retrieval-check-1",
+            "type": "retrieval_check",
+            "data": {
+              "recall_prompt": "What is the formula for calculating the inflation rate using the CPI?",
+              "expected_fact": "[(CPI in current year - CPI in previous year) / CPI in previous year] × 100",
+              "elaborative_why_prompt": "Why do economists use the CPI to calculate inflation instead of just looking at the price of one good?",
+              "expected_why_rationale": "Because the CPI reflects the average change in prices for a basket of goods, giving a more accurate picture of overall price level changes than any single good."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
