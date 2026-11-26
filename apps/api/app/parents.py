@@ -16,6 +16,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, joinedload
 
+from app.block_score import (
+    LEGACY_SCORE,
+    REQUIREMENT_SCORE,
+    classify_stored_outcome,
+    requirement_star_unit,
+    stored_block_revealed,
+    uses_requirement_score,
+)
 from app.kc import _ready_course_cards, kc_chat_detail, kc_chat_summaries
 from app.learn_stars import stars_from_units
 from app.models import KcSession, Parent, ParentStudent, Student
@@ -266,18 +274,16 @@ def _aware(moment: datetime) -> datetime:
     return moment
 
 
-def session_star_unit(status: str, block_results: list, reveals: int) -> dict:
+def session_star_unit(status: str, block_results: list, reveals: int, scoring_version: int = LEGACY_SCORE) -> dict:
     """One session as the unit shape `stars_from_units` already scores.
 
     Topic and crown points apply only when the session is completed.
     Block points come from passed and revealed outcomes stored on that session.
     A requirement-score row uses its verdict. An unfamiliar outcome is not a pass.
     """
-    from app.block_score import requirement_star_unit, uses_requirement_score
-
     rows = [item for item in block_results if isinstance(item, dict)]
-    if uses_requirement_score(rows):
-        return requirement_star_unit(status, rows, reveals)
+    if scoring_version >= REQUIREMENT_SCORE or uses_requirement_score(rows):
+        return requirement_star_unit(status, rows, reveals, scoring_version)
     passed = [item for item in rows if item.get("outcome") == "passed"]
     revealed_rows = [item for item in rows if item.get("outcome") == "revealed"]
     first_try = 0
@@ -314,7 +320,7 @@ def _empty_week() -> dict:
     }
 
 
-def _outcome_counts(block_results: object) -> tuple[int, int]:
+def _outcome_counts(block_results: object, scoring_version: int) -> tuple[int, int]:
     """Passed and revealed blocks stored on one session. Other outcomes are skipped."""
     rows = block_results if isinstance(block_results, list) else []
     passed = 0
@@ -323,9 +329,11 @@ def _outcome_counts(block_results: object) -> tuple[int, int]:
         if not isinstance(item, dict):
             continue
         outcome = item.get("outcome")
+        if scoring_version >= REQUIREMENT_SCORE:
+            outcome, _ = classify_stored_outcome(item, scoring_version)
         if outcome == "passed":
             passed += 1
-        elif outcome == "revealed":
+        if stored_block_revealed(item):
             revealed += 1
     return passed, revealed
 
@@ -348,7 +356,8 @@ def _week_counts(rows: list[KcSession]) -> dict[uuid.UUID, dict]:
             bucket = _empty_week()
             counts[row.student_id] = bucket
         bucket["sessions"] += 1
-        passed, revealed = _outcome_counts(row.block_results)
+        version = int(getattr(row, "scoring_version", LEGACY_SCORE) or LEGACY_SCORE)
+        passed, revealed = _outcome_counts(row.block_results, version)
         bucket["blocks_passed"] += passed
         bucket["blocks_revealed"] += revealed
         active_days.setdefault(row.student_id, set()).add(
@@ -362,7 +371,7 @@ def _week_counts(rows: list[KcSession]) -> dict[uuid.UUID, dict]:
         seen.add(key)
         bucket["topics_finished"] += 1
         results = row.block_results if isinstance(row.block_results, list) else []
-        unit = session_star_unit(row.status, results, int(row.reveals or 0))
+        unit = session_star_unit(row.status, results, int(row.reveals or 0), version)
         bucket["stars"] += int(stars_from_units([unit])["stars"])
     for student_id, bucket in counts.items():
         bucket["days_active"] = len(active_days.get(student_id, ()))

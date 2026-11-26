@@ -3,6 +3,7 @@
 import uuid
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, func, or_, select
 
@@ -768,7 +769,7 @@ def test_pass_bumps_an_encompassed_component() -> None:
         _wipe_zz()
 
 
-def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() -> None:
+def test_repeated_misconception_reveals_block_and_pass_does_not_mark_prerequisites_known() -> None:
     storm = _storm()
     _clear_progress(storm.id)
     rule = "SAS proves two triangles congruent. SSA does not."
@@ -824,11 +825,15 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
         )
         failed = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
-            json={"reply": "This unit is paused. The next card is the included angle.", "decision": "stay"},
+            json={"reply": "SAS needs the included angle. SSA alone does not establish congruence.", "decision": "stay"},
         )
         assert failed.status_code == 200, failed.text
         assert failed.json()["passed"] is False
-        assert failed.json()["redirect"]["code"] == "zz-mis-patch"
+        assert failed.json()["redirect"] is None
+        assert failed.json()["unit_complete"] is True
+        (assessment,) = _assessments(opened.json()["id"])
+        assert assessment["verdict"] == "fragile"
+        assert assessment["work_on"] == "SSA proves congruence"
         board = client.get(
             f"/kc/tutor/courses/{course['id']}",
             params={"student_id": str(storm.id)},
@@ -854,7 +859,7 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
         _open_goal(session_id)
         steps = (
             ("The outline is clear.", "advance", []),
-            ("I can explain SAS versus SSA.", "complete", ["rule"]),
+            (rule, "complete", ["rule"]),
         )
         step = None
         for answer, decision, rubric in steps:
@@ -872,6 +877,7 @@ def test_misconception_opens_prerequisite_and_pass_does_not_mark_them_known() ->
                 )
                 assert summary.status_code == 200, summary.text
                 assert summary.json()["active_substep"] == "summary_check"
+                _post_answer(session_id, "move on")
             step = client.post(
                 f"/kc/tutor/sessions/{session_id}/decision",
                 json={
@@ -989,7 +995,7 @@ def test_time_box_synthesis_and_factual_recipe() -> None:
         _open_goal(opened.json()["id"])
         client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/turn",
-            json={"answer": "Explain the triangle angle sum."},
+            json={"answer": "The three interior angles in a triangle add up to 180 degrees."},
         )
         summary = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
@@ -1002,6 +1008,7 @@ def test_time_box_synthesis_and_factual_recipe() -> None:
         )
         assert summary.status_code == 200, summary.text
         assert summary.json()["active_substep"] == "summary_check"
+        _post_answer(opened.json()["id"], "move on")
         answered = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
             json={
@@ -1814,7 +1821,7 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         _open_goal(session_id)
         client.post(
             f"/kc/tutor/sessions/{session_id}/turn",
-            json={"answer": "Explain the river fact."},
+            json={"answer": "The river appears blue in daylight."},
         )
         summary = client.post(
             f"/kc/tutor/sessions/{session_id}/decision",
@@ -1827,6 +1834,7 @@ def test_tutor_variables_list_inputs_and_keep_empty_layers() -> None:
         )
         assert summary.status_code == 200, summary.text
         assert summary.json()["active_substep"] == "summary_check"
+        _post_answer(session_id, "move on")
         done = client.post(
             f"/kc/tutor/sessions/{session_id}/decision",
             json={
@@ -2072,6 +2080,7 @@ def test_decision_overrides_and_course_outro() -> None:
         )
         assert summary.status_code == 200, summary.text
         assert summary.json()["active_substep"] == "summary_check"
+        _post_answer(opened["id"], "move on")
         finished = client.post(
             f"/kc/tutor/sessions/{opened['id']}/decision",
             json={
@@ -2103,7 +2112,7 @@ def test_decision_overrides_and_course_outro() -> None:
         assert stepped.json()["step_label"] == "Block 1 of 1: Topic / Goal"
         client.post(
             f"/kc/tutor/sessions/{other['id']}/turn",
-            json={"answer": "Explain the second fact. The rule is the contrast."},
+            json={"answer": "The second fact uses the contrast to distinguish the two cases."},
         )
         summary = client.post(
             f"/kc/tutor/sessions/{other['id']}/decision",
@@ -2116,6 +2125,7 @@ def test_decision_overrides_and_course_outro() -> None:
         )
         assert summary.status_code == 200, summary.text
         assert summary.json()["active_substep"] == "summary_check"
+        _post_answer(other["id"], "move on")
         outro = client.post(
             f"/kc/tutor/sessions/{other['id']}/decision",
             json={
@@ -2326,7 +2336,7 @@ def test_closing_a_component_saves_the_result_on_that_child() -> None:
         _open_goal(session_id)
         client.post(
             f"/kc/tutor/sessions/{session_id}/turn",
-            json={"answer": "I can explain floating."},
+            json={"answer": "The shape of a boat helps it float by spreading its weight over more water."},
         )
         summary = client.post(
             f"/kc/tutor/sessions/{session_id}/decision",
@@ -2339,6 +2349,7 @@ def test_closing_a_component_saves_the_result_on_that_child() -> None:
         )
         assert summary.status_code == 200, summary.text
         assert summary.json()["active_substep"] == "summary_check"
+        _post_answer(session_id, "move on")
         finished = client.post(
             f"/kc/tutor/sessions/{session_id}/decision",
             json={
@@ -2363,11 +2374,12 @@ def test_closing_a_component_saves_the_result_on_that_child() -> None:
         unit = next(item for item in board["units"] if item["code"] == "zz-result-float")
         result = unit["result"]
         assert result["status"] == "known"
-        assert "blk-1" in result["rubric_met"]
-        assert "goal-1" in result["rubric_met"]
-        assert "Say why shape matters" in result["justification"]
-        assert result["strong"]
-        assert result["work_on"]
+        assert {"goal-1", "goal-2"}.issubset(result["rubric_met"])
+        assert result["verdict"] == "known"
+        assert result["requirements"][0]["observation"] == "independent"
+        assert result["justification"] == "Known."
+        assert result["strong"] == "Named the floating idea."
+        assert result["work_on"] == "Try a new object."
         assert "?" not in result["reply"]
     finally:
         _clear_progress(storm.id)
@@ -2393,14 +2405,18 @@ def _open_goal(session_id: str) -> None:
     assert decided.json()["active_substep"] == "main"
 
 
+def _post_answer(session_id: str, answer: str) -> None:
+    posted = client.post(f"/kc/tutor/sessions/{session_id}/turn", json={"answer": answer})
+    assert posted.status_code == 200, posted.text
+
+
 def _decide(session_id: str, answer: str, decision: str = "stay", reply: str = "Noted.", **extra: object) -> dict:
     # A goal answer is graded only after the learner leaves the opening explanation.
     if extra.get("substep_passed"):
         current = client.get(f"/kc/tutor/sessions/{session_id}")
         if current.status_code == 200 and current.json().get("active_substep") == "explain":
             _decide(session_id, "Got it - move on", reply="What is the idea?")
-    posted = client.post(f"/kc/tutor/sessions/{session_id}/turn", json={"answer": answer})
-    assert posted.status_code == 200, posted.text
+    _post_answer(session_id, answer)
     body = {"reply": reply, "decision": decision, "rubric_met": [], **extra}
     decided = client.post(f"/kc/tutor/sessions/{session_id}/decision", json=body)
     assert decided.status_code == 200, decided.text
@@ -2408,8 +2424,15 @@ def _decide(session_id: str, answer: str, decision: str = "stay", reply: str = "
 
 
 def _finish_block(session_id: str, answer: str, reply: str = "Noted.", **extra: object) -> dict:
-    """Pass the last task substep, then close the summary check."""
+    """A clean middle block advances immediately. A final or revealed block has a check-in."""
+    current = client.get(f"/kc/tutor/sessions/{session_id}")
+    assert current.status_code == 200, current.text
+    before = current.json()["step"]
     landed = _decide(session_id, answer, reply="Summary check.", substep_passed=True, **extra)
+    if landed["step"] == before + 1:
+        assert landed["unit_complete"] is False
+        return landed
+    assert landed["step"] == before
     assert landed["active_substep"] == "summary_check", landed
     assert landed["unit_complete"] is False
     closing = {key: value for key, value in extra.items() if key != "substep_passed"}
@@ -2613,8 +2636,8 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         assert "Which color is the river?" in mcq_prompt
         assert "Blue water" in mcq_prompt
         assert "If the first pick is correct, move to the summary check." in mcq_prompt
-        assert "River color: passed after" in mcq_prompt
-        assert "Summary close:" in mcq_prompt
+        assert "River color: passed." in mcq_prompt
+        assert "If the learner needed another try, ask why that option is right before the summary check." in mcq_prompt
         assert "The unit is not finished." in mcq_prompt
 
         wrong = _decide(
@@ -2691,7 +2714,7 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         assert held["step"] == 1
         assert "Explain Why" in held["step_label"]
         why_next = client.get(f"/kc/tutor/sessions/{why['id']}/prompt").json()["system_prompt"]
-        assert "Summary close:" in why_next
+        assert "This turn is only the why. Do not ask the multiple choice again." in why_next
         assert "The unit is not finished." in why_next
         closed = _finish_block(
             why["id"],
@@ -2710,7 +2733,7 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         ).json()
         moved = _finish_block(
             partial["id"],
-            "Explain the first idea.",
+            "The first idea links the pattern to the cause.",
             reply="The first idea holds.",
         )
         assert moved["step"] == 1
@@ -2750,7 +2773,7 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         )
         assert spoken.status_code == 200, spoken.text
         assert spoken.json()["choice"]["prompt"] == "Pick the river color"
-        missed = _decide(dynamic["id"], "Red", decision="complete", reply="Try the other color.", block_complete=True)
+        missed = _decide(dynamic["id"], "Red", decision="complete", reply="The correct answer is Blue.", block_complete=True)
         assert missed["passed"] is False
         assert missed["status"] == "in_progress"
         stored = client.get(f"/kc/sessions/{dynamic['id']}")
@@ -2766,14 +2789,17 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         picked = _decide(dynamic["id"], "Blue", decision="complete", reply="Say why that color fits.", block_complete=True)
         assert picked["passed"] is False
         assert "Explain Why" in picked["step_label"]
-        known = _finish_block(
+        helped = _finish_block(
             dynamic["id"],
-            "Blue is the color of this river.",
-            reply="You can name the river color now.",
+            "The river reflects the blue light from the sky.",
+            reply="You explained why that color fits.",
         )
-        assert known["passed"] is True
-        assert known["status"] == "completed"
-        assert _assessments(dynamic["id"])[0]["outcome"] == "passed"
+        assert helped["passed"] is False
+        assert helped["status"] == "completed"
+        assert helped["verdict"] == "fragile"
+        (quiz_result,) = _assessments(dynamic["id"])
+        observations = {r["key"]: r["observation"] for r in quiz_result["requirements"]}
+        assert observations == {"choice": "assisted", "why": "independent"}
 
         wonder_node = _node(course, "zz-loop-wonder")
         wonder = client.post(
@@ -2785,8 +2811,9 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
             "I wonder why.",
             reply="Here is the wonder, and you can ask it again later.",
         )
-        assert counted_off["passed"] is True
-        assert _state(storm.id, "zz-loop-wonder").status == "known"
+        assert counted_off["passed"] is False
+        assert counted_off["verdict"] == "unassessed"
+        assert _state(storm.id, "zz-loop-wonder").status == "unknown"
 
         counting = client.put(
             "/tutor-profile",
@@ -2815,15 +2842,18 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         revealed = _decide(again["id"], "move on anyway", reply="Moving on.", block_complete=True)
         assert revealed["passed"] is False
         assert revealed["unit_complete"] is True
-        assert _state(storm.id, "zz-loop-wonder").status == "fragile"
-        assert _assessments(again["id"])[0]["outcome"] == "revealed"
+        assert _state(storm.id, "zz-loop-wonder").status == "unknown"
+        assert _assessments(again["id"])[0]["outcome"] == "unassessed"
     finally:
         client.put("/tutor-profile", json=original.json())
         _clear_progress(storm.id)
         _wipe_zz()
 
 
-def test_course_progress_reports_percent_and_unit_status() -> None:
+@pytest.mark.parametrize("scoring_version, expected_mastery", [(1, "known"), (2, "unassessed")])
+def test_course_progress_reports_percent_and_unit_status(scoring_version: int, expected_mastery: str) -> None:
+    from app.parents import _week_counts
+
     storm = _storm()
     _clear_progress(storm.id)
     course = _ready(
@@ -2926,6 +2956,8 @@ def test_course_progress_reports_percent_and_unit_status() -> None:
             row = db.get(KcSession, uuid.UUID(opened.json()["id"]))
             assert row is not None
             assert row.status == "in_progress"
+            # Only legacy scoring allowed this block outcome alone to establish mastery.
+            row.scoring_version = scoring_version
             row.block_results = [
                 {
                     "id": "blk-1",
@@ -2944,7 +2976,9 @@ def test_course_progress_reports_percent_and_unit_status() -> None:
         ).json()
         left = {item["code"]: item for item in left_open["units"]}
         assert left["zz-prog-open"]["status"] == "completed"
-        assert left["zz-prog-open"]["mastery"] == "known"
+        assert left["zz-prog-open"]["mastery"] == expected_mastery
+        assert left["zz-prog-open"]["first_try_blocks_count"] == (1 if scoring_version == 1 else 0)
+        assert left["zz-prog-open"]["passed_blocks_count"] == (1 if scoring_version == 1 else 0)
         assert left["zz-prog-open"]["finished_blocks"] == 1
         refused = client.post(
             f"/kc/tutor/sessions/{opened.json()['id']}/decision",
@@ -2958,9 +2992,17 @@ def test_course_progress_reports_percent_and_unit_status() -> None:
             assert row.status == "completed"
             state = db.scalar(select(KcState).where(KcState.student_id == storm.id, KcState.kc_id == row.kc_id))
             assert state is not None
-            assert state.status == "known"
+            assert state.status == ("known" if scoring_version == 1 else "unknown")
+            assert state.result["status"] == expected_mastery
+            week = _week_counts([row])[storm.id]
+            assert week["blocks_passed"] == (1 if scoring_version == 1 else 0)
+            assert week["stars"] == (55 if scoring_version == 1 else 35)
             assert state.result["strong"]
-            assert state.result["work_on"]
+            if scoring_version == 1:
+                assert state.result["work_on"]
+            else:
+                assert row.verdict == expected_mastery
+                assert state.result["requirements"] == []
         finally:
             db.close()
     finally:
@@ -2974,10 +3016,10 @@ def _miss_until_revealed(session_id: str, **extra: object) -> dict:
         opened = _decide(session_id, "Got it - move on", reply="What is the idea?")
         assert opened["active_substep"] == "main"
     revealed = {}
-    for index in range(4):
+    for _ in range(4):
         revealed = _decide(
             session_id,
-            f"This reply number {index} misses the idea on purpose.",
+            "I don't know yet.",
             reply="The answer stays covered for now.",
             **extra,
         )
@@ -3061,12 +3103,13 @@ def test_fragile_finishes_the_course_without_becoming_known() -> None:
         assert gap_unit["mastery"] == "fragile"
         assert gap_unit["finished_blocks"] == 1
         assert gap_unit["blocks"][0]["type"] == "topic_goal"
-        assert gap_unit["blocks"][0]["outcome"] == "revealed"
+        assert gap_unit["blocks"][0]["outcome"] == "fragile"
+        assert gap_unit["block_details"][0]["revealed"] is True
         assert gap_unit["blocks"][0]["attempts"] >= 1
         assert gap_unit["blocks"][0]["rubric"] == "Explain Gap fact."
         assert gap_unit["result"]["strong"] == "You stayed with the question."
         assert gap_unit["result"]["work_on"] == "Name the idea in your own words."
-        assert gap_unit["result"]["justification"] == "A required block was revealed."
+        assert gap_unit["result"]["justification"] == "Finished with help. The goal was assisted."
         assert "score" not in gap_unit
     finally:
         _clear_progress(storm.id)
@@ -3632,7 +3675,9 @@ def test_kc_progress_analytics_and_accomplishments_opportunities() -> None:
         assert fu["prerequisite_codes"] == ["zz-an-known"]
         assert fu["dependent_codes"] == ["zz-an-open"]
         assert fu["revealed_blocks_count"] == 1
-        assert fu["block_details"][0]["outcome"] == "revealed"
+        assert fu["block_details"][0]["outcome"] == "fragile"
+        assert fu["block_details"][0]["revealed"] is True
+        assert ku["block_details"][0]["revealed"] is False
         assert fu["what_to_work_on"] == "Practice stating the rule without a prompt."
         assert units_by_code["zz-an-open"]["child_status"] == "In Progress"
     finally:
@@ -4008,7 +4053,7 @@ def test_word_overlap_does_not_finish_a_block_the_model_kept_open() -> None:
         block_complete: bool = False,
         substep_passed: bool = False,
         decision: str = "stay",
-        answer: str = "The river is blue.",
+        answer: str = "The river is green.",
         state: dict | None = None,
     ):
         return resolve_block_turn(
@@ -4039,11 +4084,13 @@ def test_word_overlap_does_not_finish_a_block_the_model_kept_open() -> None:
     still = turn(move_attempts=1)
     assert still.next_step == 0
     assert still.next_block_state["substep"] == "main"
-    agreed = turn(move_attempts=0, block_complete=True, substep_passed=True)
-    assert agreed.next_step == 0
-    assert agreed.advance_block is False
-    assert agreed.next_block_state["substep"] == "summary_check"
-    assert not agreed.next_block_state.get("revealed_substep")
+    paraphrase = turn(move_attempts=0, answer="Its surface is the color of a clear summer sky.", substep_passed=True)
+    assert paraphrase.next_step == 1
+    assert paraphrase.block_results[-1]["outcome"] == "passed"
+    literal = turn(move_attempts=0, answer="The river is blue.")
+    assert literal.next_step == 1
+    assert literal.advance_block is True
+    assert literal.block_results[-1]["outcome"] == "passed"
     exhausted = turn(move_attempts=2)
     assert exhausted.next_step == 0
     assert exhausted.advance_block is False
@@ -4125,10 +4172,13 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
     assert missed.next_block_state["substep"] == "summary_check"
     assert missed.next_block_state["revealed_substep"] is True
     assert missed.hint_tier == "reveal"
+    follow_up = run(topic, "summary_check", "Can you explain the blue?", state=missed.next_block_state)
+    assert follow_up.advance_block is True
+    assert follow_up.block_results[-1]["outcome"] == "revealed"
     still_open = run(
         topic,
         "summary_check",
-        "Can you explain the blue?",
+        "tell me more",
         state=missed.next_block_state,
     )
     assert still_open.advance_block is False
@@ -4273,8 +4323,11 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
         },
     }
     faded = run(worked, "faded_step", "no idea", move_attempts=1)
-    assert faded.next_block_state["substep"] == "solo_solve"
+    assert faded.next_block_state["substep"] == "faded_step"
     assert faded.next_block_state["revealed_substep"] is True
+    solo = run(worked, "faded_step", "ok", state=faded.next_block_state)
+    assert solo.next_block_state["substep"] == "solo_solve"
+    assert solo.move_attempts == 0
     solved = run(worked, "solo_solve", "The river is blue.", substep_passed=True)
     assert solved.advance_block is True
     assert solved.next_step == 1
@@ -4294,6 +4347,10 @@ def test_summary_check_closes_topic_guided_and_assessment_blocks() -> None:
     assert critiqued.advance_block is True
     assert critiqued.next_step == 1
     assert critiqued.block_results[-1]["outcome"] == "passed"
+    dismissed = run(flaw, "critique", "Looks fine to me.", substep_passed=True)
+    assert dismissed.move_attempts == 1
+    assert dismissed.advance_block is False
+    assert dismissed.block_results == []
     missed_flaw = run(flaw, "critique", "Looks fine to me.", move_attempts=1)
     assert missed_flaw.next_block_state["revealed_substep"] is True
 
@@ -4441,7 +4498,7 @@ def test_session_block_progress_short_title() -> None:
 
 
 
-def _explain_session(code: str) -> str:
+def _explain_session(code: str, opening: str = "A boat floats because its hull pushes water out of the way.") -> str:
     storm = _storm()
     _clear_progress(storm.id)
     course = _make(code, description="How boats stay up.")
@@ -4466,7 +4523,7 @@ def _explain_session(code: str) -> str:
     assert opened.json()["active_substep"] == "explain"
     spoken = client.post(
         f"/kc/tutor/sessions/{session_id}/speech",
-        json={"content": "A boat floats because its hull pushes water out of the way."},
+        json={"content": opening},
     )
     assert spoken.status_code == 200, spoken.text
     return session_id
@@ -4514,6 +4571,7 @@ def test_a_ready_signal_ends_the_opening_explanation_over_http() -> None:
         assert moved["active_substep"] == "main"
         assert moved["step"] == 0
         assert moved["step_label"] == "Block 1 of 2: Topic / Goal"
+        assert moved["loop_result"]["attempt_counted"] is False
         assert moved["passed"] is False
         # The block's question must still be passed before the block closes.
         _, summary = _explain_turn(
@@ -4528,16 +4586,23 @@ def test_a_ready_signal_ends_the_opening_explanation_over_http() -> None:
 
 
 def test_an_answer_during_the_opening_explanation_is_scored_over_http() -> None:
-    session_id = _explain_session("zz-early")
+    session_id = _explain_session("zz-early", "We are looking at why a heavy boat can float.")
     try:
         answer = "The hull pushes aside water that weighs more than the boat, so it floats."
         bundle, scored = _explain_turn(session_id, answer, substep_passed=True)
         assert "Goal answer: The learner answered during the explanation" in bundle["system_prompt"]
         assert "Active substep: main." in bundle["system_prompt"]
         assert "ready_to_move_on" not in bundle["response_schema"]["properties"]
-        assert scored["active_substep"] == "summary_check"
-        assert scored["step"] == 0
+        assert scored["active_substep"] == "explain"
+        assert scored["step"] == 1
         assert scored["unit_complete"] is False
+        (first,) = _assessments(session_id)
+        assert first["block_id"] == "blk-1"
+        (goal,) = first["requirements"]
+        assert goal["observation"] == "independent"
+        assert goal["attempts"] == 1
+        assert first["verdict"] == "known"
+        assert scored["loop_result"]["attempt_counted"] is True
     finally:
         _wipe_zz()
 

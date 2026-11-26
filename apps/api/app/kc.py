@@ -50,6 +50,7 @@ from app.block_score import (
     remember_tutor_disclosures,
     score_supported_turn,
     scoring_version_for_blocks,
+    stored_block_revealed,
     verdict_from_results,
 )
 from app.kc_loop import SAY_THAT_AGAIN, hold_for_blank_reply, reply_is_unreadable, resolve_block_turn
@@ -1404,7 +1405,7 @@ def _build_block_details(
         passed_first = False
         observations: list[dict] = []
         if stored is not None:
-            outcome, passed_first = classify_stored_outcome(stored)
+            outcome, passed_first = classify_stored_outcome(stored, int(getattr(session, "scoring_version", 1) or 1))
             attempts = int(stored.get("attempts") or 0)
             b_status = outcome or "passed"
             observations = _requirement_observations(stored.get("requirements"))
@@ -1449,6 +1450,7 @@ def _build_block_details(
                 "attempts": attempts,
                 "max_retries": max_ret,
                 "passed_on_first_try": passed_first,
+                "revealed": stored_block_revealed(stored),
                 "eliminated_choices": elim_labels,
                 **({"observations": observations} if observations else {}),
             }
@@ -1526,7 +1528,7 @@ def _synthesize_course_insights(
                 }
             )
         for blk in b_details:
-            if blk.get("outcome") == "revealed":
+            if blk.get("revealed"):
                 opportunities.append(
                     {
                         "component_id": cid,
@@ -1910,7 +1912,7 @@ def _summary_unit(
     done, total = _block_counts(node, chosen)
     details = _build_block_details(node, chosen, cfg, goal, unit_status=status)
     passed_b = sum(1 for block in details if block.get("outcome") == "passed")
-    revealed_b = sum(1 for block in details if block.get("outcome") == "revealed")
+    revealed_b = sum(1 for block in details if block.get("revealed"))
     first_try_b = sum(1 for block in details if block.get("passed_on_first_try"))
     result = state.result if state is not None and isinstance(state.result, dict) else {}
     stored_just = str(result.get("justification") or "").strip()
@@ -2579,8 +2581,8 @@ def _mastery_label(state: KcState | None, node: KcNode, sessions: list[KcSession
         latest_assessed = max(assessed, key=lambda row: row.updated_at or row.created_at or _now())
         return str(latest_assessed.verdict or "")
     latest = max(finished, key=lambda row: row.updated_at or row.created_at or _now())
-    if int(latest.scoring_version or 1) >= REQUIREMENT_SCORE and str(latest.verdict or "") == "unassessed":
-        return "unassessed"
+    if int(latest.scoring_version or 1) >= REQUIREMENT_SCORE:
+        return str(latest.verdict or verdict_from_results(list(latest.block_results or [])) or "")
     if not _result_ids(latest.block_results):
         return ""
     if _walk_fragile(stored_blocks(node), latest.block_results, cfg):
@@ -2733,7 +2735,7 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
         mastery = _mastery_label(state, node, node_sessions, cfg)
         b_details = _build_block_details(node, chosen, cfg, goal, unit_status=status)
         passed_b = sum(1 for b in b_details if b.get("outcome") == "passed")
-        revealed_b = sum(1 for b in b_details if b.get("outcome") == "revealed")
+        revealed_b = sum(1 for b in b_details if b.get("revealed"))
         first_try_b = sum(1 for b in b_details if b.get("passed_on_first_try"))
         total_attempts = sum(int(b.get("attempts") or 0) for b in b_details)
         if chosen is not None and int(chosen.attempts or 0) > total_attempts:

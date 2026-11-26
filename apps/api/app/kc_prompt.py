@@ -3592,15 +3592,15 @@ def _how_to_teach(
     if has_misconceptions:
         if misc_policy == "immediate_redirect":
             lines.append(
-                "If a stored wrong move matches, name it on that same turn and set the decision to redirect."
+                "If a stored wrong move matches, name it on that same turn. Follow the block outcome for the next step."
             )
         elif misc_policy == "nudge_without_naming":
             lines.append(
-                "If a stored wrong move matches, guide the learner away with a contrasting question without naming the misconception; if it repeats, redirect."
+                "If a stored wrong move matches, guide the learner away with a contrasting question without naming the misconception. If it repeats, follow the block outcome for the next step."
             )
         else:
             lines.append(
-                "the first time a stored wrong move matches, explain the trap and retry once. The second time, redirect."
+                "the first time a stored wrong move matches, explain the trap and retry once. The second time, follow the block outcome for the next step."
             )
     else:
         if misc_policy == "nudge_without_naming":

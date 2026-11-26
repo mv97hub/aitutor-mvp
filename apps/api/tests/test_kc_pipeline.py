@@ -41,6 +41,14 @@ client = TestClient(app)
 OUTCOME = "Find a missing angle in a triangle and explain why two sides and a non-included angle do not prove congruence."
 
 
+def test_openapi_describes_the_current_course_creator() -> None:
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+    paths = response.json()["paths"]
+    assert "post" in paths["/kc/courses/{course_id}/pipeline/{stage}"]
+    assert "/kc/courses/{course_id}/draft-finish" not in paths
+
+
 def _course(**overrides) -> dict:
     base = {
         "title": "Triangle congruence",
