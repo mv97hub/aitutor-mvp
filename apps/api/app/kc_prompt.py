@@ -1246,13 +1246,17 @@ _GOAL_START_ASK = (
 )
 _SUMMARY_CONGRATULATE = "Congratulate the learner once."
 _NEVER_SAY_BLOCK = "Never say the word block to the learner."
+_FINAL_INVITATION = (
+    'Invite the learner to ask you a question: "Do you have a question for me before we finish?" '
+    "They may also choose Continue. Do not offer to quiz them."
+)
 _SUMMARY_CHOICE = (
     "Do not offer one more example. Do not ask the goal again. "
-    "Ask one question only: move on, or ask one more question."
+    f"{_FINAL_INVITATION}"
 )
 _SUMMARY_REMINDER = (
     "If they ask one further question, answer it, then close. "
-    "Do not ask move on, or one more question, again. "
+    "Do not repeat the invitation. "
     "Set block_complete=true. Ask no question. "
     "Do not return to the goal, the explain step, or another summary."
 )
@@ -1283,7 +1287,7 @@ _SUMMARY_ELABORATE = (
     "The learner asked to elaborate on the recap. Elaborate on the summary in this reply. "
     "Set substep_passed=false and block_complete=false. Do not complete this part and do not advance. "
     "Do not close with a brief affirmation. Do not open the next part. "
-    "Then ask the same single choice: move on, or ask one more question. "
+    f"{_FINAL_INVITATION} "
     "Do not return to the goal, the explain step, or another summary. "
     "Only an explicit move-on, such as got it - move on, no final questions, let's continue, "
     "let's go, move on, next, or yes, may complete this part."
@@ -1473,7 +1477,7 @@ def _summary_close_lines(
                         "Do not score this message. Set help_requested=true, substep_passed=false, and block_complete=false. "
                         "Answer that question in one or two sentences. "
                         "If they ask what something is or who someone is, define it. "
-                        "Then ask the same single choice: move on, or ask one more question. "
+                        f"{_FINAL_INVITATION} "
                         "Do not return to the goal, the explain step, or another summary. "
                         "Do not repeat the goal question. "
                         "Do not say the reply was partial, close, or a good start. "
@@ -1487,7 +1491,7 @@ def _summary_close_lines(
                     f"Their question: {asked}. "
                     "Answer that question in one or two sentences. "
                     "If they ask what something is or who someone is, define it. "
-                    "Then close. Do not ask move on, or one more question, again. "
+                    "Then close. Do not repeat the invitation. "
                     "Set block_complete=true. Ask no question. "
                     "Do not repeat the goal question. "
                     "Do not open the next part."
@@ -1588,7 +1592,7 @@ def _ending(
     if summary_stay and side_question and not unit_complete and not course_complete:
         return (
             "Close Contract: Answer this one further question, then close. "
-            "Do not ask move on, or one more question, again. "
+            "Do not repeat the invitation. "
             "Set block_complete=true. Ask no question. Do not return to the goal."
         )
     if summary_stay and not unit_complete and not course_complete:
@@ -1597,7 +1601,7 @@ def _ending(
         return " ".join(
             (
                 "Close Contract: If block_complete=true on this summary, include the unit close and ask no new question. "
-                "If block_complete=false, ask one question only: move on, or ask one more question.",
+                f"If block_complete=false, {_FINAL_INVITATION}",
                 length,
                 _close_body(),
                 outro,
@@ -2207,7 +2211,7 @@ def _decision_sentence(turn: object, label: str) -> str:
             body = (
                 "If this answer satisfies the substep, set substep_passed=true and block_complete=false. "
                 f"{_SUMMARY_CONGRATULATE} "
-                "Ask one question only: move on, or ask one more question. "
+                f"{_FINAL_INVITATION} "
                 f"{_NEVER_SAY_BLOCK} Do not open the next part in this reply."
             )
         else:
@@ -4225,7 +4229,22 @@ def _park_turn_branches(
     return placed
 
 
-def _blocks_text(sections: list[tuple[str, list[str]]], forecast: object | None = None) -> str:
+def _blocks_text(
+    sections: list[tuple[str, list[str]]], forecast: object | None = None, *, waiting_for_question: bool = False,
+) -> str:
+    if waiting_for_question:
+        # The ordinary closing and teaching branches would ask the model to
+        # finish or start a quiz. Keep the learner context and the safety rules.
+        sections = [(title, lines) for title, lines in sections if title in {
+            "Safety", "Who you are talking to", "How to sound", "What just happened",
+        }]
+        sections.append(("This turn", [
+            'The learner has not asked their question yet. Say: "I can answer a question about the lesson. '
+            'What would you like to ask me?" They can also choose Continue.',
+            "Stay on this summary. Set decision to stay, substep_passed=false and block_complete=false. "
+            "Award no rubric items. Do not give a quiz or close this part.",
+        ]))
+        forecast = None
     include_generated_mcq = any(
         "populate generated_mcq" in line for _, lines in sections for line in lines
     )
@@ -4400,6 +4419,7 @@ def build_kc_prompt(
         learner_asks_clarification,
         stay_on_course_enabled,
         summary_ready_signal,
+        summary_needs_learner_question,
         unanswered_side_turn,
     )
 
@@ -4452,6 +4472,7 @@ def build_kc_prompt(
     )
     from app.kc_loop import forecast_this_turn
 
+    prior_tutor = _previous_tutor_text(last_messages or "", last_answer or "")
     forecast = forecast_this_turn(
         blocks=blocks,
         step=index,
@@ -4466,7 +4487,7 @@ def build_kc_prompt(
         reveals=int(reveals or 0),
         enrichment_turns=int(enrichment_turns or 0),
         fragment=bool(fragment),
-        prior_tutor=_previous_tutor_text(last_messages or "", last_answer or ""),
+        prior_tutor=prior_tutor,
         opening=opening,
     )
     ends_unit = (
@@ -4663,6 +4684,8 @@ def build_kc_prompt(
             ),
         ],
         forecast,
+        waiting_for_question=(not opening and substep == "summary_check"
+                              and summary_needs_learner_question(last_answer or "", prior_tutor)),
     )
     return {
         "system_prompt": prompt,

@@ -512,6 +512,34 @@ def summary_content_question(answer: str) -> bool:
     }
 
 
+def summary_needs_learner_question(answer: str, prior_tutor: str) -> bool:
+    """The learner wants a final question but has not supplied its content yet."""
+    text = _proceed_text(answer.replace("’", "'"))
+    if re.fullmatch(
+        r"(?:please )?(?:(?:ask me|can you ask me|can i ask|i have|i want to ask) )?"
+        r"(?:one more|another|a|one|a final|a last) question(?: please)?",
+        text,
+    ):
+        return True
+    if text not in {
+        "yes", "yes please", "yeah", "yeah please", "sure", "sure please", "one more", "one more please",
+        "im not sure", "im not sure what you mean", "do you mean i ask you",
+    }:
+        return False
+    # A short answer responds to the tutor's final question. Earlier sentences
+    # may mention asking for help, and a Continue-button reminder can follow it.
+    questions = re.findall(r"[^.!?;]*\?", prior_tutor)
+    prompt = questions[-1] if questions else re.split(r"[.!?;]", prior_tutor.strip().rstrip(".!;"))[-1]
+    prompt = _proceed_text(prompt.replace("’", "'"))
+    return bool(re.search(
+        r"\b(?:have|got) (?:(?:a|any|one|another|last|final|more|other) )*questions?\b"
+        r"|\bany (?:(?:more|last|final|other) )?questions?\b"
+        r"|\b(?:like|want) to ask\b|\bwhat(?:s| is) your question\b"
+        r"|\bask (?:me|(?:you )?(?:one more|another) question)\b",
+        prompt,
+    ))
+
+
 def summary_ready_signal(answer: str) -> bool:
     """Any reply that is not a question closes a passed summary.
 
@@ -1940,6 +1968,12 @@ def resolve_block_turn(
     dialogue_turns = int(state.get("dialogue_turns") or 0) + 1
     state["dialogue_turns"] = dialogue_turns
     state["substep"] = substep
+    if substep == "summary_check" and summary_needs_learner_question(answer, prior_tutor):
+        return _unscored_stay(
+            hint=tier, move_attempts=move_attempts, reveals=reveals, enrichment_turns=enrichment_turns,
+            rubric=_clean_ids(list(stored_rubric)), index=index, bid=bid, state=state,
+            results=[dict(row) for row in block_results if isinstance(row, dict)],
+        )
     if (
         btype == "worked_example"
         and substep == "faded_step"

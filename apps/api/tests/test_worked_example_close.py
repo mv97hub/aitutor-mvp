@@ -73,7 +73,7 @@ def test_a_correct_solo_answer_completes_the_block_without_a_follow_up_question(
     assert "Ask no question." in turn
     assert "Do not praise." in turn
     assert "Begin the next block in this same reply." not in turn
-    assert "ask one question only: move on, or ask one more question" not in text.lower()
+    assert "do you have a question for me before we finish?" not in text.lower()
     assert "Do not mention the next block and do not open it." not in text
     assert "ask whether the learner wants to continue discussing" not in text
     assert "Give a short summary of what this block covered" not in text
@@ -206,7 +206,7 @@ def test_a_finished_worked_example_starts_the_next_block_without_asking() -> Non
     assert "Begin the next block in this same reply." not in text
     assert "The next part arrives in its own message." in text
     assert "First line:" not in text
-    assert "ask one question only: move on, or ask one more question" not in lowered
+    assert "do you have a question for me before we finish?" not in lowered
     assert "do you want to move on" not in lowered
     closed = _appointment_turn(APPOINTED, "solo_solve", substep_passed=True)
     assert closed.advance_block is True

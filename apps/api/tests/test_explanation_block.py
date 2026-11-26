@@ -125,7 +125,7 @@ def test_summary_lists_every_topic() -> None:
     assert "Numerator" in teaching
     assert "summary_check" in teaching
     assert "congratulate the learner once" in teaching.lower()
-    assert "ask one question only: move on, or ask one more question" in teaching.lower()
+    assert "do you have a question for me before we finish?" in teaching.lower()
     assert "do not offer one more example" in teaching.lower()
     assert "any other final questions" not in teaching.lower()
     assert "do not open the next part" in teaching.lower()
@@ -133,7 +133,7 @@ def test_summary_lists_every_topic() -> None:
     assert "then ask if there are any final questions" not in how.lower()
     assert "any other final questions" not in how.lower()
     assert "congratulate the learner once" in how.lower()
-    assert "ask one question only: move on, or ask one more question" in how.lower()
+    assert "do you have a question for me before we finish?" in how.lower()
 
 
 def _turn(answer: str, state: dict, *, substep_passed: bool = False, block_complete: bool = False):
@@ -575,7 +575,7 @@ def test_a_ruhr_style_advance_is_short_and_does_not_teach_the_next_topic() -> No
     assert "A strike against the occupation." not in text
     assert "ask if they have questions or want elaboration" not in lowered
     assert "would you like me to elaborate" not in lowered
-    assert "ask one question only: move on, or ask one more question" not in lowered
+    assert "do you have a question for me before we finish?" not in lowered
 
 
 def test_a_question_on_an_unfinished_topic_stays_short() -> None:
@@ -613,7 +613,7 @@ def test_got_it_move_on_on_the_last_topic_opens_the_next_block() -> None:
     lowered = text.lower()
     assert "summarize every topic" not in lowered
     assert "topics to include in that summary" not in lowered
-    assert "ask one question only: move on, or ask one more question" not in lowered
+    assert "do you have a question for me before we finish?" not in lowered
     for explanation in _OTHER_LAGS:
         assert explanation not in text
     assert "An impact lag is the time before the policy changes spending." not in text
@@ -636,6 +636,6 @@ def test_a_question_on_the_last_topic_is_answered_then_the_block_closes() -> Non
     lowered = text.lower()
     assert "summarize every topic" not in lowered
     assert "topics to include in that summary" not in lowered
-    assert "ask one question only: move on, or ask one more question" not in lowered
+    assert "do you have a question for me before we finish?" not in lowered
     for explanation in _OTHER_LAGS:
         assert explanation not in text
