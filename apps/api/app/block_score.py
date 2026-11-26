@@ -25,7 +25,21 @@ from app.kc_loop import (
 
 LEGACY_SCORE = 1
 REQUIREMENT_SCORE = 2
-SUPPORTED = frozenset({"retrieval_check", "worked_example", "explanation", "curiosity"})
+SUPPORTED = frozenset(
+    {
+        "retrieval_check",
+        "worked_example",
+        "explanation",
+        "curiosity",
+        "topic_goal",
+        "mcq",
+        "case_study",
+        "socratic",
+        "spot_the_flaw",
+        "teach_back",
+        "passage_ela",
+    }
+)
 LEGACY_OUTCOMES = frozenset({"passed", "revealed", "engaged"})
 CONTINUE_LABEL = "No final questions — let's continue!"
 TELL_ME_MORE = "Tell me more"
@@ -52,14 +66,95 @@ _PHRASE = {
         "independent": "The solo problem was independent.",
         "insufficient": "The solo problem was not shown.",
     },
+    "goal": {
+        "assisted": "The goal was assisted.",
+        "independent": "The goal was independent.",
+        "insufficient": "The goal was not shown.",
+    },
+    "choice": {
+        "assisted": "The choice was assisted.",
+        "independent": "The choice was independent.",
+        "insufficient": "The choice was not shown.",
+    },
+    "why": {
+        "assisted": "The reason for the choice was assisted.",
+        "independent": "The reason for the choice was independent.",
+        "insufficient": "The reason for the choice was not shown.",
+    },
+    "predict": {
+        "assisted": "The prediction was assisted.",
+        "independent": "The prediction was independent.",
+        "insufficient": "The prediction was not shown.",
+    },
+    "rule": {
+        "assisted": "The rule was assisted.",
+        "independent": "The rule was independent.",
+        "insufficient": "The rule was not shown.",
+    },
+    "transfer": {
+        "assisted": "The transfer was assisted.",
+        "independent": "The transfer was independent.",
+        "insufficient": "The transfer was not shown.",
+    },
+    "initial_thesis": {
+        "assisted": "The thesis was assisted.",
+        "independent": "The thesis was independent.",
+        "insufficient": "The thesis was not shown.",
+    },
+    "identify": {
+        "assisted": "The flaw identification was assisted.",
+        "independent": "The flaw identification was independent.",
+        "insufficient": "The flaw was not identified.",
+    },
+    "repair": {
+        "assisted": "The repair was assisted.",
+        "independent": "The repair was independent.",
+        "insufficient": "The repair was not shown.",
+    },
+    "initial_explanation": {
+        "assisted": "The explanation was assisted.",
+        "independent": "The explanation was independent.",
+        "insufficient": "The explanation was not shown.",
+    },
+    "peer_follow_up": {
+        "assisted": "The follow-up was assisted.",
+        "independent": "The follow-up was independent.",
+        "insufficient": "The follow-up was not shown.",
+    },
+    "peer_follow_up_1": {
+        "assisted": "Follow-up 1 was assisted.",
+        "independent": "Follow-up 1 was independent.",
+        "insufficient": "Follow-up 1 was not shown.",
+    },
+    "peer_follow_up_2": {
+        "assisted": "Follow-up 2 was assisted.",
+        "independent": "Follow-up 2 was independent.",
+        "insufficient": "Follow-up 2 was not shown.",
+    },
+    "central_idea": {
+        "assisted": "The central idea was assisted.",
+        "independent": "The central idea was independent.",
+        "insufficient": "The central idea was not shown.",
+    },
+    "cite_evidence": {
+        "assisted": "The citation was assisted.",
+        "independent": "The citation was independent.",
+        "insufficient": "The citation was not shown.",
+    },
+    "craft_or_inference": {
+        "assisted": "The interpretation was assisted.",
+        "independent": "The interpretation was independent.",
+        "insufficient": "The interpretation was not shown.",
+    },
 }
 
 
 def scoring_version_for_blocks(blocks: list[dict] | None) -> int:
     """New sessions use the requirement score only when every block is supported.
 
-    A component that mixes in a topic, a question, or any other block stays on
-    the score it already had. An empty walk stays on the legacy score too.
+    The supported set is the eleven block types. A component that includes a
+    type outside that set stays on the legacy score. An empty walk does too.
+    A session keeps the version it opened with.
     """
     rows = [block for block in (blocks or []) if isinstance(block, dict)]
     if not rows:
@@ -90,7 +185,66 @@ def freeze_requirements(block: dict, cfg: dict | None) -> list[dict]:
         return [_requirement("participation", label, "participation", 0)]
     if kind == "curiosity":
         return [_requirement("participation", "Curiosity", "participation", 0)]
+    if kind == "topic_goal":
+        return [_requirement("goal", "Goal", "assessed", 0)]
+    if kind == "mcq":
+        rows = [_requirement("choice", "Choice", "assessed", 0)]
+        if str(bcfg.get("confirm_why_on_correct") or "on_retry_only") == "always":
+            rows.append(_requirement("why", "Why", "assessed", 1))
+        return rows
+    if kind == "case_study":
+        return _case_requirements(block, cfg)
+    if kind == "socratic":
+        return _socratic_requirements(block, cfg)
+    if kind == "spot_the_flaw":
+        rows = [_requirement("identify", "Identify the flaw", "assessed", 0)]
+        if str(bcfg.get("critique_depth") or "identify_and_correct") != "identify_only":
+            rows.append(_requirement("repair", "Repair", "assessed", 1))
+        return rows
+    if kind == "teach_back":
+        from app.kc_prompt import teach_back_follow_up_count, teach_back_task_steps
+
+        labels = {
+            "initial_explanation": "Explanation",
+            "peer_follow_up": "Follow-up",
+            "peer_follow_up_1": "Follow-up 1",
+            "peer_follow_up_2": "Follow-up 2",
+        }
+        steps = teach_back_task_steps(teach_back_follow_up_count(cfg))
+        return [_requirement(step, labels.get(step, step), "assessed", index) for index, step in enumerate(steps)]
+    if kind == "passage_ela":
+        return [
+            _requirement("central_idea", "Central idea", "assessed", 0),
+            _requirement("cite_evidence", "Citation", "assessed", 1),
+            _requirement("craft_or_inference", "Interpretation", "assessed", 2),
+        ]
     return []
+
+
+def _case_requirements(block: dict, cfg: dict | None) -> list[dict]:
+    from app.kc_prompt import substeps_for_block
+
+    labels = {"predict": "Prediction", "contrast_and_rule": "Rule", "transfer": "Transfer"}
+    keys = {"predict": "predict", "contrast_and_rule": "rule", "transfer": "transfer"}
+    rows: list[dict] = []
+    for step in substeps_for_block(block, cfg):
+        if step not in keys:
+            continue
+        rows.append(_requirement(keys[step], labels[step], "assessed", len(rows)))
+    return rows
+
+
+def _socratic_requirements(block: dict, cfg: dict | None) -> list[dict]:
+    bcfg = ((cfg or {}).get("blocks") or {}).get("socratic") or {}
+    try:
+        depth = int(bcfg.get("dialogue_depth_turns", 2) or 2)
+    except (TypeError, ValueError):
+        depth = 2
+    depth = max(1, depth)
+    rows = [_requirement("initial_thesis", "Thesis", "assessed", 0)]
+    for index in range(depth):
+        rows.append(_requirement(f"counterexample_{index + 1}", f"Counterexample {index + 1}", "assessed", index + 1))
+    return rows
 
 
 def _requirement(key: str, label: str, role: str, ordinal: int) -> dict:
@@ -149,6 +303,25 @@ def first_try_block(requirements: list[dict] | None) -> bool:
     return True
 
 
+def _observation_phrase(row: dict) -> str:
+    key = str(row.get("key") or "")
+    observation = str(row.get("observation") or "")
+    phrase = _PHRASE.get(key, {}).get(observation)
+    if phrase:
+        return phrase
+    if key.startswith("counterexample_"):
+        number = key.rsplit("_", 1)[-1]
+        words = {
+            "assisted": "assisted",
+            "independent": "independent",
+            "insufficient": "not shown",
+        }
+        word = words.get(observation)
+        if word:
+            return f"Counterexample {number} was {word}."
+    return ""
+
+
 def parent_text(verdict: str | None, results: list[dict] | None) -> str:
     """Parent wording. Help and participation stay different even when the stars match."""
     rows = [item for item in (results or []) if isinstance(item, dict)]
@@ -165,7 +338,7 @@ def parent_text(verdict: str | None, results: list[dict] | None) -> str:
         for row in requirements:
             if row.get("role") != "assessed":
                 continue
-            phrase = _PHRASE.get(str(row.get("key") or ""), {}).get(str(row.get("observation") or ""))
+            phrase = _observation_phrase(row)
             if phrase:
                 parts.append(phrase)
         return " ".join(parts)
@@ -349,9 +522,12 @@ def _overlay(
             prior_tutor=prior_tutor,
             cfg=cfg,
             sealed=bool(new_rows),
+            new_outcome=str(new_rows[-1].get("outcome") or "") if new_rows else "",
         )
+        _ensure_why(requirements, block, cfg, after)
     rubric = list(before_rubric) if continued else list(resolution.rubric_met)
     if new_rows:
+        _drop_unasked_why(requirements)
         block_verdict = verdict_from_requirements(requirements, finished=True)
         first = first_try_block(requirements) if block_verdict == "known" else False
         outcome = {"known": "passed", "fragile": "fragile", "unassessed": "unassessed"}.get(
@@ -413,36 +589,152 @@ def _advance(
     prior_tutor: str,
     cfg: dict,
     sealed: bool,
+    new_outcome: str = "",
 ) -> None:
+    del cfg
     if kind in {"explanation", "curiosity"}:
         if sealed:
             for row in requirements:
                 if row.get("role") == "participation":
                     row["observation"] = "participated"
         return
+    if kind == "spot_the_flaw":
+        _advance_flaw(
+            requirements,
+            block=block,
+            before_state=before_state,
+            after_state=after_state,
+            before_move=before_move,
+            resolution=resolution,
+            answer=answer,
+            prior_tutor=prior_tutor,
+        )
+        return
     before_sub = str(before_state.get("substep") or "")
-    key = before_sub
-    if before_sub == "summary_check":
-        key = str(before_state.get("last_task_substep") or "")
-        if not substep_passed:
-            return
+    if before_sub == "summary_check" and not substep_passed:
+        return
+    key = _active_key(kind, before_sub, before_state, after_state)
     target = next((row for row in requirements if row.get("key") == key), None)
     if target is None or target.get("role") != "assessed":
         return
-    attempted = _attempted(before_state, after_state, before_move, resolution)
+    # Finishing the block replaces the state, so the attempt counter is not on it.
+    attempted = _attempted(before_state, after_state, before_move, resolution) or sealed
     if not attempted and not substep_passed:
         return
-    giveaway = tutor_gave_away_answer(block, before_state, before_sub, prior_tutor)
-    revealed = _revealed(kind, before_sub, before_state, after_state)
+    step_for_giveaway = before_sub
+    if before_sub == "summary_check":
+        step_for_giveaway = str(before_state.get("last_task_substep") or before_sub)
+    giveaway = tutor_gave_away_answer(block, before_state, step_for_giveaway, prior_tutor)
+    accepted = _passed(kind, before_sub, before_state, after_state, substep_passed, new_outcome)
+    # A sealed "revealed" is this step's help, except a worked solo that the loop
+    # still labels revealed because the faded step was shown earlier.
+    revealed = _revealed(kind, before_sub, before_state, after_state, new_outcome, resolution) or (
+        new_outcome == "revealed" and not accepted
+    )
     if revealed or giveaway:
         observation = "assisted"
-    elif _passed(kind, before_sub, before_state, after_state, substep_passed):
+    elif accepted:
         observation = "independent"
     elif attempted:
         observation = "insufficient"
     else:
         return
     _record(target, observation, attempted=attempted or observation != "open", gave_up=_gives_up(answer))
+
+
+def _ensure_why(requirements: list[dict], block: dict, cfg: dict, state: dict) -> None:
+    """A why that appears only after a retry is still its own requirement."""
+    if str(block.get("type") or "") != "mcq":
+        return
+    if str(state.get("substep") or "") != "awaiting_why":
+        return
+    if any(row.get("key") == "why" for row in requirements):
+        return
+    bcfg = ((cfg or {}).get("blocks") or {}).get("mcq") or {}
+    if str(bcfg.get("confirm_why_on_correct") or "on_retry_only") == "never":
+        return
+    requirements.append(_requirement("why", "Why", "assessed", len(requirements)))
+
+
+def _drop_unasked_why(requirements: list[dict]) -> None:
+    """A why frozen at open but never asked does not keep a first-try pass from known."""
+    requirements[:] = [
+        row
+        for row in requirements
+        if not (row.get("key") == "why" and str(row.get("observation") or "") == "open")
+    ]
+
+
+def _active_key(kind: str, substep: str, before_state: dict, after_state: dict) -> str | None:
+    step = substep
+    if step == "summary_check":
+        step = str(before_state.get("last_task_substep") or "")
+    if kind == "socratic" and step == "counterexample_probe":
+        before_n = _as_int(before_state.get("probe_turns"))
+        after_n = _as_int(after_state.get("probe_turns"))
+        number = after_n if after_n > before_n else before_n + 1
+        return f"counterexample_{number}"
+    mapping = {
+        "topic_goal": {"main": "goal"},
+        "mcq": {"choice": "choice", "awaiting_why": "why"},
+        "case_study": {"predict": "predict", "contrast_and_rule": "rule", "transfer": "transfer"},
+        "socratic": {"initial_thesis": "initial_thesis"},
+        "retrieval_check": {"recall": "recall", "elaborate_why": "elaborate_why"},
+        "worked_example": {"faded_step": "faded_step", "solo_solve": "solo_solve"},
+        "teach_back": {
+            "initial_explanation": "initial_explanation",
+            "peer_follow_up": "peer_follow_up",
+            "peer_follow_up_1": "peer_follow_up_1",
+            "peer_follow_up_2": "peer_follow_up_2",
+        },
+        "passage_ela": {
+            "central_idea": "central_idea",
+            "cite_evidence": "cite_evidence",
+            "craft_or_inference": "craft_or_inference",
+        },
+    }
+    return mapping.get(kind, {}).get(step)
+
+
+def _advance_flaw(
+    requirements: list[dict],
+    *,
+    block: dict,
+    before_state: dict,
+    after_state: dict,
+    before_move: int,
+    resolution: BlockResolution,
+    answer: str,
+    prior_tutor: str,
+) -> None:
+    """Identify and repair are separate. Supplying the repair leaves a found flaw intact."""
+    from app.kc_loop import _data, _matches
+
+    data = _data(block)
+    flaw = str(data.get("flaw_description") or "")
+    corrected = str(data.get("corrected_version") or "")
+    found = bool(flaw) and _matches(answer, flaw)
+    fixed = bool(corrected) and _matches(answer, corrected)
+    attempted = _attempted(before_state, after_state, before_move, resolution)
+    revealed = bool(after_state.get("revealed_substep")) and not bool(before_state.get("revealed_substep"))
+    giveaway = tutor_gave_away_answer(block, before_state, "critique", prior_tutor)
+    gave_up = _gives_up(answer)
+    identify = next((row for row in requirements if row.get("key") == "identify"), None)
+    repair = next((row for row in requirements if row.get("key") == "repair"), None)
+    if identify is not None and str(identify.get("observation") or "") != "independent":
+        if found and attempted:
+            # Finding the flaw stands even when this same turn also supplies the repair.
+            _record(identify, "independent", attempted=True, gave_up=gave_up)
+        elif revealed:
+            _record(identify, "assisted", attempted=attempted, gave_up=gave_up)
+        elif attempted and not giveaway:
+            _record(identify, "insufficient", attempted=True, gave_up=gave_up)
+    if repair is None or str(repair.get("observation") or "") == "independent":
+        return
+    if fixed and attempted and not giveaway:
+        _record(repair, "independent", attempted=True, gave_up=gave_up)
+    elif (revealed or giveaway) and (attempted or revealed or giveaway):
+        _record(repair, "assisted", attempted=attempted or revealed, gave_up=gave_up)
 
 
 def _attempted(before_state: dict, after_state: dict, before_move: int, resolution: BlockResolution) -> bool:
@@ -459,23 +751,73 @@ def _attempted(before_state: dict, after_state: dict, before_move: int, resoluti
     return int(resolution.move_attempts) > int(before_move)
 
 
-def _revealed(kind: str, substep: str, before_state: dict, after_state: dict) -> bool:
+def _revealed(
+    kind: str,
+    substep: str,
+    before_state: dict,
+    after_state: dict,
+    new_outcome: str,
+    resolution: BlockResolution,
+) -> bool:
     if kind == "retrieval_check" and substep == "recall":
         return bool(after_state.get("recall_revealed")) and not bool(before_state.get("recall_revealed"))
     if kind == "worked_example" and substep == "faded_step":
         return bool(after_state.get("revealed_substep")) and not bool(before_state.get("revealed_substep"))
-    return False
+    if kind == "case_study" and substep == "predict":
+        return bool(after_state.get("prediction_supplied")) and not bool(before_state.get("prediction_supplied"))
+    if kind == "case_study" and substep == "contrast_and_rule":
+        return bool(after_state.get("rule_supplied")) and not bool(before_state.get("rule_supplied"))
+    if kind == "passage_ela" and substep == "cite_evidence":
+        if bool(after_state.get("citation_assisted")) and not bool(before_state.get("citation_assisted")):
+            return True
+    if kind == "passage_ela" and resolution.hint_tier == "reveal":
+        return True
+    if kind == "mcq" and substep == "choice" and after_state.get("choice_assisted") and not before_state.get("choice_assisted"):
+        return True
+    if kind == "topic_goal" and substep in {"main", "summary_check"} and new_outcome == "revealed":
+        return True
+    return bool(after_state.get("revealed_substep")) and not bool(before_state.get("revealed_substep"))
 
 
-def _passed(kind: str, substep: str, before_state: dict, after_state: dict, substep_passed: bool) -> bool:
+def _passed(
+    kind: str,
+    substep: str,
+    before_state: dict,
+    after_state: dict,
+    substep_passed: bool,
+    new_outcome: str,
+) -> bool:
     after_sub = str(after_state.get("substep") or "")
     if kind == "retrieval_check" and substep == "recall":
         return after_sub != "recall" and not bool(after_state.get("recall_revealed"))
+    if kind == "socratic" and substep == "counterexample_probe":
+        return _as_int(after_state.get("probe_turns")) > _as_int(before_state.get("probe_turns"))
+    if kind == "socratic" and substep == "initial_thesis" and after_sub not in {"", substep} and new_outcome != "revealed":
+        return True
+    if kind == "mcq" and substep == "choice" and after_sub not in {"", "choice"}:
+        return True
+    if kind == "passage_ela" and after_sub not in {"", substep} and not after_state.get("citation_assisted"):
+        return True
+    if kind == "case_study" and after_sub not in {"", substep} and new_outcome != "revealed":
+        return True
+    if kind == "teach_back" and after_sub not in {"", substep} and new_outcome != "revealed":
+        return True
+    if kind == "topic_goal" and substep == "main" and after_sub not in {"", "main"} and new_outcome != "revealed":
+        return True
+    if kind == "topic_goal" and substep in {"main", "summary_check"} and new_outcome == "passed":
+        return True
     if substep_passed and after_sub != substep:
         return True
     if substep_passed and substep == "summary_check":
         return True
     return False
+
+
+def _as_int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _record(target: dict, observation: str, *, attempted: bool, gave_up: bool) -> None:

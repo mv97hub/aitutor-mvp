@@ -318,12 +318,12 @@ def learner_side_question(answer: str, block: dict | None = None) -> bool:
     """
     if not learner_asks_question_or_background(answer):
         return False
-    if (
-        block is not None
-        and str(block.get("type") or "").strip() == "passage_ela"
-        and learner_asks_for_passage(answer)
-    ):
-        return False
+    if block is not None and str(block.get("type") or "").strip() == "passage_ela":
+        if learner_asks_for_passage(answer):
+            return False
+        # Pointing at the span is the citation assist, not a side question.
+        if learner_points_at_span(answer, _data(block)):
+            return False
     return True
 
 
@@ -610,6 +610,35 @@ def last_topic_closes_block(block: dict, state: dict | None, answer: str) -> boo
     return last_topic_question_close(block, state, answer)
 
 
+def _repeats_thesis(answer: str, state: dict | None) -> bool:
+    """The line restates the stored thesis and does not take up the probe."""
+    stored = state if isinstance(state, dict) else {}
+    thesis = str(stored.get("thesis") or "").strip()
+    if not thesis:
+        return False
+    left = " ".join(_words(answer))
+    right = " ".join(_words(thesis))
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return _matches(answer, thesis) and len(left.split()) <= len(right.split()) + 2
+
+
+def _current_counterexample(block: dict, state: dict | None) -> str:
+    data = _data(block)
+    counters = [str(item).strip() for item in (data.get("counterexamples") or []) if str(item).strip()]
+    if not counters:
+        return ""
+    stored = state if isinstance(state, dict) else {}
+    try:
+        index = int(stored.get("probe_turns") or 0)
+    except (TypeError, ValueError):
+        index = 0
+    index = min(max(index, 0), len(counters) - 1)
+    return counters[index]
+
+
 def answer_addresses_substep(
     block: dict,
     substep: str,
@@ -661,6 +690,11 @@ def answer_addresses_substep(
     if btype == "socratic" and substep == "initial_thesis":
         return _substantive(answer)
     if btype == "socratic" and substep == "counterexample_probe":
+        if _repeats_thesis(answer, stored):
+            return False
+        probe = _current_counterexample(block, stored)
+        if probe and _matches(answer, probe):
+            return True
         return _matches(answer, str(data.get("target_synthesis") or ""))
     if btype == "curiosity":
         minimum = 2 if bool(bcfg.get("require_initial_prediction", True)) else 1
@@ -714,6 +748,8 @@ def answer_addresses_substep(
 
 _EVIDENCE_ALIASES = {
     "peer_follow_up": ("peer_follow_up", "follow_up_question"),
+    "peer_follow_up_1": ("peer_follow_up_1",),
+    "peer_follow_up_2": ("peer_follow_up_2",),
     "initial_explanation": ("initial_explanation",),
     "faded_step": ("faded_step",),
     "solo_solve": ("solo_solve",),
@@ -735,35 +771,16 @@ def evidence_ids_for_substep(block: dict, index: int, substep: str) -> set[str]:
     return {item for item in ids if item}
 
 
-_TEACH_BACK_EVIDENCE = {"initial_explanation", "peer_follow_up", "follow_up_question"}
-
-
 def rubric_covers_substep(block: dict, index: int, substep: str, rubric_met: list[str]) -> bool:
     """True when rubric_met names this step, an alias, or the block prefix.
 
-    On teach-back, the initial explanation id and the follow-up id both count
-    for either step. The model often awards the explanation id for the example
-    the tutor just asked for.
+    A teach-back follow-up has its own id. The explanation id does not cover a
+    follow-up, and follow-up 1 does not cover follow-up 2.
     """
     if not substep:
         return False
     met = {str(item).strip() for item in rubric_met if str(item).strip()}
-    if evidence_ids_for_substep(block, index, substep) & met:
-        return True
-    if str(block.get("type") or "").strip() != "teach_back":
-        return False
-    if substep not in _TEACH_BACK_EVIDENCE | {"summary_check", "main"}:
-        return False
-    prefix = _block_prefix(block, index)
-    for item in met:
-        if item == prefix:
-            return True
-        if not item.startswith(prefix + ":"):
-            continue
-        tail = item.split(":", 1)[1]
-        if tail in _TEACH_BACK_EVIDENCE:
-            return True
-    return False
+    return bool(evidence_ids_for_substep(block, index, substep) & met)
 
 
 def _minimum_words(block: dict, substep: str, cfg: dict | None) -> int:
@@ -992,6 +1009,8 @@ def learner_non_answer(
         return False
     if answer_addresses_substep(block, substep, raw, state, cfg):
         return False
+    if str(block.get("type") or "") == "passage_ela" and learner_points_at_span(raw, _data(block)):
+        return False
     text = _proceed_text(raw)
     if not text:
         return False
@@ -1084,6 +1103,8 @@ def unscored_side_request(
         from app.kc_blocks import learner_asks_for_passage
 
         if learner_asks_for_passage(raw):
+            return False
+        if learner_points_at_span(raw, _data(block)):
             return False
     # Before the goal-overlap check. "What is a computer?" is still a question.
     if learner_asks_question_or_background(raw):
@@ -1450,6 +1471,33 @@ def _passage_quotes(data: dict) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [str(item).strip() for item in raw if str(item or "").strip()]
+
+
+def learner_points_at_span(answer: str, data: dict) -> bool:
+    """The learner points at where the evidence is, without quoting it.
+
+    A reread is not this. A required verbatim quote is not this.
+    """
+    if learner_asks_for_passage(answer):
+        return False
+    quotes = _passage_quotes(data)
+    if any(quote_in_text(quote, answer) for quote in quotes):
+        return False
+    text = _proceed_text(answer)
+    if not text:
+        return False
+    cues = (
+        "paragraph",
+        "that sentence",
+        "this sentence",
+        "that part",
+        "this part",
+        "the span",
+        "those lines",
+        "that line",
+        "this line",
+    )
+    return any(cue in text for cue in cues)
 
 
 def _passage_answer_met(data: dict, substep: str, answer: str, bcfg: dict) -> bool:
@@ -2074,6 +2122,26 @@ def resolve_block_turn(
         model_pass = True
     # Keyword overlap is only the fallback. A model pass on a real answer stands.
     addressed = model_pass or literal
+    if btype == "socratic" and substep == "counterexample_probe" and _repeats_thesis(answer, state):
+        # Repeating the thesis does not answer the probe, even when the model marks it passed.
+        addressed = False
+        model_pass = False
+    if btype == "spot_the_flaw":
+        flaw_text = str(data.get("flaw_description") or "")
+        repair_text = str(data.get("corrected_version") or "")
+        if flaw_text and _matches(answer, flaw_text):
+            state["flaw_identified"] = True
+        identify_only = str(bcfg.get("critique_depth") or "identify_and_correct") == "identify_only"
+        if (
+            not identify_only
+            and state.get("flaw_identified")
+            and repair_text
+            and _matches(answer, repair_text)
+            and learner_gave_real_attempt(block, substep, answer, cfg)
+        ):
+            # The repair can arrive after the flaw. Supplying it does not erase the identification.
+            addressed = True
+            model_pass = True
 
     def note_try() -> int:
         total = int(state.get("block_attempts") or 0) + 1
@@ -2148,6 +2216,14 @@ def resolve_block_turn(
         policy = str(bcfg.get("passage_ela_reread_policy") or "free_reprint")
         if policy == "free_reprint":
             return stay(move_attempts, tier)
+
+    if btype == "passage_ela" and substep == "cite_evidence" and learner_points_at_span(answer, data):
+        # Pointing at the span settles citation as assisted and leaves the other steps alone.
+        state["citation_assisted"] = True
+        note_try()
+        if "craft_or_inference" in substeps:
+            state["substep"] = "craft_or_inference"
+        return stay(0, "nudge")
 
     if btype == "topic_goal" and substep == "main" and learner_ready_to_proceed(answer, False):
         tries = note_try()
@@ -2254,9 +2330,26 @@ def resolve_block_turn(
             return stay(move_attempts, tier)
         picked = match_mcq_choice_index(answer, choices)
         mcq_state = dict(state.get("mcq") or {})
+        if "frozen_key" in mcq_state:
+            try:
+                correct_idx = int(mcq_state["frozen_key"])
+            except (TypeError, ValueError):
+                mcq_state["frozen_key"] = correct_idx
+        else:
+            mcq_state["frozen_key"] = correct_idx
+        correct_idx = max(0, min(int(correct_idx), len(choices) - 1))
+        eliminated_now: list[int] = []
+        for item in mcq_state.get("eliminated_indices") or []:
+            try:
+                eliminated_now.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        visible = [index for index in range(len(choices)) if index not in set(eliminated_now)]
         mcq_state["choices"] = choices
         mcq_state["correct_index"] = correct_idx
         if picked is not None and picked == correct_idx:
+            if len(visible) <= 1:
+                state["choice_assisted"] = True
             note_try()
             confirm_mode = str(bcfg.get("confirm_why_on_correct") or "on_retry_only")
             need_why = confirm_mode == "always" or (confirm_mode == "on_retry_only" and move_attempts > 0)
@@ -2323,9 +2416,13 @@ def resolve_block_turn(
         depth = max(1, int(bcfg.get("dialogue_depth_turns", 2) or 2))
         probes = int(state.get("probe_turns") or 0) + 1
         state["probe_turns"] = probes
+        note_try()
         if probes < depth:
-            note_try()
             return stay(move_attempts, "nudge")
+        # Addressing this probe counts. The thesis id does not.
+        if _clean_mid_pass():
+            return finish(_summary_outcome(), int(state.get("block_attempts") or 1), reveals)
+        return _enter_summary(revealed=False)
 
     # The model pass is enough. Literal overlap still needs the model flag,
     # except a topic_goal reply that already states the chain: that finishes main.
@@ -2353,6 +2450,8 @@ def resolve_block_turn(
         return _enter_summary(revealed=False)
 
     if addressed:
+        if btype == "socratic" and substep == "initial_thesis":
+            state["thesis"] = (answer or "").strip()
         note_try()
         if substep in task_steps:
             position = task_steps.index(substep)
@@ -2373,6 +2472,15 @@ def resolve_block_turn(
 
     tries = note_try()
     if move_attempts + 1 >= max_retries:
+        if btype == "case_study" and substep == "predict" and "contrast_and_rule" in task_steps:
+            # The supplied prediction stays assisted. The rule is still open.
+            state["prediction_supplied"] = True
+            state["substep"] = "contrast_and_rule"
+            return stay(0, "nudge", reveals_now=reveals + 1)
+        if btype == "case_study" and substep == "contrast_and_rule" and "transfer" in task_steps:
+            state["rule_supplied"] = True
+            state["substep"] = "transfer"
+            return stay(0, "nudge", reveals_now=reveals + 1)
         if btype == "passage_ela" and substep in task_steps:
             position = task_steps.index(substep)
             if position < len(task_steps) - 1:

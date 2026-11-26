@@ -59,6 +59,8 @@ SUBSTEP_LABELS: dict[str, str] = {
     "critique": "Identify & Fix",
     "initial_explanation": "Peer Explanation",
     "peer_follow_up": "Peer Follow-Up",
+    "peer_follow_up_1": "Peer Follow-Up 1",
+    "peer_follow_up_2": "Peer Follow-Up 2",
     "recall": "Cued Recall",
     "elaborate_why": "Elaborative Why",
     "explain_topic": "Explain Topic",
@@ -330,6 +332,29 @@ def _with_summary_check(steps: list[str]) -> list[str]:
     return [*steps, "summary_check"]
 
 
+def teach_back_follow_up_count(cfg: dict | None) -> int:
+    """Configured follow-ups, clamped to zero, one, or two."""
+    bcfg = ((cfg or {}).get("blocks") or {}).get("teach_back") or {}
+    try:
+        count = int(bcfg.get("follow_up_questions_count", 1) or 0)
+    except (TypeError, ValueError):
+        count = 1
+    return max(0, min(2, count))
+
+
+def teach_back_task_steps(count: int) -> list[str]:
+    """The explanation, then each follow-up as its own step.
+
+    Zero, one, and two follow-ups do not share a substep or an evidence id.
+    """
+    steps = ["initial_explanation"]
+    if count <= 0:
+        return steps
+    if count == 1:
+        return [*steps, "peer_follow_up"]
+    return [*steps, "peer_follow_up_1", "peer_follow_up_2"]
+
+
 def substeps_for_block(block: dict, cfg: dict | None = None) -> list[str]:
     """Ordered substeps for a block under the active tutor configuration."""
     btype = str(block.get("type") or "topic_goal").strip()
@@ -360,10 +385,7 @@ def substeps_for_block(block: dict, cfg: dict | None = None) -> list[str]:
     if btype == "spot_the_flaw":
         return _with_summary_check(["critique"])
     if btype == "teach_back":
-        follow_ups = int(bcfg.get("follow_up_questions_count", 1) or 0)
-        if follow_ups > 0:
-            return _with_summary_check(["initial_explanation", "peer_follow_up"])
-        return _with_summary_check(["initial_explanation"])
+        return _with_summary_check(teach_back_task_steps(teach_back_follow_up_count(cfg)))
     if btype == "retrieval_check":
         if bool(bcfg.get("require_elaborative_why", True)):
             return _with_summary_check(["recall", "elaborate_why"])
@@ -2746,9 +2768,15 @@ def _what_to_teach(
         follow = str(data.get("peer_follow_up_question") or "").strip()
         lines.append(f"Naive peer persona & confusion prompt: {_finish(persona_prompt)}")
         lines.append("Required concepts the learner must weave into their explanation: " + "; ".join(reqs))
-        if substep == "peer_follow_up":
+        if substep in {"peer_follow_up", "peer_follow_up_1", "peer_follow_up_2"}:
+            which = {
+                "peer_follow_up": "the one follow-up",
+                "peer_follow_up_1": "follow-up 1 of 2. Do not ask follow-up 2 yet",
+                "peer_follow_up_2": "follow-up 2 of 2. The first follow-up is already done",
+            }[substep]
             lines.append(
-                f"Active substep (peer_follow_up): Ask peer follow-up question or probe missing concepts: {_finish(follow)}"
+                f"Active substep ({substep}): Ask {which}: {_finish(follow)} "
+                "Grade only this follow-up. The explanation id does not satisfy it."
             )
         else:
             lines.append(

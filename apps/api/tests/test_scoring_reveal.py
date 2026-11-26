@@ -297,7 +297,7 @@ def test_teach_back_follow_up_example_passes_instead_of_revealing() -> None:
     assert follow.next_step == 1
     assert follow.block_results[-1]["outcome"] == "passed"
 
-    # The model kept the explanation id while scoring the follow-up example.
+    # The explanation id does not close the follow-up. This line is not that follow-up.
     same_id = _turn(
         TEACH,
         TIME_ANSWER,
@@ -306,10 +306,11 @@ def test_teach_back_follow_up_example_passes_instead_of_revealing() -> None:
         move_attempts=1,
     )
     assert same_id.reveals == 0
-    assert not _revealed(same_id)
-    assert same_id.advance_block is True
-    assert same_id.next_step == 1
-    assert same_id.block_results[-1]["outcome"] == "passed"
+    assert same_id.block_results == []
+    assert same_id.advance_block is False
+    assert same_id.next_step == 0
+    assert same_id.next_block_state["substep"] == "peer_follow_up"
+    assert not same_id.next_block_state.get("revealed_substep")
 
 
 def test_teach_back_prompt_does_not_tag_a_fair_price_or_follow_up_example() -> None:

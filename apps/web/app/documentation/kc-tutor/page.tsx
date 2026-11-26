@@ -117,12 +117,13 @@ export default function KcTutorDocsPage() {
           ))}
         </ul>
         <p>
-          The last part of every block is a summary check. A completed block gets a short summary and a question about
-          whether to keep discussing or close and move on. A block that hits its attempt limit says so, does not say
-          congratulations, and still lets the learner finish it by talking further. Closing records passed, or revealed
-          when the block is still incomplete. That closing reply does not open the next block. The next block&apos;s
-          opening is its own speech. The unit close is reserved for the last block. The course outro follows when every
-          target component is known or fragile. Fragile is not rewritten to known.
+          A clean pass in the middle of a component finishes the block without a summary check. The next block opens
+          in its own speech. The last block, a reveal, and a giveaway still stop for the close. A block that hits its
+          attempt limit says so, does not say congratulations, and still lets the learner finish it by talking further.
+          That closing reply does not open the next block. Passage ends on the interpretation: a required quote counts,
+          pointing at the span assists the citation only, and a reread spends no attempt. Teach-back scores the
+          explanation and each follow-up separately. The unit close is reserved for the last block. The course outro
+          follows when every target component is known or fragile. Fragile is not rewritten to known.
         </p>
         <h2>Block close flows</h2>
         {BLOCK_CLOSE_FLOWS.map((flow) => (

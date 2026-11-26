@@ -287,10 +287,11 @@ export default function KcPromptLayersPage() {
 
         <h2>Block close flows</h2>
         <p>
-          Every non-explanation block ends on summary_check. The prompt for that step asks for a short summary and a
-          choice to keep talking or close. If the attempt limit was reached, the prompt says the block is not complete
-          and forbids congratulations. A later reply that shows the goal can still complete the block. The closing
-          reply does not open the next block.
+          A clean pass in the middle of a component finishes that block. The next block opens in its own speech. That
+          pass does not stop for a summary check. The last block, a reveal, and a giveaway still stop for the close.
+          The prompt for that close asks whether to keep talking or move on. If the attempt limit was reached, the
+          prompt says the block is not complete and forbids congratulations. A later reply that shows the goal can
+          still complete the block. The closing reply does not open the next block.
         </p>
         {BLOCK_CLOSE_FLOWS.map((flow) => (
           <BlockCloseFlow key={flow.title} {...flow} />
@@ -355,10 +356,14 @@ export default function KcPromptLayersPage() {
 
         <h2>How the prompt is written</h2>
         <p>
-          summary_check is the last substep. When the learner closes it, the app records the block and advances. The
-          closing reply affirms or, if the block is still incomplete, closes without congratulations. It does not open
-          the next block. The next block&apos;s opening is a separate speech. If that next block is a dynamic multiple
-          choice, the opening includes the generated item. Only the last block&apos;s summary check adds the unit close.
+          A clean pass in the middle of a component records the block and advances. It does not add a summary check.
+          The last block, a reveal, and a giveaway still use summary_check. When the learner closes that check, the
+          app records the block. The closing reply affirms, or closes without congratulations if the block is still
+          incomplete. It does not open the next block. The next block&apos;s opening is a separate speech. If that next
+          block is a dynamic multiple choice, the opening includes the generated item. Only the last block adds the
+          unit close. Passage does not use summary_check. It runs central idea, citation, then interpretation. A
+          required verbatim quote counts as the citation. Pointing at the span assists the citation only. A reread
+          spends no attempt. Teach-back keeps the explanation and each follow-up, zero, one, or two, as its own step.
         </p>
         <section>
           <h3>This turn</h3>

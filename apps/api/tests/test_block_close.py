@@ -1,6 +1,7 @@
 """Stages 0–3. Requirement scores for retrieval, worked example, explanation, and curiosity.
 
-No model call. Topic, question, and the other block types stay on the legacy score.
+No model call. Stage 4 scores the other seven types on the same path. A session
+keeps the version it opened with.
 """
 
 import uuid
@@ -651,14 +652,14 @@ def test_an_in_progress_session_is_not_upgraded() -> None:
         _wipe_zz()
 
 
-def test_mixed_components_stay_on_the_legacy_score() -> None:
+def test_a_supported_walk_opens_on_version_two_and_a_pinned_session_stays() -> None:
     storm = _storm()
     _clear_progress(storm.id)
     course = _course("zz-block-mixed", [TOPIC, RECALL])
     try:
         mixed = _open(course, "zz-block-mixed-a")
-        assert mixed["scoring_version"] == 1
-        assert mixed["actions"] is None
+        assert mixed["scoring_version"] == 2
+        assert mixed["actions"] == []
         db = SessionLocal()
         try:
             row = db.get(KcSession, uuid.UUID(mixed["id"]))
@@ -670,6 +671,7 @@ def test_mixed_components_stay_on_the_legacy_score() -> None:
         again = _open(course, "zz-block-mixed-a")
         assert again["id"] == mixed["id"]
         assert again["scoring_version"] == 1
+        assert again["actions"] is None
     finally:
         _clear_progress(storm.id)
         _wipe_zz()

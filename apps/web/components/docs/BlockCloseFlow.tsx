@@ -58,32 +58,38 @@ export function BlockCloseFlow({ title, intro, tracks }: BlockCloseFlowProps) {
 export const BLOCK_CLOSE_FLOWS: BlockCloseFlowProps[] = [
   {
     title: "Explanatory",
-    intro: "The tutor explains each topic, then the summary check closes the walkthrough without a quiz.",
+    intro: "The tutor explains each topic. A clean agreement on the last topic finishes the walkthrough. It does not add another ready check.",
     tracks: [{ name: "explanation", steps: ["explain_topic", "summary_check"] }],
   },
   {
     title: "Topic / Goal",
-    intro: "The topic starts as an explanation. The goal question is asked on main only after the learner moves on. summary_check is the only close, whether the goal was met or the attempt limit was reached.",
-    tracks: [{ name: "topic_goal", steps: ["explain", "main", "summary_check"] }],
+    intro: "The topic starts as an explanation. The goal is asked on main after the learner moves on. A clean pass in the middle of a component does not stop for summary_check. The last block, a reveal, and a giveaway still do.",
+    tracks: [{ name: "topic_goal", steps: ["explain", "main"] }],
   },
   {
     title: "Guided Discussion",
-    intro: "Dialogue finishes its task substeps, then summary_check offers more discussion or a clean close into the next block.",
+    intro: "Thesis and each counterexample stay separate. Prediction, rule, and transfer stay separate. Teach-back keeps the explanation and each follow-up separate: zero ends on the explanation, one uses peer_follow_up, and two use peer_follow_up_1 then peer_follow_up_2. A clean middle pass does not stop for summary_check.",
     tracks: [
-      { name: "socratic", steps: ["initial_thesis", "counterexample_probe", "summary_check"] },
-      { name: "case_study", steps: ["predict", "contrast_and_rule", "transfer", "summary_check"] },
-      { name: "teach_back", steps: ["initial_explanation", "peer_follow_up", "summary_check"] },
-      { name: "curiosity", steps: ["hook_and_predict", "summary_check"] },
+      { name: "socratic", steps: ["initial_thesis", "counterexample_probe"] },
+      { name: "case_study", steps: ["predict", "contrast_and_rule", "transfer"] },
+      { name: "teach_back", steps: ["initial_explanation", "peer_follow_up"] },
+      { name: "teach_back, two follow-ups", steps: ["initial_explanation", "peer_follow_up_1", "peer_follow_up_2"] },
+      { name: "curiosity", steps: ["hook_and_predict"] },
     ],
   },
   {
     title: "Assessment & Practice",
-    intro: "A correct answer or the attempt limit both land on summary_check. The choice widget is hidden there so the learner replies in chat.",
+    intro: "A correct answer in the middle of a component opens the next block. It does not land on summary_check. A reveal still stops for the close. The choice widget is hidden there so the learner replies in chat.",
     tracks: [
-      { name: "mcq", steps: ["choice", "awaiting_why", "summary_check"] },
-      { name: "worked_example", steps: ["faded_step", "solo_solve", "summary_check"] },
-      { name: "spot_the_flaw", steps: ["critique", "summary_check"] },
-      { name: "retrieval_check", steps: ["recall", "elaborate_why", "summary_check"] },
+      { name: "mcq", steps: ["choice", "awaiting_why"] },
+      { name: "worked_example", steps: ["faded_step", "solo_solve"] },
+      { name: "spot_the_flaw", steps: ["critique"] },
+      { name: "retrieval_check", steps: ["recall", "elaborate_why"] },
     ],
+  },
+  {
+    title: "Close reading",
+    intro: "Central idea, citation, and interpretation stay in that order. A required verbatim quote counts. Pointing at the span assists the citation only. A reread spends no attempt. Passage does not end on summary_check.",
+    tracks: [{ name: "passage_ela", steps: ["central_idea", "cite_evidence", "craft_or_inference"] }],
   },
 ];
