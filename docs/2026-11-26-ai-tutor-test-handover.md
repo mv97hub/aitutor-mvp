@@ -21,11 +21,13 @@ The PRs below record the implementation, review findings and reproduction steps.
 
 **Retry and profile verification after #206 merged.** Codex tested #211 on `main` at `6ade047` using the worker, FastAPI and disposable PostgreSQL. The hesitant and declarative CPI variants used the same seed. Each worker was interrupted after the tutor committed the decision. Resume returned the originally saved response. Each run had one child message, one decision, one recorded harness turn and one matched scenario opportunity. The tutor replies were controlled and no live model was called. [Retry PR](https://github.com/mv97hub/aitutor-mvp/pull/206) · [Profile PR](https://github.com/mv97hub/aitutor-mvp/pull/211)
 
+**Merge verification.** With all six fixes present on the final review branch (`e925477`), 87 focused API tests, all 230 web tests and TypeScript passed. The full API suite passed 501 tests and retained the same 18 failing test IDs reproduced on the original main revision. Review added coverage for an unsent answer at the spending cap, a revealed numeric option with an independent explanation, a short correctly attributed quotation, the two reader settings, and “yes” after different final questions. The grading and retry tests used controlled replies. The three reviewed lesson corrections are ready for a separately scheduled live import.
+
 ## Original decisions requested
 
 **Recommended order.** Start with the export and scoring fixes. The current report hides assisted work, and in real exchanges the tutor both withheld credit for a correct answer and awarded credit for an answer it supplied. Correct the verified course errors alongside that work. Then tune age-specific coaching and broaden the simulated journeys.
 
-All six items are pending review. Myuran can approve individual items for implementation on scoped pull requests, request a revision, or defer them. Each implementation PR should include the failing example and evidence of the corrected behavior. A future paid model comparison is a separate decision.
+At the time of the original test review, all six items were proposed for implementation. The PRs above record the fixes and their verification. A future paid model comparison is a separate decision.
 
 | Order | Scope for approval | What Myuran should see before accepting the fix |
 | --- | --- | --- |
