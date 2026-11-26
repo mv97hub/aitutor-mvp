@@ -105,16 +105,21 @@ export function serverTransport(runId: string, routes: TransportRoutes, io?: Tra
       });
       return saved.submission;
     },
-    answer: async (sessionId, pending, model) => {
-      const response = await callRoute(routes.answer, "/api/kc/tutor/answer", {
-        sessionId,
-        answer: pending.child_text,
-        model,
-        turnId: pending.turn_id,
-        revision: pending.revision,
-      });
-      if (!response.ok) throw new Error((await response.text()) || "The tutor could not answer.");
-      const saved: SessionSnap = await response.json();
+    answer: async (sessionId, pending, model, receiptOnlyChatId) => {
+      let saved: SessionSnap;
+      if (receiptOnlyChatId) {
+        const receipt = await api<{ result: SessionSnap | null }>(
+          `/kc/harness/chats/${receiptOnlyChatId}/pending-turn/${pending.turn_id}`,
+        );
+        if (!receipt.result) throw new Error("The tutor has not committed this submission.");
+        saved = receipt.result;
+      } else {
+        const response = await callRoute(routes.answer, "/api/kc/tutor/answer", {
+          sessionId, answer: pending.child_text, model, turnId: pending.turn_id, revision: pending.revision,
+        });
+        if (!response.ok) throw new Error((await response.text()) || "The tutor could not answer.");
+        saved = await response.json();
+      }
       const before = pending.session_before;
       const count = Number(before.message_count);
       const boundaryMatches = count === 0 || (Number.isInteger(count) && count > 0 && before.last_message_id

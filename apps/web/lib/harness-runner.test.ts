@@ -584,3 +584,51 @@ test("a replaced worker with a lost response yields its pending submission to th
   assert.equal(await playChat({ ...chat(), claim_generation: 3 }, transport), "paused");
   assert.equal(attempts, 1);
 });
+
+test("a capped run stops before generation and only reads receipts for a pending answer", async () => {
+  const transport = retryTestTransport();
+  transport.runStatus = async () => ({ status: "running", run_cap_reached: true });
+  transport.session = async () => session({ needs_speech: true });
+  const events: string[] = [];
+  transport.speak = async () => { throw Error("no speech at cap"); };
+  transport.childText = async () => { throw Error("no child call at cap"); };
+  transport.finish = async (_id, reason) => { events.push(reason); };
+  assert.equal(await playChat(chat(), transport), "done");
+  const submitted = {
+    turn_id: crypto.randomUUID(), revision: 1, seq: 1, child_text: "yes", intent: "continue", child_prompt: "",
+    child_tokens: { model: "", input_tokens: 0, output_tokens: 0 }, session_before: {message_count: 0},
+    move_intent: "continue", move_inner: { boredom: 0, confusion: 0, frustration: 0, hints: 0 },
+  };
+  transport.answer = async (_id, _pending, _model, receiptOnlyChatId) => {
+    assert.equal(receiptOnlyChatId, chat().id);
+    events.push("read receipt");
+    return session({ messages: [{id: "new", role: "assistant", content: "Try again."}], response_message_id: "new" });
+  };
+  transport.recordTurn = async (_id, body) => {
+    assert.equal((body.session_after as Record<string, unknown>).delivery_status, "recovered");
+    events.push("record");
+    return {stop: "run_cap", luna_tokens: 0, cost_usd: "0.10"};
+  };
+  assert.equal(await playChat({ ...chat(), pending_turn: submitted }, transport), "done");
+  assert.deepEqual(events, ["run_cap", "read receipt", "record"]);
+
+  // A sibling crosses the cap while this child's wording is generated. The
+  // worker must recheck spending before dispatching that freshly saved move.
+  events.length = 0;
+  let exhausted = false;
+  transport.session = async () => session();
+  transport.runStatus = async () => ({ status: "running", run_cap_reached: exhausted, plan: { run_cap_cents: 10 } });
+  transport.childText = async () => {
+    events.push("initial child");
+    exhausted = true;
+    return { text: "yes", model: "child", input_tokens: 1, output_tokens: 1 };
+  };
+  transport.answer = async (_id, _turn, _model, receiptOnlyChatId) => {
+    assert.equal(receiptOnlyChatId, chat().id);
+    events.push("check only");
+    throw Error("has not committed");
+  };
+  transport.recordTurn = async () => ({ stop: "awaiting_retry", pending: true, luna_tokens: 0, cost_usd: null });
+  assert.equal(await playChat({ ...chat(), behavior: "free" }, transport), "paused");
+  assert.deepEqual(events, ["initial child", "check only", "check only"]);
+});

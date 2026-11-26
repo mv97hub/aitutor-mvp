@@ -32,6 +32,7 @@ from app.harness import (
     list_runs,
     list_suites,
     pause_run,
+    pending_answer_result,
     plan_preview,
     prepare_harness_turn,
     record_turn,
@@ -189,6 +190,11 @@ def get_one_chat(chat_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
 @router.get("/kc/harness/chats/{chat_id}/answer-key")
 def get_answer_key(chat_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return answer_key(db, chat_id)
+
+
+@router.get("/kc/harness/chats/{chat_id}/pending-turn/{turn_id}")
+def get_pending_answer(chat_id: uuid.UUID, turn_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    return pending_answer_result(db, chat_id, turn_id)
 
 
 @router.post("/kc/harness/chats/{chat_id}/pending-turn")

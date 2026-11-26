@@ -447,6 +447,11 @@ def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, see
     return run_out(db, run)
 
 
+def _run_cap_reached(run: HarnessRun) -> bool:
+    cap = (run.plan or {}).get("run_cap_cents")
+    return bool(cap and int((run.totals or {}).get("priced_cents") or 0) >= int(cap))
+
+
 def run_out(db: Session, run: HarnessRun) -> dict:
     chats = db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id).order_by(HarnessChat.created_at)).all()
     done = sum(1 for chat in chats if chat.status in {"completed", "cancelled", "failed"})
@@ -454,6 +459,7 @@ def run_out(db: Session, run: HarnessRun) -> dict:
         "id": run.id,
         "status": run.status,
         "plan": _as_dict(run.plan),
+        "run_cap_reached": _run_cap_reached(run),
         "totals": _as_dict(run.totals),
         "code_version": run.code_version,
         "suite_id": run.suite_id,
@@ -561,7 +567,7 @@ def resume_run(db: Session, run_id: uuid.UUID) -> dict:
         run.status = "running"
         run.updated_at = _now()
         running = db.scalars(
-            select(HarnessChat).where(HarnessChat.run_id == run.id, HarnessChat.status == "running")
+            select(HarnessChat).where(HarnessChat.run_id == run.id, HarnessChat.status.in_(("running", "paused")))
         ).all()
         for chat in running:
             # Queue the chat so the open tab can continue it. Do not clear session_id.
@@ -629,34 +635,29 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
         return None
     if run.status == "queued":
         run.status = "running"
-    plan = dict(run.plan or {})
-    run_cap = plan.get("run_cap_cents")
-    totals = dict(run.totals or {})
-    if run_cap and int(totals.get("priced_cents") or 0) >= int(run_cap):
-        for chat in db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id, HarnessChat.status == "queued")).all():
+    queued = select(HarnessChat).where(HarnessChat.run_id == run.id, HarnessChat.status == "queued")
+    if _run_cap_reached(run):
+        # Never open a fresh session at the cap. A previously submitted answer can
+        # still settle after its HTTP request timed out, so keep those chats claimable.
+        unused = db.scalars(queued.where(HarnessChat.pending_turn.is_(None)).with_for_update(skip_locked=True)).all()
+        for chat in unused:
             chat.status = "cancelled"
             chat.ended_how = "run_cap"
             chat.updated_at = _now()
-        run.status = "completed"
-        run.updated_at = _now()
-        return None
+            _close_session(db, chat)
+        if unused:
+            _refresh_totals(db, run)
+            db.flush()
+        queued = queued.where(HarnessChat.pending_turn.is_not(None))
     # LIMIT 1 so each parallel claim locks a different queued chat.
     chat = db.scalar(
-        select(HarnessChat)
-        .where(HarnessChat.run_id == run.id, HarnessChat.status == "queued")
+        queued
         .order_by(HarnessChat.created_at)
         .limit(1)
         .with_for_update(skip_locked=True)
     )
     if chat is None:
-        open_count = db.scalar(
-            select(func.count()).select_from(HarnessChat).where(
-                HarnessChat.run_id == run.id, HarnessChat.status.in_(("queued", "running"))
-            )
-        )
-        if not open_count:
-            run.status = "completed"
-            run.updated_at = _now()
+        _settle_inactive_run(db, run)
         return None
     if not claim_opens_session(chat.session_id):
         existing = db.get(KcSession, chat.session_id)
@@ -929,6 +930,9 @@ def _refresh_chat_cost(db: Session, chat: HarnessChat) -> None:
 
 
 def _refresh_totals(db: Session, run: HarnessRun) -> None:
+    # Parallel workers write separate chats. Serialize the aggregate so the last
+    # writer includes every earlier committed cost before deciding on more calls.
+    db.scalar(select(HarnessRun.id).where(HarnessRun.id == run.id).with_for_update())
     chats = db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id)).all()
     cents = 0
     luna = 0
@@ -943,6 +947,26 @@ def _refresh_totals(db: Session, run: HarnessRun) -> None:
         "cost_usd": None if cents == 0 and luna else format(Decimal(cents) / Decimal(100), "f"),
     }
     run.updated_at = _now()
+
+
+def _settle_inactive_run(db: Session, run: HarnessRun) -> None:
+    if run.status != "running":
+        return
+    if _run_cap_reached(run):
+        # Two capped workers can pause their own chats at the same time. The
+        # last one must see its sibling's commit before settling the run.
+        stored_status = db.scalar(select(HarnessRun.status).where(HarnessRun.id == run.id).with_for_update())
+        if stored_status != "running":
+            return
+    active = db.scalar(select(func.count()).select_from(HarnessChat).where(
+        HarnessChat.run_id == run.id, HarnessChat.status.in_(("queued", "running"))
+    ))
+    if not active:
+        paused = db.scalar(select(HarnessChat.id).where(
+            HarnessChat.run_id == run.id, HarnessChat.status == "paused"
+        ).limit(1))
+        run.status = "paused" if paused else "completed"
+        run.updated_at = _now()
 
 
 def _close_open_session(db: Session, session_id: object) -> None:
@@ -1024,6 +1048,15 @@ def _answer_receipt(db: Session, chat: HarnessChat, turn_id: str) -> KcTurnRecei
     ))
 
 
+def pending_answer_result(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID) -> dict:
+    """Read a saved decision without claiming the turn or contacting a model."""
+    chat = db.get(HarnessChat, chat_id)
+    if chat is None or (chat.pending_turn or {}).get("turn_id") != str(turn_id):
+        raise HTTPException(status_code=409, detail="This submission is no longer pending.")
+    receipt = _answer_receipt(db, chat, str(turn_id))
+    return {"result": receipt.result if receipt and receipt.status == "committed" else None}
+
+
 def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     chat = _locked_chat(db, chat_id)
     turn_id = _uuid(body.get("turn_id"))
@@ -1039,8 +1072,12 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
             return {"turn": stored.seq, "stop": chat.ended_how, "replayed": True,
                     "pending_nudges": chat.pending_nudges, "stuck_answers": chat.stuck_answers,
                     "cost_usd": chat.cost_usd, "luna_tokens": chat.luna_tokens}
+        matches = pending and all(body.get(key) == pending.get(key) for key in ("turn_id", "seq", "child_text"))
+        if (matches and chat.status == "paused" and body.get("claim_generation") == chat.claim_generation
+                and after.get("delivery_status") == "unknown"):
+            return {"turn": body["seq"], "stop": "awaiting_retry", "pending": True}
         _check_turn_owner(chat, body)
-        if not pending or any(body.get(key) != pending.get(key) for key in ("turn_id", "seq", "child_text")):
+        if not matches:
             raise HTTPException(status_code=409, detail="The result does not match the prepared submission.")
         receipt = _answer_receipt(db, chat, str(turn_id))
         committed = receipt is not None and receipt.status == "committed"
@@ -1049,7 +1086,15 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
                 return {"turn": body["seq"], "stop": "", "recover": True, "pending": True}
             # A timed-out request may still commit. Keep the move across Resume even if
             # no receipt was visible when this transaction inspected the tutor session.
-            pause_run(db, chat.run_id)
+            run = _run_or_404(db, chat.run_id)
+            if _run_cap_reached(run):
+                # Other already-paid submissions must still be able to drain.
+                chat.status = "paused"
+                chat.updated_at = _now()
+                db.flush()
+                _settle_inactive_run(db, run)
+            else:
+                pause_run(db, chat.run_id)
             db.flush()
             return {"turn": body["seq"], "stop": "awaiting_retry", "pending": True}
         if not committed:
@@ -1123,10 +1168,12 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     )
     chat.pending_nudges = pending
     chat.stuck_answers = answers
+    if run is not None and not reason:
+        _refresh_totals(db, run)
+        if _run_cap_reached(run):
+            reason = "run_cap"
     if reason:
         _finish(db, chat, reason)
-    elif run is not None:
-        _refresh_totals(db, run)
     db.flush()
     return {
         "turn": seq,
@@ -1199,14 +1246,8 @@ def _finish(db: Session, chat: HarnessChat, reason: str) -> None:
     run = db.get(HarnessRun, chat.run_id)
     if run is not None:
         _refresh_totals(db, run)
-        remaining = db.scalar(
-            select(func.count()).select_from(HarnessChat).where(
-                HarnessChat.run_id == run.id, HarnessChat.status.in_(("queued", "running"))
-            )
-        )
-        if not remaining and run.status == "running":
-            run.status = "completed"
-            run.updated_at = _now()
+        db.flush()
+        _settle_inactive_run(db, run)
 
 
 def finish_chat(db: Session, chat_id: uuid.UUID, reason: str, claim_generation: int | None = None) -> dict:
@@ -1215,7 +1256,7 @@ def finish_chat(db: Session, chat_id: uuid.UUID, reason: str, claim_generation: 
         _check_turn_owner(chat, {"claim_generation": claim_generation})
     if chat.pending_turn:
         raise HTTPException(status_code=409, detail="Recover the pending submission before closing the chat.")
-    allowed = {"completed", "quit", "turn_limit", "stuck", "cap", "luna_ceiling", "route_error", "safety", "cancelled"}
+    allowed = {"completed", "quit", "turn_limit", "stuck", "cap", "luna_ceiling", "route_error", "safety", "cancelled", "run_cap"}
     chosen = reason if reason in allowed else "completed"
     _refresh_chat_cost(db, chat)
     _finish(db, chat, chosen)
@@ -1340,6 +1381,7 @@ def chat_detail(db: Session, chat: HarnessChat) -> dict:
     reply_ids = [reply_message_id(turn.session_before, turn.session_after) for turn in turns]
     reply_counts = Counter(reply_ids)
     body = chat_out(chat)
+    body["run_cap_reached"] = _run_cap_reached(_run_or_404(db, chat.run_id))
     body["model_prompts"] = [
         {"id": str(row.id), "message_id": str(row.message_id) if row.message_id else None,
          "seq": row.seq, "model": row.model, "system_prompt": row.system_prompt} for row in prompts
