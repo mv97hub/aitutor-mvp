@@ -264,7 +264,7 @@ def test_the_opening_prompt_prints_the_passage_and_other_blocks_do_not() -> None
     assert PASSAGE_CAP_RULE in text
     assert PASSAGE in text.split("What to teach", 1)[1]
     assert "Active substep (1/3 central_idea):" in text
-    assert "Keep response length bite-sized" not in text
+    assert "For the coaching only: Keep response length bite-sized: 1 to 2 short sentences." in text
     assert "ELA substep 1 of 3 (central_idea). Attempt tier: ask." in text
     how = text.split("How to teach", 1)[1].split("What to return", 1)[0]
     assert "reprint the passage text verbatim" in how

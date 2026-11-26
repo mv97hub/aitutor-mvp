@@ -1021,6 +1021,7 @@ def _who_you_are_talking_to(
         parts.append(_READING_LEVEL_LINES.get(read_lvl, _READING_LEVEL_LINES["on_grade"]))
 
     if passage_reprint:
+        parts.append("For the coaching only: " + _RESPONSE_LENGTH_LINES[cp["response_length"]])
         parts.append(
             "The response_length sentence cap applies ONLY to your coaching and question below the passage, "
             "never to the passage text itself."
@@ -1688,7 +1689,7 @@ def _passage_turn_lines(
         if first:
             lines.append(f"Paragraph 1:\n{first}")
         lines.append(
-            "The response_length sentence cap (2 to 4 sentences) applies ONLY to your coaching and question below the passage, never to the passage text itself."
+            "The response_length sentence cap applies ONLY to your coaching and question below the passage, never to the passage text itself."
         )
     elif kind == "full":
         lines.append(PASSAGE_CAP_RULE)
@@ -2930,7 +2931,7 @@ def _summary_style_line(style: str) -> str:
     )
 
 
-def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> list[str]:
+def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal, *, length_limited: bool) -> list[str]:
     """Plain instructions for the active block type. No setting names."""
     btype = str(block.get("type") or "topic_goal").strip()
     bcfg = ((cfg.get("blocks") or {}).get(btype)) or {}
@@ -3169,13 +3170,16 @@ def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal) -> l
             "This block is a guided explanation, not a quiz. There is no miss, no retry, and no reveal. "
             "Ignore miss, retry, scaffold, and reveal instructions."
         )
-        lines.append(_explanation_depth_line(depth))
-        if allow_override and depth >= 3:
+        if length_limited:
+            lines.append(f"Explanation depth {depth} of 5: build understanding over successive short turns.")
+        else:
+            lines.append(_explanation_depth_line(depth))
+        if not length_limited and allow_override and depth >= 3:
             lines.append(
                 "Length override is on. Do not cut the explanation down to the learner's response_length "
                 "when the topic needs more sentences. Still match their reading level and explanation style."
             )
-        elif allow_override:
+        elif not length_limited and allow_override:
             lines.append(
                 "Stay inside the learner's response_length unless they ask you to elaborate. "
                 "An elaboration request may run longer, still at their reading level and explanation style."
@@ -3334,7 +3338,8 @@ def _how_to_teach(
     expl_style = str(cp.get("explanation_style") or "concrete_examples")
     challenge_appetite = str(cp.get("challenge_appetite") or "steady")
 
-    lines.extend(_block_config_rules(block, substep, cfg, goal))
+    length = cp.get("response_length", "balanced")
+    lines.extend(_block_config_rules(block, substep, cfg, goal, length_limited=length in {"bite_sized", "balanced"}))
     if _worked_reveal_stop(forecast):
         rewritten: list[str] = []
         for line in lines:
@@ -3432,9 +3437,15 @@ def _how_to_teach(
         lines = [line for line in lines if not line.lower().startswith("close each topic")]
     deeper = learner_wants_deeper_explanation(last_answer) or learner_wants_recap_elaboration(last_answer)
     if str(block.get("type") or "") == "explanation" and not (aside or closing):
-        if deeper and not restated and not moving:
+        if deeper and not restated and not moving and length in {"bite_sized", "balanced"}:
+            lines = [line for line in lines if not line.startswith("When the learner asks a question or wants elaboration,")]
             lines.append(
-                "They asked to hear more. This elaboration may run longer than their response_length. "
+                "They asked to hear more. Offer one new example or one next step at their reading level. "
+                + _RESPONSE_LENGTH_LINES[length] + " Include any check-in in that length."
+            )
+        elif deeper and not restated and not moving:
+            lines.append(
+                "They asked to hear more. Give a fuller explanation at the configured depth. "
                 "Keep each sentence at their reading level."
             )
         else:
@@ -3453,7 +3464,7 @@ def _how_to_teach(
             lines = [line for line in lines if not any(bit in line.lower() for bit in first_teaching_bits)]
             lines.append(
                 "The first teaching of this topic stays inside the learner's response_length. "
-                "Do not write the long version until they ask to hear more."
+                "Build on it if they ask to hear more."
             )
     side_question = _prompts_side_question(
         block, substep, last_answer, opening=opening, cfg=cfg, state=active_block_state

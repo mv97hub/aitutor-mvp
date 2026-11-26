@@ -1047,6 +1047,11 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
 
 
 def _turns_for_checks(db: Session, chat: HarnessChat) -> list[dict]:
+    passages = {
+        block.get("id"): _as_dict(block.get("data")).get("passage_text")
+        for block in _as_list(_as_dict(chat.settings_copy).get("blocks"))
+        if isinstance(block, dict) and block.get("type") == "passage_ela" and block.get("id")
+    }
     rows = []
     for turn in db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id).order_by(HarnessTurn.seq)).all():
         after = turn.session_after if isinstance(turn.session_after, dict) else {}
@@ -1056,6 +1061,7 @@ def _turns_for_checks(db: Session, chat: HarnessChat) -> list[dict]:
                 "intent": turn.intent,
                 "child_text": turn.child_text,
                 "tutor_reply": after.get("tutor_reply") or "",
+                "passage_text": passages.get(before.get("block_id")),
                 "prompt": after.get("prompt") or "",
                 "passed": bool(after.get("passed")),
                 "loop_result": after.get("loop_result") if isinstance(after.get("loop_result"), dict) else {},
