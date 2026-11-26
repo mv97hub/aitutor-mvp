@@ -6,7 +6,7 @@ import pytest
 
 from app import harness
 from app.database import SessionLocal
-from app.models import HarnessChat, HarnessRun
+from app.models import HarnessChat, HarnessEvaluation, HarnessRun
 
 
 @pytest.mark.parametrize(("last_cost", "reached"), [("0.00115", False), ("0.00116", True)])
@@ -96,3 +96,59 @@ def test_chat_cap_uses_the_actual_fractional_cost(input_tokens, stop):
         })
         assert result["stop"] == stop
         assert Decimal(result["cost_usd"]) == Decimal(input_tokens) * Decimal("0.0000004")
+
+
+@pytest.mark.parametrize("invalid", ["bad", -5, True, 0.5, 10**100])
+def test_invalid_judge_usage_cannot_reduce_cost_or_break_historical_reads(invalid):
+    with SessionLocal() as db:
+        run = HarnessRun(status="completed", plan={"run_cap_cents": 1})
+        db.add(run)
+        db.flush()
+        chat = HarnessChat(run_id=run.id, status="completed", judge_model="gpt-4o-mini")
+        db.add(chat)
+        db.flush()
+        # Old JSON could include arbitrary values and string representations of counts.
+        usage = {"input_tokens": invalid, "output_tokens": "5000", "opaque_metadata": "private"}
+        db.add(HarnessEvaluation(chat_id=chat.id, kind="judged", judge_model=chat.judge_model,
+                                 scores={"usage": usage}))
+        db.flush()
+        detail = harness.save_evaluation(db, chat.id, {"usage": usage})
+        assert [e["usage"] for e in detail["evaluations"]] == [{"output_tokens": 5000}] * 2
+        assert Decimal(detail["cost_usd"]) == Decimal("0.006")
+        assert not detail["run_cap_reached"]
+
+
+def test_resumed_run_preserves_aggregate_only_spend_across_new_costs():
+    with SessionLocal() as db:
+        run = HarnessRun(status="running", plan={"run_cap_cents": 4}, totals={"priced_cents": 3})
+        db.add(run)
+        db.flush()
+        historical = HarnessChat(run_id=run.id, status="completed")
+        active = HarnessChat(run_id=run.id, status="running", child_model="gpt-4.1-mini")
+        db.add_all([historical, active])
+        db.flush()
+
+        def add_turn(input_tokens):
+            return harness.record_turn(db, active.id, {
+                "child_text": "Maybe.", "intent": "answer_part", "child_tokens": {"input_tokens": input_tokens},
+                "session_after": {"status": "in_progress"},
+            })
+
+        assert add_turn(5_000)["stop"] == ""  # $0.002
+        assert Decimal(harness.get_run(db, run.id)["totals"]["cost_usd"]) == Decimal("0.032")
+        assert add_turn(20_000)["stop"] == "run_cap"  # another $0.008
+        assert Decimal(run.totals["cost_usd"]) == Decimal("0.040")
+
+
+@pytest.mark.parametrize(("stored_cents", "expected"), [(2, "0.012"), (5, "0.042")])
+def test_known_prices_are_not_counted_twice_in_a_partial_legacy_ledger(stored_cents, expected):
+    with SessionLocal() as db:
+        run = HarnessRun(status="paused", totals={"priced_cents": stored_cents})
+        db.add(run)
+        db.flush()
+        # The old roll-up rounded both $0.006 chats up to $0.01 apiece.
+        db.add_all(HarnessChat(run_id=run.id, status="completed", cost_usd=cost)
+                   for cost in ("0.006", "0.006", None))
+        db.flush()
+        assert harness.get_run(db, run.id)["totals"]["cost_usd"] == expected
+        assert run.totals == {"priced_cents": stored_cents}

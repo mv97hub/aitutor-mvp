@@ -918,7 +918,7 @@ def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
     }
 
 
-def _usd(amount: str | None) -> Decimal:
+def _usd(amount: str | int | None) -> Decimal:
     try:
         value = Decimal(amount or "0")
         return value if value.is_finite() else Decimal(0)
@@ -934,6 +934,18 @@ def _add_money(left: str | None, right: str | None) -> str | None:
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return text or "0"
+
+
+def _judge_usage(value: object) -> dict[str, int]:
+    usage = _as_dict(value)
+    counts = {}
+    for key in ("input_tokens", "output_tokens"):
+        count = usage.get(key)
+        if isinstance(count, str) and len(count) <= 19 and count.isascii() and count.isdigit():
+            count = int(count)
+        if type(count) is int and 0 <= count < 2**63:
+            counts[key] = count
+    return counts
 
 
 def _chat_priced_cost(db: Session, chat: HarnessChat) -> tuple[str | None, int]:
@@ -973,12 +985,12 @@ def _chat_priced_cost(db: Session, chat: HarnessChat) -> tuple[str | None, int]:
         select(HarnessEvaluation).where(HarnessEvaluation.chat_id == chat.id, HarnessEvaluation.kind == "judged")
     ).all():
         scores = review.scores if isinstance(review.scores, dict) else {}
-        usage = scores.get("usage") if isinstance(scores, dict) else None
-        if not isinstance(usage, dict):
+        usage = _judge_usage(scores.get("usage"))
+        if not usage:
             continue
         model = str(review.judge_model or "")
-        incoming = int(usage.get("input_tokens") or 0)
-        outgoing = int(usage.get("output_tokens") or 0)
+        incoming = usage.get("input_tokens", 0)
+        outgoing = usage.get("output_tokens", 0)
         if model == LUNA_MODEL:
             luna += incoming + outgoing
             continue
@@ -991,6 +1003,12 @@ def _chat_priced_cost(db: Session, chat: HarnessChat) -> tuple[str | None, int]:
 
 
 def _refresh_chat_cost(db: Session, chat: HarnessChat) -> None:
+    run = _run_or_404(db, chat.run_id)
+    stored = run.totals or {}
+    if stored.get("cost_precision") != "exact_usd" and _stored_usd(stored) > 0:
+        # Preserve any historical spend that has no chat price before the first
+        # new price changes which part of the old aggregate can be reconstructed.
+        _refresh_totals(db, run)
     priced, luna = _chat_priced_cost(db, chat)
     chat.cost_usd = priced
     chat.luna_tokens = luna
@@ -1011,12 +1029,20 @@ def _cost_rows(db: Session, run: HarnessRun):
     ).all()
 
 
+def _stored_usd(totals: dict) -> Decimal:
+    return _usd(totals.get("cost_usd")) or _usd(totals.get("priced_cents")) / 100
+
+
 def _cost_totals(chats, stored: dict) -> dict:
     priced = sum((_usd(chat.cost_usd) for chat in chats), Decimal(0))
-    if not any(chat.cost_usd is not None for chat in chats):
-        # Some historical records have only the aggregate. Keep that evidence
-        # when there are no priced rows from which to reconstruct the total.
-        priced = _usd(stored.get("cost_usd")) or Decimal(stored.get("priced_cents") or 0) / 100
+    carry = _usd(stored.get("unallocated_usd"))
+    if stored.get("cost_precision") != "exact_usd" and _stored_usd(stored) > 0:
+        if not chats or any(chat.cost_usd is None for chat in chats):
+            # Before exact pricing, each known chat contributed its rounded
+            # cents to the aggregate. Keep only the part those rows cannot explain.
+            known_cents = sum((_usd(chat.cost_usd) * 100).to_integral_value() for chat in chats)
+            carry = max(Decimal(0), _stored_usd(stored) - known_cents / Decimal(100))
+    priced += carry
     luna = sum(int(chat.luna_tokens or 0) for chat in chats) if chats else int(stored.get("luna_tokens") or 0)
     return {
         "chats": len(chats),
@@ -1024,6 +1050,7 @@ def _cost_totals(chats, stored: dict) -> dict:
         "priced_cents": int((priced * 100).to_integral_value()),
         "luna_tokens": luna,
         "cost_usd": None if not priced and luna else format(priced, "f"),
+        **({"unallocated_usd": format(carry, "f")} if carry else {}),
     }
 
 
@@ -1031,8 +1058,8 @@ def _refresh_totals(db: Session, run: HarnessRun) -> None:
     # Flush chat usage first, then serialize the aggregate. Selecting columns
     # reads committed sibling costs even if an earlier query cached their objects.
     db.flush()
-    db.scalar(select(HarnessRun.id).where(HarnessRun.id == run.id).with_for_update())
-    run.totals = {**_cost_totals(_cost_rows(db, run), run.totals or {}), "cost_precision": "exact_usd"}
+    stored = db.scalar(select(HarnessRun.totals).where(HarnessRun.id == run.id).with_for_update())
+    run.totals = {**_cost_totals(_cost_rows(db, run), stored or {}), "cost_precision": "exact_usd"}
     run.updated_at = _now()
 
 
@@ -1398,7 +1425,7 @@ def save_evaluation(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     chat = _locked_chat(db, chat_id)
     scores = body.get("scores") if isinstance(body.get("scores"), list) else []
     tags = body.get("tags") if isinstance(body.get("tags"), list) else []
-    usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+    usage = _judge_usage(body.get("usage"))
     realism = body.get("child_realism")
     error = str(body.get("error") or "").strip()[:500]
     payload = {"items": scores, "usage": usage}
@@ -1472,7 +1499,6 @@ def save_hand_scores(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
 def _evaluation_out(row: HarnessEvaluation) -> dict:
     scores = row.scores if isinstance(row.scores, dict) else {}
     items = scores.get("items") if isinstance(scores, dict) else row.scores
-    usage = _as_dict(scores.get("usage"))
     return {
         "id": row.id,
         "kind": row.kind,
@@ -1483,7 +1509,7 @@ def _evaluation_out(row: HarnessEvaluation) -> dict:
         "rubric_version": row.rubric_version,
         "judge_model": row.judge_model,
         "child_realism": row.child_realism,
-        "usage": {key: usage[key] for key in ("input_tokens", "output_tokens") if type(usage.get(key)) is int},
+        "usage": _judge_usage(scores.get("usage")),
         "created_at": row.created_at,
     }
 
