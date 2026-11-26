@@ -53,7 +53,14 @@ from app.block_score import (
     stored_block_revealed,
     verdict_from_results,
 )
-from app.kc_loop import SAY_THAT_AGAIN, hold_for_blank_reply, reply_is_unreadable, resolve_block_turn
+from app.kc_loop import (
+    SAY_THAT_AGAIN,
+    hold_for_blank_reply,
+    passage_example_question_spoken,
+    reply_is_unreadable,
+    resolve_block_turn,
+    short_passage_example_requested,
+)
 from app.kc_prompt import (
     AFFECTS,
     DECISIONS,
@@ -4693,6 +4700,17 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     session.step = resolution.next_step
     next_state = dict(resolution.next_block_state or {})
     next_state.pop("component_verdict", None)
+    student = _student_or_404(db, session.student_id)
+    if (
+        not blank_reply
+        and _block.get("type") == "passage_ela"
+        and short_passage_example_requested(
+            _block, answer, effective_child_profile(student)["response_length"],
+            opening=not _assistant_on_step(messages, index),
+        )
+        and passage_example_question_spoken(_block, before_state["substep"], reply)
+    ):
+        next_state["passage_example_substep"] = before_state["substep"]
     generated = body.get("generated_mcq")
     if isinstance(generated, dict) and generated.get("choices") and resolution.next_step == index:
         next_state["generated_mcq"] = generated
@@ -4714,7 +4732,6 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     if pending:
         _add_message(db, session, "user", pending)
     _add_message(db, session, "assistant", reply, step=index)
-    student = _student_or_404(db, session.student_id)
     state = _state_row(db, student, node)
     settled = _state_settled(state)
     unit_complete = session.status == "completed"
