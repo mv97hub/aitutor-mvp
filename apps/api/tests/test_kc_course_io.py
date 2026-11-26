@@ -1,9 +1,15 @@
 """Full course import and export, including blocks and a unit-by-unit file."""
 
+from copy import deepcopy
+from uuid import UUID
+
+import pytest
 from fastapi.testclient import TestClient
 
+from app.database import SessionLocal
 from app.kc_course_io import SCHEMA, external_course_prompt, normalize_blocks
 from app.main import app
+from app.models import KcGoal
 from tests.test_kc_pipeline import OUTCOME, _wipe_zz
 
 client = TestClient(app)
@@ -171,5 +177,59 @@ def test_import_export_round_trip_merge_and_the_external_prompt() -> None:
         assert "topic_goal" in text and "mcq" in text
         built = external_course_prompt(title="AP", grade="12", audience="15-17", curriculum="Unit 1: Ideas", block_notes="")
         assert "one unit per reply" in built
+    finally:
+        _wipe_zz()
+
+
+@pytest.mark.parametrize("has_authored_unit", [False, True])
+def test_partial_merge_preserves_the_implicit_components_unit(has_authored_unit: bool) -> None:
+    _wipe_zz()
+    try:
+        document = _file()
+        nodes = document["units"][0]["components"]
+        nodes[1] = {**deepcopy(nodes[0]), "code": "zz-cost", "title": "Opportunity cost"}
+        created = client.post("/kc/courses/import", json={"document": document})
+        assert created.status_code == 200
+        course_id = UUID(created.json()["id"])
+        base = f"/kc/courses/{course_id}"
+        # Manually authored nodes appear under Components when they have no blueprint entry.
+        with SessionLocal.begin() as db:
+            goal = db.get(KcGoal, course_id)
+            blueprint = deepcopy(goal.blueprint) if has_authored_unit else {}
+            if has_authored_unit:
+                blueprint["units"][0]["components"].pop()
+            goal.blueprint = blueprint
+            goal.drafting = {"questions": ["Which topic next?"], "answers": ["Scarcity."]}
+
+        before = client.get(f"{base}/export").json()
+        unit = before["units"][-1]
+        assert unit["title"] == "Components"
+        expected = deepcopy(before)
+        corrected = expected["units"][-1]["components"][-1]
+        corrected["blocks"][0]["data"]["goal"] = "Explain the next best alternative."
+        assert corrected["summary"] == ""
+        target = created.json()["components"][-1]
+        assert client.post(f"/kc/nodes/{target['id']}/complete").status_code == 200
+        assert client.post(f"{base}/ready").status_code == 200
+
+        payload = {"document": {"unit": {**unit, "components": [corrected]}}, "mode": "merge"}
+        merged = client.post(f"{base}/import", json=payload)
+        assert merged.status_code == 200, merged.text
+        assert not merged.json()["ready"]
+        assert merged.json()["components"][-1]["marked_complete"]
+        assert client.post(f"{base}/ready").json()["ready"]
+        assert client.get(f"{base}/export").json() == expected
+        with SessionLocal() as db:
+            goal = db.get(KcGoal, course_id)
+            assert goal.blueprint == blueprint
+            assert goal.drafting == {"questions": ["Which topic next?"], "answers": ["Scarcity."]}
+
+        # An explicit summary *is* authoring unit metadata and must still be stored.
+        corrected["summary"] = "The opportunity cost rule."
+        enriched = client.post(f"{base}/import", json=payload)
+        assert enriched.status_code == 200
+        after = client.get(f"{base}/export").json()
+        by_code = {c["code"]: c for u in after["units"] for c in u["components"]}
+        assert by_code[corrected["code"]]["summary"] == corrected["summary"]
     finally:
         _wipe_zz()

@@ -34,6 +34,7 @@ from app.kc_standards import clean_statements, read_statements
 from app.models import KcGoal, KcNode
 
 SCHEMA = "KcCourseExportV1"
+_UNGROUPED_TITLE = "Components"
 _AUDIENCES = ("6-8", "9-11", "12-14", "15-17")
 _KINDS = ("mastery", "time_boxed", "curiosity")
 
@@ -188,7 +189,7 @@ def _clean_component(raw: object, statements: list[dict[str, str]]) -> dict:
         "code": _text(raw.get("code")),
         "title": title,
         "description": _text(raw.get("description")),
-        "summary": _text(raw.get("summary")) or _text(raw.get("description"))[:240],
+        "summary": _text(raw.get("summary")),
         "outline": _text(raw.get("outline")),
         "core_truth": _text(raw.get("core_truth")),
         "rubric": _clean_rubric(raw.get("rubric") or []),
@@ -321,7 +322,7 @@ def _blueprint(units: list[dict], outcomes: list[str], statements: list[dict]) -
                 {
                     "code": item["code"],
                     "title": item["title"],
-                    "summary": item["summary"] or item["title"],
+                    "summary": item["summary"] or item["description"][:240] or item["title"],
                     "prerequisites": list(item["prerequisite_codes"]),
                     "standards": list(item["standards"]),
                     "extension": bool(known) and not item["standards"],
@@ -438,7 +439,7 @@ def _apply_course_fields(db: Session, goal: KcGoal, course: dict) -> None:
         goal.standards = clean_statements(course.get("standards") or [])
 
 
-def _store_graph(db: Session, goal: KcGoal, units: list[dict], *, replace: bool) -> None:
+def _store_graph(db: Session, goal: KcGoal, units: list[dict], *, replace: bool) -> set[str]:
     _assign_codes(db, units)
     existing_nodes = load_targets(db, goal)
     existing_codes = {node.code for node in existing_nodes}
@@ -465,6 +466,7 @@ def _store_graph(db: Session, goal: KcGoal, units: list[dict], *, replace: bool)
         goal.target_kc_ids = current
     goal.ready = False
     goal.updated_at = _now()
+    return existing_codes
 
 
 def _store_draft(goal: KcGoal, units: list[dict], outcomes: list[str], statements: list[dict]) -> None:
@@ -562,6 +564,24 @@ def _merge_blueprint(goal: KcGoal, units: list[dict], outcomes: list[str], state
     goal.drafting = drafting
 
 
+def _edits_ungrouped_components(goal: KcGoal, parsed: dict, existing_codes: set[str]) -> bool:
+    # The export presents nodes outside the blueprint in a synthetic Components unit.
+    # Editing those nodes alone should not create an authored unit or course outcomes.
+    if parsed["course"] is not None or len(parsed["units"]) != 1:
+        return False
+    unit = parsed["units"][0]
+    if unit["title"] != _UNGROUPED_TITLE or unit["summary"]:
+        return False
+    blueprint = goal.blueprint if isinstance(goal.blueprint, dict) else {}
+    grouped_codes = {
+        component.get("code")
+        for group in blueprint.get("units") or [] if isinstance(group, dict)
+        for component in group.get("components") or [] if isinstance(component, dict)
+    }
+    ungrouped_codes = existing_codes - grouped_codes
+    return all(item["code"] in ungrouped_codes and not item["summary"] for item in unit["components"])
+
+
 def import_into_course(db: Session, goal: KcGoal, raw: object, mode: str) -> KcGoal:
     if mode not in {"replace", "merge"}:
         raise ValueError("Mode is replace or merge.")
@@ -588,8 +608,9 @@ def import_into_course(db: Session, goal: KcGoal, raw: object, mode: str) -> KcG
             goal.standards = list(current.values())
     statements = read_statements(goal.standards)
     _reject_unknown_standards(parsed["units"], statements)
-    _store_graph(db, goal, parsed["units"], replace=False)
-    _merge_blueprint(goal, parsed["units"], _outcomes(parsed["course"], goal), statements)
+    existing_codes = _store_graph(db, goal, parsed["units"], replace=False)
+    if not _edits_ungrouped_components(goal, parsed, existing_codes):
+        _merge_blueprint(goal, parsed["units"], _outcomes(parsed["course"], goal), statements)
     db.flush()
     return goal
 
@@ -623,7 +644,7 @@ def export_course(db: Session, goal: KcGoal) -> dict:
     if extras:
         units.append(
             {
-                "title": "Components",
+                "title": _UNGROUPED_TITLE,
                 "summary": "",
                 "components": [_export_component({}, node, node.description or "") for node in extras],
             }
