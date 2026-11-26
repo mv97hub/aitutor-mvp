@@ -72,15 +72,17 @@ def test_a_detail_shared_with_the_expected_answer_is_still_practice(reader):
     assert _state(reader)["requirements"] == requirements
 
 
-def test_help_after_an_earlier_reveal_cannot_award_an_assisted_citation(reader):
+@pytest.mark.parametrize("request_text", ["Tell me more", "Show me the passage again", "Can you help me?"])
+def test_help_after_an_earlier_reveal_cannot_award_an_assisted_citation(reader, request_text):
     _decide(reader, "I do not know yet.", reply=QUESTION)
     revealed = _decide(reader, "I do not know yet.", reply="Rivers help towns move things. Which line shows that?")
     assert revealed["active_substep"] == "cite_evidence"
     requirements = _state(reader)["requirements"]
-    _decide(reader, "Tell me more", substep_passed=True, reply=EXAMPLE)
+    _decide(reader, request_text, substep_passed=True, reply=EXAMPLE)
     assert _state(reader)["requirements"] == requirements
-    _decide(reader, "Pears!", substep_passed=True, reply="That could fit in a boat. Which line talks about food?")
-    assert _state(reader)["requirements"] == requirements
+    if request_text == "Tell me more":
+        _decide(reader, "Pears!", substep_passed=True, reply="That could fit in a boat. Which line talks about food?")
+        assert _state(reader)["requirements"] == requirements
 
 
 def test_rereading_ends_example_practice(reader):

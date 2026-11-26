@@ -18,8 +18,6 @@ from app.kc_loop import (
     explain_step_turn,
     learner_ready_to_proceed,
     mcq_payload,
-    passage_elaboration_request,
-    passage_example_reply,
     resolve_block_turn,
     summary_explicit_move_on,
     summary_needs_learner_question,
@@ -733,9 +731,6 @@ def _advance(
         )
         return
     before_sub = str(before_state.get("substep") or "")
-    if passage_elaboration_request(block, answer) or passage_example_reply(block, before_sub, before_state, answer):
-        # The reveal tier can carry over from the previous passage step. Practice proves nothing on this one.
-        return
     if kind == "topic_goal" and before_sub == "explain":
         # The loop grades a substantive goal answer given during the opening.
         # Readiness, requests for help and other opening turns carry no evidence.
@@ -750,7 +745,8 @@ def _advance(
         return
     # Finishing the block replaces the state, so the attempt counter is not on it.
     attempted = _attempted(before_state, after_state, before_move, resolution) or sealed
-    if not attempted and not substep_passed:
+    # An unscored passage turn may retain the previous step's reveal tier.
+    if not attempted and (kind == "passage_ela" or not substep_passed):
         return
     step_for_giveaway = before_sub
     if before_sub == "summary_check":
