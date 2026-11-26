@@ -26,13 +26,15 @@ def test_successful_reply_invites_the_learner_to_ask():
     assert "move on, or ask one more question" not in text
 
 
-@pytest.mark.parametrize(("accept", "finish"), [
-    ("Ask me one more question.", "What is an index point?"),
-    ("Yes please.", "No final questions — let's continue!"),
-    ("", "What is an index point?"),
-    ("", "No final questions — let's continue!"),
+@pytest.mark.parametrize(("invite", "accept", "finish"), [
+    (INVITE, "Ask me one more question.", "What is an index point?"),
+    (INVITE, "Yes please.", "No final questions — let's continue!"),
+    ("Any questions before we finish? You can also choose Continue.", "Yes please.", "What is an index point?"),
+    ("You can always ask me later. Are you ready to move on?", "", "Yes please."),
+    (INVITE, "", "What is an index point?"),
+    (INVITE, "", "No final questions — let's continue!"),
 ])
-def test_summary_acceptance_waits_for_a_question_and_closes_once(accept, finish):
+def test_summary_acceptance_waits_for_a_question_and_closes_once(invite, accept, finish):
     code = f"zz-closing-{uuid4().hex[:8]}"
     created = client.post("/kc/courses", json={
         "code": code, "title": "Read a graph", "description": "Reading an index.", "audience": "12-14", "kind": "mastery",
@@ -48,7 +50,7 @@ def test_summary_acceptance_waits_for_a_question_and_closes_once(accept, finish)
         path = f"/kc/tutor/sessions/{session}"
         assert client.post(f"{path}/speech", json={"content": "We will look at an index."}).status_code == 200
         _decide(session, "Got it - move on", reply="Tell me the units of the difference.")
-        correct = _decide(session, ANSWER, reply=INVITE, substep_passed=True)
+        correct = _decide(session, ANSWER, reply=invite, substep_passed=True)
         assert correct["active_substep"] == "summary_check"
         with SessionLocal() as db:
             evidence = db.get(KcSession, UUID(session)).active_block_state["requirements"]
@@ -93,6 +95,14 @@ def test_summary_acceptance_waits_for_a_question_and_closes_once(accept, finish)
 @pytest.mark.parametrize(("answer", "prior", "waiting"), [
     ("yes please", "Do you want to move on?", False),
     ("yes", "Do you want to move on?", False),
+    ("yes please", "Any questions before we finish? You can also choose Continue.", True),
+    ("yes please", "Do you have one last question before we finish?", True),
+    ("yeah", "That's the lesson. Let me know if you have any final questions.", True),
+    ("yes", "You can ask me later. Ready to move on", False),
+    ("Sure.", "Before we finish, is there anything you'd like to ask?", True),
+    ("I’m not sure what you mean.", INVITE, True),
+    ("yes", "You can always ask me later. Are you ready to move on?", False),
+    ("yes", "Any final questions? Or would you like to move on?", False),
     ("yes", INVITE, True),
     ("I'm not sure what you mean.", INVITE, True),
     ("Can I ask a question?", INVITE, True),
