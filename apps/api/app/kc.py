@@ -14,6 +14,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
@@ -38,6 +39,17 @@ from app.engine.choices import (
     SIDEKICKS,
     VOCABULARY_REGISTERS,
     VOICES,
+)
+from app.block_score import (
+    REQUIREMENT_SCORE,
+    SUPPORTED,
+    classify_stored_outcome,
+    freeze_requirements,
+    offered_actions,
+    parent_text,
+    score_supported_turn,
+    scoring_version_for_blocks,
+    verdict_from_results,
 )
 from app.kc_loop import SAY_THAT_AGAIN, hold_for_blank_reply, reply_is_unreadable, resolve_block_turn
 from app.kc_prompt import (
@@ -76,18 +88,22 @@ from app.block_catalog import BLOCK_BANNER_LABELS, BLOCK_FIELDS, BLOCK_LABELS, b
 from app.models import (
     ALL_BLOCK_TYPES,
     DEFAULT_TUTOR_DESCRIPTION,
+    KcCourseRun,
     KcCreatorMessage,
     KcEdge,
     KcGoal,
     KcMessage,
     KcModelPrompt,
     KcNode,
+    KcRequirement,
     KcSession,
     KcState,
+    KcVisit,
     Student,
     TutorProfile,
     effective_child_profile,
 )
+from app.turn_receipt import claim_answer, claim_speech, prepare_answer_commit, seal_receipt, speech_commit_owner
 from app.present import student_out
 
 logger = logging.getLogger(__name__)
@@ -1317,6 +1333,24 @@ def _student_misconceptions_for(
     return found
 
 
+def _requirement_observations(requirements: object) -> list[dict]:
+    if not isinstance(requirements, list):
+        return []
+    rows: list[dict] = []
+    for item in requirements:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "key": str(item.get("key") or ""),
+                "label": str(item.get("label") or ""),
+                "observation": str(item.get("observation") or ""),
+                "attempts": int(item.get("attempts") or 0),
+            }
+        )
+    return rows
+
+
 def _build_block_details(
     node: KcNode,
     session: KcSession | None,
@@ -1365,18 +1399,19 @@ def _build_block_details(
 
         outcome: str | None = None
         attempts = 0
+        passed_first = False
+        observations: list[dict] = []
         if stored is not None:
-            raw_out = str(stored.get("outcome") or "passed").strip()
-            outcome = raw_out if raw_out in {"passed", "revealed"} else "passed"
+            outcome, passed_first = classify_stored_outcome(stored)
             attempts = int(stored.get("attempts") or 0)
-            b_status = outcome
+            b_status = outcome or "passed"
+            observations = _requirement_observations(stored.get("requirements"))
         elif active_index == index:
             b_status = "active"
             attempts = int(session.move_attempts or 0) if session is not None else 0
+            observations = _requirement_observations(state_dict.get("requirements"))
         else:
             b_status = "upcoming"
-
-        passed_first = bool(outcome == "passed" and attempts <= 1)
 
         elim_labels: list[str] = []
         if kind == "mcq":
@@ -1413,6 +1448,7 @@ def _build_block_details(
                 "max_retries": max_ret,
                 "passed_on_first_try": passed_first,
                 "eliminated_choices": elim_labels,
+                **({"observations": observations} if observations else {}),
             }
         )
     return details
@@ -1781,10 +1817,13 @@ def _load_course_cards(db: Session, students: list[Student]) -> _CourseCardLoad:
     sessions_by_goal: dict[tuple[uuid.UUID, uuid.UUID], list[KcSession]] = {}
     goal_ids = [goal.id for goal in goals]
     if student_ids and goal_ids:
+        run_ids = _latest_run_map(db, student_ids, goal_ids)
         for row in db.scalars(
             select(KcSession).where(KcSession.student_id.in_(student_ids), KcSession.goal_id.in_(goal_ids))
         ):
             key = (row.student_id, row.goal_id)
+            if not _on_current_run(row, run_ids.get(key)):
+                continue
             sessions_by_goal.setdefault(key, []).append(row)
             sessions_by_node.setdefault(key, {}).setdefault(row.kc_id, []).append(row)
     empty.goals = goals
@@ -2227,9 +2266,14 @@ def _is_known(states: dict[uuid.UUID, KcState], node: KcNode) -> bool:
 
 
 def _is_settled(states: dict[uuid.UUID, KcState], node: KcNode) -> bool:
-    """Known or fragile. Fragile stays fragile; it is still finished for the next course."""
+    """Known, fragile, or an unassessed finish. An open walk does not unlock the next topic."""
     row = states.get(node.id)
-    return row is not None and row.status in {"known", "fragile"}
+    if row is None:
+        return False
+    if row.status in {"known", "fragile"}:
+        return True
+    result = row.result if isinstance(row.result, dict) else {}
+    return str(result.get("verdict") or "") == "unassessed"
 
 
 def _ring_status(states: dict[uuid.UUID, KcState], node: KcNode) -> str:
@@ -2300,7 +2344,7 @@ def _stored_block_rows(
         }
         if stored is not None:
             outcome = str(stored.get("outcome") or "").strip()
-            if outcome in {"passed", "revealed", "engaged"}:
+            if outcome in {"passed", "revealed", "engaged", "fragile", "unassessed", "known"}:
                 row["outcome"] = outcome
             if stored.get("attempts") is not None:
                 row["attempts"] = int(stored.get("attempts") or 0)
@@ -2322,11 +2366,61 @@ def _next_ready_course(db: Session, goal: KcGoal) -> dict | None:
     return None
 
 
+def _latest_run_map(
+    db: Session, student_ids: list[uuid.UUID], goal_ids: list[uuid.UUID]
+) -> dict[tuple[uuid.UUID, uuid.UUID], uuid.UUID]:
+    if not student_ids or not goal_ids:
+        return {}
+    latest: dict[tuple[uuid.UUID, uuid.UUID], tuple[datetime, uuid.UUID]] = {}
+    rows = db.scalars(
+        select(KcCourseRun).where(
+            KcCourseRun.student_id.in_(student_ids),
+            KcCourseRun.goal_id.in_(goal_ids),
+        )
+    )
+    for row in rows:
+        key = (row.student_id, row.goal_id)
+        stamp = row.created_at or _now()
+        current = latest.get(key)
+        if current is None or stamp >= current[0]:
+            latest[key] = (stamp, row.id)
+    return {key: value[1] for key, value in latest.items()}
+
+
+def _on_current_run(session: KcSession, run_id: uuid.UUID | None) -> bool:
+    """A session with no run still counts. A later run hides an older completion."""
+    if run_id is None or session.course_run_id is None:
+        return True
+    return session.course_run_id == run_id
+
+
+def _ensure_course_run(db: Session, student_id: uuid.UUID, goal_id: uuid.UUID) -> KcCourseRun:
+    row = db.scalar(
+        select(KcCourseRun)
+        .where(KcCourseRun.student_id == student_id, KcCourseRun.goal_id == goal_id)
+        .order_by(KcCourseRun.created_at.desc())
+    )
+    if row is not None:
+        return row
+    row = KcCourseRun(student_id=student_id, goal_id=goal_id)
+    db.add(row)
+    db.flush()
+    return row
+
+
+def _start_course_run(db: Session, student_id: uuid.UUID, goal_id: uuid.UUID) -> KcCourseRun:
+    row = KcCourseRun(student_id=student_id, goal_id=goal_id)
+    db.add(row)
+    db.flush()
+    return row
+
+
 def _sessions_for(
     db: Session, student_id: uuid.UUID, goal_id: uuid.UUID, node_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, list[KcSession]]:
     if not node_ids:
         return {}
+    run_id = _latest_run_map(db, [student_id], [goal_id]).get((student_id, goal_id))
     grouped: dict[uuid.UUID, list[KcSession]] = {}
     rows = db.scalars(
         select(KcSession).where(
@@ -2336,6 +2430,8 @@ def _sessions_for(
         )
     )
     for row in rows:
+        if not _on_current_run(row, run_id):
+            continue
         grouped.setdefault(row.kc_id, []).append(row)
     return grouped
 
@@ -2400,11 +2496,24 @@ def _close_finished_walk(
     reply: str = "",
     body: dict | None = None,
 ) -> None:
-    """A finished block walk must not stay open. Known or fragile is written with the close."""
+    """A finished block walk must not stay open. The verdict comes from this session."""
     if session.status == "completed":
         return
     blocks = stored_blocks(node)
     if not _last_block_finished(node, session):
+        return
+    if int(session.scoring_version or 1) >= REQUIREMENT_SCORE:
+        verdict = verdict_from_results(list(session.block_results or [])) or "unassessed"
+        session.verdict = verdict
+        if verdict == "known":
+            _mark_known(db, session, node)
+        elif verdict == "fragile":
+            _mark_fragile(db, session, node)
+        else:
+            _keep_unassessed(db, session, node)
+        session.status = "completed"
+        session.updated_at = _now()
+        _save_requirement_result(db, session, node, body or {}, reply)
         return
     student = db.get(Student, session.student_id)
     cfg = effective_kc_tutor_config(resolve_active_profile(db, session=session, student=student))
@@ -2461,7 +2570,15 @@ def _mastery_label(state: KcState | None, node: KcNode, sessions: list[KcSession
     ]
     if not finished:
         return ""
+    assessed = [
+        row for row in finished if str(row.verdict or "") in {"known", "fragile"}
+    ]
+    if assessed:
+        latest_assessed = max(assessed, key=lambda row: row.updated_at or row.created_at or _now())
+        return str(latest_assessed.verdict or "")
     latest = max(finished, key=lambda row: row.updated_at or row.created_at or _now())
+    if int(latest.scoring_version or 1) >= REQUIREMENT_SCORE and str(latest.verdict or "") == "unassessed":
+        return "unassessed"
     if not _result_ids(latest.block_results):
         return ""
     if _walk_fragile(stored_blocks(node), latest.block_results, cfg):
@@ -2826,6 +2943,7 @@ def restart_course(db: Session, goal: KcGoal, student: Student) -> dict:
         db.execute(delete(KcModelPrompt).where(KcModelPrompt.session_id.in_(drop_ids)))
         db.execute(delete(KcMessage).where(KcMessage.session_id.in_(drop_ids)))
         db.execute(delete(KcSession).where(KcSession.id.in_(drop_ids)))
+    _start_course_run(db, student.id, goal.id)
     db.flush()
     db.expire_all()
     return progress(db, goal, student)
@@ -3168,7 +3286,7 @@ def loop_turn_result(
     closed = ""
     for row in new_rows:
         outcome = str(row.get("outcome") or "").strip()
-        if outcome in {"passed", "revealed", "engaged"}:
+        if outcome in {"passed", "revealed", "engaged", "fragile", "unassessed"}:
             closed = outcome
     same_block = int(resolution.next_step) == int(before_step)
     sub_moved = after_sub != before_sub
@@ -3240,6 +3358,16 @@ def session_out(db: Session, session: KcSession) -> dict:
         "step_label": label,
         "status": session.status,
         "score": session.score,
+        "revision": int(session.revision or 0),
+        "scoring_version": int(session.scoring_version or 1),
+        "verdict": session.verdict if session.status == "completed" else None,
+        "actions": offered_actions(
+            scoring_version=int(session.scoring_version or 1),
+            block_type=str(block.get("type") or "") if isinstance(block, dict) else "",
+            substep=substep,
+            status=session.status,
+            needs_speech=needs_speech,
+        ),
         "block_id": str(block.get("id") or "") if isinstance(block, dict) else "",
         "topic_index": _topic_index(state),
         "needs_speech": needs_speech,
@@ -3300,6 +3428,11 @@ def open_session(
     blocks = stored_blocks(node)
     cfg = effective_kc_tutor_config(active_profile)
     substep = default_substep_for_block(blocks[0], cfg) if blocks else "main"
+    version = scoring_version_for_blocks(blocks)
+    state = initial_block_state(blocks[0], cfg) if blocks else {"substep": substep, "dialogue_turns": 0}
+    if version >= REQUIREMENT_SCORE and blocks:
+        state = {**state, "requirements": freeze_requirements(blocks[0], cfg)}
+    course_run = _ensure_course_run(db, student.id, goal.id)
     session = KcSession(
         student_id=student.id,
         goal_id=goal.id,
@@ -3308,10 +3441,14 @@ def open_session(
         recipe="block_walk",
         step=0,
         status="in_progress",
-        active_block_state=initial_block_state(blocks[0], cfg) if blocks else {"substep": substep, "dialogue_turns": 0},
+        scoring_version=version,
+        course_run_id=course_run.id,
+        active_block_state=state,
     )
     db.add(session)
     db.flush()
+    if version >= REQUIREMENT_SCORE and blocks:
+        _sync_visit(db, session, blocks[0], 0, state.get("requirements") or [], finished=False)
     return session
 
 
@@ -3565,9 +3702,25 @@ def _others_known(db: Session, student: Student | None, goal: KcGoal | None, nod
         if node is not None and target.id == node.id:
             continue
         state = _state_row(db, student, target)
-        if state is None or state.status not in {"known", "fragile"}:
+        if not _state_settled(state):
             return False
     return True
+
+
+def _state_settled(state: KcState | None) -> bool:
+    if state is None:
+        return False
+    if state.status in {"known", "fragile"}:
+        return True
+    result = state.result if isinstance(state.result, dict) else {}
+    return str(result.get("verdict") or "") == "unassessed"
+
+
+def _messages_with_pending(messages: list[KcMessage], pending: str) -> list:
+    text = (pending or "").strip()
+    if not text:
+        return messages
+    return [*messages, SimpleNamespace(role="user", content=text)]
 
 
 def _last_messages(messages: list[KcMessage], limit: int = 4) -> str:
@@ -3969,7 +4122,7 @@ def tutor_variables(
     ]
 
 
-def prompt_for(db: Session, session: KcSession) -> dict:
+def prompt_for(db: Session, session: KcSession, pending_answer: str = "") -> dict:
     student = _student_or_404(db, session.student_id)
     goal = _course_or_404(db, session.goal_id)
     node = _node_or_404(db, session.kc_id)
@@ -4017,9 +4170,10 @@ def prompt_for(db: Session, session: KcSession) -> dict:
         minutes_used=int(_minutes_used(db, student, goal) or 0),
         component_status="" if state is None else state.status,
         stability="" if state is None else str(state.stability),
-        last_answer=next((message.content for message in reversed(messages) if message.role == "user"), ""),
+        last_answer=(pending_answer or "").strip()
+        or next((message.content for message in reversed(messages) if message.role == "user"), ""),
         last_misconception=session.last_misconception or "",
-        last_messages=_last_messages(messages),
+        last_messages=_last_messages(_messages_with_pending(messages, pending_answer)),
         rubric_met=[str(item) for item in (session.rubric_met or [])],
         redirect_pending=session.redirect_kc_id is not None,
         fragment=fragment,
@@ -4114,6 +4268,107 @@ def _mark_fragile(db: Session, session: KcSession, node: KcNode) -> None:
     session.score = MISS_SCORE
 
 
+def _keep_unassessed(db: Session, session: KcSession, node: KcNode) -> None:
+    """Participation does not change a known or fragile result already stored."""
+    state = _get_state(db, session.student_id, node.id)
+    state.last_practiced = _now()
+    if state.status in {"known", "fragile"}:
+        return
+    session.score = None
+
+
+def _save_requirement_result(db: Session, session: KcSession, node: KcNode, body: dict, reply: str = "") -> None:
+    """Write this session's verdict. An unassessed visit leaves an earlier known result in place."""
+    state = _get_state(db, session.student_id, node.id)
+    verdict = str(session.verdict or "") or "unassessed"
+    if verdict == "unassessed" and state.status in {"known", "fragile"}:
+        return
+    results = list(session.block_results or [])
+    line = parent_text(verdict, results)
+    met = [str(item).strip() for item in (session.rubric_met or []) if str(item).strip()]
+    last = results[-1] if results and isinstance(results[-1], dict) else {}
+    strong = str(body.get("what_was_strong") or body.get("strong") or last.get("strong") or "").strip()
+    work_on = str(body.get("what_to_work_on") or body.get("work_on") or last.get("work_on") or "").strip()
+    if not line:
+        line = "Known." if verdict == "known" else "Finished with help." if verdict == "fragile" else "Finished."
+    if not strong:
+        strong = line
+    requirements: list[dict] = []
+    for item in results:
+        if isinstance(item, dict):
+            requirements.extend(row for row in (item.get("requirements") or []) if isinstance(row, dict))
+    state.result = {
+        "status": verdict if verdict in {"known", "fragile"} else "unassessed",
+        "verdict": verdict,
+        "rubric_met": met,
+        "justification": line,
+        "strong": strong,
+        "work_on": work_on,
+        "reply": (reply or "").strip() or line,
+        "requirements": requirements,
+    }
+
+
+def _sync_visit(
+    db: Session,
+    session: KcSession,
+    block: dict,
+    index: int,
+    requirements: list,
+    *,
+    finished: bool,
+) -> None:
+    if int(session.scoring_version or 1) < REQUIREMENT_SCORE or not isinstance(block, dict):
+        return
+    block_id = str(block.get("id") or f"blk_{index + 1}")
+    visit = db.scalar(
+        select(KcVisit).where(
+            KcVisit.session_id == session.id,
+            KcVisit.block_id == block_id,
+            KcVisit.status == "open",
+        )
+    )
+    if visit is None:
+        visit = KcVisit(
+            session_id=session.id,
+            course_run_id=session.course_run_id,
+            block_id=block_id,
+            block_index=index,
+            status="finished" if finished else "open",
+        )
+        db.add(visit)
+        db.flush()
+    rows = {
+        row.requirement_key: row
+        for row in db.scalars(select(KcRequirement).where(KcRequirement.visit_id == visit.id))
+    }
+    for ordinal, item in enumerate(requirements or []):
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "")
+        if not key:
+            continue
+        stored = rows.get(key)
+        if stored is None:
+            stored = KcRequirement(
+                visit_id=visit.id,
+                session_id=session.id,
+                requirement_key=key,
+                ordinal=int(item.get("ordinal") or ordinal),
+                role=str(item.get("role") or "assessed"),
+            )
+            db.add(stored)
+            rows[key] = stored
+        stored.label = str(item.get("label") or stored.label or "")
+        stored.role = str(item.get("role") or stored.role or "assessed")
+        stored.observation = str(item.get("observation") or "open")
+        stored.attempts = int(item.get("attempts") or 0)
+        stored.gave_up = bool(item.get("gave_up"))
+    if finished:
+        visit.status = "finished"
+    db.flush()
+
+
 def _choice_answer_text(answer: str, choice: dict) -> str:
     """Selected label on the first line, then the options that were on screen.
 
@@ -4136,8 +4391,70 @@ def _choice_answer_text(answer: str, choice: dict) -> str:
     return "\n".join([selected, *options, *trailing])
 
 
-def turn(db: Session, session: KcSession, answer: str) -> dict:
-    """Store the child's answer and return the layer bundle. Scoring waits for the decision."""
+def _requirement_attempt_total(requirements: object) -> int:
+    total = 0
+    if not isinstance(requirements, list):
+        return 0
+    for item in requirements:
+        if isinstance(item, dict):
+            total += int(item.get("attempts") or 0)
+    return total
+
+
+def _requirements_advanced(before_state: dict, before_results: list, resolution) -> bool:
+    before = _requirement_attempt_total((before_state or {}).get("requirements"))
+    produced = [row for row in (resolution.block_results or []) if isinstance(row, dict)]
+    stored = [row for row in before_results if isinstance(row, dict)]
+    new_rows = produced[len(stored) :] if len(produced) > len(stored) else []
+    if new_rows:
+        after = _requirement_attempt_total(new_rows[-1].get("requirements"))
+    else:
+        after = _requirement_attempt_total((resolution.next_block_state or {}).get("requirements"))
+    return after > before
+
+
+def _sync_scored_visits(db: Session, session: KcSession, blocks: list[dict], index: int, before_results: list, resolution) -> None:
+    produced = [row for row in (resolution.block_results or []) if isinstance(row, dict)]
+    stored = [row for row in before_results if isinstance(row, dict)]
+    new_rows = produced[len(stored) :] if len(produced) > len(stored) else []
+    if new_rows and blocks:
+        _sync_visit(
+            db,
+            session,
+            blocks[index],
+            index,
+            new_rows[-1].get("requirements") or [],
+            finished=True,
+        )
+    if resolution.advance_block and blocks:
+        next_index = min(max(int(resolution.next_step), 0), len(blocks) - 1)
+        _sync_visit(
+            db,
+            session,
+            blocks[next_index],
+            next_index,
+            (resolution.next_block_state or {}).get("requirements") or [],
+            finished=False,
+        )
+    elif not resolution.unit_complete and blocks:
+        _sync_visit(
+            db,
+            session,
+            blocks[index],
+            index,
+            (resolution.next_block_state or {}).get("requirements") or [],
+            finished=False,
+        )
+
+
+def turn(
+    db: Session,
+    session: KcSession,
+    answer: str,
+    turn_id: str | None = None,
+    revision: int | None = None,
+) -> dict:
+    """Return the layer bundle. A turn id claims the answer and leaves the line for the decision."""
     if session.status == "completed":
         raise HTTPException(status_code=422, detail="This component session is already finished.")
     cleaned = answer.strip()
@@ -4150,6 +4467,24 @@ def turn(db: Session, session: KcSession, answer: str) -> dict:
     if block is not None and not _needs_speech(session, messages):
         choice = on_screen_choice(block, substep, state, cfg)
     content = _choice_answer_text(cleaned, choice) if choice else cleaned
+    if str(turn_id or "").strip():
+        claimed = claim_answer(
+            db,
+            session,
+            turn_id=str(turn_id),
+            revision=revision,
+            answer=content,
+        )
+        if claimed.get("replayed"):
+            return claimed["result"]
+        session.updated_at = _now()
+        body = session_out(db, session)
+        body.update(prompt_for(db, session, content))
+        body["reply"] = ""
+        body["passed"] = False
+        body["unit_complete"] = False
+        body["course_complete"] = False
+        return body
     _add_message(db, session, "user", content)
     session.updated_at = _now()
     body = session_out(db, session)
@@ -4163,6 +4498,15 @@ def turn(db: Session, session: KcSession, answer: str) -> dict:
 
 def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     """Check the model's decision and write mastery, edges, and the reply."""
+    turn_id = str(body.get("turn_id") or "").strip()
+    pending = None
+    receipt = None
+    if turn_id:
+        prepared = prepare_answer_commit(db, session, turn_id)
+        if prepared.get("replay"):
+            return prepared["replay"]
+        pending = prepared.get("pending")
+        receipt = prepared.get("receipt")
     if session.status == "completed":
         raise HTTPException(status_code=422, detail="This component session is already finished.")
     node = _node_or_404(db, session.kc_id)
@@ -4191,14 +4535,16 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         goal = _course_or_404(db, session.goal_id)
     if not blocks:
         raise HTTPException(status_code=422, detail="This component has no blocks yet.")
-    if not any(message.role == "user" for message in messages):
+    if not pending and not any(message.role == "user" for message in messages):
         raise HTTPException(status_code=422, detail="Write an answer first.")
-    answer = next(message.content for message in reversed(messages) if message.role == "user")
+    answer = pending or next(message.content for message in reversed(messages) if message.role == "user")
     before_state = dict(block_state or {})
     before_attempts = int(session.move_attempts or 0)
     before_results = list(session.block_results or [])
     before_step = index
     if safety_flag != "none":
+        if pending:
+            _add_message(db, session, "user", pending)
         stored = _add_message(db, session, "assistant", reply, step=index)
         record_safety_event(
             db,
@@ -4228,10 +4574,11 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         }
         result["loop_result"] = held
         result["loop_decision"] = loop_result_label(held)
-        return result
+        return seal_receipt(db, session, receipt, result)
     reported = body.get("misconception")
     matched = _stored_wrong(node, answer, None if reported is None else str(reported))
     rubric = [str(item).strip() for item in (body.get("rubric_met") or []) if str(item).strip()]
+    supported = int(session.scoring_version or 1) >= REQUIREMENT_SCORE and str((_block or {}).get("type") or "") in SUPPORTED
     if blank_reply:
         resolution = hold_for_blank_reply(
             blocks=blocks,
@@ -4243,6 +4590,32 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
             reveals=int(session.reveals or 0),
             enrichment_turns=int(session.enrichment_turns or 0),
             rubric_met=[str(item) for item in (session.rubric_met or [])],
+        )
+    elif supported:
+        resolution = score_supported_turn(
+            decision=decision,
+            substep_passed=bool(body.get("substep_passed")),
+            block_complete=bool(body.get("block_complete")),
+            rubric_met=rubric,
+            stored_rubric=[str(item) for item in (session.rubric_met or [])],
+            matched_wrong=matched,
+            blocks=blocks,
+            step=index,
+            active_block_state=block_state,
+            block_results=list(session.block_results or []),
+            move_attempts=int(session.move_attempts or 0),
+            hint_tier=session.hint_tier or "nudge",
+            reveals=int(session.reveals or 0),
+            enrichment_turns=int(session.enrichment_turns or 0),
+            cfg=cfg,
+            goal=goal,
+            last_misconception=session.last_misconception or "",
+            answer=answer,
+            fragment=fragment,
+            strong=str(body.get("what_was_strong") or body.get("strong") or ""),
+            work_on=str(body.get("what_to_work_on") or body.get("work_on") or ""),
+            prior_tutor=next((message.content for message in reversed(messages) if message.role == "assistant"), ""),
+            learner_ready=bool(body.get("ready_to_move_on")),
         )
     else:
         resolution = resolve_block_turn(
@@ -4270,17 +4643,27 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
             prior_tutor=next((message.content for message in reversed(messages) if message.role == "assistant"), ""),
             learner_ready=bool(body.get("ready_to_move_on")),
         )
-    if resolution.mark_fragile:
-        _mark_fragile(db, session, node)
-        if resolution.redirect:
-            broken_code = ""
-            for item in node.misconceptions or []:
-                if isinstance(item, dict) and str(item.get("wrong_move") or "").strip() == resolution.misconception:
-                    broken_code = str(item.get("broken_kc") or "")
-            broken = _nodes_by_code(db).get(broken_code)
-            session.redirect_kc_id = broken.id if broken is not None else None
-    if resolution.mark_known:
-        _mark_known(db, session, node)
+    if supported and resolution.unit_complete:
+        verdict = str((resolution.next_block_state or {}).get("component_verdict") or "") or "unassessed"
+        session.verdict = verdict
+        if verdict == "known":
+            _mark_known(db, session, node)
+        elif verdict == "fragile":
+            _mark_fragile(db, session, node)
+        else:
+            _keep_unassessed(db, session, node)
+    else:
+        if resolution.mark_fragile:
+            _mark_fragile(db, session, node)
+            if resolution.redirect:
+                broken_code = ""
+                for item in node.misconceptions or []:
+                    if isinstance(item, dict) and str(item.get("wrong_move") or "").strip() == resolution.misconception:
+                        broken_code = str(item.get("broken_kc") or "")
+                broken = _nodes_by_code(db).get(broken_code)
+                session.redirect_kc_id = broken.id if broken is not None else None
+        if resolution.mark_known:
+            _mark_known(db, session, node)
     session.hint_tier = resolution.hint_tier
     session.move_attempts = resolution.move_attempts
     session.reveals = resolution.reveals
@@ -4291,24 +4674,36 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     session.help_requested = bool(body.get("help_requested"))
     if bool(body.get("off_course")):
         session.off_course_count = int(session.off_course_count or 0) + 1
-    session.attempts = int(session.attempts or 0) + 1
+    if supported:
+        if _requirements_advanced(before_state, before_results, resolution):
+            session.attempts = int(session.attempts or 0) + 1
+    else:
+        session.attempts = int(session.attempts or 0) + 1
     session.step = resolution.next_step
     next_state = dict(resolution.next_block_state or {})
+    next_state.pop("component_verdict", None)
     generated = body.get("generated_mcq")
     if isinstance(generated, dict) and generated.get("choices") and resolution.next_step == index:
         next_state["generated_mcq"] = generated
     session.active_block_state = next_state
     session.block_results = list(resolution.block_results)
+    if supported:
+        _sync_scored_visits(db, session, blocks, index, before_results, resolution)
     if resolution.unit_complete:
         session.status = "completed"
-        _save_component_result(db, session, node, body, reply)
+        if supported:
+            _save_requirement_result(db, session, node, body, reply)
+        else:
+            _save_component_result(db, session, node, body, reply)
     elif _last_block_finished(node, session):
         _close_finished_walk(db, session, node, reply, body)
     session.updated_at = _now()
+    if pending:
+        _add_message(db, session, "user", pending)
     _add_message(db, session, "assistant", reply, step=index)
     student = _student_or_404(db, session.student_id)
     state = _state_row(db, student, node)
-    settled = state is not None and state.status in {"known", "fragile"}
+    settled = _state_settled(state)
     unit_complete = session.status == "completed"
     course_complete = bool(unit_complete and settled and _others_known(db, student, goal, node))
     result = session_out(db, session)
@@ -4328,7 +4723,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         facts["stayed"] = False
     result["loop_result"] = facts
     result["loop_decision"] = loop_result_label(facts)
-    return result
+    return seal_receipt(db, session, receipt, result)
 
 
 def _chat_step_label(
@@ -4518,6 +4913,39 @@ def append_kc_model_prompt(
     db.add(row)
     db.flush()
     return row
+
+
+def claim_speech_opening(db: Session, session: KcSession, turn_id: str, revision: int | None) -> dict:
+    """Reserve the opening key. The generated key is written later, by the owner only."""
+    claimed = claim_speech(db, session, turn_id=turn_id, revision=revision)
+    body = {
+        "replayed": bool(claimed.get("replayed")),
+        "held": bool(claimed.get("held")),
+        "opening_key": claimed.get("opening_key"),
+        "revision": int(session.revision or 0),
+    }
+    if claimed.get("session"):
+        body["session"] = claimed["session"]
+    return body
+
+
+def commit_speech_opening(
+    db: Session,
+    session: KcSession,
+    *,
+    turn_id: str,
+    content: str,
+    generated_mcq: dict | None,
+    safety_flag: str,
+) -> dict:
+    """Write the opening once. A late worker keeps the first key and the first reply."""
+    owner = speech_commit_owner(db, session, turn_id)
+    if not owner.get("write"):
+        if isinstance(owner.get("result"), dict):
+            return owner["result"]
+        raise HTTPException(status_code=409, detail="The opening is already in progress.")
+    result = record_speech(db, session, content, generated_mcq, safety_flag)
+    return seal_receipt(db, session, owner.get("receipt"), result)
 
 
 def record_speech(

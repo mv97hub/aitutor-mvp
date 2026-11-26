@@ -3,6 +3,7 @@
  * The labels match the buttons in KcLesson. Typing stays off while a choice card is showing.
  */
 
+import { committedButtons } from "./committed-actions.ts";
 import { TELL_ME_MORE_LABEL, MOVE_ON_LABEL, goalStartActions } from "./kc-goal-start.ts";
 import { choiceShowing, lessonComposerVisible } from "./learn-mobile.ts";
 
@@ -18,6 +19,7 @@ export type HarnessSession = {
   active_block_type?: string;
   active_substep?: string;
   choice?: { prompt: string; choices: { id: string; text: string }[] } | null;
+  actions?: string[] | null;
 };
 
 export function availableActions(session: HarnessSession): {
@@ -54,5 +56,7 @@ export function availableActions(session: HarnessSession): {
   const choices = choosing
     ? (session.choice?.choices ?? []).map((choice) => ({ id: choice.id, text: choice.text }))
     : [];
+  const projected = committedButtons(session.actions);
+  if (projected !== null) return { canType, buttons: projected, choices };
   return { canType, buttons, choices };
 }

@@ -532,6 +532,10 @@ export type KcTutorSession = {
   step_label: string;
   status: string;
   score: number | null;
+  revision?: number;
+  scoring_version?: number;
+  verdict?: string | null;
+  actions?: string[] | null;
   needs_speech: boolean;
   choice: { prompt: string; choices: { id: string; text: string }[] } | null;
   total_blocks?: number;

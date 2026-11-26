@@ -14,6 +14,8 @@ export type SessionSnap = {
   needs_speech: boolean;
   active_block_type?: string;
   active_substep?: string;
+  revision?: number;
+  actions?: string[] | null;
   active_block_index?: number;
   choice?: { prompt: string; choices: { id: string; text: string }[] } | null;
   messages: { role: string; content: string }[];
