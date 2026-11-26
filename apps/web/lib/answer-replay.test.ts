@@ -58,3 +58,51 @@ test("a conflicting saved submission preserves the API conflict", async (t) => {
   }));
   assert.equal(response.status, 409);
 });
+
+for (const failsBeforeCommit of [true, false]) {
+  test(failsBeforeCommit
+    ? "provider failure keeps the claimed submission available for retry"
+    : "overlapping calls retain actual usage without claiming the winning reply", async (t) => {
+    const oldKey = process.env.OPENROUTER_API_KEY;
+    t.after(() => {
+      if (oldKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = oldKey;
+    });
+    process.env.OPENROUTER_API_KEY = "offline-fixture";
+    const model = "~deepseek/deepseek-flash-latest";
+    const session = { id: "lesson", revision: 1, tutor_model: model, messages: [] };
+    const winner = { ...session, revision: 2, replayed: true, reply: "Saved.", loop_decision: "advance" };
+    const writes: Record<string, Record<string, unknown>> = {};
+    t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === "openrouter.ai") {
+        if (failsBeforeCommit) return Response.json({ error: { message: "provider unavailable", type: "provider_error" } }, { status: 400 });
+        return Response.json({
+          id: "offline", model, created: 1, choices: [{ index: 0, finish_reason: "stop",
+            message: { role: "assistant", content: JSON.stringify({ reply: "Losing reply.", decision: "stay" }) } }],
+          usage: { prompt_tokens: 21, completion_tokens: 6, total_tokens: 27 },
+        });
+      }
+      if (url.pathname.endsWith("/turn")) {
+        return Response.json({ ...session, system_prompt: "Test rubric", response_schema: { type: "object" }, temperature: 0 });
+      }
+      if (url.pathname.endsWith("/lesson")) return Response.json(session);
+      const operation = url.pathname.split("/").at(-1) || "";
+      writes[operation] = JSON.parse(String(init?.body));
+      return Response.json(operation === "decision" ? winner : {});
+    });
+    const response = await POST(new Request("http://harness.local/api/kc/tutor/answer", {
+      method: "POST", body: JSON.stringify({ sessionId: "lesson", model, turnId: "pending-id", revision: 1, answer: "yes" }),
+    }));
+    if (failsBeforeCommit) {
+      assert.equal(response.status, 502);
+      assert.deepEqual(writes, {});
+    } else {
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), winner);
+      assert.equal(writes["token-usage"]?.message_id, null);
+      assert.equal(writes["token-usage"]?.input_tokens, 21);
+      assert.equal(writes["model-prompts"]?.message_id, null);
+    }
+  });
+}
