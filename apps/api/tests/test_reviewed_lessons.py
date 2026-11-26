@@ -54,6 +54,20 @@ def test_contextual_citation_uses_source_and_current_reading_judgment():
     assert strict.next_block_state["substep"] == "cite_evidence"
 
 
+@pytest.mark.parametrize(("quotation", "attributed", "next_step"), [
+    ("refuse thy name", True, "craft_or_inference"),
+    ("refuse your name", True, "cite_evidence"),
+    ("My only love sprung from my only hate!", True, "cite_evidence"),
+    ("refuse thy name", False, "cite_evidence"),
+])
+def test_exact_evidence_accepts_a_short_verbatim_excerpt_with_supported_attribution(quotation, attributed, next_step):
+    balcony = _component("romeo-and-juliet")["blocks"][0]
+    speaker = "Juliet" if attributed else "Romeo"
+    line = f'{speaker} says “{quotation}” because their family names make them enemies.'
+    result = _score(balcony, "cite_evidence", line, attributed, "exact_quote_required")
+    assert result.next_block_state["substep"] == next_step
+
+
 @pytest.mark.parametrize(("old", "new", "rate"), [(100, 115, "15.00%"), (108, 115, "6.48%"), (108, 108, "0.00%"), (115, 108, "-6.09%")])
 def test_cpi_question_and_choice_grade_use_the_same_two_readings(old, new, rate):
     check = cpi_check(old, new)

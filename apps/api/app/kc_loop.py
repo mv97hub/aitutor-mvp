@@ -1571,14 +1571,15 @@ def _contextual_citation_met(data: dict, answer: str, bcfg: dict, passed: bool) 
     quoted = re.findall(r"""["“]([^"”]+)["”]|(?:^|\s)[‘'](.+?)[’'](?=\s|[.,!?]|$)""", answer)
     fragments = [double or single for double, single in quoted]
     mode = bcfg.get("passage_ela_evidence_mode", "quote_or_close_paraphrase")
-    if mode == "exact_quote_required":
-        return any(quote_in_text(quote, text) for quote in _passage_quotes(data) for text in [answer, *fragments])
     if mode == "paragraph_reference":
         return _passage_answer_met(data, "cite_evidence", answer, bcfg)
     if fragments:
         # Learners may omit the edition's punctuation when typing a quoted line.
         passage = " ".join(_words(str(data.get("passage_text") or "")))
         return any(quote_in_text(" ".join(_words(line)), passage) for line in fragments)
+    if mode == "exact_quote_required":
+        # Without quote marks an authored quotation can still identify the exact span.
+        return any(quote_in_text(quote, answer) for quote in _passage_quotes(data))
     return bool(answer.strip())
 
 
