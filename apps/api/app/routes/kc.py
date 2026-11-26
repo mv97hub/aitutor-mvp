@@ -336,12 +336,6 @@ def patch_course(course_id: uuid.UUID, body: CoursePatch, db: Session = Depends(
     return course_out(db, update_course(db, goal, fields))
 
 
-@router.post("/kc/courses/{course_id}/draft-finish")
-def post_course_draft_finish(course_id: uuid.UUID, body: FinishDraftIn, db: Session = Depends(get_db)) -> dict:
-    goal = _course_or_404(db, course_id)
-    return finish_model_course(goal, body.message, body.proposal, body.allowed_block_types)
-
-
 @router.get("/kc/courses/{course_id}/pipeline")
 def get_course_pipeline(course_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return pipeline_out(_course_or_404(db, course_id))
