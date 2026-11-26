@@ -4697,7 +4697,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     if isinstance(generated, dict) and generated.get("choices") and resolution.next_step == index:
         next_state["generated_mcq"] = generated
     if supported and resolution.next_step == index and not resolution.unit_complete:
-        next_state = remember_tutor_disclosures(_block, next_state, reply)
+        next_state = remember_tutor_disclosures(_block, next_state, reply, feedback=True)
     session.active_block_state = next_state
     session.block_results = list(resolution.block_results)
     if supported:
