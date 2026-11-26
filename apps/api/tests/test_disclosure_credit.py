@@ -196,3 +196,28 @@ def test_confirming_a_correct_choice_does_not_rewrite_prior_independent_evidence
 def test_label_before_a_because_clause_discloses_the_chosen_option():
     state = remember_tutor_disclosures(QUIZ, {"substep": "choice"}, "The correct answer is B because she means Romeo.")
     assert state["tutor_disclosures"]["choice"] == "b"
+
+
+@pytest.mark.parametrize("tutor_line", [
+    "The answer is B: 10%.",
+    "The answer is B. The rate is 10%.",
+    "The answer is B. It is not true that dividing the change by the starting price shows an increase of 10%.",
+])
+def test_naming_the_rate_or_denying_its_reason_leaves_the_why_independent(open_lesson, tutor_line):
+    reason = "Dividing the change by the starting price shows an increase of 10%."
+    block = {"id": "rate", "type": "mcq", "data": {
+        "mode": "static", "question_stem": "What is the rate of inflation?",
+        "choices": [{"id": "a", "text": "5%"}, {"id": "b", "text": "10%", "is_correct": True}],
+        "correct_explanation": reason,
+    }}
+    session = open_lesson([block])
+    _speak(session, "Which rate is correct?")
+    _decide(session, "5%", reply=tutor_line)
+    assert _state(session)["tutor_disclosures"] == {"choice": "b"}
+    _decide(session, "10%", reply="How did you calculate it?")
+    _decide(session, reason, substep_passed=True, reply="Ready to finish?")
+    _decide(session, "No final questions — let's continue!", reply="Done.")
+    rows = _closed(session)["requirements"]
+    assert {r["key"]: r["observation"] for r in rows} == {"choice": "assisted", "why": "independent"}
+    supplied = remember_tutor_disclosures(block, {"substep": "choice"}, "The answer is B: 10%. " + reason)
+    assert supplied["tutor_disclosures"] == {"choice": "b", "why": True}

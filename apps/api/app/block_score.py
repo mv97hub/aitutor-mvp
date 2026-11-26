@@ -476,6 +476,10 @@ _REVEAL_AND_REPEAT = re.compile(
     r"\s*\S.+?\b(?:say (?:it|that) back|repeat (?:it|that)|put (?:it|that) in your own words)\b",
     re.I | re.S,
 )
+_DENIES_EXPLANATION = re.compile(
+    r"\b(?:not true that|(?:wrong|incorrect|false) (?:that|to (?:say|think))|"
+    r"(?:does not|doesn't) mean that|not because)\b", re.I,
+)
 
 
 def remember_tutor_disclosures(block: dict, state: dict, reply: str) -> dict:
@@ -516,10 +520,19 @@ def remember_tutor_disclosures(block: dict, state: dict, reply: str) -> dict:
                 names_choice |= wording.rstrip(".!") == correct_text and bool(prefix or statement != line or not menu)
             if menu and not names_choice and any(text in line.casefold() for text in offered_texts):
                 continue
-            statements.append(line)
             if names_choice and step == "choice":
                 disclosed["choice"] = choice_id
-            explains |= bool(names_choice or re.search(r"\bbecause\b|^the reason is\b", line, re.I))
+            # The option itself is evidence for the choice only. Keep any
+            # explanation after the label/option, even in the same sentence.
+            rationale = line
+            if names_choice:
+                explains = True
+                rationale = statement[match.end():] if match else ""
+                rationale = rationale.lstrip(") :,.—–-").casefold().removeprefix(correct_text)
+            if not rationale.strip(" .,!:") or _DENIES_EXPLANATION.search(rationale):
+                continue
+            statements.append(rationale)
+            explains |= bool(re.search(r"\bbecause\b|^the reason is\b", rationale, re.I))
         # A full explanation can span sentences. Ignore questions, coaching
         # prompts and a bare label when comparing it with the authored reason.
         stated = " ".join(statements)
@@ -527,7 +540,11 @@ def remember_tutor_disclosures(block: dict, state: dict, reply: str) -> dict:
             from app.kc import matches_phrase
 
             verbatim = reason.casefold().replace("’", "'").rstrip(".") in stated.casefold()
-            if verbatim or (explains and matches_phrase(stated, reason)):
+            # matches_phrase normally accepts the right numbers alone. Those
+            # establish a result, while a separately assessed reason needs words.
+            words = re.sub(r"\d+", " ", stated)
+            reason_words = re.sub(r"\d+", " ", reason)
+            if verbatim or (explains and matches_phrase(words, reason_words)):
                 disclosed["why"] = True
     if not disclosed:
         return state
