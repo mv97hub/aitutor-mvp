@@ -93,6 +93,7 @@ def run_code_version() -> str:
     return f"{HARNESS_CODE_VERSION} {commit}"[:80]
 FIXTURE_CODE = "harness-every-block"
 LUNA_MODEL = "gpt-6-luna"
+MAX_LUNA_TOKENS = 2**31 - 1  # The largest value the chat's PostgreSQL INTEGER can record.
 _UNGRADED_STEPS = {"explain", "explain_topic", "summary_check"}
 
 
@@ -1011,7 +1012,7 @@ def _refresh_chat_cost(db: Session, chat: HarnessChat) -> None:
         _refresh_totals(db, run)
     priced, luna = _chat_priced_cost(db, chat)
     chat.cost_usd = priced
-    chat.luna_tokens = luna
+    chat.luna_tokens = min(luna, MAX_LUNA_TOKENS)
 
 
 def refresh_harness_session_cost(db: Session, session_id: uuid.UUID) -> None:
@@ -1302,7 +1303,7 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
         priced_cents=int(_usd(chat.cost_usd) * 100),
         cap_cents=int(plan.get("chat_cap_cents") or DEFAULT_CHAT_CAP_CENTS),
         luna_tokens=int(chat.luna_tokens or 0),
-        luna_ceiling=int(plan.get("luna_token_ceiling") or DEFAULT_LUNA_TOKEN_CEILING),
+        luna_ceiling=min(int(plan.get("luna_token_ceiling") or DEFAULT_LUNA_TOKEN_CEILING), MAX_LUNA_TOKENS),
         consecutive_errors=errors,
         safety_flag=str(after.get("safety_flag") or "none"),
         stop_on_safety=bool(plan.get("stop_on_safety")),

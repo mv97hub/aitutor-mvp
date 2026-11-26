@@ -152,3 +152,23 @@ def test_known_prices_are_not_counted_twice_in_a_partial_legacy_ledger(stored_ce
         db.flush()
         assert harness.get_run(db, run.id)["totals"]["cost_usd"] == expected
         assert run.totals == {"priced_cents": stored_cents}
+
+
+def test_luna_usage_at_the_storage_limit_stays_unpriced_and_stops_the_chat():
+    with SessionLocal() as db:
+        run = HarnessRun(status="running", plan={"luna_token_ceiling": 2**40})
+        db.add(run)
+        db.flush()
+        chat = HarnessChat(run_id=run.id, status="running", child_model="gpt-6-luna", judge_model="gpt-6-luna")
+        db.add(chat)
+        db.flush()
+        raw = {"input_tokens": 2**31 - 1, "output_tokens": 2**31 - 1}
+        judged = harness.save_evaluation(db, chat.id, {"usage": raw})
+        assert judged["cost_usd"] is None and judged["luna_tokens"] == 2**31 - 1
+        assert judged["evaluations"][0]["usage"] == raw
+        result = harness.record_turn(db, chat.id, {
+            "child_text": "Maybe.", "intent": "answer_part", "child_tokens": {"input_tokens": 1},
+            "session_after": {"status": "in_progress"},
+        })
+        assert result["stop"] == "luna_ceiling" and result["cost_usd"] is None
+        assert run.totals["luna_tokens"] == 2**31 - 1 and run.totals["priced_cents"] == 0
