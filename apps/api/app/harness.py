@@ -20,7 +20,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.ai_safety import read_ai_safety
-from app.block_score import LEGACY_OUTCOMES, classify_stored_outcome
+from app.block_score import LEGACY_OUTCOMES, REQUIREMENT_SCORE, classify_stored_outcome
 from app.flow import unique_student_slug
 from app.harness_download import render_download, reply_message_id
 from app.harness_checks import (
@@ -80,9 +80,9 @@ HARNESS_CODE_VERSION = "harness-1"
 def deployed_commit() -> str:
     """The build that served this process. Empty when the host did not set one."""
     for key in ("RENDER_GIT_COMMIT", "GIT_COMMIT", "SOURCE_VERSION"):
-        value = os.environ.get(key, "").strip().split()
+        value = os.environ.get(key, "").strip()
         if value:
-            return value[0][:40]
+            return value
     return ""
 
 
@@ -90,7 +90,7 @@ def run_code_version() -> str:
     commit = deployed_commit()
     if not commit:
         return HARNESS_CODE_VERSION
-    return f"{HARNESS_CODE_VERSION} {commit}"[:80]
+    return f"{HARNESS_CODE_VERSION} {commit.split()[0][:40]}"[:80]
 FIXTURE_CODE = "harness-every-block"
 LUNA_MODEL = "gpt-6-luna"
 _UNGRADED_STEPS = {"explain", "explain_topic", "summary_check"}
@@ -1613,20 +1613,34 @@ def _block_score(db: Session, chat: HarnessChat) -> tuple[int | None, list[dict]
     session = db.get(KcSession, chat.session_id)
     if session is None:
         return None, []
+    modern = session.scoring_version >= REQUIREMENT_SCORE
     outcomes = []
     for row in session.block_results or []:
         if not isinstance(row, dict):
             continue
         stored = str(row.get("outcome") or "").strip()
         verdict = str(row.get("verdict") or "").strip()
-        if (verdict or stored) in {"known", "fragile", "unassessed"}:
-            outcome, _ = classify_stored_outcome(row)
+        # An older loop label may survive an interrupted requirement-score write.
+        # A raw pass needs independent evidence; bare engagement and reveal are observations.
+        requirements = row.get("requirements")
+        recover_verdict = modern and not verdict and (
+            stored == "passed" or (
+                stored in {"", "revealed", "engaged"} and isinstance(requirements, list) and bool(requirements)
+            )
+        )
+        if (verdict or stored) in {"known", "fragile", "unassessed"} or recover_verdict:
+            outcome, _ = classify_stored_outcome(row, session.scoring_version)
         elif not verdict and stored in LEGACY_OUTCOMES:
             outcome = stored
         else:
             outcome = "unknown"
         title = str(row.get("title") or row.get("block_type") or "block").strip() or "block"
-        outcomes.append({"title": title, "outcome": outcome})
+        result = {"title": title, "outcome": outcome}
+        if modern and stored in LEGACY_OUTCOMES and outcome not in {stored, "unknown"}:
+            result["stored_outcome"] = stored
+        if row.get("revealed") is True:
+            result["revealed"] = True
+        outcomes.append(result)
     return session.score, outcomes
 
 

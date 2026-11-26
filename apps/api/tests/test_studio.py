@@ -444,6 +444,7 @@ def test_unknown_model_is_rejected_and_prompt_names_the_framework_rule() -> None
         assert unknown.status_code == 422
         assert "model" in unknown.json()["detail"]
         assert client.get("/studio/settings").json()["model"] == "gpt-4o-mini"
+        assert client.get(f"/studio/courses/{course_id}/prompt").json()["model"] == "gpt-4o-mini"
         assert client.get("/studio/settings").json()["options"] == [
             "gpt-4o-mini",
             "gpt-4o",
@@ -454,10 +455,8 @@ def test_unknown_model_is_rejected_and_prompt_names_the_framework_rule() -> None
         luna = client.put("/studio/settings", json={"model": "gpt-6-luna"})
         assert luna.status_code == 200, luna.text
         assert luna.json()["model"] == "gpt-6-luna"
-        assert client.get(f"/studio/courses/{course_id}/prompt").json()["model"] == "gpt-6-luna"
-
         prompt = client.get(f"/studio/courses/{course_id}/prompt").json()
-        assert prompt["model"] == "gpt-4o-mini"
+        assert prompt["model"] == "gpt-6-luna"
         assert "widely known national curricula" in prompt["system_prompt"]
         assert "which framework a suggestion comes from" in prompt["system_prompt"]
         assert "no web search" in prompt["system_prompt"]

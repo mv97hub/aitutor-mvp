@@ -168,7 +168,7 @@ def test_a_factual_opening_states_each_setting_once() -> None:
         "Learning goal the learner must explain in their own words: The river is blue.",
         "Acceptance criteria to check ( withhold until pass or reveal ): The river is blue.",
         "Component misconceptions to listen for: The river is red.",
-        "the first time a stored wrong move matches",
+        "the first time a stored wrong move matches, explain the trap and retry once. The second time, follow the block outcome for the next step.",
         "name the missing prerequisite idea",
         "Speak to Ada.",
         "10-year-old",

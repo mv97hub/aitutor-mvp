@@ -109,4 +109,6 @@ Add child asks for a name and an age. Reading level, modality, and interests are
 
 ## Render
 
+To verify a rollout, request `GET /health/revision` on the API service. It reports the deployed Git commit (if the host supplies it) and the Alembic revisions read from the connected database. Compare those values with the release commit and `alembic heads` on that revision. `GET /health` remains the lightweight liveness check.
+
 Not deployed from this repo. A later deploy would be three Render resources you create by hand: a web service for `apps/web`, a web service for `apps/api`, and a managed Postgres database. Set `OPENAI_API_KEY`, `API_URL`, and `NEXT_PUBLIC_API_URL` on the Next service. Set `DATABASE_URL` (`postgresql+psycopg://...`) on the API. The API pre-deploy stays `alembic upgrade head && python -m app.seed`. That seed inserts the four learners and the default tutor profile. It does not write courses or knowledge-component courses, and it does not overwrite a saved course or a saved tutor profile. Revision `014_one_course_model` removes the three seeded courses and the class transcripts that belonged only to them.

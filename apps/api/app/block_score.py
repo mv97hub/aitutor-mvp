@@ -15,6 +15,7 @@ from dataclasses import replace
 from app.kc_loop import (
     BlockResolution,
     _gives_up,
+    explain_step_turn,
     learner_ready_to_proceed,
     mcq_payload,
     resolve_block_turn,
@@ -372,7 +373,11 @@ def offered_actions(
     return []
 
 
-def classify_stored_outcome(stored: dict) -> tuple[str | None, bool]:
+def stored_block_revealed(stored: dict | None) -> bool:
+    return bool(stored and (stored.get("outcome") == "revealed" or stored.get("revealed") is True))
+
+
+def classify_stored_outcome(stored: dict, scoring_version: int = LEGACY_SCORE) -> tuple[str | None, bool]:
     """Map a stored block row to an outcome and a first-try flag.
 
     Passed, revealed, and engaged keep today's meaning. An unfamiliar outcome
@@ -385,6 +390,11 @@ def classify_stored_outcome(stored: dict) -> tuple[str | None, bool]:
     except (TypeError, ValueError):
         attempts = 0
     explicit = (stored or {}).get("passed_on_first_try")
+    if scoring_version >= REQUIREMENT_SCORE and not verdict and (not raw or raw in LEGACY_OUTCOMES):
+        # An interrupted modern write may have a legacy loop outcome and no verdict yet.
+        requirements = _rows(stored.get("requirements"))
+        verdict = verdict_from_requirements(requirements, finished=True)
+        explicit = first_try_block(requirements)
     if verdict in {"known", "fragile", "unassessed"} or raw in {"known", "fragile", "unassessed"}:
         if verdict == "unassessed" or raw == "unassessed":
             outcome = "unassessed"
@@ -416,7 +426,7 @@ def uses_requirement_score(rows: list) -> bool:
     return False
 
 
-def requirement_star_unit(status: str, block_results: list, reveals: int) -> dict:
+def requirement_star_unit(status: str, block_results: list, reveals: int, scoring_version: int = LEGACY_SCORE) -> dict:
     """Stars for a requirement-score session. Unfamiliar rows are not passes."""
     del reveals
     rows = [item for item in block_results if isinstance(item, dict)]
@@ -429,10 +439,10 @@ def requirement_star_unit(status: str, block_results: list, reveals: int) -> dic
         verdict = str(item.get("verdict") or "").strip()
         if raw and raw not in LEGACY_OUTCOMES and raw not in {"known", "fragile", "unassessed"} and not verdict:
             continue
-        outcome, is_first = classify_stored_outcome(item)
+        outcome, is_first = classify_stored_outcome(item, scoring_version)
         if outcome in {"passed", "fragile", "unassessed", "revealed"}:
             completed += 1
-        if outcome == "revealed":
+        if stored_block_revealed(item):
             revealed += 1
         if is_first:
             first_try += 1
@@ -641,6 +651,8 @@ def _overlay(
             block_verdict or "", "unassessed"
         )
         for row in new_rows:
+            if row.get("outcome") == "revealed":
+                row["revealed"] = True
             row["requirements"] = [dict(item) for item in requirements]
             row["verdict"] = block_verdict
             row["outcome"] = outcome
@@ -700,7 +712,6 @@ def _advance(
     sealed: bool,
     new_outcome: str = "",
 ) -> None:
-    del cfg
     if kind in {"explanation", "curiosity"}:
         if sealed:
             for row in requirements:
@@ -720,6 +731,12 @@ def _advance(
         )
         return
     before_sub = str(before_state.get("substep") or "")
+    if kind == "topic_goal" and before_sub == "explain":
+        # The loop grades a substantive goal answer given during the opening.
+        # Readiness, requests for help and other opening turns carry no evidence.
+        if explain_step_turn(block, answer, before_state, cfg) != "attempt":
+            return
+        before_sub = "main"
     if before_sub == "summary_check" and not substep_passed:
         return
     key = _active_key(kind, before_sub, before_state, after_state)

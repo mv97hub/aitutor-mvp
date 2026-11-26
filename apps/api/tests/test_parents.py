@@ -122,12 +122,20 @@ def test_upgrade_head_includes_the_parent_tables() -> None:
 
     from alembic.config import Config
     from alembic.script import ScriptDirectory
+    from sqlalchemy import inspect
+
+    from app.database import engine
 
     ini = Path(__file__).resolve().parents[1] / "alembic.ini"
     script = ScriptDirectory.from_config(Config(str(ini)))
-    assert script.get_heads() == ["035_gpt6_luna_model"]
-    revisions = {rev.revision for rev in script.walk_revisions()}
-    assert {"030_parent_portal", "031_course_standards"} <= revisions
+    head = script.get_current_head()
+    assert head is not None
+    revisions = {rev.revision for rev in script.iterate_revisions(head, "base")}
+    assert {"030_parent_portal", "031_course_standards", "035_gpt6_luna_model"} <= revisions
+    schema = inspect(engine)
+    assert schema.has_table("parents")
+    assert schema.has_table("parent_students")
+    assert {fk["referred_table"] for fk in schema.get_foreign_keys("parent_students")} == {"parents", "students"}
 
 
 def test_create_list_and_name_checks() -> None:
@@ -393,7 +401,13 @@ def test_parent_dashboard_is_the_last_ten_chats_progress_and_this_week() -> None
             opened = db.get(KcSession, uuid.UUID(session_id))
             assert opened is not None
             opened.status = "completed"
-            opened.block_results = [{"outcome": "passed", "attempts": 1}]
+            opened.block_results = [{
+                "outcome": "passed",
+                "verdict": "known",
+                "requirements": [{"key": "goal", "role": "assessed", "observation": "independent", "attempts": 1}],
+                "passed_on_first_try": True,
+                "attempts": 1,
+            }]
             opened.reveals = 0
             opened.updated_at = datetime.now(timezone.utc)
             state = db.scalar(

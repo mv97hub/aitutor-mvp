@@ -257,7 +257,12 @@ def _review_lines(chat: dict) -> list[str]:
     if not outcomes:
         lines.append("none stored")
     for row in outcomes:
-        lines.append(f"{_text(row.get('title')) or 'block'}: {_text(row.get('outcome'))}")
+        line = f"{_text(row.get('title')) or 'block'}: {_text(row.get('outcome'))}"
+        if row.get("stored_outcome"):
+            line += f" (stored loop outcome: {_text(row['stored_outcome'])})"
+        if row.get("revealed") and "revealed" not in {row.get("stored_outcome"), row.get("outcome")}:
+            line += " (answer revealed)"
+        lines.append(line)
     lines.append("")
     return lines
 

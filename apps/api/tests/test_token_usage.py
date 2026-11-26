@@ -137,6 +137,7 @@ def test_token_usage_is_stored_and_filtered() -> None:
             "output_tokens": 0,
             "cached_tokens": 0,
             "total_tokens": 0,
+            "cache_hit_rate": 0.0,
         }
         assert empty.json()["by_child"] == []
         assert empty.json()["by_day"] == []
@@ -237,6 +238,7 @@ def test_token_usage_breaks_down_by_model_and_cost() -> None:
             "output_tokens": 150,
             "cached_tokens": 650,
             "total_tokens": 1250,
+            "cache_hit_rate": round(650 / 1100, 4),
         }
         assert narrowed["cost_usd"] == "0.00265"
         assert narrowed["unpriced_models"] == []
