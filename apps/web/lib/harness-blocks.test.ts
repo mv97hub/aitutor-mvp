@@ -28,3 +28,16 @@ test("an older turn with no stored title shows the type only", () => {
   assert.equal(marks[1].edge, "end");
   assert.equal(marks[2].label, "Socratic Discussion — Two cases");
 });
+
+test("a move belongs to the block the learner answered before advancing", () => {
+  const first = { block_id: "1", block_type: "mcq" };
+  const next = { block_id: "2", block_type: "teach_back" };
+  const marks = blockMarks([
+    { seq: 1, session_before: first, session_after: next },
+    { seq: 2, session_before: next, session_after: next },
+  ]);
+  assert.deepEqual(marks.map(({ seq, edge, label }) => [seq, edge, label]), [
+    [1, "start", "Multiple Choice Question"], [1, "end", "Multiple Choice Question"],
+    [2, "start", "Teach-Back / Feynman"],
+  ]);
+});

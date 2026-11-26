@@ -310,7 +310,8 @@ test("a thrown tutor call does not copy the previous reply forward", async () =>
   const recorded: { tutor_reply?: string; error?: string }[] = [];
   const transport: HarnessTransport = {
     runStatus: async () => ({ status: "running" }),
-    session: async () => session({ messages: [{ role: "assistant", content: prior }] }),
+    session: async () => session({ messages: [{ id: "old", role: "assistant", content: prior }],
+      prompt: "old prompt", loop_decision: "advance", loop_result: { advanced: true } }),
     speak: async () => session(),
     answer: async () => {
       throw new Error("The tutor did not write a reply.");
@@ -321,6 +322,13 @@ test("a thrown tutor call does not copy the previous reply forward", async () =>
     },
     recordTurn: async (_id, body) => {
       const after = body.session_after as { tutor_reply?: string; error?: string };
+      assert.equal((body.session_before as Record<string, unknown>).tutor_message_id, "old");
+      const evidence = body.session_after as Record<string, unknown>;
+      assert.ok(!evidence.tutor_message_id);
+      assert.ok(!evidence.prompt);
+      assert.ok(!evidence.loop_decision);
+      assert.equal(evidence.loop_result, null);
+      assert.equal(evidence.passed, false);
       recorded.push({ tutor_reply: after.tutor_reply, error: String(after.error || "") });
       return { stop: "completed", cost_usd: "0", luna_tokens: 0 };
     },

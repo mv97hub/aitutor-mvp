@@ -1085,7 +1085,8 @@ def test_download_keeps_turns_checks_scores_and_a_failed_call() -> None:
     assert "Start of block: Multiple Choice Question — Color" in text
     assert "The river is blue." in text
     assert "Tutor: Yes." in text
-    assert '"stayed": true' in text
+    assert '"stayed": false' in text
+    assert '"stayed": true' not in text  # The failed turn had only the previous snapshot.
     assert "teaching_quality: 2" in text
     assert "false_passes" in text
     assert "Rivers: passed" in text

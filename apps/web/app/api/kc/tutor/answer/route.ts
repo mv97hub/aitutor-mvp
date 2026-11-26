@@ -6,7 +6,7 @@ import { languageModel } from "@/lib/language-model";
 import { isKcModel, kcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { readModelUsage, type ModelUsageCounts } from "@/lib/model-usage";
 import { requestForCall, type ModelCall } from "@/lib/stored-prompt";
-import { finishSavedTurn } from "@/lib/tutor-turn";
+import { finishSavedTurn, newTutorMessageId } from "@/lib/tutor-turn";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -214,7 +214,7 @@ export async function POST(req: Request) {
     return new Response(message, { status: 502 });
   }
 
-  const added = [...session.messages].reverse().find((message) => message.role === "assistant");
+  const messageId = newTutorMessageId(bundle.messages, session.messages);
   const stored = captured ?? {
     system_prompt: bundle.system_prompt,
     messages: [{ role: "user", content: childLine }],
@@ -227,7 +227,7 @@ export async function POST(req: Request) {
         system_prompt: stored.system_prompt,
         messages: stored.messages,
         model: stored.model,
-        message_id: added?.id ?? null,
+        message_id: messageId,
         rubric_met: decision.rubric_met,
         misconception: decision.misconception,
         decision: {
@@ -242,7 +242,7 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         kind: "answer",
         model: stored.model,
-        message_id: added?.id ?? null,
+        message_id: messageId,
         ...usage,
       }),
     });

@@ -1,13 +1,7 @@
 /** Start and end marks for a stored harness transcript. */
 
-export type MarkTurn = {
-  seq: number;
-  session_after?: {
-    block_id?: string;
-    block_type?: string;
-    block_title?: string;
-  };
-};
+type BlockPlace = { block_id?: string; block_type?: string; block_title?: string };
+export type MarkTurn = { seq: number; session_before?: BlockPlace; session_after?: BlockPlace };
 
 export type BlockMark = { seq: number; edge: "start" | "end"; label: string };
 
@@ -31,8 +25,13 @@ export function blockTypeLabel(value: string): string {
   return BLOCK_LABELS[key] || key.replaceAll("_", " ");
 }
 
+function turnBlock(turn: MarkTurn): BlockPlace {
+  const before = turn.session_before;
+  return before?.block_id || before?.block_type ? before : turn.session_after || {};
+}
+
 function blockKey(turn: MarkTurn): string {
-  const after = turn.session_after || {};
+  const after = turnBlock(turn);
   const id = String(after.block_id || "").trim();
   if (id) return `id:${id}`;
   const type = String(after.block_type || "").trim();
@@ -41,7 +40,7 @@ function blockKey(turn: MarkTurn): string {
 }
 
 export function blockMarkLabel(turn: MarkTurn): string {
-  const after = turn.session_after || {};
+  const after = turnBlock(turn);
   const type = blockTypeLabel(String(after.block_type || ""));
   const title = String(after.block_title || "").trim();
   if (type && title) return `${type} — ${title}`;

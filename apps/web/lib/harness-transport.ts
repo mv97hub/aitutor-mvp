@@ -1,6 +1,7 @@
 /** The server loop calls the same tutor routes the page calls. One route, one model call. */
 
 import { api } from "./api.ts";
+import { newTutorMessageId } from "./tutor-turn.ts";
 import type { HarnessTransport, RunStatus, SessionSnap } from "./harness-runner.ts";
 
 export type RoutePost = (req: Request) => Promise<Response>;
@@ -15,7 +16,7 @@ export type TransportRoutes = {
 
 export type TransportIo = {
   runStatus: () => Promise<RunStatus>;
-  session: (sessionId: string) => Promise<SessionSnap>;
+  session: (sessionId: string, committed?: SessionSnap) => Promise<SessionSnap>;
   answerKey: HarnessTransport["answerKey"];
 };
 
@@ -31,8 +32,8 @@ async function callRoute(post: RoutePost, path: string, body: unknown): Promise<
   return post(jsonRequest(path, body));
 }
 
-export async function readSnap(sessionId: string): Promise<SessionSnap> {
-  const session = await api<SessionSnap>(`/kc/tutor/sessions/${sessionId}`);
+export async function readSnap(sessionId: string, committed?: SessionSnap): Promise<SessionSnap> {
+  const session = committed ?? await api<SessionSnap>(`/kc/tutor/sessions/${sessionId}`);
   let prompt = "";
   let safety = "none";
   let loop: SessionSnap["loop_result"] = session.loop_result ?? null;
@@ -40,6 +41,7 @@ export async function readSnap(sessionId: string): Promise<SessionSnap> {
   try {
     const detail = await api<{
       prompts?: {
+        message_id?: string;
         system_prompt?: string;
         decision?: {
           safety_flag?: string;
@@ -48,11 +50,13 @@ export async function readSnap(sessionId: string): Promise<SessionSnap> {
         };
       }[];
     }>(`/kc/sessions/${sessionId}`);
-    const latest = detail.prompts?.[detail.prompts.length - 1];
-    prompt = latest?.system_prompt || "";
-    safety = latest?.decision?.safety_flag || "none";
-    if (latest?.decision?.loop_result) loop = latest.decision.loop_result;
-    if (latest?.decision?.loop_decision) loopDecision = latest.decision.loop_decision;
+    const messageId = [...session.messages].reverse().find((message) => message.role === "assistant")?.id;
+    const matches = messageId ? detail.prompts?.filter((row) => row.message_id === messageId) : [];
+    const record = matches?.length === 1 ? matches[0] : undefined;
+    prompt = record?.system_prompt || "";
+    safety = record?.decision?.safety_flag || "none";
+    loop ??= record?.decision?.loop_result ?? null;
+    loopDecision ||= record?.decision?.loop_decision || "";
   } catch {
     prompt = "";
   }
@@ -71,6 +75,15 @@ export async function readSnap(sessionId: string): Promise<SessionSnap> {
 
 export function serverTransport(runId: string, routes: TransportRoutes, io?: TransportIo): HarnessTransport {
   const session = io?.session ?? readSnap;
+  async function committedSnap(prior: SessionSnap, response: Response, kind: "speak" | "answer") {
+    const saved: SessionSnap = await response.json();
+    const messageId = newTutorMessageId(prior.messages, saved.messages);
+    return {
+      ...await session(prior.id, saved),
+      response_message_id: messageId,
+      tutor_call_kind: messageId ? kind : undefined,
+    };
+  }
   return {
     runStatus: io?.runStatus ?? (() => api<RunStatus>(`/kc/harness/runs/${runId}`)),
     session,
@@ -83,7 +96,7 @@ export function serverTransport(runId: string, routes: TransportRoutes, io?: Tra
         revision: prior.revision ?? 0,
       });
       if (!response.ok) throw new Error((await response.text()) || "The tutor could not speak.");
-      return session(sessionId);
+      return committedSnap(prior, response, "speak");
     },
     answer: async (sessionId, text, model) => {
       const prior = await session(sessionId);
@@ -95,7 +108,7 @@ export function serverTransport(runId: string, routes: TransportRoutes, io?: Tra
         revision: prior.revision ?? 0,
       });
       if (!response.ok) throw new Error((await response.text()) || "The tutor could not answer.");
-      return session(sessionId);
+      return committedSnap(prior, response, "answer");
     },
     answerKey: io?.answerKey ?? ((chatId) => api(`/kc/harness/chats/${chatId}/answer-key`)),
     childText: async (input) => {

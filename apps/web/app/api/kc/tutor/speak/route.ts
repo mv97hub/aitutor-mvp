@@ -6,7 +6,7 @@ import { languageModel } from "@/lib/language-model";
 import { isKcModel, kcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { readModelUsage, type ModelUsageCounts } from "@/lib/model-usage";
 import { requestForCall, type ModelCall } from "@/lib/stored-prompt";
-import { finishSavedTurn } from "@/lib/tutor-turn";
+import { finishSavedTurn, newTutorMessageId } from "@/lib/tutor-turn";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -157,9 +157,7 @@ export async function POST(req: Request) {
     return new Response(message, { status: 502 });
   }
 
-  const added =
-    session.messages.length > prior.messages.length ? session.messages[session.messages.length - 1] : undefined;
-  const messageId = added && added.role === "assistant" ? added.id : null;
+  const messageId = newTutorMessageId(prior.messages, session.messages);
   const stored = captured ?? {
     system_prompt: bundle.system_prompt,
     messages: [{ role: "user", content: SPEAK_PROMPT }],
