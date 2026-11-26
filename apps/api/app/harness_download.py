@@ -192,6 +192,12 @@ def _chat_lines(chat: dict) -> list[str]:
             rendered.add(index)
         lines.extend(_turn_lines(turn, marks, call))
     pending = _dict(chat.get("pending_delivery"))
+    unsent = _dict(_dict(chat.get("tokens")).get("unsent_child"))
+    if unsent:
+        lines.extend(["### Child response stopped before submission", "",
+                      "The run reached its spending cap before the tutor was contacted.",
+                      f"Submission: {unsent['turn_id']}",
+                      f"Child tokens: {_tokens(_dict(unsent.get('child_tokens')))}", ""])
     if pending:
         lines.extend([f"### Pending submission for turn {pending['seq']}", "",
                       f"Child: {pending['child_text']}", f"Submission: {pending['turn_id']}",

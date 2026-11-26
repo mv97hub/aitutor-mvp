@@ -101,9 +101,19 @@ export function serverTransport(runId: string, routes: TransportRoutes, io?: Tra
     },
     prepareTurn: async (chatId, generation, submission) => {
       const saved = await api<{ submission: PreparedTurn }>(`/kc/harness/chats/${chatId}/pending-turn`, {
-        method: "POST", body: JSON.stringify({ claim_generation: generation, seq: submission.seq, submission }),
+        method: "POST", body: JSON.stringify({
+          claim_generation: generation, seq: submission.seq, submission: { ...submission, dispatch_state: "prepared" },
+        }),
       });
       return saved.submission;
+    },
+    dispatchTurn: async (chatId, turnId, generation) => {
+      const saved = await api<{ action: "send" | "read_receipt" | "run_cap" | "paused" }>(
+        `/kc/harness/chats/${chatId}/pending-turn/${turnId}/dispatch`, {
+          method: "POST", body: JSON.stringify({ claim_generation: generation }),
+        },
+      );
+      return saved.action;
     },
     answer: async (sessionId, pending, model, receiptOnlyChatId) => {
       let saved: SessionSnap;

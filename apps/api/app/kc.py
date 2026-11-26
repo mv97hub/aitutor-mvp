@@ -4906,6 +4906,9 @@ def append_kc_model_prompt(
     if not stored_model:
         student = db.get(Student, session.student_id)
         stored_model = effective_child_profile(student)["tutor_model"]
+    # Concurrent attempts on one answer may both have real provider calls to log.
+    # Serialize this short insert so each call gets its own prompt sequence.
+    db.scalar(select(KcSession.id).where(KcSession.id == session.id).with_for_update())
     seq = db.scalar(select(func.max(KcModelPrompt.seq)).where(KcModelPrompt.session_id == session.id))
     row = KcModelPrompt(
         session_id=session.id,

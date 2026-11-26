@@ -33,6 +33,7 @@ test("a chat stops when the server reports the spending cap", async () => {
   const calls: string[] = [];
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => session(),
@@ -58,6 +59,7 @@ test("two tutor failures in a row close the chat", async () => {
   let finished = "";
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ needs_speech: true, messages: [] }),
     speak: async () => {
@@ -80,6 +82,7 @@ test("a model turn stores the child prompt, and a scripted line does not", async
   const recorded: { child_prompt?: string; child_text?: string }[] = [];
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => session(),
@@ -116,6 +119,7 @@ test("a loop stops when the claim generation is no longer its own", async () => 
   owned.script = ["one", "two"];
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({
       status: "running",
       chat_rows: [{ id: "chat-1", claim_generation: answers === 0 ? 1 : 2 }],
@@ -151,6 +155,7 @@ test("a loop stops when the claim generation is no longer its own", async () => 
 test("a paused run leaves the chat for resume", async () => {
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "paused" }),
     session: async () => session(),
     speak: async () => session(),
@@ -180,6 +185,7 @@ test("eight same-place turns are followed by two nudges, then stuck", async () =
   let pending = 0;
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ block_id: "b1", active_substep: "explain", active_block_type: "topic_goal" }),
     speak: async () => session(),
@@ -231,6 +237,7 @@ test("a nudge that moves the block does not send the second nudge", async () => 
   moving.script = ["one", "two", "three"];
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => session(),
@@ -263,6 +270,7 @@ test("a refresh resumes the remaining nudge instead of repeating the first", asy
   resumed.pending_nudges = 1;
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => session(),
@@ -287,6 +295,7 @@ test("an empty tutor reply is not stored as the previous reply", async () => {
   const recorded: { tutor_reply?: string; error?: string; child_text?: string }[] = [];
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ messages: [{ role: "assistant", content: prior }] }),
     speak: async () => session(),
@@ -319,6 +328,7 @@ test("a thrown tutor call does not copy the previous reply forward", async () =>
   const recorded: { tutor_reply?: string; error?: string }[] = [];
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ messages: [{ id: "old", role: "assistant", content: prior }],
       prompt: "old prompt", loop_decision: "advance", loop_result: { advanced: true } }),
@@ -363,6 +373,7 @@ test("a Cuba recall and a next-move explanation are answered before either nudge
   asked.script = ["Spain lost the island", "sugar and empire pulled it into the fight", "ok"];
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ messages: [{ role: "assistant", content: cuba }] }),
     speak: async () => session(),
@@ -403,6 +414,7 @@ test("a Cuba recall and a next-move explanation are answered before either nudge
 function retryTestTransport(): HarnessTransport {
   return {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ revision: 4, messages: [{ role: "assistant", id: "old", content: "Ready?" }] }),
     speak: async () => { throw new Error("unexpected opening"); },
@@ -623,12 +635,14 @@ test("a capped run stops before generation and only reads receipts for a pending
     exhausted = true;
     return { text: "yes", model: "child", input_tokens: 1, output_tokens: 1 };
   };
-  transport.answer = async (_id, _turn, _model, receiptOnlyChatId) => {
-    assert.equal(receiptOnlyChatId, chat().id);
-    events.push("check only");
-    throw Error("has not committed");
+  transport.prepareTurn = async (_id, _generation, planned) => ({ ...planned, dispatch_state: "prepared" });
+  transport.dispatchTurn = async () => {
+    assert.ok(exhausted);
+    events.push("close unsent at cap");
+    return "run_cap";
   };
-  transport.recordTurn = async () => ({ stop: "awaiting_retry", pending: true, luna_tokens: 0, cost_usd: null });
-  assert.equal(await playChat({ ...chat(), behavior: "free" }, transport), "paused");
-  assert.deepEqual(events, ["initial child", "check only", "check only"]);
+  transport.answer = async () => { throw Error("a known-unsent submission has no receipt to poll"); };
+  transport.recordTurn = async () => { throw Error("no attempt was made"); };
+  assert.equal(await playChat({ ...chat(), behavior: "free" }, transport), "done");
+  assert.deepEqual(events, ["initial child", "close unsent at cap"]);
 });

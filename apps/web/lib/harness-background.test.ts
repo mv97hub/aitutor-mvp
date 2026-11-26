@@ -74,6 +74,7 @@ test("chats run side by side, and one chat takes its turns one at a time", async
   let peak = 0;
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => {
@@ -126,6 +127,7 @@ test("stop ends the loop before another chat is claimed", async () => {
   let answers = 0;
   const transport: HarnessTransport = {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ status: "completed", messages: [] }),
     speak: async () => session(),
@@ -157,6 +159,7 @@ test("stop ends the loop before another chat is claimed", async () => {
 function flightTransport(onTurn: (id: string) => Promise<void>): HarnessTransport {
   return {
     prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => session(),
