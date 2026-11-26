@@ -223,26 +223,14 @@ def test_naming_the_rate_or_denying_its_reason_leaves_the_why_independent(open_l
     assert supplied["tutor_disclosures"] == {"choice": "b", "why": True}
 
 
+BAT_STORY = "Evie points at the sky and says, “Look at that bat!” Noah looks in his baseball bag."
+BAT_QUESTION = "What does Noah think Evie means?"
 BAG_HINT = "A flying animal fits what Evie saw in the sky. Noah looks in his baseball bag. What does he think she means?"
 BAG_REASON = "The fact he looks in his bag"
 
 
-@pytest.mark.parametrize(("tutor_feedback", "reason", "extra_clue", "choice_credit", "reason_credit"), [
-    pytest.param("Take another look. Which option do you choose?", BAG_REASON, "",
-                 "independent", "independent", id="general-encouragement"),
-    pytest.param(BAG_HINT, BAG_REASON, "", "independent", "assisted", id="used-highlighted-clue"),
-    pytest.param(BAG_HINT, "He puts on his batting helmet, so he is getting ready to play.",
-                 " He puts on his batting helmet.", "independent", "independent", id="used-another-clue"),
-    pytest.param("The answer is C because Noah looks in the baseball bag and thinks Evie means the bat used to hit a ball.",
-                 BAG_REASON, "", "assisted", "assisted", id="given-choice-and-reason"),
-])
-def test_reason_credit_depends_on_using_the_highlighted_clue(
-    open_lesson, tutor_feedback, reason, extra_clue, choice_credit, reason_credit,
-):
-    question = (
-        "Evie points at the sky and says, “Look at that bat!” Noah looks in his baseball bag."
-        + extra_clue + " What does Noah think Evie means?"
-    )
+def _bag_explanation(open_lesson, tutor_feedback, extra_clue=""):
+    question = f"{BAT_STORY}{extra_clue} {BAT_QUESTION}"
     block = {"id": "bat-meaning", "type": "mcq", "data": {
         "mode": "static", "question_stem": question,
         "choices": [
@@ -257,6 +245,30 @@ def test_reason_credit_depends_on_using_the_highlighted_clue(
     _decide(session, "A", reply=tutor_feedback)
     picked = _decide(session, "C", reply="Yes. What clue tells you which kind of bat Noah is thinking of?")
     assert picked["active_substep"] == "awaiting_why"
+    return session
+
+
+@pytest.mark.parametrize(("tutor_feedback", "reason", "extra_clue", "choice_credit", "reason_credit"), [
+    pytest.param("Take another look. Which option do you choose?", BAG_REASON, "",
+                 "independent", "independent", id="general-encouragement"),
+    pytest.param(f"{BAT_STORY} {BAT_QUESTION}", BAG_REASON, "",
+                 "independent", "independent", id="authored-question-repeated"),
+    pytest.param("What clue in the story tells you what Noah means?", BAG_REASON, "",
+                 "independent", "independent", id="open-question"),
+    pytest.param(BAG_HINT, BAG_REASON, "", "independent", "assisted", id="used-highlighted-clue"),
+    pytest.param("What does Noah’s baseball bag tell you?", BAG_REASON, "",
+                 "independent", "assisted", id="pointed-question"),
+    pytest.param("Think about the baseball bag.", BAG_REASON, "",
+                 "independent", "assisted", id="pointed-instruction"),
+    pytest.param(BAG_HINT, "He puts on his batting helmet, so he is getting ready to play.",
+                 " He puts on his batting helmet.", "independent", "independent", id="used-another-clue"),
+    pytest.param("The answer is C because Noah looks in the baseball bag and thinks Evie means the bat used to hit a ball.",
+                 BAG_REASON, "", "assisted", "assisted", id="given-choice-and-reason"),
+])
+def test_reason_credit_depends_on_using_the_highlighted_clue(
+    open_lesson, tutor_feedback, reason, extra_clue, choice_credit, reason_credit,
+):
+    session = _bag_explanation(open_lesson, tutor_feedback, extra_clue)
     _decide(session, reason, reply="Ready to finish?", substep_passed=True)
     _decide(session, "No final questions — let's continue!", reply="Done.")
     result = _closed(session)
@@ -266,3 +278,33 @@ def test_reason_credit_depends_on_using_the_highlighted_clue(
     with SessionLocal() as db:
         observations = db.scalars(select(KcRequirement).where(KcRequirement.session_id == UUID(session)))
         assert {r.requirement_key: r.observation for r in observations} == expected
+
+
+def test_an_unaccepted_explanation_using_the_hint_earns_no_credit(open_lesson):
+    session = _bag_explanation(open_lesson, BAG_HINT)
+    attempt = _decide(session, "There is a flying animal in his bag.", reply="Think about what Noah expects to find.")
+    assert attempt["active_substep"] == "awaiting_why"
+    assert attempt["loop_result"]["attempt_counted"]
+    rows = {row["key"]: row["observation"] for row in _state(session)["requirements"]}
+    assert rows == {"choice": "independent", "why": "insufficient"}
+
+
+def test_highlighted_clue_in_a_different_lesson(open_lesson):
+    question = "Mina sees webbed footprints in the mud by her pond. Which bird left them?"
+    block = {"id": "pond-tracks", "type": "mcq", "data": {
+        "mode": "static", "question_stem": question,
+        "choices": [
+            {"id": "a", "text": "A sparrow."}, {"id": "b", "text": "A robin."},
+            {"id": "c", "text": "A duck.", "is_correct": True},
+        ],
+        "correct_explanation": "A duck has webbed toes, and the shape they leave matches the footprints in the mud.",
+    }}
+    session = open_lesson([block])
+    _speak(session, question)
+    _decide(session, "A", reply="Notice the webbed footprints. Which bird fits?")
+    _decide(session, "C", reply="What clue helped you choose?")
+    _decide(session, "Those footprints are webbed.", substep_passed=True, reply="Ready to finish?")
+    _decide(session, "No final questions — let's continue!", reply="Done.")
+    assert {r["key"]: r["observation"] for r in _closed(session)["requirements"]} == {
+        "choice": "independent", "why": "assisted",
+    }
