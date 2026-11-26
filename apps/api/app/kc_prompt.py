@@ -1777,6 +1777,7 @@ def _this_turn(
     cfg: dict | None = None,
     worked_close: str = "",
     early_answer: bool = False,
+    passage_example_turn: str = "",
     summary_begin: bool = False,
     has_next: bool = False,
     forecast: object | None = None,
@@ -1802,7 +1803,7 @@ def _this_turn(
         cfg=cfg,
         state=active_block_state,
     )
-    side_question = _prompts_side_question(
+    side_question = bool(passage_example_turn) or _prompts_side_question(
         block,
         substep,
         last_answer,
@@ -2120,7 +2121,7 @@ def _this_turn(
                     has_next=has_next,
                 )
             )
-        if force_side_question and summary_phase not in {"task", "check"}:
+        if force_side_question and not passage_example_turn and summary_phase not in {"task", "check"}:
             lines.append(_side_question_reply(last_answer))
     del misconception_policy
     del prerequisite_support_policy
@@ -3329,6 +3330,7 @@ def _how_to_teach(
     has_next: bool = False,
     forecast: object | None = None,
     ask_goal_now: bool = False,
+    passage_example_turn: str = "",
 ) -> list[str]:
     if _agreement_close(summary_begin, worked_close, last_answer):
         # The close sentence is a this-turn branch. The section underneath stays stable.
@@ -3488,7 +3490,20 @@ def _how_to_teach(
         f"Representation harmony: when you explain, scaffold, or reveal, use explanation_style ({expl_style})."
     )
 
-    if goal_start == "aside":
+    if passage_example_turn == "offer":
+        lines.append(
+            "They asked to hear more. Use two short sentences in all. First, give one new concrete example "
+            "that helps explain a detail in this passage. Make clear an imagined example is an example. "
+            "Then ask one simple question about that example that helps the learner work on this step. "
+            "Use fresh, easy words and withhold the expected answer. Set help_requested=true. Award no rubric items."
+        )
+    elif passage_example_turn == "feedback":
+        lines.append(
+            "They answered the practice example. Acknowledge their answer in one short sentence, then "
+            "return to the current passage question from What to teach. Ask only that question in simple words. "
+            "Do not score practice or reveal the passage answer."
+        )
+    elif goal_start == "aside":
         lines.append(
             "On this goal-start turn, answer the side remark in one or two sentences, then one line back to the lesson. "
             "Do not start a new explanation."
@@ -3565,7 +3580,7 @@ def _how_to_teach(
             "and advance immediately when the block passes." + budget
         )
 
-    if goal_start in {"aside", "cap"} or aside:
+    if passage_example_turn or goal_start in {"aside", "cap"} or aside:
         pass
     elif side and not stay_on and not aside:
         lines.append(_SIDE_FOLLOW)
@@ -4118,6 +4133,7 @@ _TURN_BRANCH_PREFIXES = (
     "The learner already restated this point.",
     "The response_length sentence cap applies ONLY",
     "They asked to hear more.",
+    "They answered the practice example.",
     "This concept was just taught.",
     "This is the last topic.",
     "This is the opening turn.",
@@ -4417,6 +4433,8 @@ def build_kc_prompt(
         explanation_restates_topic,
         explanation_side_remark,
         learner_asks_clarification,
+        passage_example_reply,
+        short_passage_example_requested,
         stay_on_course_enabled,
         summary_ready_signal,
         summary_needs_learner_question,
@@ -4459,7 +4477,12 @@ def build_kc_prompt(
         and substep == "explain"
         and unanswered_side_turn(active_block, substep, last_answer or "", state_dict, cfg)
     )
-    side_help = (
+    passage_example_turn = ""
+    if short_passage_example_requested(active_block, last_answer or "", cp["response_length"], opening=opening):
+        passage_example_turn = "offer"
+    elif not opening and passage_example_reply(active_block, substep, state_dict, last_answer or ""):
+        passage_example_turn = "feedback"
+    side_help = passage_example_turn == "offer" or (
         _prompts_side_question(
             active_block,
             substep,
@@ -4560,6 +4583,7 @@ def build_kc_prompt(
                     cfg=cfg,
                     worked_close=worked_close,
                     early_answer=early_answer,
+                    passage_example_turn=passage_example_turn,
                     summary_begin=summary_begin,
                     has_next=has_next,
                     forecast=forecast,
@@ -4615,6 +4639,7 @@ def build_kc_prompt(
                     has_misconceptions=bool(_wrong_moves(node)),
                     include_close=include_close,
                     student=student,
+                    passage_example_turn=passage_example_turn,
                     presenting_dynamic_mcq=presenting_dynamic_mcq,
                     close_block_only=close_block_only,
                     last_answer=last_answer,

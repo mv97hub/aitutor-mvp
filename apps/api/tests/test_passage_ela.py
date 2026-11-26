@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 
+import pytest
+
 from app.block_catalog import BLOCK_AUTHORING_RULES, BLOCK_DATA_SCHEMAS, BLOCK_FIELDS, PASSAGE_LENGTH_GUIDELINES
 from app.kc_blocks import (
     PASSAGE_CAP_RULE,
@@ -251,6 +253,55 @@ def _passage_prompt(**overrides: object) -> str:
     }
     values.update(overrides)
     return build_kc_prompt(**values)["system_prompt"]
+
+
+@pytest.mark.parametrize("stay_mode", ["brief_answer_then_return", "exploratory"])
+def test_bite_sized_passage_elaboration_guides_one_unscored_step(stay_mode: str) -> None:
+    cfg = default_kc_tutor_config()
+    cfg["overarching"]["stay_on_course"] = stay_mode
+    profile = _profile(kc_tutor_config=cfg)
+    student = _student(age=6, child_profile={"reading_level": "emerging", "response_length": "bite_sized"})
+    state = {"substep": "central_idea", "dialogue_turns": 0}
+    question = BLOCK["data"]["central_idea_question"]
+    text = _passage_prompt(
+        student=student, profile=profile, opening=False, last_answer="Tell me more",
+        last_messages=f"assistant: {PASSAGE}\n\n{question} | user: Tell me more",
+        active_block_state=state,
+    )
+    turn = text.split("This turn\n", 1)[1].split("\n\nWhat just happened", 1)[0]
+    assert "repeat the active question" not in turn.lower()
+    assert "one new concrete example" in turn
+    assert "one simple question" in turn
+    assert "two short sentences" in turn
+    assert "help_requested=true" in turn
+    assert "Decision: stay." in turn
+    assert PASSAGE_CAP_RULE not in text
+
+    result = resolve_block_turn(
+        decision="complete", substep_passed=True, block_complete=True, rubric_met=["blk_passage:central_idea"],
+        stored_rubric=[], matched_wrong="", blocks=[deepcopy(BLOCK)], step=0, active_block_state=state,
+        block_results=[], move_attempts=0, hint_tier="nudge", reveals=0, enrichment_turns=0, cfg=cfg,
+        goal=None, last_misconception="", answer="Tell me more",
+    )
+    assert result.next_block_state["substep"] == "central_idea"
+    assert result.move_attempts == 0
+    assert not result.next_block_state.get("block_attempts")
+    assert not result.passed and not result.unit_complete and result.rubric_met == []
+
+
+def test_passage_reread_specific_question_and_other_lengths_keep_their_instructions() -> None:
+    asked = _passage_prompt(opening=False, last_answer="Show me the passage again")
+    assert PASSAGE_CAP_RULE in asked and PASSAGE in asked
+    assert "one new concrete example" not in asked
+    specific = _passage_prompt(opening=False, last_answer="Tell me more about the heron")
+    assert "Their question: Tell me more about the heron" in specific
+    assert "one new concrete example" not in specific
+    for length in ("balanced", "detailed"):
+        student = _student(age=6, child_profile={"reading_level": "emerging", "response_length": length})
+        text = _passage_prompt(student=student, opening=False, last_answer="Tell me more")
+        assert f"Keep response length {length}" in text
+        assert "Then repeat the active question unchanged." in text
+        assert "one new concrete example" not in text
 
 
 def test_the_opening_prompt_prints_the_passage_and_other_blocks_do_not() -> None:

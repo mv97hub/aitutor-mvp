@@ -807,7 +807,8 @@ def _advance(
         return
     # Finishing the block replaces the state, so the attempt counter is not on it.
     attempted = _attempted(before_state, after_state, before_move, resolution) or sealed
-    if not attempted and not substep_passed:
+    # An unscored passage turn may retain the previous step's reveal tier.
+    if not attempted and (kind == "passage_ela" or not substep_passed):
         return
     step_for_giveaway = before_sub
     if before_sub == "summary_check":

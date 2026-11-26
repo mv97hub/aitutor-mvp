@@ -390,6 +390,41 @@ _DEEPEN_EXACT = {
 }
 
 
+def passage_elaboration_request(block: dict, answer: str) -> bool:
+    """A request for more help with this passage, without a separate question or topic."""
+    return block.get("type") == "passage_ela" and _proceed_text(answer) in _DEEPEN_EXACT
+
+
+def short_passage_example_requested(block: dict, answer: str, length: str, *, opening: bool) -> bool:
+    return not opening and length == "bite_sized" and passage_elaboration_request(block, answer)
+
+
+def passage_example_question_spoken(block: dict, substep: str, reply: str) -> bool:
+    """Only expect a practice answer when the tutor actually asked a different question."""
+    field = {"central_idea": "central_idea_question", "cite_evidence": "evidence_prompt",
+             "craft_or_inference": "analysis_question"}.get(substep)
+    authored = _proceed_text(str(_data(block).get(field) or ""))
+    spoken, separator, _ = reply.rpartition("?")
+    return bool(separator and authored and not _proceed_text(spoken).endswith(authored))
+
+
+def passage_example_reply(block: dict, substep: str, state: dict, answer: str) -> bool:
+    """A reply to the practice question. Direct evidence and new help requests keep their own paths."""
+    if block.get("type") != "passage_ela" or state.get("passage_example_substep") != substep:
+        return False
+    if passage_elaboration_request(block, answer) or learner_asks_for_passage(answer):
+        return False
+    if learner_side_question(answer, block, substep) and _opens_as_question(_proceed_text(answer).split()):
+        return False
+    data = _data(block)
+    if substep == "cite_evidence":
+        return not (learner_points_at_span(answer, data) or any(quote_in_text(q, answer) for q in _passage_quotes(data)))
+    # A single shared detail can answer the example without stating the main idea.
+    field = "expected_analysis" if substep == "craft_or_inference" else "expected_central_idea"
+    expected = str(data.get(field) or "").strip()
+    return not (expected and _precise(answer, expected))
+
+
 def learner_wants_deeper_explanation(answer: str) -> bool:
     """Tell me more, with no question of their own. That still deepens the same topic."""
     raw = answer or ""
@@ -1982,6 +2017,8 @@ def resolve_block_turn(
     dialogue_turns = int(state.get("dialogue_turns") or 0) + 1
     state["dialogue_turns"] = dialogue_turns
     state["substep"] = substep
+    example_reply = passage_example_reply(block, substep, state, answer)
+    state.pop("passage_example_substep", None)
     if substep == "summary_check" and summary_needs_learner_question(answer, prior_tutor):
         return _unscored_stay(
             hint=tier, move_attempts=move_attempts, reveals=reveals, enrichment_turns=enrichment_turns,
@@ -2166,8 +2203,8 @@ def resolve_block_turn(
     if scored_try:
         side_turn = False
         non_answer = False
-    # A tagged misconception is a real try. Off-topic wording does not drop it.
-    if not matched_wrong and (side_turn or non_answer):
+    # Asking to hear more about the passage is on-topic help, even in exploratory mode.
+    if example_reply or passage_elaboration_request(block, answer) or (not matched_wrong and (side_turn or non_answer)):
         # Unscored help. Same block, same substep, same attempt count.
         return _unscored_stay(
             hint=tier,
