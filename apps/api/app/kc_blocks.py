@@ -33,7 +33,7 @@ PASSAGE_SUBSTEPS = (
 
 PASSAGE_CAP_RULE = (
     "Include the full Passage text verbatim (preserving paragraph breaks) before asking the question. "
-    "The response_length sentence cap (2 to 4 sentences) applies ONLY to your coaching and question below the passage, never to the passage text itself."
+    "The response_length sentence cap applies ONLY to your coaching and question below the passage, never to the passage text itself."
 )
 
 _TOKEN = re.compile(r"\S+")
