@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 
+from app.harness_personas import BOUNDARY_SITUATIONS
 from app.harness_checks import SIDE_INTENTS, WRONG_INTENTS, graded_step, line_matches_key, loop_accepted, turn_place
+
+SIMULATION_LABELS = {"learner": "Learner-visible", "answer_key_control": "Answer-key control",
+                     "script": "Scripted control", "legacy_unknown": "Historical mode unknown"}
 
 RUBRIC_VERSION = "2"
 CLEAR_DELTA = 0.3
@@ -296,6 +300,7 @@ def rollup(chats: list[dict]) -> dict:
         "usable_chats": len(usable),
         "not_judged": not_judged,
         "low_realism_left_out": dropped,
+        "by_simulation_role": _group(usable, lambda chat: SIMULATION_LABELS.get(chat.get("simulation_role"), "Historical mode unknown")),
         "by_child": _group(usable, lambda chat: chat.get("persona_name")),
         "by_course": _group(usable, lambda chat: chat.get("course_title")),
         "by_component": _group(usable, lambda chat: chat.get("component_title")),
@@ -486,7 +491,6 @@ def _match_key(chat: dict) -> tuple:
     return (
         str(chat.get("persona_name") or ""),
         str(chat.get("component_id") or chat.get("component_title") or ""),
-        str(chat.get("tutor_model") or ""),
         int(chat.get("seed") or 0),
         int(chat.get("iteration") or 1),
     )
@@ -528,7 +532,10 @@ def compare_runs(left: list[dict], right: list[dict]) -> dict:
 
     A new stuck chat, false pass, or empty reply is a failure even when the mean rises.
     """
-    right_by = {_match_key(chat): chat for chat in right}
+    left_count = Counter(_match_key(chat) for chat in left)
+    right_by = defaultdict(list)
+    for chat in right:
+        right_by[_match_key(chat)].append(chat)
     matched = []
     flips_good = []
     flips_bad = []
@@ -537,9 +544,20 @@ def compare_runs(left: list[dict], right: list[dict]) -> dict:
     new_empty = []
     dim_pairs: dict[str, list[tuple[float, float]]] = defaultdict(list)
     for chat in left:
-        other = right_by.get(_match_key(chat))
-        if other is None:
-            continue
+        key = _match_key(chat)
+        candidates = right_by[key]
+        if len(candidates) == left_count[key] == 1:
+            # Paired independent runs can compare different tutors when the cohort has just one variant.
+            other = candidates[0]
+            if chat.get("tutor_model") != other.get("tutor_model") and not (chat.get("paired_seeds") and other.get("paired_seeds")):
+                continue
+        else:
+            exact = [c for c in candidates if (c.get("tutor_model"), c.get("seed_profile")) ==
+                     (chat.get("tutor_model"), chat.get("seed_profile"))]
+            if len(exact) != 1:
+                continue
+            other = exact[0]
+        candidates.remove(other)
         before = _chat_score(chat)
         after = _chat_score(other)
         left_checks = chat.get("checks") or {}
@@ -1063,6 +1081,40 @@ def run_summary(chats: list[dict]) -> dict:
                 "outcomes": _outcome_bits(outcomes),
             }
         )
+    # The opportunity belongs to the block where the child acted, even on its last turn.
+    opportunities = Counter()
+    situation_counts = Counter()
+    fallback_counts = Counter()
+    for chat in chats:
+        for turn in _chat_turns(chat):
+            role = turn.get("simulation_role") or chat.get("simulation_role") or "legacy_unknown"
+            block = turn.get("block_type_before") or "unknown"
+            outcome = turn.get("learner_observation") or "unknown"
+            scenario = chat.get("scenario") or "unspecified"
+            if chat.get("scenario") and turn.get("scenario_exercised") is False:
+                scenario += " (setup)"
+            opportunities[(role, chat.get("persona_name") or "unknown", scenario, block, outcome)] += 1
+            if turn.get("choice_fallback"):
+                fallback_counts[role] += 1
+            situation = BOUNDARY_SITUATIONS.get(str(turn.get("child_text") or "").strip().lower())
+            if situation:
+                situation_counts[(role, situation)] += 1
+    rows = [{"role": role, "profile": profile, "scenario": scenario, "block": block, "outcome": outcome, "turns": count}
+            for (role, profile, scenario, block, outcome), count in sorted(opportunities.items())]
+    text = _summary_text(len(chats), completed, stuck, ended_stuck, models, groups, tone, chats)
+    if rows:
+        counts = Counter()
+        for row in rows:
+            counts[row["role"]] += row["turns"]
+        text += "\n\nRecorded turn opportunities\n" + "\n".join(
+            f"{SIMULATION_LABELS.get(role, role)}: {count} turns, {fallback_counts[role]} fallback choices"
+            for role, count in sorted(counts.items())
+        )
+    if situation_counts:
+        text += "\nSynthetic boundary situations exercised: " + ", ".join(
+            f"{situation.replace('_', ' ')} ({count} turns, {SIMULATION_LABELS.get(role, role)})"
+            for (role, situation), count in sorted(situation_counts.items())
+        )
     return {
         "chats": len(chats),
         "completed": completed,
@@ -1072,5 +1124,6 @@ def run_summary(chats: list[dict]) -> dict:
         "groups": groups,
         "tone": tone,
         "block_scores": block_scores,
-        "text": _summary_text(len(chats), completed, stuck, ended_stuck, models, groups, tone, chats),
+        "opportunities": rows,
+        "text": text,
     }

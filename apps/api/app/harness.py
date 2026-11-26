@@ -7,6 +7,8 @@ This module stores the plan, the child's intent, and the reviews.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import os
 import uuid
 from collections import Counter
@@ -44,6 +46,8 @@ from app.harness_report import (
     run_summary,
     stuck_nudge_rows,
 )
+from app.harness_scenario_fixture import SCENARIO_FIXTURE_CODE, scenario_fixture_document
+from app.kc_blocks import passage_paragraphs
 from app.kc import course_out, load_targets, mark_ready, open_session
 from app.kc import _block_context
 from app.kc_course_io import SCHEMA, _BLOCK_EXAMPLES, import_new_course
@@ -279,6 +283,11 @@ def normalize_plan(raw: dict) -> dict:
         "luna_token_ceiling": int(raw.get("luna_token_ceiling") or DEFAULT_LUNA_TOKEN_CEILING),
         "script": [str(line).strip() for line in script if str(line).strip()][:80],
         "seed": int(raw.get("seed") or 0),
+        "pair_tutor_seeds": raw.get("pair_tutor_seeds") is True,
+        "scenario": str(raw.get("scenario") or "")[:100],
+        "scenario_group": str(raw.get("scenario_group") or "")[:100],
+        "seed_from_run": str(raw.get("seed_from_run") or ""),
+        "seed_from_profile": str(raw.get("seed_from_profile") or ""),
     }
 
 
@@ -382,7 +391,29 @@ def plan_preview(db: Session, raw: dict) -> dict:
     }
 
 
-def _snapshot(row: HarnessPersona) -> dict:
+def scenario_seed(run_seed: int, persona, course, component, model: str, profile: str,
+                  iteration: int, *, scenario: str = "", group: str = "", paired: bool = False) -> int:
+    """Reordering the run grid cannot change a learner's scenario or shift its turn stream."""
+    parts = [int(run_seed), str(persona), str(course), str(component), int(iteration)]
+    parts.append(group if paired and group else scenario)
+    if not paired:
+        parts.extend([model, profile])
+    payload = json.dumps(parts, separators=(",", ":")).encode()
+    return int.from_bytes(hashlib.blake2s(payload, digest_size=8).digest(), "big") % 2_000_000_000
+
+
+def _recorded_seeds(db: Session, run_id, *, source_profile=None, target_profile=None) -> dict:
+    stmt = select(HarnessChat).where(HarnessChat.run_id == run_id)
+    if source_profile:
+        stmt = stmt.where(HarnessChat.tutor_profile_id == source_profile)
+    return {(c.persona_id, c.course_id, c.component_id, c.tutor_model, target_profile or c.tutor_profile_id, c.iteration): c.seed
+            for c in db.scalars(stmt)}
+
+
+def _snapshot(row: HarnessPersona, behavior: str) -> dict:
+    role = "script" if behavior == "script" else "learner"
+    if behavior == "rule" and row.number in (13, 14):
+        role = "answer_key_control"
     return {
         "id": str(row.id),
         "number": row.number,
@@ -391,10 +422,12 @@ def _snapshot(row: HarnessPersona) -> dict:
         "age": row.age,
         "child_profile": dict(row.child_profile or {}),
         "traits": dict(row.traits or {}),
+        "simulation_role": role,
+        "policy_version": "visible-v1",
     }
 
 
-def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, seeds: list[int] | None = None) -> dict:
+def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, seeds: dict | None = None) -> dict:
     plan = normalize_plan(raw)
     if not plan["tutor_models"]:
         raise HTTPException(status_code=422, detail="Choose a tutor model.")
@@ -412,20 +445,30 @@ def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, see
     )
     db.add(run)
     db.flush()
-    index = 0
+    if seeds is None and (source_run := _uuid(plan["seed_from_run"])) and len(profiles) == 1 and plan["seed_from_profile"]:
+        seeds = _recorded_seeds(db, source_run, source_profile=plan["seed_from_profile"], target_profile=profiles[0].id)
     for child in children:
         for goal, node in components:
             for model in plan["tutor_models"]:
                 for profile in profiles:
                     for iteration in range(1, plan["iterations"] + 1):
-                        seed = seeds[index] if seeds and index < len(seeds) else (plan["seed"] + index * 997) % 2_000_000_000
-                        index += 1
+                        identity = child.id, goal.id, node.id, model, profile.id, iteration
+                        seed = (seeds or {}).get(identity)
+                        if seed is None:
+                            seed = scenario_seed(
+                                plan["seed"], *identity, scenario=plan["scenario"], group=plan["scenario_group"],
+                                paired=plan["pair_tutor_seeds"],
+                            )
                         db.add(
                             HarnessChat(
                                 run_id=run.id,
                                 status="queued",
                                 persona_id=child.id,
-                                child_snapshot=_snapshot(child),
+                                child_snapshot={
+                                    **_snapshot(child, plan["behavior"]), "scenario": plan["scenario"],
+                                    "seed_profile": plan["seed_from_profile"] or profile.id,
+                                    "paired_seeds": plan["pair_tutor_seeds"],
+                                },
                                 course_id=goal.id,
                                 component_id=node.id,
                                 tutor_model=model,
@@ -605,11 +648,9 @@ def delete_run(db: Session, run_id: uuid.UUID) -> dict:
 
 def run_again(db: Session, run_id: uuid.UUID) -> dict:
     run = _run_or_404(db, run_id)
-    chats = db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id).order_by(HarnessChat.created_at)).all()
     plan = dict(run.plan or {})
     plan["seed"] = int(plan.get("seed") or 1)
-    created = create_run(db, plan, suite_id=run.suite_id, seeds=[chat.seed for chat in chats])
-    return created
+    return create_run(db, plan, suite_id=run.suite_id, seeds=_recorded_seeds(db, run.id))
 
 
 def _settings_copy(db: Session, profile: TutorProfile, node: KcNode) -> dict:
@@ -802,6 +843,14 @@ def _topic_number(state: dict | None) -> int | None:
         return None
 
 
+def seen_passage(text: str, messages, block_index: int) -> str:
+    """Only repeat authored paragraphs the tutor has actually displayed in this block."""
+    shown = [" ".join(message.content.split()) for message in messages
+             if message.step == block_index and message.role == "assistant"]
+    paragraphs = passage_paragraphs(text)
+    return "\n\n".join(p for p in paragraphs if any(" ".join(p.split()) in line for line in shown))
+
+
 def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
     chat = db.get(HarnessChat, chat_id)
     if chat is None or chat.session_id is None:
@@ -810,7 +859,7 @@ def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
     node = db.get(KcNode, session.kc_id) if session is not None else None
     if session is None or node is None:
         raise HTTPException(status_code=404, detail="That session was not found.")
-    _profile, _goal, _messages, _fragment, _cfg, _blocks, index, block, state = _block_context(db, session, node)
+    _profile, _goal, messages, _fragment, _cfg, _blocks, index, block, state = _block_context(db, session, node)
     data = block.get("data") if isinstance(block, dict) and isinstance(block.get("data"), dict) else {}
     choices = []
     correct = ""
@@ -846,6 +895,8 @@ def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
             str(state.get("substep") or ""),
             data,
         ),
+        "visible_passage": seen_passage(str(data.get("passage_text") or ""), messages, index)
+        if block and block.get("type") == "passage_ela" else "",
         "correct_choice_id": correct,
         "choices": choices,
         "misconceptions": misconceptions,
@@ -1435,7 +1486,9 @@ def _download_payload(db: Session, chat: HarnessChat) -> dict:
 
 
 def _run_stamp(run: HarnessRun) -> dict:
-    return {"id": str(run.id), "status": run.status, "code_version": run.code_version}
+    plan = dict(run.plan or {})
+    return {"id": str(run.id), "status": run.status, "code_version": run.code_version,
+            "seed": plan.get("seed"), "pair_tutor_seeds": plan.get("pair_tutor_seeds")}
 
 
 def download_chat(db: Session, chat_id: uuid.UUID) -> str:
@@ -1583,6 +1636,12 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
                 "block_label": block_label(typed),
                 "block_id": str(after.get("block_id") or ""),
                 "block_before": str(before.get("block_id") or ""),
+                "block_type_before": str(before.get("block_type") or blocks_by_id.get(str(before.get("block_id") or ""), "")),
+                "planned_intent": before.get("planned_intent"),
+                "scenario_exercised": before.get("scenario_exercised"),
+                "simulation_role": before.get("simulation_role"),
+                "learner_observation": after.get("learner_observation"),
+                "choice_fallback": before.get("choice_fallback") is True,
                 "substep": str(after.get("substep") or ""),
                 "substep_before": str(before.get("substep") or ""),
                 "passed": bool(after.get("passed")),
@@ -1599,6 +1658,10 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
     return {
         "id": str(chat.id),
         "persona_name": snapshot.get("name") or "",
+        "simulation_role": snapshot.get("simulation_role"),
+        "seed_profile": snapshot.get("seed_profile") or chat.tutor_profile_id,
+        "paired_seeds": snapshot.get("paired_seeds") is True,
+        "scenario": snapshot.get("scenario"),
         "traits": snapshot.get("traits") or {},
         "course_title": goal.title if goal is not None else "",
         "component_title": node.title if node is not None else "",
@@ -1715,12 +1778,17 @@ def fixture_document() -> dict:
 
 
 def ensure_fixture(db: Session) -> dict:
-    existing = db.scalar(select(KcGoal).where(KcGoal.code == FIXTURE_CODE))
-    if existing is None:
-        existing = import_new_course(db, fixture_document())
-    if not existing.ready:
-        mark_ready(db, existing)
-    body = course_out(db, existing)
+    def load(code, document):
+        course = db.scalar(select(KcGoal).where(KcGoal.code == code))
+        if course is None:
+            course = import_new_course(db, document())
+        if not course.ready:
+            mark_ready(db, course)
+        return course
+
+    base = load(FIXTURE_CODE, fixture_document)
+    load(SCENARIO_FIXTURE_CODE, scenario_fixture_document)
+    body = course_out(db, base)
     body["fixture"] = True
     return body
 
@@ -1906,6 +1974,8 @@ def trial_profile(db: Session, card_id: uuid.UUID) -> dict:
         if run is not None:
             plan = dict(run.plan or {})
             plan["tutor_profile_ids"] = [created.id]
+            plan["seed_from_run"] = str(run.id)
+            plan["seed_from_profile"] = source.id
     return {"recommendation": recommendation_out(row), "trial_profile_id": created.id, "plan": plan}
 
 

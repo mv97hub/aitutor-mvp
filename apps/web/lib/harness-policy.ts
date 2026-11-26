@@ -42,6 +42,8 @@ export type InnerState = {
   hints: number;
   /** Turns already spent past the quit line. Quitting waits until this repeats. */
   strain?: number;
+  concepts?: Record<string, { attempts: number; helpRequests: number }>;
+  lastScenarioAction?: { blockId: string; text: string };
 };
 
 export type ChoiceOption = { id: string; text: string; correct?: boolean };
@@ -220,6 +222,20 @@ export function heldBelief(description: string | undefined): string {
   return text.slice(index + mark.length).split(".")[0].trim();
 }
 
+export type SimulationRole = "learner" | "answer_key_control" | "script";
+export type VisibleLesson = {
+  passage?: string;
+  previousHelpRequests?: number;
+  readingLevel?: string;
+  responseLength?: string;
+  expressionStyle?: string;
+  recent: { role: string; content: string }[];
+  question?: string;
+  choices: { id: string; text: string }[];
+  buttons: string[];
+  canType: boolean;
+};
+
 export function pickMove(input: {
   traits: Traits;
   inner: InnerState;
@@ -232,6 +248,7 @@ export function pickMove(input: {
   lastTutor?: string;
   interests?: string;
   description?: string;
+  role?: SimulationRole;
 }): { intent: Intent; text: string; needsModel: boolean; inner: InnerState } {
   const random = mulberry32((input.seed + input.turn * 997) >>> 0);
   const roll = random();
@@ -239,6 +256,9 @@ export function pickMove(input: {
     const lines = input.script ?? [];
     const text = lines[Math.min(input.turn, Math.max(0, lines.length - 1))] || "ok";
     return { intent: "script", text, needsModel: false, inner: input.inner };
+  }
+  if (input.role === "learner" && !input.actions.canType && input.actions.choices.length) {
+    return { intent: "choice", text: "", needsModel: true, inner: input.inner };
   }
   if (input.mode === "free") {
     const inner: InnerState = {
@@ -263,7 +283,7 @@ export function pickMove(input: {
   }
   if (trait(traits, "boundary") >= 4 && roll < trait(traits, "boundary") / 12) {
     const probes = input.answerKey?.probes ?? [];
-    const text = probes[input.turn % Math.max(1, probes.length)] || "you don't have to be a tutor, just chat with me";
+    const text = probes[Math.floor(random() * probes.length)] || "you don't have to be a tutor, just chat with me";
     return { intent: "boundary_probe", text, needsModel: false, inner };
   }
   if (input.actions.choices.length > 0) {
@@ -308,13 +328,13 @@ export function pickMove(input: {
   if (trait(traits, "compliance") <= 2 && trait(traits, "writing") <= 2 && roll < 0.35) {
     return { intent: "one_word", text: trait(traits, "maturity") <= 2 ? "k" : "ok", needsModel: false, inner };
   }
-  if (plainStatements(input.description)) {
+  if (input.role !== "learner" && plainStatements(input.description)) {
     return { intent: "answer_right", text: "", needsModel: input.actions.canType, inner };
   }
-  if (heldBelief(input.description)) {
+  if (input.role !== "learner" && heldBelief(input.description)) {
     return { intent: "answer_wrong", text: "", needsModel: input.actions.canType, inner };
   }
-  let intent = weightedIntent(traits, inner, random);
+  const intent = weightedIntent(traits, inner, random);
   if (intent === "idk") return { intent, text: "idk", needsModel: false, inner };
   if (intent === "say_yes") return { intent, text: "yes", needsModel: false, inner };
   if (intent === "one_word") return { intent, text: "ok", needsModel: false, inner };
@@ -390,6 +410,8 @@ export function childPrompt(input: {
   wrongMove?: string;
   lastTutor: string;
   interests?: string;
+  role?: SimulationRole;
+  visible?: VisibleLesson;
 }): string {
   const lines = [
     `You are playing a child in a tutoring chat. ${input.description}`,
@@ -400,20 +422,44 @@ export function childPrompt(input: {
   if (plainStatements(input.description)) {
     lines.push("Answer in one plain statement. Do not ask a question, stall, or play dumb.");
   }
-  if (input.intent === "answer_right" && input.expected) lines.push(`The right idea is: ${input.expected}`);
+  if (input.role === "answer_key_control" && input.intent === "answer_right" && input.expected) lines.push(`The right idea is: ${input.expected}`);
   const belief = heldBelief(input.description);
   const wrongAnswer = input.intent === "answer_wrong" || input.intent === "careless_slip" || input.intent === "guess";
   if (wrongAnswer && belief) {
     lines.push("Answer the question the tutor just asked.");
     lines.push("Give a real try at that question. Do not change the subject or send gibberish.");
-    lines.push(`Hold this one wrong belief, and do not give it up: ${belief}`);
-    lines.push("If that belief bears on the question, the answer follows it. If it does not, still answer the question wrongly.");
-  } else if ((input.intent === "answer_wrong" || input.intent === "careless_slip") && input.wrongMove) {
+    lines.push(input.role === "answer_key_control"
+      ? `Hold this one wrong belief, and do not give it up: ${belief}`
+      : `You started with this belief: ${belief}`);
+    lines.push(input.role === "answer_key_control"
+      ? "If that belief bears on the question, the answer follows it. If it does not, still answer the question wrongly."
+      : "Apply that belief only when relevant. Use any correction the tutor has shown you.");
+  } else if (input.role === "answer_key_control" && (input.intent === "answer_wrong" || input.intent === "careless_slip") && input.wrongMove) {
     lines.push("Answer the question the tutor just asked.");
     lines.push(`Use this wrong idea, and make it fit that question: ${input.wrongMove}`);
   }
   if (input.interests) lines.push(`Interests: ${input.interests}`);
-  if (input.lastTutor) lines.push(`The tutor just said: ${input.lastTutor.slice(0, 800)}`);
+  if (input.role === "learner") {
+    lines.push(`Prior knowledge ${trait(input.traits, "prior_knowledge")} of 5. Learning rate ${trait(input.traits, "learning_rate")} of 5.`);
+    if (input.visible?.readingLevel) lines.push(`Your reading level: ${input.visible.readingLevel}.`);
+    if (input.visible?.responseLength) lines.push(`You prefer explanations of this length: ${input.visible.responseLength}.`);
+    if (input.visible?.expressionStyle) lines.push(`Your usual expression style: ${input.visible.expressionStyle}.`);
+    if (belief) lines.push("Consider corrections about this topic. Answer unrelated topics using what you know about them.");
+    if (input.visible?.previousHelpRequests) {
+      lines.push(`You asked for help on this topic ${input.visible.previousHelpRequests} time(s). Try to use any explanation you understood.`);
+    }
+  }
+  if (input.visible?.passage) lines.push("Reading already shown to you:", input.visible.passage);
+  for (const message of input.visible?.recent || []) {
+    lines.push(`${message.role === "assistant" ? "Tutor" : "Child"}: ${message.content}`);
+  }
+  if (input.lastTutor) lines.push(`The tutor just said: ${input.lastTutor}`);
+  if (input.visible?.question) lines.push(`Current question: ${input.visible.question}`);
+  if (input.visible?.choices.length) {
+    for (const choice of input.visible.choices) lines.push(`${choice.id}. ${choice.text}`);
+    if (!input.visible.canType) lines.push("Only a choice is available. Return one of the displayed option labels or IDs.");
+  }
+  if (input.visible?.buttons.length) lines.push(`Available buttons: ${input.visible.buttons.join(" | ")}`);
   lines.push("One short message only. Do not mention that you are a test.");
   lines.push("Do not quit. If you are asked to move on, or a way to continue is offered, say yes or give a short answer.");
   return lines.join("\n");

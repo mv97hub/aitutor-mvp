@@ -1,7 +1,7 @@
 import { generateText } from "ai";
 
 import { childPrompt } from "@/lib/harness-policy";
-import type { Intent, Traits } from "@/lib/harness-policy";
+import type { Intent, Traits, SimulationRole, VisibleLesson } from "@/lib/harness-policy";
 import { isKcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { languageModel } from "@/lib/language-model";
 import { readModelUsage } from "@/lib/model-usage";
@@ -21,6 +21,8 @@ export async function POST(req: Request) {
     interests?: string;
     text?: string;
     needsModel?: boolean;
+    role?: SimulationRole;
+    visible?: VisibleLesson;
   };
   try {
     body = (await req.json()) as typeof body;
@@ -39,6 +41,8 @@ export async function POST(req: Request) {
     description: body.description || "A test child.",
     traits: body.traits || {},
     intent: (body.intent || "answer_part") as Intent,
+    role: body.role,
+    visible: body.visible,
     expected: body.expected,
     wrongMove: body.wrongMove,
     lastTutor: body.lastTutor || "",

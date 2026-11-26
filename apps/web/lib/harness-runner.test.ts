@@ -584,3 +584,129 @@ test("a replaced worker with a lost response yields its pending submission to th
   assert.equal(await playChat({ ...chat(), claim_generation: 3 }, transport), "paused");
   assert.equal(attempts, 1);
 });
+
+test("a realistic learner can reread the full visible passage and question without seeing the answer key", async () => {
+  const passage = "The class read the forest journal. ".repeat(35) + "The last tree was a cedar.";
+  const question = "What sort of tree stood last?";
+  const transport = retryTestTransport();
+  const visible = [{ role: "assistant", id: "passage", step: 0, content: passage },
+    { role: "user", id: "u1", step: 0, content: "Can I reread it?" },
+    { role: "assistant", id: "q", step: 0, content: question }];
+  transport.session = async () => session({ active_block_type: "passage_ela", active_block_index: 0, messages: visible });
+  transport.answerKey = async () => ({ expected: "PRIVATE_CEDAR_KEY", misconceptions: [{ wrong_move: "PRIVATE_WRONG" }] });
+  let capture = "";
+  transport.childText = async (input) => {
+    capture = JSON.stringify(input);
+    return { text: "a cedar", input_tokens: 1, output_tokens: 1, model: "fake" };
+  };
+  const learner = { ...chat(), behavior: "free" as const, child: { number: 10, description: "Struggling reader", traits: {} } };
+  await playChat(learner, transport);
+  assert.ok(capture.includes(passage));
+  assert.ok(capture.includes(question));
+  assert.ok(capture.includes("Can I reread it?"));
+  assert.doesNotMatch(capture, /PRIVATE_/);
+});
+
+for (const behavior of ["rule", "free"] as const) {
+  test(`a ${behavior} learner can only submit a visible option on a choice-only turn`, async () => {
+    const transport = retryTestTransport();
+    transport.session = async () => session({ choice: { prompt: "Which?", choices: [{ id: "A", text: "Oak" }, { id: "B", text: "Pine" }] } });
+    transport.answerKey = async () => ({ expected: "PRIVATE", correct_choice_id: "B", probes: ["An unrelated remark."] });
+    let capture = "";
+    transport.childText = async (input) => {
+      capture = JSON.stringify(input);
+      return { text: "Can we talk about dogs?", input_tokens: 2, output_tokens: 1, model: "fake" };
+    };
+    const seen: string[] = [];
+    transport.answer = async (_id, saved) => {
+      seen.push(saved.child_text);
+      return session({ status: "completed", messages: [{ id: "a", role: "assistant", content: "Done." }] });
+    };
+    const child = { ...chat(), behavior, child: { number: 12, traits: { boundary: 5 } }, pending_nudges: 2, stuck_answers: 2 };
+    await playChat(child, transport);
+    assert.equal(seen.length, 1);
+    assert.ok(["Oak", "Pine"].includes(seen[0]));
+    assert.ok(capture.includes("Oak") && capture.includes("Pine"));
+    assert.doesNotMatch(capture, /PRIVATE|correct_choice|"correct":/);
+  });
+}
+
+test("the simulator remembers the delivered words and loop outcome even when the intended wrong answer was correct", async () => {
+  const transport = retryTestTransport();
+  const owned = { ...chat(), behavior: "rule" as const, child: { number: 14,
+    description: "Holds one wrong belief: higher prices mean more money. Answers the question.", traits: { boundary: 1, echoing: 1 } } };
+  transport.childText = async (input) => {
+    assert.equal(input.intent, "answer_wrong");
+    return { text: "I think it is blue.", input_tokens: 2, output_tokens: 1, model: "child" };
+  };
+  transport.answer = async () => session({ status: "completed",
+    messages: [{ role: "assistant", id: "fresh", content: "Blue is right." }],
+    loop_result: { attempt_counted: true, advanced: true, stayed: false } });
+  transport.recordTurn = async (_id, record) => {
+    assert.equal(record.child_text, "I think it is blue.");
+    assert.equal((record.session_before as Record<string, unknown>).planned_intent, "answer_wrong");
+    assert.equal((record.session_after as Record<string, unknown>).learner_observation, "advanced_after_attempt");
+    const state = record.inner_state as { confusion: number; concepts: Record<string, unknown> };
+    assert.equal(state.confusion, 0);
+    assert.deepEqual(state.concepts.b1, { attempts: 1, helpRequests: 0 });
+    return { stop: "completed", cost_usd: null, luna_tokens: 0 };
+  };
+  assert.equal(await playChat(owned, transport), "done");
+});
+
+test("a named scenario drives its target once and uses a legal learner action outside its target", async () => {
+  for (const matches of [true, false]) {
+    const transport = retryTestTransport();
+    const owned = { ...chat(), script: ["never send this line"], child: { number: 5, scenario: "cpi-formula-statement", traits: {} } };
+    const tutor = matches ? "What is the formula for the inflation rate using CPI?" : "Pick a river.";
+    transport.session = async () => session({ active_block_type: matches ? "retrieval_check" : "mcq",
+      active_substep: matches ? "recall" : "choice", messages: [{role: "assistant", content: tutor, step: 0}],
+      choice: matches ? null : { prompt: tutor, choices: [{id: "a", text: "Thames"}] } });
+    transport.childText = async (input) => {
+      assert.equal(input.role, "learner");
+      assert.equal(input.expected, undefined);
+      return { text: "I'm trying to type on a choice card", input_tokens: 2, output_tokens: 1, model: "child" };
+    };
+    transport.recordTurn = async (_id, body) => {
+      const before = body.session_before as Record<string, unknown>;
+      assert.equal(before.scenario_exercised, matches);
+      assert.equal(before.simulation_role, "script");
+      assert.equal(before.choice_fallback, !matches);
+      assert.equal(body.child_text, matches ? "The change in CPI divided by the old CPI, times 100." : "Thames");
+      return { stop: "completed", cost_usd: null, luna_tokens: 0 };
+    };
+    assert.equal(await playChat(owned, transport), "done");
+  }
+});
+
+test("a scripted child who explicitly asks to stop records quit after two prior acknowledgements", async () => {
+  const transport = retryTestTransport();
+  const owned = { ...chat(), child: { number: 7, scenario: "closing-stops" } };
+  transport.session = async () => session({ active_block_type: "explanation", active_substep: "summary_check",
+    active_block_index: 0,
+    messages: [{role: "assistant", step: 0, content: "Any final questions?"}, {role: "user", step: 0, content: "k"},
+      {role: "assistant", step: 0, content: "Anything else?"}, {role: "user", step: 0, content: "k"},
+      {role: "assistant", step: 0, content: "Shall we continue?"}] });
+  transport.recordTurn = async (_id, body) => {
+    assert.equal(body.child_text, "Can we stop now?");
+    assert.equal(body.intent, "quit");
+    assert.equal((body.session_before as Record<string, unknown>).scenario_exercised, true);
+    return { stop: "quit", cost_usd: null, luna_tokens: 0 };
+  };
+  assert.equal(await playChat(owned, transport), "done");
+});
+
+test("a resumed reasoning scenario remembers its actual choice when the stem was only on the card", async () => {
+  const transport = retryTestTransport();
+  const owned = { ...chat(), child: { number: 1, scenario: "reason-sound" },
+    turn_count: 1, last_inner_state: { lastScenarioAction: { blockId: "b1", text: "10%" } } };
+  transport.session = async () => session({ active_block_type: "mcq", active_substep: "awaiting_why", active_block_index: 1,
+    messages: [{role: "assistant", step: 1, content: "Pick a choice."}, {role: "user", step: 1, content: "10%"},
+      {role: "assistant", step: 1, content: "Why?"}] });
+  transport.recordTurn = async (_id, body) => {
+    assert.equal((body.session_before as Record<string, unknown>).scenario_exercised, true);
+    assert.match(String(body.child_text), /Dividing by the starting 120 gives 10%/);
+    return { stop: "completed", cost_usd: null, luna_tokens: 0 };
+  };
+  assert.equal(await playChat(owned, transport), "done");
+});
