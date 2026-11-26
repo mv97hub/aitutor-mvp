@@ -107,7 +107,8 @@ BLOCK_AUTHORING_RULES: dict[str, str] = {
         "Substep central_idea needs central_idea_question, expected_central_idea, and distractor_detail "
         "(a true but minor detail from one paragraph). "
         "Substep cite_evidence needs evidence_prompt and verbatim_evidence_quotes, a list of 2 or 3 sentences "
-        "copied verbatim from passage_text. "
+        "copied verbatim from passage_text. For attribution-sensitive evidence give evidence_context "
+        "with the speaker, listener and supported meaning; otherwise leave it null. "
         "Substep craft_or_inference needs analysis_focus (inference, vocab_in_context, "
         "author_purpose_structure, or evaluate_argument; default inference), analysis_question, and expected_analysis."
     ),
@@ -189,6 +190,7 @@ BLOCK_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ("expected_central_idea", "Expected central idea"),
         ("distractor_detail", "Distractor detail"),
         ("evidence_prompt", "Evidence prompt"),
+        ("evidence_context", "Source attribution and meaning (optional)"),
         ("verbatim_evidence_quotes", "Verbatim evidence quotes"),
         ("analysis_focus", "Analysis focus"),
         ("analysis_question", "Analysis question"),
@@ -406,6 +408,7 @@ BLOCK_DATA_SCHEMAS: dict[str, dict] = {
             "expected_central_idea": _STRING,
             "distractor_detail": _STRING,
             "evidence_prompt": _STRING,
+            "evidence_context": _NULLABLE_STRING,
             "verbatim_evidence_quotes": {
                 "type": "array",
                 "minItems": 2,

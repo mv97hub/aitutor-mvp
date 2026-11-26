@@ -121,6 +121,9 @@ def _turn_lines(turn: dict, marks: list[dict], call: dict | None) -> list[str]:
     lines.append(f"Intent: {_text(turn.get('intent')) or 'not stored'}")
     lines.append(f"Child: {turn.get('child_text') or ''}")
     lines.append(f"Tutor: {reply}")
+    if after.get("turn_id") and after.get("receipt_status") and after.get("delivery_status"):
+        lines.extend([f"Submission: {after['turn_id']}", f"Tutor receipt: {after['receipt_status']}",
+                      f"Delivery: {after['delivery_status']}"])
     if error or not reply:
         lines.append(f"Error: {error or 'The tutor did not write a reply.'}")
     loop = after.get("loop_result") if reply and not error else None
@@ -188,6 +191,17 @@ def _chat_lines(chat: dict) -> list[str]:
             call = {**calls[index], "kind": "answer"}
             rendered.add(index)
         lines.extend(_turn_lines(turn, marks, call))
+    pending = _dict(chat.get("pending_delivery"))
+    unsent = _dict(_dict(chat.get("tokens")).get("unsent_child"))
+    if unsent:
+        lines.extend(["### Child response stopped before submission", "",
+                      "The run reached its spending cap before the tutor was contacted.",
+                      f"Submission: {unsent['turn_id']}",
+                      f"Child tokens: {_tokens(_dict(unsent.get('child_tokens')))}", ""])
+    if pending:
+        lines.extend([f"### Pending submission for turn {pending['seq']}", "",
+                      f"Child: {pending['child_text']}", f"Submission: {pending['turn_id']}",
+                      f"Tutor receipt: {pending['receipt_status']}", "Delivery: unconfirmed", ""])
     remaining = [call for index, call in enumerate(calls) if index not in rendered]
     if remaining:
         lines.extend(["### Tutor records without a verified turn", "",

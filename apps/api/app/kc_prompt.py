@@ -1712,6 +1712,13 @@ def _passage_teach_lines(block: dict, substep: str) -> list[str]:
     ]
     if current == "cite_evidence":
         lines.append(f"Question: {data['evidence_prompt']}")
+        if data.get("evidence_context"):
+            lines.extend([
+                f"Source context for grading (withhold until needed): {data['evidence_context']}",
+                "Check the attribution and the meaning of the cited words. For a different scene or a "
+                "reversed speaker, identify the mismatch and invite the learner to reread this excerpt. "
+                "Set substep_passed only for a supported reading in the configured citation mode.",
+            ])
         quotes = data["verbatim_evidence_quotes"]
         if quotes:
             lines.append("Verbatim evidence quotes (withhold until pass or reveal):")
