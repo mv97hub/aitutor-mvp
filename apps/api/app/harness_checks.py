@@ -7,7 +7,7 @@ from difflib import SequenceMatcher
 
 from app.kc_blocks import passage_paragraphs
 
-CHECKS_VERSION = "1"
+CHECKS_VERSION = "2"
 DEFAULT_CHAT_CAP_CENTS = 40
 DEFAULT_TURN_LIMIT = 40
 DEFAULT_STUCK_LIMIT = 8
