@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Callable
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -30,18 +31,28 @@ def claim_answer(
     turn_id: str,
     revision: int | None,
     answer: str,
+    legacy_payload: Callable[[KcTurnReceipt], str],
 ) -> dict:
     """Claim this answer, or return the result already stored for this turn id."""
     client_turn_id = _turn_id(turn_id)
-    digest = payload_hash(answer)
+    # A domain tag distinguishes new submission hashes from legacy transcript hashes.
+    digest = payload_hash("answer-v2\0" + answer)
     _lock(db, session)
     existing = _by_turn(db, session.id, client_turn_id)
     if existing is not None:
-        if existing.payload_hash != digest:
+        if existing.route != "answer":
+            raise HTTPException(status_code=409, detail="That turn id belongs to another request.")
+        if existing.payload_hash != digest and (
+            existing.payload_hash != payload_hash(existing.payload)
+            or legacy_payload(existing) != existing.payload
+        ):
             raise HTTPException(status_code=409, detail="That turn was already sent with a different answer.")
         if existing.status == "committed" and isinstance(existing.result, dict):
             return {"replayed": True, "result": existing.result}
-        return {"replayed": False, "receipt": existing}
+        _check_revision(session, existing.revision)
+        return {"replayed": False, "created": False, "receipt": existing}
+    if session.status == "completed":
+        raise HTTPException(status_code=422, detail="This component session is already finished.")
     _check_revision(session, revision)
     receipt = KcTurnReceipt(
         session_id=session.id,
@@ -53,7 +64,7 @@ def claim_answer(
         status="claimed",
     )
     _insert(db, receipt)
-    return {"replayed": False, "receipt": receipt}
+    return {"replayed": False, "created": True, "receipt": receipt}
 
 
 def prepare_answer_commit(db: Session, session: KcSession, turn_id: str) -> dict:
@@ -69,6 +80,7 @@ def prepare_answer_commit(db: Session, session: KcSession, turn_id: str) -> dict
         raise HTTPException(status_code=409, detail="Claim this turn before scoring it.")
     if existing.status == "committed" and isinstance(existing.result, dict):
         return {"replay": existing.result, "pending": None, "receipt": existing}
+    _check_revision(session, existing.revision)
     return {"replay": None, "pending": str(existing.payload or ""), "receipt": existing}
 
 
@@ -88,6 +100,8 @@ def claim_speech(
     _lock(db, session)
     existing = _by_turn(db, session.id, client_turn_id)
     if existing is not None:
+        if existing.route != "speech":
+            raise HTTPException(status_code=409, detail="That turn id belongs to another request.")
         if existing.status == "committed" and isinstance(existing.result, dict):
             return {
                 "replayed": True,

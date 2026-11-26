@@ -1,6 +1,6 @@
 import { generateText, jsonSchema, Output, wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { KcTutorSession } from "@/lib/kc";
 import { languageModel } from "@/lib/language-model";
 import { isKcModel, kcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
@@ -12,6 +12,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type TurnBundle = KcTutorSession & {
+  replayed?: boolean;
   system_prompt: string;
   response_schema: Record<string, unknown>;
   temperature: number;
@@ -136,12 +137,8 @@ export async function POST(req: Request) {
   }
   const modelName = called && isKcModel(called) ? called : kcModel(prior.tutor_model);
   const missingKey = missingKeyMessage(modelName);
-  if (missingKey) {
-    return new Response(missingKey, {
-      status: 503,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-    });
-  }
+  // A legacy unkeyed claim immediately writes the learner message.
+  if (!turnId && missingKey) return new Response(missingKey, { status: 503 });
 
   let bundle: TurnBundle;
   try {
@@ -151,8 +148,10 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not store the answer.";
-    return new Response(message, { status: 502 });
+    return new Response(message, { status: error instanceof ApiError && error.status === 409 ? 409 : 502 });
   }
+  if (bundle.replayed) return Response.json(bundle);
+  if (missingKey) return new Response(missingKey, { status: 503 });
 
   let captured: StoredCall | null = null;
   const captureRequest: LanguageModelMiddleware = {
@@ -200,7 +199,7 @@ export async function POST(req: Request) {
     decision = blankDecision();
   }
 
-  let session: KcTutorSession & { loop_result?: Record<string, unknown> | null; loop_decision?: string };
+  let session: KcTutorSession & { replayed?: boolean; loop_result?: Record<string, unknown> | null; loop_decision?: string };
   try {
     session = await api<KcTutorSession & { loop_result?: Record<string, unknown> | null; loop_decision?: string }>(
       `/kc/tutor/sessions/${sessionId}/decision`,
@@ -211,8 +210,10 @@ export async function POST(req: Request) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not apply that decision.";
-    return new Response(message, { status: 502 });
+    return new Response(message, { status: error instanceof ApiError && error.status === 409 ? 409 : 502 });
   }
+  // A concurrent submission can commit while our model call is running.
+  if (session.replayed) return Response.json(session);
 
   const messageId = newTutorMessageId(bundle.messages, session.messages);
   const stored = captured ?? {

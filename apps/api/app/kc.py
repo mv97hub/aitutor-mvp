@@ -98,6 +98,7 @@ from app.models import (
     KcRequirement,
     KcSession,
     KcState,
+    KcTurnReceipt,
     KcVisit,
     Student,
     TutorProfile,
@@ -4455,40 +4456,47 @@ def turn(
     revision: int | None = None,
 ) -> dict:
     """Return the layer bundle. A turn id claims the answer and leaves the line for the decision."""
-    if session.status == "completed":
-        raise HTTPException(status_code=422, detail="This component session is already finished.")
     cleaned = answer.strip()
     if not cleaned:
         raise HTTPException(status_code=422, detail="Write an answer first.")
-    node = db.get(KcNode, session.kc_id)
-    _profile, _goal, messages, _fragment, cfg, _blocks, _index, block, state = _block_context(db, session, node)
-    substep = str(state.get("substep") or "")
-    choice = None
-    if block is not None and not _needs_speech(session, messages):
-        choice = on_screen_choice(block, substep, state, cfg)
-    content = _choice_answer_text(cleaned, choice) if choice else cleaned
+
+    def legacy_payload(receipt: KcTurnReceipt) -> str:
+        # Older receipts hashed the transcript (including the choices). Reconstruct
+        # it from the screen at the original revision, never from a later question.
+        if session.revision == receipt.revision:
+            screen = session_out(db, session)
+        else:
+            screen = db.scalar(select(KcTurnReceipt.result).where(
+                KcTurnReceipt.session_id == session.id,
+                KcTurnReceipt.revision == receipt.revision - 1,
+                KcTurnReceipt.status == "committed",
+            )) or {}
+        choice = screen.get("choice")
+        return _choice_answer_text(cleaned, choice) if choice else cleaned
+
+    claimed = None
     if str(turn_id or "").strip():
         claimed = claim_answer(
-            db,
-            session,
-            turn_id=str(turn_id),
-            revision=revision,
-            answer=content,
+            db, session, turn_id=str(turn_id), revision=revision, answer=cleaned, legacy_payload=legacy_payload,
         )
-        if claimed.get("replayed"):
-            return claimed["result"]
-        session.updated_at = _now()
-        body = session_out(db, session)
-        body.update(prompt_for(db, session, content))
-        body["reply"] = ""
-        body["passed"] = False
-        body["unit_complete"] = False
-        body["course_complete"] = False
-        return body
-    _add_message(db, session, "user", content)
-    session.updated_at = _now()
+        if claimed["replayed"]:
+            return {**claimed["result"], "replayed": True}
+    elif session.status == "completed":
+        raise HTTPException(status_code=422, detail="This component session is already finished.")
+
     body = session_out(db, session)
-    body.update(prompt_for(db, session))
+    choice = body["choice"]
+    content = _choice_answer_text(cleaned, choice) if choice else cleaned
+    if claimed is not None:
+        receipt = claimed["receipt"]
+        if claimed["created"]:
+            receipt.payload = content
+        body.update(prompt_for(db, session, receipt.payload))
+    else:
+        _add_message(db, session, "user", content)
+        body = session_out(db, session)
+        body.update(prompt_for(db, session))
+    session.updated_at = _now()
     body["reply"] = ""
     body["passed"] = False
     body["unit_complete"] = False
@@ -4504,7 +4512,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     if turn_id:
         prepared = prepare_answer_commit(db, session, turn_id)
         if prepared.get("replay"):
-            return prepared["replay"]
+            return {**prepared["replay"], "replayed": True}
         pending = prepared.get("pending")
         receipt = prepared.get("receipt")
     if session.status == "completed":
