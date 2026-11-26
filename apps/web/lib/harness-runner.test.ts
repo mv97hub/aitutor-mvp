@@ -32,6 +32,8 @@ function chat(): ClaimedChat {
 test("a chat stops when the server reports the spending cap", async () => {
   const calls: string[] = [];
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => session(),
@@ -56,6 +58,8 @@ test("a chat stops when the server reports the spending cap", async () => {
 test("two tutor failures in a row close the chat", async () => {
   let finished = "";
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ needs_speech: true, messages: [] }),
     speak: async () => {
@@ -77,6 +81,8 @@ test("two tutor failures in a row close the chat", async () => {
 test("a model turn stores the child prompt, and a scripted line does not", async () => {
   const recorded: { child_prompt?: string; child_text?: string }[] = [];
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => session(),
@@ -112,6 +118,8 @@ test("a loop stops when the claim generation is no longer its own", async () => 
   owned.claim_generation = 1;
   owned.script = ["one", "two"];
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({
       status: "running",
       chat_rows: [{ id: "chat-1", claim_generation: answers === 0 ? 1 : 2 }],
@@ -146,6 +154,8 @@ test("a loop stops when the claim generation is no longer its own", async () => 
 
 test("a paused run leaves the chat for resume", async () => {
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "paused" }),
     session: async () => session(),
     speak: async () => session(),
@@ -174,10 +184,12 @@ test("eight same-place turns are followed by two nudges, then stuck", async () =
   const answered: string[] = [];
   let pending = 0;
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ block_id: "b1", active_substep: "explain", active_block_type: "topic_goal" }),
     speak: async () => session(),
-    answer: async (_id, text) => {
+    answer: async (_id, { child_text: text }) => {
       answered.push(text);
       return session({
         block_id: "b1",
@@ -224,10 +236,12 @@ test("a nudge that moves the block does not send the second nudge", async () => 
   const moving = chat();
   moving.script = ["one", "two", "three"];
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => session(),
-    answer: async (_id, text) =>
+    answer: async (_id, { child_text: text }) =>
       session({
         status: calls >= 2 ? "completed" : "in_progress",
         block_id: text === "What's next?" ? "b2" : "b1",
@@ -255,6 +269,8 @@ test("a refresh resumes the remaining nudge instead of repeating the first", asy
   const resumed = chat();
   resumed.pending_nudges = 1;
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session(),
     speak: async () => session(),
@@ -278,6 +294,8 @@ test("an empty tutor reply is not stored as the previous reply", async () => {
   const prior = "What color is the river?";
   const recorded: { tutor_reply?: string; error?: string; child_text?: string }[] = [];
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ messages: [{ role: "assistant", content: prior }] }),
     speak: async () => session(),
@@ -309,6 +327,8 @@ test("a thrown tutor call does not copy the previous reply forward", async () =>
   const prior = "What color is the river?";
   const recorded: { tutor_reply?: string; error?: string }[] = [];
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ messages: [{ id: "old", role: "assistant", content: prior }],
       prompt: "old prompt", loop_decision: "advance", loop_result: { advanced: true } }),
@@ -352,6 +372,8 @@ test("a Cuba recall and a next-move explanation are answered before either nudge
   asked.stuck_answers = 0;
   asked.script = ["Spain lost the island", "sugar and empire pulled it into the fight", "ok"];
   const transport: HarnessTransport = {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
     runStatus: async () => ({ status: "running" }),
     session: async () => session({ messages: [{ role: "assistant", content: cuba }] }),
     speak: async () => session(),
@@ -387,4 +409,240 @@ test("a Cuba recall and a next-move explanation are answered before either nudge
     "What should we do next?",
   ]);
   assert.deepEqual(intents, ["script", "script", "nudge", "nudge"]);
+});
+
+function retryTestTransport(): HarnessTransport {
+  return {
+    prepareTurn: async (_id, _gen, prepared) => prepared,
+    dispatchTurn: async () => "send",
+    runStatus: async () => ({ status: "running" }),
+    session: async () => session({ revision: 4, messages: [{ role: "assistant", id: "old", content: "Ready?" }] }),
+    speak: async () => { throw new Error("unexpected opening"); },
+    answerKey: async () => ({ block_id: "b1", expected: "yes" }),
+    childText: async () => ({ text: "yes", input_tokens: 5, output_tokens: 1, model: "test-child" }),
+    answer: async () => session({ status: "completed", messages: [{ id: "fresh", role: "assistant", content: "Done." }] }),
+    recordTurn: async () => ({ stop: "completed", cost_usd: null, luna_tokens: 0 }),
+    finish: async () => { throw new Error("pending turn was bypassed"); },
+  };
+}
+
+test("a lost tutor reply and a lost recording response retry the original submission once", async () => {
+  const transport = retryTestTransport();
+  let childCalls = 0;
+  let preparations = 0;
+  let writes = 0;
+  const ids: string[] = [];
+  const bodies: unknown[] = [];
+  transport.childText = async () => ({ text: `answer ${++childCalls}`, input_tokens: 5, output_tokens: 1, model: "child" });
+  transport.prepareTurn = async (_id, generation, prepared) => {
+    assert.equal(generation, 7);
+    assert.equal(prepared.seq, 3);
+    assert.equal(prepared.revision, 4);
+    assert.equal(prepared.session_before.tutor_message_id, "old");
+    preparations++;
+    return prepared;
+  };
+  transport.answer = async (_id, prepared) => {
+    assert.equal(preparations, 1);
+    assert.equal(prepared.child_text, "answer 1");
+    ids.push(prepared.turn_id);
+    if (ids.length === 1) throw new Error("lost after tutor commit");
+    return session({ status: "completed", response_message_id: "new", messages: [{ id: "new", role: "assistant", content: "Ready?" }] });
+  };
+  transport.recordTurn = async (_id, body) => {
+    bodies.push(body);
+    if (++writes === 1) throw new Error("lost after harness commit");
+    assert.deepEqual(body, bodies[0]);
+    assert.equal(body.turn_id, ids[0]);
+    assert.equal(body.seq, 3);
+    assert.equal(body.claim_generation, 7);
+    assert.equal((body.session_after as Record<string,unknown>).delivery_status, "recovered");
+    return { replayed: true, stop: "completed", cost_usd: null, luna_tokens: 0 };
+  };
+  const owned = { ...chat(), behavior: "free" as const, claim_generation: 7, turn_count: 2 };
+  assert.equal(await playChat(owned, transport), "done");
+  assert.equal(ids.length, 2);
+  assert.equal(new Set(ids).size, 1);
+  assert.equal(childCalls, 1);
+  assert.equal(writes, 2);
+});
+
+test("a reclaimed completed session reconciles the pending answer before opening, finishing or generating another", async () => {
+  const transport = retryTestTransport();
+  const saved = {
+    turn_id: crypto.randomUUID(), revision: 3, seq: 4, child_text: "B", intent: "choice", child_prompt: "",
+    child_tokens: { model: "test-child", input_tokens: 0, output_tokens: 0 },
+    session_before: { tutor_message_id: "q", tutor_reply: "Which option?", block_id: "original", message_count: 1, last_message_id: "q" },
+    move_intent: "choice", move_inner: { boredom: 3, frustration: 0, confusion: 0, hints: 2 },
+  };
+  const owned = { ...chat(), pending_turn: saved, claim_generation: 19, turn_count: 3, last_place: "original:choice" };
+  const completed = session({ revision: 4, status: "completed", needs_speech: true, block_id: "saved-block",
+    messages: [{ id: "q", role: "assistant", content: "Which option?" }, { id: "r", role: "assistant", content: "Well done." }],
+    loop_result: { ended_unit: true, attempt_counted: true },
+  });
+  transport.session = async () => completed;
+  transport.childText = async () => { throw new Error("pending child regenerated"); };
+  transport.prepareTurn = async () => { throw new Error("pending move regenerated"); };
+  transport.answerKey = async () => ({ revision: 6, block_id: "from-another-revision" });
+  const events: string[] = [];
+  transport.answer = async (_id, turn) => {
+    events.push("replay");
+    assert.deepEqual(turn, saved);
+    assert.equal(turn.child_text, "B");
+    return { ...completed, response_message_id: "r" };
+  };
+  transport.recordTurn = async (_id, body) => {
+    events.push("record");
+    assert.equal(body.claim_generation, 19);
+    assert.equal(body.turn_id, saved.turn_id);
+    assert.equal(body.seq, 4);
+    assert.deepEqual(body.session_before, saved.session_before);
+    assert.equal((body.inner_state as { hints: number }).hints, 2);
+    const after = body.session_after as Record<string, unknown>;
+    assert.equal(after.tutor_message_id, "r");
+    assert.equal(after.block_id, "saved-block");
+    assert.equal(after.delivery_status, "recovered");
+    assert.deepEqual(after.loop_result, completed.loop_result);
+    return { stop: "completed", cost_usd: "0", luna_tokens: 0 };
+  };
+  assert.equal(await playChat(owned, transport), "done");
+  assert.deepEqual(events, ["replay", "record"]);
+});
+
+test("exhausted delivery preserves a single pending submission and defers after a committed receipt is found", async () => {
+  const transport = retryTestTransport();
+  const ids: string[] = [];
+  const writes: unknown[] = [];
+  transport.answer = async (_id, pending) => {
+    ids.push(pending.turn_id);
+    throw new Error("no response");
+  };
+  transport.recordTurn = async (_id, body) => {
+    const after = body.session_after as Record<string, unknown>;
+    assert.equal(after.delivery_status, "unknown");
+    assert.equal(after.tutor_reply, "");
+    assert.equal(after.loop_result, null);
+    assert.equal(body.seq, 1);
+    writes.push(body.defer);
+    return { stop: body.defer ? "awaiting_retry" : "", recover: !body.defer, pending: true, cost_usd: null, luna_tokens: 0 };
+  };
+  assert.equal(await playChat(chat(), transport), "paused");
+  assert.equal(ids.length, 3);
+  assert.equal(new Set(ids).size, 1);
+  assert.deepEqual(writes, [false, true]);
+});
+
+test("repeated child text on separate logical turns has separate submission IDs and sequence numbers", async () => {
+  const transport = retryTestTransport();
+  const owned = { ...chat(), script: ["yes", "yes"] };
+  const turns: { text: string; seq: number; id: string }[] = [];
+  transport.answer = async (_id, pending) => {
+    turns.push({ text: pending.child_text, seq: pending.seq, id: pending.turn_id });
+    return session({ revision: pending.seq, messages: [{ role: "assistant", id: `r${pending.seq}`, content: "Again?" }] });
+  };
+  transport.recordTurn = async () => ({ stop: turns.length === 2 ? "cap" : "", cost_usd: null, luna_tokens: 0 });
+  assert.equal(await playChat(owned, transport), "done");
+  assert.deepEqual(turns.map(({ text, seq }) => [text, seq]), [["yes", 1], ["yes", 2]]);
+  assert.notEqual(turns[0].id, turns[1].id);
+});
+
+test("an unconfirmed submission survives Pause and Resume without drawing another child response", async () => {
+  const transport = retryTestTransport();
+  let saved: ClaimedChat["pending_turn"] = null;
+  let accepted = false;
+  let commits = 0;
+  let answers = 0;
+  let childCalls = 0;
+  transport.childText = async () => ({ text: `chosen answer ${++childCalls}`, input_tokens: 2, output_tokens: 1, model: "child" });
+  transport.prepareTurn = async (_id, _generation, turn) => {
+    assert.equal(saved, null);
+    saved = turn;
+    return saved;
+  };
+  transport.answer = async (_id, turn) => {
+    answers++;
+    assert.deepEqual(turn, saved);
+    if (!accepted) throw new Error("network unavailable before commit");
+    return session({ status: "completed", messages: [{ role: "assistant", id: "fresh", content: "Correct." }] });
+  };
+  transport.recordTurn = async (_id, body) => {
+    assert.equal(body.turn_id, saved?.turn_id);
+    if (!accepted) {
+      assert.equal((body.session_after as Record<string, unknown>).delivery_status, "unknown");
+      return { pending: true, stop: "awaiting_retry", cost_usd: null, luna_tokens: 0 };
+    }
+    assert.equal(body.claim_generation, 6);
+    assert.equal((body.session_after as Record<string, unknown>).delivery_status, "recovered");
+    commits++;
+    return { stop: "completed", cost_usd: null, luna_tokens: 0 };
+  };
+  const first = { ...chat(), behavior: "free" as const, claim_generation: 5 };
+  assert.equal(await playChat(first, transport), "paused");
+  assert.equal(answers, 2);
+  assert.equal(commits, 0);
+  accepted = true;
+  assert.equal(await playChat({ ...first, claim_generation: 6, pending_turn: saved }, transport), "done");
+  assert.equal(answers, 3);
+  assert.equal(commits, 1);
+  assert.equal(childCalls, 1);
+});
+
+test("a replaced worker with a lost response yields its pending submission to the new claim", async () => {
+  const transport = retryTestTransport();
+  let attempts = 0;
+  transport.runStatus = async () => ({ status: "running", chat_rows: [{ id: "chat-1", claim_generation: attempts ? 4 : 3 }] });
+  transport.answer = async () => { attempts++; throw new Error("lost"); };
+  transport.recordTurn = async () => { throw new Error("a stale worker must not record or generate the next turn"); };
+  assert.equal(await playChat({ ...chat(), claim_generation: 3 }, transport), "paused");
+  assert.equal(attempts, 1);
+});
+
+test("a capped run stops before generation and only reads receipts for a pending answer", async () => {
+  const transport = retryTestTransport();
+  transport.runStatus = async () => ({ status: "running", run_cap_reached: true });
+  transport.session = async () => session({ needs_speech: true });
+  const events: string[] = [];
+  transport.speak = async () => { throw Error("no speech at cap"); };
+  transport.childText = async () => { throw Error("no child call at cap"); };
+  transport.finish = async (_id, reason) => { events.push(reason); };
+  assert.equal(await playChat(chat(), transport), "done");
+  const submitted = {
+    turn_id: crypto.randomUUID(), revision: 1, seq: 1, child_text: "yes", intent: "continue", child_prompt: "",
+    child_tokens: { model: "", input_tokens: 0, output_tokens: 0 }, session_before: {message_count: 0},
+    move_intent: "continue", move_inner: { boredom: 0, confusion: 0, frustration: 0, hints: 0 },
+  };
+  transport.answer = async (_id, _pending, _model, receiptOnlyChatId) => {
+    assert.equal(receiptOnlyChatId, chat().id);
+    events.push("read receipt");
+    return session({ messages: [{id: "new", role: "assistant", content: "Try again."}], response_message_id: "new" });
+  };
+  transport.recordTurn = async (_id, body) => {
+    assert.equal((body.session_after as Record<string, unknown>).delivery_status, "recovered");
+    events.push("record");
+    return {stop: "run_cap", luna_tokens: 0, cost_usd: "0.10"};
+  };
+  assert.equal(await playChat({ ...chat(), pending_turn: submitted }, transport), "done");
+  assert.deepEqual(events, ["run_cap", "read receipt", "record"]);
+
+  // A sibling crosses the cap while this child's wording is generated. The
+  // worker must recheck spending before dispatching that freshly saved move.
+  events.length = 0;
+  let exhausted = false;
+  transport.session = async () => session();
+  transport.runStatus = async () => ({ status: "running", run_cap_reached: exhausted, plan: { run_cap_cents: 10 } });
+  transport.childText = async () => {
+    events.push("initial child");
+    exhausted = true;
+    return { text: "yes", model: "child", input_tokens: 1, output_tokens: 1 };
+  };
+  transport.prepareTurn = async (_id, _generation, planned) => ({ ...planned, dispatch_state: "prepared" });
+  transport.dispatchTurn = async () => {
+    assert.ok(exhausted);
+    events.push("close unsent at cap");
+    return "run_cap";
+  };
+  transport.answer = async () => { throw Error("a known-unsent submission has no receipt to poll"); };
+  transport.recordTurn = async () => { throw Error("no attempt was made"); };
+  assert.equal(await playChat({ ...chat(), behavior: "free" }, transport), "done");
+  assert.deepEqual(events, ["initial child", "close unsent at cap"]);
 });

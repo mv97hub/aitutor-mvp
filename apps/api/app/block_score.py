@@ -9,12 +9,14 @@ forecast_this_turn stays a preview. It does not call this module.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 
 from app.kc_loop import (
     BlockResolution,
     _gives_up,
     learner_ready_to_proceed,
+    mcq_payload,
     resolve_block_turn,
     summary_explicit_move_on,
     summary_ready_signal,
@@ -460,6 +462,108 @@ def requirement_star_unit(status: str, block_results: list, reveals: int) -> dic
     }
 
 
+# An option can be named without repeating any of the authored option text.
+# Match affirmative statements; a question, negation or menu is not a disclosure.
+_CHOICE_LABEL = re.compile(
+    r"^(?:(?:the (?:correct |right )?(?:answer|choice|option) is|"
+    r"it(?:'s| is)) (?:option |choice )?\(?([a-z0-9_-]+)"
+    r"(?=\)|\s*[:,.!—–]|\s+because\b|$)|(?:option |choice )?\(?([a-z0-9_-]+)\)? is (?:correct|right)"
+    r"(?=\s*[:,.!—–]|\s+because\b|$))",
+    re.I,
+)
+_REVEAL_AND_REPEAT = re.compile(
+    r"(?:here(?:'s| is) the (?:reveal|answer)|the answer is)\s*:"
+    r"\s*\S.+?\b(?:say (?:it|that) back|repeat (?:it|that)|put (?:it|that) in your own words)\b",
+    re.I | re.S,
+)
+_DENIES_EXPLANATION = re.compile(
+    r"\b(?:not true that|(?:wrong|incorrect|false) (?:that|to (?:say|think))|"
+    r"(?:does not|doesn't) mean that|not because)\b", re.I,
+)
+
+
+def remember_tutor_disclosures(block: dict, state: dict, reply: str) -> dict:
+    """Keep supplied evidence on the open item without counting a learner attempt."""
+    kind = block.get("type")
+    step = state.get("substep")
+    disclosed = dict(state.get("tutor_disclosures") or {})
+    reply = reply.replace("’", "'")
+    if kind == "topic_goal" and step == "main" and _REVEAL_AND_REPEAT.search(reply):
+        disclosed["goal"] = True
+    elif kind == "mcq" and step in {"choice", "awaiting_why"}:
+        choices, correct = mcq_payload(block, state)
+        correct = (state.get("mcq") or {}).get("frozen_key", correct)
+        if not isinstance(correct, int) or not 0 <= correct < len(choices):
+            return state
+        choice_id = choices[correct]["id"]
+        labels = {choice_id.casefold()}
+        ordinal = chr(ord("a") + correct)
+        if all(choice["id"].casefold() != ordinal for i, choice in enumerate(choices) if i != correct):
+            labels.add(ordinal)
+        correct_text = choices[correct]["text"].strip().casefold().replace("’", "'").rstrip(".")
+        generated = state.get("generated_mcq") or {}
+        reason = str(generated.get("correct_explanation") or block.get("data", {}).get("correct_explanation") or "")
+        offered_texts = [choice["text"].casefold().replace("’", "'").rstrip(".") for choice in choices]
+        menu = len(offered_texts) > 1 and all(text and text in reply.casefold() for text in offered_texts)
+        statements = []
+        explains = False
+        for sentence in re.split(r"(?<=[.!?])\s+", reply):
+            line = sentence.strip().strip("*")
+            if not line or line.endswith("?") or re.match(r"^(?:think|consider|imagine|try|ask yourself)\b", line, re.I):
+                continue
+            # "I'm giving you the answer now: it's d) ..." is an explicit label too.
+            statement = re.sub(r"^(?:here(?:'s| is) the answer|I'm giving you the answer(?: now)?)[:,]\s*", "", line, flags=re.I)
+            match = _CHOICE_LABEL.match(statement)
+            names_choice = bool(match and (match.group(1) or match.group(2)).casefold() in labels)
+            if correct_text:
+                wording, prefix = re.subn(r"^the (?:correct |right )?(?:answer|option|choice) is ", "", statement.casefold())
+                names_choice |= wording.rstrip(".!") == correct_text and bool(prefix or statement != line or not menu)
+            if menu and not names_choice and any(text in line.casefold() for text in offered_texts):
+                continue
+            if names_choice and step == "choice":
+                disclosed["choice"] = choice_id
+            # The option itself is evidence for the choice only. Keep any
+            # explanation after the label/option, even in the same sentence.
+            rationale = line
+            if names_choice:
+                explains = True
+                rationale = statement[match.end():] if match else ""
+                rationale = rationale.lstrip(") :,.—–-").casefold().removeprefix(correct_text)
+            if not rationale.strip(" .,!:") or _DENIES_EXPLANATION.search(rationale):
+                continue
+            statements.append(rationale)
+            explains |= bool(re.search(r"\bbecause\b|^the reason is\b", rationale, re.I))
+        # A full explanation can span sentences. Ignore questions, coaching
+        # prompts and a bare label when comparing it with the authored reason.
+        stated = " ".join(statements)
+        if reason and stated:
+            from app.kc import matches_phrase
+
+            verbatim = reason.casefold().replace("’", "'").rstrip(".") in stated.casefold()
+            # matches_phrase normally accepts the right numbers alone. Those
+            # establish a result, while a separately assessed reason needs words.
+            words = re.sub(r"\d+", " ", stated)
+            reason_words = re.sub(r"\d+", " ", reason)
+            if verbatim or (explains and matches_phrase(words, reason_words)):
+                disclosed["why"] = True
+    if not disclosed:
+        return state
+    updated = {**state, "tutor_disclosures": disclosed}
+    if isinstance(state.get("requirements"), list):
+        updated["requirements"] = _rows(state["requirements"])
+        _tag_disclosed_requirements(updated["requirements"], disclosed)
+    return updated
+
+
+def _tag_disclosed_requirements(requirements: list[dict], disclosed: dict) -> None:
+    for row in requirements:
+        key = row.get("key")
+        if disclosed.get(key):
+            row["tutor_disclosed"] = True
+            if key == "choice":
+                row["disclosed_choice_id"] = disclosed[key]
+
+
 def score_supported_turn(**kwargs) -> BlockResolution:
     """Run the legacy step, then record requirements on that same outcome.
 
@@ -525,6 +629,8 @@ def _overlay(
             new_outcome=str(new_rows[-1].get("outcome") or "") if new_rows else "",
         )
         _ensure_why(requirements, block, cfg, after)
+    # On retry-only MCQs the why row can first appear after its explanation was supplied.
+    _tag_disclosed_requirements(requirements, before_state.get("tutor_disclosures") or {})
     rubric = list(before_rubric) if continued else list(resolution.rubric_met)
     if new_rows:
         _drop_unasked_why(requirements)
@@ -624,7 +730,14 @@ def _advance(
     step_for_giveaway = before_sub
     if before_sub == "summary_check":
         step_for_giveaway = str(before_state.get("last_task_substep") or before_sub)
-    giveaway = tutor_gave_away_answer(block, before_state, step_for_giveaway, prior_tutor)
+    if kind == "mcq":
+        # A label supplied on the choice step does not answer the separate why.
+        disclosure = remember_tutor_disclosures(block, before_state, prior_tutor)
+        giveaway = bool((disclosure.get("tutor_disclosures") or {}).get(key))
+    else:
+        giveaway = bool((before_state.get("tutor_disclosures") or {}).get(key)) or tutor_gave_away_answer(
+            block, before_state, step_for_giveaway, prior_tutor
+        )
     accepted = _passed(kind, before_sub, before_state, after_state, substep_passed, new_outcome)
     # A sealed "revealed" is this step's help, except a worked solo that the loop
     # still labels revealed because the faded step was shown earlier.
