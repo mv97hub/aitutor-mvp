@@ -93,7 +93,7 @@ def test_what_is_a_province_is_answered_and_the_summary_closes() -> None:
     assert "Their question: what is a province." in turn
     assert "define it" in turn
     assert "Answer that question in one or two sentences." in turn
-    assert "Do not ask move on, or one more question, again." in turn
+    assert "Do not repeat the invitation." in turn
     assert "same single choice" not in turn
     assert "ask the goal again" not in turn
     assert "Set block_complete=true." in turn
@@ -161,4 +161,4 @@ def test_a_real_attempt_and_a_move_on_keep_today_behavior() -> None:
     assert "Side question:" not in text
     turn = _section(text, "This turn")
     assert "Congratulate the learner once." in turn
-    assert "Ask one question only: move on, or ask one more question." in turn
+    assert "Do you have a question for me before we finish?" in turn

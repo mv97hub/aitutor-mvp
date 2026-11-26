@@ -1040,11 +1040,11 @@ def test_praise_only_when_the_reply_meets_the_goal() -> None:
     assert "Ask no question." in turn
     assert "Do not praise." in turn
     assert "Congratulate the learner once." not in turn
-    assert "Ask one question only: move on, or ask one more question." not in turn
+    assert "Do you have a question for me before we finish?" not in turn
 
 
 _CONGRATULATE = "Congratulate the learner once."
-_CHOICE = "Ask one question only: move on, or ask one more question."
+_CHOICE = "Do you have a question for me before we finish?"
 _REMINDER = "If they ask one further question, answer it, then close."
 
 
@@ -1135,7 +1135,7 @@ def test_every_summary_block_congratulates_offers_a_choice_and_reminds_after_a_q
         assert "any other final questions" not in asked, block_type
         assert _CONGRATULATE not in asked, block_type
         assert "Close in one sentence." in asked, block_type
-        assert "Do not ask move on, or one more question, again." in asked, block_type
+        assert "Do not repeat the invitation." in asked, block_type
         assert "do not open the next part" in asked.lower(), block_type
         assert "You do not set the block order" in asked, block_type
         returned = _section(asked, "What to return")
@@ -1307,7 +1307,7 @@ def test_one_further_question_then_closes() -> None:
     assert "and ask the goal again." not in turn
     assert "Stay on course: this is not an attempt at the goal." not in asked
     assert "Answer that question in one or two sentences." in turn
-    assert "Do not ask move on, or one more question, again." in turn
+    assert "Do not repeat the invitation." in turn
     assert "then ask the same single choice" not in turn.lower()
     assert "Set block_complete=true." in turn
     assert "do not open the next part" in asked.lower()

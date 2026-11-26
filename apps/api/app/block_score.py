@@ -17,6 +17,7 @@ from app.kc_loop import (
     learner_ready_to_proceed,
     resolve_block_turn,
     summary_explicit_move_on,
+    summary_needs_learner_question,
     summary_ready_signal,
     tutor_asked_to_continue,
     tutor_gave_away_answer,
@@ -570,6 +571,8 @@ def _overlay(
 def _summary_continue(answer: str, before_state: dict, prior_tutor: str) -> bool:
     if str(before_state.get("substep") or "") != "summary_check":
         return False
+    if summary_needs_learner_question(answer, prior_tutor):
+        return True
     if learner_ready_to_proceed(answer, False) or summary_explicit_move_on(answer) or summary_ready_signal(answer):
         return True
     return bool(tutor_asked_to_continue(prior_tutor) and worked_continue_answer(answer))
