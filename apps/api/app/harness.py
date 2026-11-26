@@ -13,7 +13,7 @@ import os
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select
@@ -93,6 +93,7 @@ def run_code_version() -> str:
     return f"{HARNESS_CODE_VERSION} {commit.split()[0][:40]}"[:80]
 FIXTURE_CODE = "harness-every-block"
 LUNA_MODEL = "gpt-6-luna"
+MAX_LUNA_TOKENS = 2**31 - 1  # The largest value the chat's PostgreSQL INTEGER can record.
 _UNGRADED_STEPS = {"explain", "explain_topic", "summary_check"}
 
 
@@ -494,26 +495,34 @@ def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, see
     return run_out(db, run)
 
 
-def _run_cap_reached(run: HarnessRun) -> bool:
+def _run_cap_reached(db: Session, run: HarnessRun, totals: dict | None = None) -> bool:
     cap = (run.plan or {}).get("run_cap_cents")
-    return bool(cap and int((run.totals or {}).get("priced_cents") or 0) >= int(cap))
+    if not cap:
+        return False
+    if totals is None:
+        totals = run.totals or {}
+        if totals.get("cost_precision") != "exact_usd":
+            # Older cached totals rounded every chat to whole cents. Reconstruct
+            # the estimate before admitting work, without writing on a GET.
+            totals = _cost_totals(_cost_rows(db, run), totals)
+    return _usd(totals.get("cost_usd")) * 100 >= int(cap)
 
 
 def run_out(db: Session, run: HarnessRun) -> dict:
     chats = db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id).order_by(HarnessChat.created_at)).all()
-    done = sum(1 for chat in chats if chat.status in {"completed", "cancelled", "failed"})
+    totals = _cost_totals(chats, run.totals or {})
     return {
         "id": run.id,
         "status": run.status,
         "plan": _as_dict(run.plan),
-        "run_cap_reached": _run_cap_reached(run),
-        "totals": _as_dict(run.totals),
+        "run_cap_reached": _run_cap_reached(db, run, totals),
+        "totals": totals,
         "code_version": run.code_version,
         "suite_id": run.suite_id,
         "created_at": run.created_at,
         "updated_at": run.updated_at,
         "chats": len(chats),
-        "finished": done,
+        "finished": totals["finished"],
         "chat_rows": [chat_out(chat) for chat in chats],
     }
 
@@ -681,7 +690,7 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
     if run.status == "queued":
         run.status = "running"
     queued = select(HarnessChat).where(HarnessChat.run_id == run.id, HarnessChat.status == "queued")
-    if _run_cap_reached(run):
+    if _run_cap_reached(db, run):
         # Never open a fresh session at the cap. A previously submitted answer can
         # still settle after its HTTP request timed out, so keep those chats claimable.
         unused = db.scalars(queued.where(HarnessChat.pending_turn.is_(None)).with_for_update(skip_locked=True)).all()
@@ -910,13 +919,12 @@ def answer_key(db: Session, chat_id: uuid.UUID) -> dict:
     }
 
 
-def _cents(amount: str | None) -> int:
-    if not amount:
-        return 0
+def _usd(amount: str | int | None) -> Decimal:
     try:
-        return int((Decimal(amount) * 100).to_integral_value())
-    except Exception:
-        return 0
+        value = Decimal(amount or "0")
+        return value if value.is_finite() else Decimal(0)
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal(0)
 
 
 def _add_money(left: str | None, right: str | None) -> str | None:
@@ -927,6 +935,18 @@ def _add_money(left: str | None, right: str | None) -> str | None:
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return text or "0"
+
+
+def _judge_usage(value: object) -> dict[str, int]:
+    usage = _as_dict(value)
+    counts = {}
+    for key in ("input_tokens", "output_tokens"):
+        count = usage.get(key)
+        if isinstance(count, str) and len(count) <= 19 and count.isascii() and count.isdigit():
+            count = int(count)
+        if type(count) is int and 0 <= count < 2**63:
+            counts[key] = count
+    return counts
 
 
 def _chat_priced_cost(db: Session, chat: HarnessChat) -> tuple[str | None, int]:
@@ -966,12 +986,12 @@ def _chat_priced_cost(db: Session, chat: HarnessChat) -> tuple[str | None, int]:
         select(HarnessEvaluation).where(HarnessEvaluation.chat_id == chat.id, HarnessEvaluation.kind == "judged")
     ).all():
         scores = review.scores if isinstance(review.scores, dict) else {}
-        usage = scores.get("usage") if isinstance(scores, dict) else None
-        if not isinstance(usage, dict):
+        usage = _judge_usage(scores.get("usage"))
+        if not usage:
             continue
         model = str(review.judge_model or "")
-        incoming = int(usage.get("input_tokens") or 0)
-        outgoing = int(usage.get("output_tokens") or 0)
+        incoming = usage.get("input_tokens", 0)
+        outgoing = usage.get("output_tokens", 0)
         if model == LUNA_MODEL:
             luna += incoming + outgoing
             continue
@@ -984,9 +1004,15 @@ def _chat_priced_cost(db: Session, chat: HarnessChat) -> tuple[str | None, int]:
 
 
 def _refresh_chat_cost(db: Session, chat: HarnessChat) -> None:
+    run = _run_or_404(db, chat.run_id)
+    stored = run.totals or {}
+    if stored.get("cost_precision") != "exact_usd" and _stored_usd(stored) > 0:
+        # Preserve any historical spend that has no chat price before the first
+        # new price changes which part of the old aggregate can be reconstructed.
+        _refresh_totals(db, run)
     priced, luna = _chat_priced_cost(db, chat)
     chat.cost_usd = priced
-    chat.luna_tokens = luna
+    chat.luna_tokens = min(luna, MAX_LUNA_TOKENS)
 
 
 def refresh_harness_session_cost(db: Session, session_id: uuid.UUID) -> None:
@@ -998,30 +1024,50 @@ def refresh_harness_session_cost(db: Session, session_id: uuid.UUID) -> None:
         _refresh_totals(db, _run_or_404(db, chat.run_id))
 
 
-def _refresh_totals(db: Session, run: HarnessRun) -> None:
-    # Parallel workers write separate chats. Serialize the aggregate so the last
-    # writer includes every earlier committed cost before deciding on more calls.
-    db.scalar(select(HarnessRun.id).where(HarnessRun.id == run.id).with_for_update())
-    chats = db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id)).all()
-    cents = 0
-    luna = 0
-    for chat in chats:
-        cents += _cents(chat.cost_usd)
-        luna += int(chat.luna_tokens or 0)
-    run.totals = {
+def _cost_rows(db: Session, run: HarnessRun):
+    return db.execute(
+        select(HarnessChat.status, HarnessChat.cost_usd, HarnessChat.luna_tokens).where(HarnessChat.run_id == run.id)
+    ).all()
+
+
+def _stored_usd(totals: dict) -> Decimal:
+    return _usd(totals.get("cost_usd")) or _usd(totals.get("priced_cents")) / 100
+
+
+def _cost_totals(chats, stored: dict) -> dict:
+    priced = sum((_usd(chat.cost_usd) for chat in chats), Decimal(0))
+    carry = _usd(stored.get("unallocated_usd"))
+    if stored.get("cost_precision") != "exact_usd" and _stored_usd(stored) > 0:
+        if not chats or any(chat.cost_usd is None for chat in chats):
+            # Before exact pricing, each known chat contributed its rounded
+            # cents to the aggregate. Keep only the part those rows cannot explain.
+            known_cents = sum((_usd(chat.cost_usd) * 100).to_integral_value() for chat in chats)
+            carry = max(Decimal(0), _stored_usd(stored) - known_cents / Decimal(100))
+    priced += carry
+    luna = sum(int(chat.luna_tokens or 0) for chat in chats) if chats else int(stored.get("luna_tokens") or 0)
+    return {
         "chats": len(chats),
         "finished": sum(1 for chat in chats if chat.status in {"completed", "cancelled", "failed"}),
-        "priced_cents": cents,
+        "priced_cents": int((priced * 100).to_integral_value()),
         "luna_tokens": luna,
-        "cost_usd": None if cents == 0 and luna else format(Decimal(cents) / Decimal(100), "f"),
+        "cost_usd": None if not priced and luna else format(priced, "f"),
+        **({"unallocated_usd": format(carry, "f")} if carry else {}),
     }
+
+
+def _refresh_totals(db: Session, run: HarnessRun) -> None:
+    # Flush chat usage first, then serialize the aggregate. Selecting columns
+    # reads committed sibling costs even if an earlier query cached their objects.
+    db.flush()
+    stored = db.scalar(select(HarnessRun.totals).where(HarnessRun.id == run.id).with_for_update())
+    run.totals = {**_cost_totals(_cost_rows(db, run), stored or {}), "cost_precision": "exact_usd"}
     run.updated_at = _now()
 
 
 def _settle_inactive_run(db: Session, run: HarnessRun) -> None:
     if run.status != "running":
         return
-    if _run_cap_reached(run):
+    if _run_cap_reached(db, run):
         # Two capped workers can pause their own chats at the same time. The
         # last one must see its sibling's commit before settling the run.
         stored_status = db.scalar(select(HarnessRun.status).where(HarnessRun.id == run.id).with_for_update())
@@ -1145,7 +1191,7 @@ def dispatch_harness_turn(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID, g
     if run.status != "running":
         return {"action": "paused"}
     prepared = pending.get("dispatch_state") == "prepared"
-    if _run_cap_reached(run):
+    if _run_cap_reached(db, run):
         if not prepared or _answer_receipt(db, chat, str(turn_id)) is not None:
             return {"action": "read_receipt"}
         # Closing this chat does not create a fictitious learner or harness turn.
@@ -1191,7 +1237,7 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
             # A timed-out request may still commit. Keep the move across Resume even if
             # no receipt was visible when this transaction inspected the tutor session.
             run = _run_or_404(db, chat.run_id)
-            if _run_cap_reached(run):
+            if _run_cap_reached(db, run):
                 # Other already-paid submissions must still be able to drain.
                 chat.status = "paused"
                 chat.updated_at = _now()
@@ -1252,10 +1298,12 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
         intent=turn.intent,
         turn_count=seq,
         same_place_turns=same_place,
-        priced_cents=_cents(chat.cost_usd),
+        # Caps are whole cents. Discard the fractional cent only for this
+        # comparison, so a chat just below its limit can still continue.
+        priced_cents=int(_usd(chat.cost_usd) * 100),
         cap_cents=int(plan.get("chat_cap_cents") or DEFAULT_CHAT_CAP_CENTS),
         luna_tokens=int(chat.luna_tokens or 0),
-        luna_ceiling=int(plan.get("luna_token_ceiling") or DEFAULT_LUNA_TOKEN_CEILING),
+        luna_ceiling=min(int(plan.get("luna_token_ceiling") or DEFAULT_LUNA_TOKEN_CEILING), MAX_LUNA_TOKENS),
         consecutive_errors=errors,
         safety_flag=str(after.get("safety_flag") or "none"),
         stop_on_safety=bool(plan.get("stop_on_safety")),
@@ -1274,7 +1322,7 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     chat.stuck_answers = answers
     if run is not None and not reason:
         _refresh_totals(db, run)
-        if _run_cap_reached(run):
+        if _run_cap_reached(db, run):
             reason = "run_cap"
     if reason:
         _finish(db, chat, reason)
@@ -1375,12 +1423,10 @@ def finish_chat(db: Session, chat_id: uuid.UUID, reason: str, claim_generation: 
 
 
 def save_evaluation(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
-    chat = db.get(HarnessChat, chat_id)
-    if chat is None:
-        raise HTTPException(status_code=404, detail="That chat was not found.")
+    chat = _locked_chat(db, chat_id)
     scores = body.get("scores") if isinstance(body.get("scores"), list) else []
     tags = body.get("tags") if isinstance(body.get("tags"), list) else []
-    usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+    usage = _judge_usage(body.get("usage"))
     realism = body.get("child_realism")
     error = str(body.get("error") or "").strip()[:500]
     payload = {"items": scores, "usage": usage}
@@ -1398,6 +1444,7 @@ def save_evaluation(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
             child_realism=int(realism) if realism is not None else None,
         )
     )
+    db.flush()  # Include this evaluation's usage in the query that prices the chat.
     _refresh_chat_cost(db, chat)
     run = db.get(HarnessRun, chat.run_id)
     if run is not None:
@@ -1463,11 +1510,12 @@ def _evaluation_out(row: HarnessEvaluation) -> dict:
         "rubric_version": row.rubric_version,
         "judge_model": row.judge_model,
         "child_realism": row.child_realism,
+        "usage": _judge_usage(scores.get("usage")),
         "created_at": row.created_at,
     }
 
 
-def chat_detail(db: Session, chat: HarnessChat) -> dict:
+def chat_detail(db: Session, chat: HarnessChat, *, include_run_cap: bool = True) -> dict:
     turns = db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id).order_by(HarnessTurn.seq)).all()
     reviews = db.scalars(
         select(HarnessEvaluation).where(HarnessEvaluation.chat_id == chat.id).order_by(HarnessEvaluation.created_at)
@@ -1491,7 +1539,8 @@ def chat_detail(db: Session, chat: HarnessChat) -> dict:
     reply_ids = [reply_message_id(turn.session_before, turn.session_after) for turn in turns]
     reply_counts = Counter(reply_ids)
     body = chat_out(chat)
-    body["run_cap_reached"] = _run_cap_reached(_run_or_404(db, chat.run_id))
+    if include_run_cap:
+        body["run_cap_reached"] = _run_cap_reached(db, _run_or_404(db, chat.run_id))
     body["model_prompts"] = [
         {"id": str(row.id), "message_id": str(row.message_id) if row.message_id else None,
          "seq": row.seq, "model": row.model, "system_prompt": row.system_prompt} for row in prompts
@@ -1574,7 +1623,7 @@ def _llm_calls(db: Session, chat: HarnessChat, prompts: list[dict]) -> list[dict
 
 
 def _download_payload(db: Session, chat: HarnessChat) -> dict:
-    body = chat_detail(db, chat)
+    body = chat_detail(db, chat, include_run_cap=False)
     if chat.pending_turn:
         pending = chat.pending_turn
         receipt = _answer_receipt(db, chat, pending["turn_id"])
