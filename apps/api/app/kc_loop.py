@@ -8,6 +8,7 @@ structured evaluation (`substep_passed`, `block_complete`, `rubric_met`).
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import dataclass
 
 from app.kc_blocks import learner_asks_for_passage, quote_in_text
@@ -310,13 +311,15 @@ def learner_asks_question_or_background(answer: str) -> bool:
     return "background" in text or "more context" in text or "some context" in text
 
 
-def learner_side_question(answer: str, block: dict | None = None) -> bool:
+def learner_side_question(answer: str, block: dict | None = None, substep: str = "") -> bool:
     """A who/what/where/why question. Not an attempt, a move-on, or a passage reread.
 
     The topic-goal explain step and explanatory blocks already stay for questions.
     Every other substep uses this to pause without scoring.
     """
     if not learner_asks_question_or_background(answer):
+        return False
+    if block is not None and proposed_step_answer(block, substep, answer):
         return False
     if block is not None and str(block.get("type") or "").strip() == "passage_ela":
         if learner_asks_for_passage(answer):
@@ -1043,6 +1046,67 @@ def _statement_before_question(answer: str) -> bool:
     return True
 
 
+_PROPOSAL_FIELDS = {
+    ("retrieval_check", "recall"): "expected_fact",
+    ("retrieval_check", "elaborate_why"): "expected_why_rationale",
+    ("case_study", "transfer"): "transfer_expected",
+}
+
+
+def _proposal_target(block: dict, substep: str) -> str:
+    field = _PROPOSAL_FIELDS.get((block.get("type"), substep))
+    return str(_data(block).get(field) or "").strip() if field else ""
+
+
+_MATH_OPERATOR = re.compile(
+    r"[×÷*/+=−]|\s-\s|\b(?:plus|minus|times|add(?:ed)?|subtract(?:ed)?|multipl(?:y|ied)|divid(?:e|ed))\b",
+    re.I,
+)
+_ANSWER_CHECK_OPEN = re.compile(r"^(?:is (?:it|that)|(?:would|could) (?:it|that) be)\s+", re.I)
+_ANSWER_CHECK_TAG = re.compile(r",?\s+(?:is that (?:right|correct)|isn['’]t it|right|correct)$", re.I)
+_FOLLOWUP = re.compile(r"(?:,?\s+and|[.!])\s+(?:could|would|can|who|what|why|how|when|where)\b", re.I)
+
+
+def proposed_step_answer(block: dict, substep: str, answer: str) -> str | None:
+    """Return proposed content, an empty string for a side question, or None for ordinary grading."""
+    target = _proposal_target(block, substep)
+    if not target or not answer:
+        return None
+    # A computation is a try in either punctuation. Word overlap cannot verify its operations.
+    formula = _MATH_OPERATOR.search(target)
+    if "?" not in answer and not (formula and _MATH_OPERATOR.search(answer)):
+        return None
+    # Judge the proposed content. A separate question can ask about something else.
+    first = _FOLLOWUP.split(answer.partition("?")[0].strip(), maxsplit=1)[0]
+    candidate, opened = _ANSWER_CHECK_OPEN.subn("", first)
+    candidate, checked = _ANSWER_CHECK_TAG.subn("", candidate)
+    words = _words(candidate)
+    if not words or _opens_as_question(words) or words[0] in _QUESTION_AUXILIARIES:
+        return ""
+    if words[0] in {"possible", "okay", "ok"} or re.search(
+        r"^true that\b|\b(?:a hint|some help|more context|you want me to)\b", candidate, re.I
+    ):
+        return ""
+    # A declarative statement checked with "..., right?" may paraphrase every word in the key.
+    if checked and _statement_before_question(first):
+        return candidate
+    # A standalone name, abbreviation or number may express the whole proposed fact.
+    # Its meaning still needs the grader (e.g. "CO2" for "carbon dioxide").
+    if opened and len(words) == 1 and (candidate[:1].isupper() or any(c.isdigit() for c in candidate)):
+        return candidate
+    # Mentioning the subject of a formula does not propose a calculation.
+    if formula:
+        return candidate if _MATH_OPERATOR.search(candidate) else ""
+    # A paraphrase can share no words with the key. Let the grader evaluate a
+    # stated answer or an explicit proposal rather than requiring a vocabulary match.
+    if opened or _statement_before_question(first):
+        return candidate
+    # Short terms, units and numbers can be meaningful parts of a proposal.
+    anchors = {w for w in _words(target) if (len(w) >= 3 or w.isdigit()) and w not in _FILLER_ANCHORS}
+    anchors.difference_update({"the", "and", "for", "are", "was", "its", "has", "but"})
+    return candidate.strip() if anchors.intersection(words) else ""
+
+
 def answer_grades_with_question_mark(
     block: dict,
     index: int,
@@ -1108,8 +1172,8 @@ def unscored_side_request(
             return False
     # Before the goal-overlap check. "What is a computer?" is still a question.
     if learner_asks_question_or_background(raw):
-        return True
-    if _gives_up(raw):
+        return learner_side_question(raw, block, substep)
+    if _gives_up(raw) or proposed_step_answer(block, substep, raw):
         return False
     if answer_addresses_substep(block, substep, raw, state, cfg):
         return False
@@ -1140,7 +1204,7 @@ def unanswered_side_turn(
         return False
     if str(substep or "") == "explain" and learner_wants_deeper_explanation(raw):
         return False
-    return learner_side_question(raw, block) or unscored_side_request(
+    return learner_side_question(raw, block, substep) or unscored_side_request(
         block,
         substep,
         raw,
@@ -1985,7 +2049,8 @@ def resolve_block_turn(
     # Same side-turn check on later steps. An early answer was already checked above.
     # A question mark does not hide a line that answers the step. Check that, and the
     # model's pass flag, before the unscored stay. A real question still stays.
-    grade_question = answer_grades_with_question_mark(
+    proposal = proposed_step_answer(block, substep, answer)
+    grade_attempt = bool(proposal) if proposal is not None else answer_grades_with_question_mark(
         block,
         index,
         substep,
@@ -2000,7 +2065,7 @@ def resolve_block_turn(
     side_turn = (
         not early_answer
         and not gave_up
-        and not grade_question
+        and not grade_attempt
         and stay_on_course_enabled(cfg)
         and unanswered_side_turn(block, substep, answer, state, cfg)
     )
@@ -2009,7 +2074,7 @@ def resolve_block_turn(
     non_answer = (
         not early_answer
         and not gave_up
-        and not grade_question
+        and not grade_attempt
         and stay_on_course_enabled(cfg)
         and learner_non_answer(
             block,
@@ -2105,7 +2170,16 @@ def resolve_block_turn(
 
     strong_text = (strong or "").strip()
     work_text = (work_on or "").strip()
-    literal = answer_addresses_substep(block, substep, answer, state, cfg)
+    if proposal:
+        # A wrong denominator can share every word with the expected formula.
+        # For an exact fallback, keep operators, units and order, and let the
+        # grader resolve any further text after the learner's first question.
+        target = _proposal_target(block, substep)
+        literal = not answer.partition("?")[2].strip() and (
+            proposal.strip().rstrip(".!") == target.rstrip(".!")
+        )
+    else:
+        literal = answer_addresses_substep(block, substep, answer, state, cfg)
     model_pass = model_accepts_substep(
         block,
         index,
@@ -2113,10 +2187,10 @@ def resolve_block_turn(
         answer,
         cfg,
         substep_passed=bool(substep_passed),
-        rubric_met=met,
+        rubric_met=fresh if proposal else met,
     )
     # A question mark kept the real-attempt check false. The model still passed this line.
-    if not model_pass and grade_question and (
+    if not model_pass and grade_attempt and (
         bool(substep_passed) or rubric_covers_substep(block, index, substep, fresh)
     ):
         model_pass = True
@@ -2239,7 +2313,7 @@ def resolve_block_turn(
         and fragment
         and not state.get("fragment_prompted")
         and not unscored_side_request(block, substep, answer, state, cfg)
-        and not learner_side_question(answer, block)
+        and not learner_side_question(answer, block, substep)
         and not (substep == "summary_check" and summary_ready_signal(answer))
     ):
         state["fragment_prompted"] = True
@@ -2434,7 +2508,7 @@ def resolve_block_turn(
         and literal
         and (
             learner_gave_real_attempt(block, substep, answer, cfg)
-            or (grade_question and _substantive(answer, _minimum_words(block, substep, cfg)))
+            or (grade_attempt and _substantive(answer, _minimum_words(block, substep, cfg)))
         )
     )
     satisfied = model_pass or (literal and bool(substep_passed)) or chain_on_main

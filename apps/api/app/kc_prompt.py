@@ -1419,7 +1419,7 @@ def _prompts_side_question(
         return False
     from app.kc_loop import learner_side_question
 
-    return learner_side_question(last_answer, block)
+    return learner_side_question(last_answer, block, substep)
 
 
 def _summary_close_lines(
@@ -1837,8 +1837,17 @@ def _this_turn(
         lines.append(_GOAL_START_READY)
     if goal_start in _GOAL_START_HOLDS:
         lines.append(_GOAL_START_NO_TURN)
-    from app.kc_loop import stay_on_course_enabled
+    from app.kc_loop import proposed_step_answer, stay_on_course_enabled
 
+    if not opening and proposed_step_answer(block, substep, last_answer):
+        lines.append(
+            "Grade the learner's proposed answer against this active requirement. "
+            "When it is correct, acknowledge their reasoning and move on. Briefly answer any follow-up."
+        )
+        lines.append(
+            "For a partial answer, acknowledge what is correct and ask only for the missing part. "
+            "Only repeat the active question if no part of the answer was usable."
+        )
     side = _typed_side_request(block, substep, last_answer, active_block_state, cfg)
     stay_on = stay_on_course_enabled(cfg)
     if goal_start in {"aside", "cap"}:
