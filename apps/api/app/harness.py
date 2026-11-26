@@ -80,9 +80,9 @@ HARNESS_CODE_VERSION = "harness-1"
 def deployed_commit() -> str:
     """The build that served this process. Empty when the host did not set one."""
     for key in ("RENDER_GIT_COMMIT", "GIT_COMMIT", "SOURCE_VERSION"):
-        value = os.environ.get(key, "").strip().split()
+        value = os.environ.get(key, "").strip()
         if value:
-            return value[0][:40]
+            return value
     return ""
 
 
@@ -90,7 +90,7 @@ def run_code_version() -> str:
     commit = deployed_commit()
     if not commit:
         return HARNESS_CODE_VERSION
-    return f"{HARNESS_CODE_VERSION} {commit}"[:80]
+    return f"{HARNESS_CODE_VERSION} {commit.split()[0][:40]}"[:80]
 FIXTURE_CODE = "harness-every-block"
 LUNA_MODEL = "gpt-6-luna"
 _UNGRADED_STEPS = {"explain", "explain_topic", "summary_check"}
