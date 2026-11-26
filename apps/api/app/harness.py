@@ -17,6 +17,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.ai_safety import read_ai_safety
+from app.block_score import LEGACY_OUTCOMES, classify_stored_outcome
 from app.flow import unique_student_slug
 from app.harness_download import render_download
 from app.harness_checks import (
@@ -1387,9 +1388,14 @@ def _block_score(db: Session, chat: HarnessChat) -> tuple[int | None, list[dict]
     for row in session.block_results or []:
         if not isinstance(row, dict):
             continue
-        outcome = str(row.get("outcome") or "").strip()
-        if outcome not in {"passed", "revealed", "engaged"}:
-            continue
+        stored = str(row.get("outcome") or "").strip()
+        verdict = str(row.get("verdict") or "").strip()
+        if (verdict or stored) in {"known", "fragile", "unassessed"}:
+            outcome, _ = classify_stored_outcome(row)
+        elif not verdict and stored in LEGACY_OUTCOMES:
+            outcome = stored
+        else:
+            outcome = "unknown"
         title = str(row.get("title") or row.get("block_type") or "block").strip() or "block"
         outcomes.append({"title": title, "outcome": outcome})
     return session.score, outcomes
