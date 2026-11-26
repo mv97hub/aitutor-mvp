@@ -6,6 +6,7 @@ import { languageModel } from "@/lib/language-model";
 import { isKcModel, kcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { readModelUsage, type ModelUsageCounts } from "@/lib/model-usage";
 import { requestForCall, type ModelCall } from "@/lib/stored-prompt";
+import { finishSavedTurn } from "@/lib/tutor-turn";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -107,14 +108,16 @@ function asDecision(value: unknown): Decision | null {
 }
 
 export async function POST(req: Request) {
-  let body: { sessionId?: string; answer?: string; model?: string };
+  let body: { sessionId?: string; answer?: string; model?: string; turnId?: string; revision?: number };
   try {
-    body = (await req.json()) as { sessionId?: string; answer?: string; model?: string };
+    body = (await req.json()) as { sessionId?: string; answer?: string; model?: string; turnId?: string; revision?: number };
   } catch {
     return new Response("Expected JSON with sessionId and answer.", { status: 400 });
   }
   const sessionId = body.sessionId;
   const answer = typeof body.answer === "string" ? body.answer.trim() : "";
+  const turnId = typeof body.turnId === "string" ? body.turnId.trim() : "";
+  const revision = typeof body.revision === "number" ? body.revision : 0;
   if (!sessionId) return new Response("sessionId is required.", { status: 400 });
   if (!answer) return new Response("Write an answer first.", { status: 400 });
 
@@ -144,7 +147,7 @@ export async function POST(req: Request) {
   try {
     bundle = await api<TurnBundle>(`/kc/tutor/sessions/${sessionId}/turn`, {
       method: "POST",
-      body: JSON.stringify({ answer }),
+      body: JSON.stringify(turnId ? { answer, turn_id: turnId, revision } : { answer }),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not store the answer.";
@@ -203,7 +206,7 @@ export async function POST(req: Request) {
       `/kc/tutor/sessions/${sessionId}/decision`,
       {
         method: "POST",
-        body: JSON.stringify(decision),
+        body: JSON.stringify(turnId ? { ...decision, turn_id: turnId } : decision),
       },
     );
   } catch (error) {
@@ -217,7 +220,7 @@ export async function POST(req: Request) {
     messages: [{ role: "user", content: childLine }],
     model: modelName,
   };
-  try {
+  const saved = await finishSavedTurn(session, async () => {
     await api(`/kc/sessions/${sessionId}/model-prompts`, {
       method: "POST",
       body: JSON.stringify({
@@ -243,13 +246,10 @@ export async function POST(req: Request) {
         ...usage,
       }),
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not store the prompt.";
-    return new Response(message, { status: 502 });
-  }
+  });
   return Response.json({
-    ...session,
-    loop_result: session.loop_result ?? null,
-    loop_decision: session.loop_decision || decision.decision,
+    ...saved,
+    loop_result: saved.loop_result ?? null,
+    loop_decision: saved.loop_decision || decision.decision,
   });
 }

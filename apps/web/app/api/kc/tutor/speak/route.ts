@@ -6,6 +6,7 @@ import { languageModel } from "@/lib/language-model";
 import { isKcModel, kcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
 import { readModelUsage, type ModelUsageCounts } from "@/lib/model-usage";
 import { requestForCall, type ModelCall } from "@/lib/stored-prompt";
+import { finishSavedTurn } from "@/lib/tutor-turn";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -37,13 +38,15 @@ type StoredCall = {
 };
 
 export async function POST(req: Request) {
-  let body: { sessionId?: string; model?: string };
+  let body: { sessionId?: string; model?: string; turnId?: string; revision?: number };
   try {
-    body = (await req.json()) as { sessionId?: string; model?: string };
+    body = (await req.json()) as { sessionId?: string; model?: string; turnId?: string; revision?: number };
   } catch {
     return new Response("Expected JSON with sessionId.", { status: 400 });
   }
   const sessionId = body.sessionId;
+  const turnId = typeof body.turnId === "string" ? body.turnId.trim() : "";
+  const revision = typeof body.revision === "number" ? body.revision : 0;
   if (!sessionId) return new Response("sessionId is required.", { status: 400 });
 
   const requested = typeof body.model === "string" ? body.model.trim() : "";
@@ -66,6 +69,24 @@ export async function POST(req: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not load the prompt.";
     return new Response(message, { status: 502 });
+  }
+
+  if (turnId) {
+    try {
+      const claim = await api<{
+        replayed?: boolean;
+        held?: boolean;
+        session?: KcTutorSession;
+      }>(`/kc/tutor/sessions/${sessionId}/speech`, {
+        method: "POST",
+        body: JSON.stringify({ phase: "claim", turn_id: turnId, revision, content: "" }),
+      });
+      if (claim.replayed && claim.session) return Response.json(claim.session);
+      if (claim.held) return new Response("The opening is already in progress.", { status: 409 });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not claim this opening.";
+      return new Response(message, { status: 502 });
+    }
   }
 
   const modelName =
@@ -125,7 +146,11 @@ export async function POST(req: Request) {
   try {
     session = await api<KcTutorSession>(`/kc/tutor/sessions/${sessionId}/speech`, {
       method: "POST",
-      body: JSON.stringify({ content: spoken, generated_mcq: generatedMcq, safety_flag: safetyFlag }),
+      body: JSON.stringify(
+        turnId
+          ? { phase: "commit", turn_id: turnId, revision, content: spoken, generated_mcq: generatedMcq, safety_flag: safetyFlag }
+          : { content: spoken, generated_mcq: generatedMcq, safety_flag: safetyFlag },
+      ),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not store that step.";
@@ -140,7 +165,7 @@ export async function POST(req: Request) {
     messages: [{ role: "user", content: SPEAK_PROMPT }],
     model: modelName,
   };
-  try {
+  const saved = await finishSavedTurn(session, async () => {
     await api(`/kc/sessions/${sessionId}/model-prompts`, {
       method: "POST",
       body: JSON.stringify({
@@ -160,9 +185,6 @@ export async function POST(req: Request) {
         ...usage,
       }),
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not store the prompt.";
-    return new Response(message, { status: 502 });
-  }
-  return Response.json(session);
+  });
+  return Response.json(saved);
 }

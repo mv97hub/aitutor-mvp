@@ -271,8 +271,13 @@ def session_star_unit(status: str, block_results: list, reveals: int) -> dict:
 
     Topic and crown points apply only when the session is completed.
     Block points come from passed and revealed outcomes stored on that session.
+    A requirement-score row uses its verdict. An unfamiliar outcome is not a pass.
     """
+    from app.block_score import requirement_star_unit, uses_requirement_score
+
     rows = [item for item in block_results if isinstance(item, dict)]
+    if uses_requirement_score(rows):
+        return requirement_star_unit(status, rows, reveals)
     passed = [item for item in rows if item.get("outcome") == "passed"]
     revealed_rows = [item for item in rows if item.get("outcome") == "revealed"]
     first_try = 0

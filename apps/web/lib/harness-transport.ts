@@ -75,12 +75,25 @@ export function serverTransport(runId: string, routes: TransportRoutes, io?: Tra
     runStatus: io?.runStatus ?? (() => api<RunStatus>(`/kc/harness/runs/${runId}`)),
     session,
     speak: async (sessionId, model) => {
-      const response = await callRoute(routes.speak, "/api/kc/tutor/speak", { sessionId, model });
+      const prior = await session(sessionId);
+      const response = await callRoute(routes.speak, "/api/kc/tutor/speak", {
+        sessionId,
+        model,
+        turnId: crypto.randomUUID(),
+        revision: prior.revision ?? 0,
+      });
       if (!response.ok) throw new Error((await response.text()) || "The tutor could not speak.");
       return session(sessionId);
     },
     answer: async (sessionId, text, model) => {
-      const response = await callRoute(routes.answer, "/api/kc/tutor/answer", { sessionId, answer: text, model });
+      const prior = await session(sessionId);
+      const response = await callRoute(routes.answer, "/api/kc/tutor/answer", {
+        sessionId,
+        answer: text,
+        model,
+        turnId: crypto.randomUUID(),
+        revision: prior.revision ?? 0,
+      });
       if (!response.ok) throw new Error((await response.text()) || "The tutor could not answer.");
       return session(sessionId);
     },

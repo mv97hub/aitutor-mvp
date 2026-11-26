@@ -7,6 +7,7 @@ import { ChoiceWidget } from "@/components/LessonBlocks";
 import type { TutorMood } from "@/components/learn/LearnQuestPanel";
 import { TutorAvatar } from "@/components/TutorAvatar";
 import type { KcTutorSession } from "@/lib/kc";
+import { committedButtons } from "@/lib/committed-actions";
 import { goalStartActions } from "@/lib/kc-goal-start";
 import { choiceShowing, lessonComposerVisible, quizFor } from "@/lib/learn-mobile";
 import { blockStepDivider, starBurst } from "@/lib/learn";
@@ -63,6 +64,8 @@ export function KcLesson({
   const [settled, setSettled] = useState<{ anchorId: string; ids: string[]; note: string } | null>(null);
   const [burst, setBurst] = useState<{ award: number; firstTry: boolean; revealed: boolean } | null>(null);
   const seenBlocks = useRef<string[] | null>(null);
+  const answerTurn = useRef<{ text: string; id: string } | null>(null);
+  const speechTurns = useRef<Record<string, string>>({});
   const tutorFace = getTutorAvatarPreset(session.avatar_preset || activeTutor.avatar_preset);
   const anchor = [...session.messages].reverse().find((message) => message.role === "assistant");
   const quiz = session.choice ? quizFor(session.choice) : null;
@@ -88,6 +91,7 @@ export function KcLesson({
     substep: session.active_substep,
     choosing,
   });
+  const projected = committedButtons(session.actions);
   const echoedMatches = pendingLine
     ? session.messages.filter((message) => message.role === "user" && message.content === pendingLine.text).length
     : 0;
@@ -135,6 +139,8 @@ export function KcLesson({
     const key = `${session.id}:${session.step}:${attempt}:${model}`;
     if (started.current === key) return;
     started.current = key;
+    const speechKey = `${session.id}:${session.step}`;
+    if (!speechTurns.current[speechKey]) speechTurns.current[speechKey] = crypto.randomUUID();
     const controller = new AbortController();
     let cancelled = false;
     setSpeaking(true);
@@ -142,7 +148,12 @@ export function KcLesson({
     void fetch("/api/kc/tutor/speak", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: session.id, model }),
+      body: JSON.stringify({
+        sessionId: session.id,
+        model,
+        turnId: speechTurns.current[speechKey],
+        revision: session.revision ?? 0,
+      }),
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -199,6 +210,8 @@ export function KcLesson({
     const cleaned = answer.trim();
     if (!cleaned || sending.current) return;
     const priorMatches = session.messages.filter((message) => message.role === "user" && message.content === cleaned).length;
+    const turnId = answerTurn.current?.text === cleaned ? answerTurn.current.id : crypto.randomUUID();
+    answerTurn.current = { text: cleaned, id: turnId };
     sending.current = true;
     setAnswering(true);
     setReplyError(null);
@@ -209,12 +222,19 @@ export function KcLesson({
       const response = await fetch("/api/kc/tutor/answer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: session.id, answer: cleaned, model }),
+        body: JSON.stringify({
+          sessionId: session.id,
+          answer: cleaned,
+          model,
+          turnId,
+          revision: session.revision ?? 0,
+        }),
       });
       if (!response.ok) {
         const text = (await response.text()).trim();
         throw new Error(text || "The tutor could not answer.");
       }
+      answerTurn.current = null;
       router.refresh();
     } catch (err: unknown) {
       setSettled(null);
@@ -344,7 +364,7 @@ export function KcLesson({
           <p>{replyError}</p>
         </div>
       ) : null}
-      {goalActions.length > 0 ? (
+      {projected === null && goalActions.length > 0 ? (
         <div className="kc-explain-chips">
           {goalActions.map((label) => (
             <button key={label} type="button" onClick={() => void sendAnswer(label)}>
@@ -353,7 +373,7 @@ export function KcLesson({
           ))}
         </div>
       ) : null}
-      {composerOpen && session.active_block_type === "explanation" && !choosing ? (
+      {projected === null && composerOpen && session.active_block_type === "explanation" && !choosing ? (
         <div className="kc-explain-chips">
           {session.active_substep === "summary_check" ? (
             <button type="button" onClick={() => void sendAnswer("No final questions — let's continue!")}>
@@ -369,6 +389,15 @@ export function KcLesson({
               </button>
             </>
           )}
+        </div>
+      ) : null}
+      {projected !== null && projected.length > 0 ? (
+        <div className="kc-explain-chips">
+          {projected.map((label) => (
+            <button key={label} type="button" onClick={() => void sendAnswer(label)}>
+              {label}
+            </button>
+          ))}
         </div>
       ) : null}
       {showComposer ? (

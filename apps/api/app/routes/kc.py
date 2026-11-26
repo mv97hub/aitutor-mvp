@@ -19,6 +19,8 @@ from app.kc import (
     append_kc_model_prompt,
     apply_component,
     apply_decision,
+    claim_speech_opening,
+    commit_speech_opening,
     course_of_node,
     course_out,
     create_course,
@@ -227,6 +229,8 @@ class RestartCourseIn(BaseModel):
 
 class TurnIn(BaseModel):
     answer: str
+    turn_id: str | None = None
+    revision: int | None = None
 
 
 class DecisionIn(BaseModel):
@@ -251,12 +255,16 @@ class DecisionIn(BaseModel):
     work_on: str = ""
     safety_flag: str = "none"
     reply_unreadable: bool = False
+    turn_id: str | None = None
 
 
 class SpeechIn(BaseModel):
-    content: str
+    content: str = ""
     generated_mcq: dict | None = None
     safety_flag: str = "none"
+    turn_id: str | None = None
+    revision: int | None = None
+    phase: str = ""
 
 
 @router.get("/kc/courses")
@@ -649,9 +657,21 @@ def get_tutor_prompt(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
 
 @router.post("/kc/tutor/sessions/{session_id}/speech")
 def post_tutor_speech(session_id: uuid.UUID, body: SpeechIn, db: Session = Depends(get_db)) -> dict:
+    session = _session_or_404(db, session_id)
+    if body.phase == "claim":
+        return claim_speech_opening(db, session, body.turn_id or "", body.revision)
+    if body.turn_id:
+        return commit_speech_opening(
+            db,
+            session,
+            turn_id=body.turn_id,
+            content=body.content,
+            generated_mcq=body.generated_mcq,
+            safety_flag=body.safety_flag,
+        )
     return record_speech(
         db,
-        _session_or_404(db, session_id),
+        session,
         body.content,
         body.generated_mcq,
         body.safety_flag,
@@ -660,7 +680,13 @@ def post_tutor_speech(session_id: uuid.UUID, body: SpeechIn, db: Session = Depen
 
 @router.post("/kc/tutor/sessions/{session_id}/turn")
 def post_tutor_turn(session_id: uuid.UUID, body: TurnIn, db: Session = Depends(get_db)) -> dict:
-    return turn(db, _session_or_404(db, session_id), body.answer)
+    return turn(
+        db,
+        _session_or_404(db, session_id),
+        body.answer,
+        body.turn_id,
+        body.revision,
+    )
 
 
 @router.post("/kc/tutor/sessions/{session_id}/decision")

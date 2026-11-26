@@ -17,6 +17,7 @@ from sqlalchemy import (
     TypeDecorator,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -1118,6 +1119,14 @@ class KcSession(Base):
             "status IN ('in_progress', 'completed')",
             name="ck_kc_sessions_status",
         ),
+        CheckConstraint(
+            "scoring_version IN (1, 2)",
+            name="ck_kc_sessions_scoring_version",
+        ),
+        CheckConstraint(
+            "verdict IS NULL OR verdict IN ('known', 'fragile', 'unassessed')",
+            name="ck_kc_sessions_verdict",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -1142,6 +1151,12 @@ class KcSession(Base):
     active_block_state: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     block_results: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     score: Mapped[int | None] = mapped_column(Integer)
+    scoring_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    course_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_course_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    verdict: Mapped[str | None] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     redirect_kc_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -1177,6 +1192,108 @@ class KcSession(Base):
         back_populates="session",
         cascade="all, delete-orphan",
         order_by="KcModelPrompt.seq",
+    )
+
+
+class KcCourseRun(Base):
+    """One start of a course for one child. A restart stores a new row."""
+
+    __tablename__ = "kc_course_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    goal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_goals.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class KcVisit(Base):
+    """One block visit inside a session."""
+
+    __tablename__ = "kc_visits"
+    __table_args__ = (
+        CheckConstraint("status IN ('open', 'finished')", name="ck_kc_visits_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    course_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_course_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    block_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    block_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open", server_default="open")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class KcRequirement(Base):
+    """One requirement observation inside a visit."""
+
+    __tablename__ = "kc_requirements"
+    __table_args__ = (
+        CheckConstraint("role IN ('assessed', 'participation')", name="ck_kc_requirements_role"),
+        CheckConstraint(
+            "observation IN ('open', 'insufficient', 'assisted', 'independent', 'participated')",
+            name="ck_kc_requirements_observation",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    visit_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_visits.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    requirement_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    label: Mapped[str] = mapped_column(String(160), nullable=False, default="", server_default="")
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    observation: Mapped[str] = mapped_column(String(16), nullable=False, default="open", server_default="open")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    gave_up: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+
+class KcTurnReceipt(Base):
+    """One claim for one client turn. A committed row is the saved response."""
+
+    __tablename__ = "kc_turn_receipts"
+    __table_args__ = (
+        UniqueConstraint("session_id", "client_turn_id", name="uq_kc_turn_receipts_session_turn"),
+        CheckConstraint("route IN ('answer', 'speech')", name="ck_kc_turn_receipts_route"),
+        CheckConstraint("status IN ('claimed', 'committed')", name="ck_kc_turn_receipts_status"),
+        Index(
+            "uq_kc_turn_receipts_speech_opening",
+            "session_id",
+            "revision",
+            unique=True,
+            postgresql_where=text("route = 'speech'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    client_turn_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    route: Mapped[str] = mapped_column(String(16), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    payload: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="claimed", server_default="claimed")
+    result: Mapped[dict | None] = mapped_column(JSON)
+    opening_key: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
 
 
