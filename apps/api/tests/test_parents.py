@@ -401,7 +401,13 @@ def test_parent_dashboard_is_the_last_ten_chats_progress_and_this_week() -> None
             opened = db.get(KcSession, uuid.UUID(session_id))
             assert opened is not None
             opened.status = "completed"
-            opened.block_results = [{"outcome": "passed", "attempts": 1}]
+            opened.block_results = [{
+                "outcome": "passed",
+                "verdict": "known",
+                "requirements": [{"key": "goal", "role": "assessed", "observation": "independent", "attempts": 1}],
+                "passed_on_first_try": True,
+                "attempts": 1,
+            }]
             opened.reveals = 0
             opened.updated_at = datetime.now(timezone.utc)
             state = db.scalar(

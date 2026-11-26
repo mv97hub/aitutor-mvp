@@ -838,6 +838,8 @@ def learner_gave_real_attempt(block: dict, substep: str, answer: str, cfg: dict 
 def _gives_up(answer: str) -> bool:
     """A skip or an 'I don't know', not a paraphrase of the step."""
     text = _proceed_text(answer)
+    if text in {"i forget", "i forgot", "i cant remember", "i cannot remember"}:
+        return True
     return any(
         phrase in text
         for phrase in (
@@ -922,6 +924,18 @@ def _matches_mcq_choice(block: dict, answer: str, state: dict | None) -> bool:
     return match_mcq_choice_index(answer, choices) is not None
 
 
+def _denies_flaw(block: dict, substep: str, answer: str) -> bool:
+    """An explicit judgment on the supplied example is a wrong critique, even without topic words."""
+    return (
+        block.get("type") == "spot_the_flaw"
+        and substep == "critique"
+        and _proceed_text(answer) in {
+            "looks fine", "looks fine to me", "it looks fine", "it looks fine to me",
+            "no flaw", "there is no flaw", "nothing is wrong", "nothing wrong",
+        }
+    )
+
+
 def _short_off_topic_remark(
     answer: str,
     block: dict,
@@ -938,7 +952,7 @@ def _short_off_topic_remark(
     # One word can be a real try. An off-topic line of any longer length is not.
     if len(words) < 2:
         return False
-    if _matches_mcq_choice(block, answer, state):
+    if _matches_mcq_choice(block, answer, state) or _denies_flaw(block, substep, answer):
         return False
     anchors = _anchor_words(block)
     if not anchors:
@@ -1533,7 +1547,7 @@ def model_accepts_substep(
 
     passage_ela stays on its own check. A help, skip, or too-short reply does not pass.
     """
-    if str(block.get("type") or "").strip() == "passage_ela":
+    if str(block.get("type") or "").strip() == "passage_ela" or _denies_flaw(block, substep, answer):
         return False
     if not learner_gave_real_attempt(block, substep, answer, cfg):
         return False
