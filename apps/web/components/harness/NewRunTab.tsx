@@ -18,6 +18,7 @@ import {
   lunaNote,
   sameModelWarning,
 } from "@/lib/harness";
+import { findHarnessScenario, SCENARIO_GROUPS } from "@/lib/harness-scenarios";
 import { kcModelLabel } from "@/lib/kc-models";
 import { api } from "@/lib/api";
 import type { KcCourse } from "@/lib/kc";
@@ -41,6 +42,9 @@ type Plan = {
   concurrency: number;
   luna_token_ceiling: number;
   script: string;
+  scenario: string;
+  seed: string;
+  pair_tutor_seeds: boolean;
 };
 
 export function NewRunTab({
@@ -73,10 +77,16 @@ export function NewRunTab({
     concurrency: DEFAULT_CONCURRENCY,
     luna_token_ceiling: DEFAULT_LUNA_TOKEN_CEILING,
     script: "",
+    scenario: "",
+    seed: "",
+    pair_tutor_seeds: false,
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const children = listedTestChildren(personas);
+  const scenario = plan.behavior === "script" ? findHarnessScenario(plan.scenario) : undefined;
+  const seedInvalid = plan.seed !== "" && (!/^\d+$/.test(plan.seed) || !Number.isSafeInteger(Number(plan.seed)) || Number(plan.seed) < 1);
   const components = ready
     .filter((course) => plan.course_ids.includes(course.id))
     .flatMap((course) => course.components.map((component) => ({ ...component, courseId: course.id, courseTitle: course.title })));
@@ -101,6 +111,17 @@ export function NewRunTab({
     return list.includes(id) ? list.filter((item) => item !== id) : [...list, id];
   }
 
+  function chooseScenario(id: string) {
+    const selected = findHarnessScenario(id);
+    const allowed = children.filter(persona => selected?.group.personas.includes(persona.number)).map(persona => persona.id);
+    const previous = plan.persona_ids.filter(personaId => allowed.includes(personaId));
+    setPlan({
+      ...plan,
+      scenario: id,
+      persona_ids: selected ? (previous.length ? previous : allowed) : plan.persona_ids,
+    });
+  }
+
   async function loadFixture() {
     setError("");
     try {
@@ -120,7 +141,10 @@ export function NewRunTab({
         body: JSON.stringify({
           ...plan,
           run_cap_cents: plan.run_cap_cents.trim() ? Number(plan.run_cap_cents) : null,
-          script: plan.script.split("\n").map((line) => line.trim()).filter(Boolean),
+          scenario: scenario?.variant.id || "",
+          scenario_group: scenario?.group.id || "",
+          seed: Number(plan.seed) || 0,
+          script: plan.behavior === "script" && !scenario ? plan.script.split("\n").map((line) => line.trim()).filter(Boolean) : [],
           stop_on_safety: plan.stop_on_safety,
         }),
       });
@@ -141,7 +165,7 @@ export function NewRunTab({
       <h2>New run</h2>
       <p className="help">
         {plan.persona_ids.length} children × {componentCount} components × {plan.tutor_models.length} models ×{" "}
-        {Math.max(1, plan.tutor_profile_ids.length)} profiles × {plan.iterations} iterations = {count} chats.
+        {Math.max(1, plan.tutor_profile_ids.length)} profiles × {plan.iterations} iterations = {count} {count === 1 ? "chat" : "chats"}.
       </p>
       {estimate.usd ? (
         <p className="help">
@@ -158,11 +182,12 @@ export function NewRunTab({
       <div className="harness-two">
         <fieldset>
           <legend>Test children</legend>
-          {listedTestChildren(personas).map((persona) => (
+          {children.map((persona) => (
             <label key={persona.id}>
               <input
                 type="checkbox"
                 checked={plan.persona_ids.includes(persona.id)}
+                disabled={Boolean(scenario && !scenario.group.personas.includes(persona.number))}
                 onChange={() => setPlan({ ...plan, persona_ids: toggle(plan.persona_ids, persona.id) })}
               />
               {persona.name} · {persona.description}
@@ -172,7 +197,7 @@ export function NewRunTab({
         <fieldset>
           <legend>Courses and components</legend>
           <button type="button" onClick={() => void loadFixture()}>
-            Load fixture course
+            Load fixture courses
           </button>
           {ready.map((course) => (
             <label key={course.id}>
@@ -236,7 +261,7 @@ export function NewRunTab({
             Child behavior
             <select
               value={plan.behavior}
-              onChange={(event) => setPlan({ ...plan, behavior: event.target.value as Plan["behavior"] })}
+              onChange={(event) => setPlan({ ...plan, behavior: event.target.value as Plan["behavior"], scenario: "" })}
             >
               <option value="rule">Rule-led</option>
               <option value="free">Free play</option>
@@ -263,6 +288,14 @@ export function NewRunTab({
         <label>
           Iterations
           <input type="number" min={1} max={50} value={plan.iterations} onChange={(event) => setPlan({ ...plan, iterations: Number(event.target.value) })} />
+        </label>
+        <label>
+          Run seed (optional)
+          <input type="number" min={1} step={1} value={plan.seed} aria-invalid={seedInvalid} onChange={(event) => setPlan({ ...plan, seed: event.target.value })} />
+        </label>
+        <label>
+          <input type="checkbox" checked={plan.pair_tutor_seeds} onChange={(event) => setPlan({ ...plan, pair_tutor_seeds: event.target.checked })} />
+          Pair learner draws across tutors or scenario variants
         </label>
         <label>
           Spending cap per chat (cents)
@@ -301,14 +334,41 @@ export function NewRunTab({
         Cap {plan.chat_cap_cents} cents per chat. Luna calls are not part of that cap. Token ceiling {plan.luna_token_ceiling}.{" "}
         {boundary ? "AI_Child12 is included, so mild scripted probes are on. Those flags stay out of the AI Safety queue." : ""}
       </p>
+      {seedInvalid ? <p className="banner">Enter a positive whole-number seed or leave it blank to generate one.</p> : null}
+      {plan.pair_tutor_seeds ? <p className="help">For paired runs, use the same run seed, scenario family, children, components and iterations. A blank seed generates a new value for each run.</p> : null}
       {plan.behavior === "script" ? (
-        <label>
-          Script, one child line per row
-          <textarea value={plan.script} onChange={(event) => setPlan({ ...plan, script: event.target.value })} rows={4} />
-        </label>
+        <fieldset>
+          <legend>Scripted scenario</legend>
+          <label>
+            Scenario
+            <select value={plan.scenario} onChange={(event) => chooseScenario(event.target.value)}>
+              <option value="">Custom script</option>
+              {SCENARIO_GROUPS.map(group => (
+                <optgroup key={group.id} label={group.label}>
+                  {group.variants.map(variant => <option key={variant.id} value={variant.id}>{variant.label}</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+          {scenario ? (
+            <>
+              <p>{scenario.group.context}</p>
+              <p className="help">
+                {scenario.group.personas.map(n => `AI_Child${n}`).join(", ")} · Supported blocks: {scenario.group.blockTypes.join(", ")}.
+                {" "}Under “Harness fixture · learner scenarios”, choose {scenario.group.fixture}. Use “Load fixture courses” if the course is missing.
+                {" "}Other turns use ordinary learner behavior. The report counts when the scripted response is sent.
+              </p>
+            </>
+          ) : (
+            <label>
+              Custom script, one child line per row
+              <textarea value={plan.script} onChange={(event) => setPlan({ ...plan, script: event.target.value })} rows={4} />
+            </label>
+          )}
+        </fieldset>
       ) : null}
-      <button type="button" disabled={busy || count < 1} onClick={() => void start()}>
-        {busy ? "Starting…" : `Start ${count} chats`}
+      <button type="button" disabled={busy || count < 1 || seedInvalid} onClick={() => void start()}>
+        {busy ? "Starting…" : `Start ${count} ${count === 1 ? "chat" : "chats"}`}
       </button>
     </section>
   );

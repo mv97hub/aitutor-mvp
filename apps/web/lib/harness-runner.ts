@@ -1,8 +1,12 @@
 /** One chat in the open tab. Turns are one after another. Several chats can run side by side. */
 
 import { ApiError } from "./api.ts";
+import { findHarnessScenario, scenarioMove } from "./harness-scenarios.ts";
 import { availableActions } from "./harness-actions.ts";
-import { EMPTY_INNER, holdQuit, nudgeAllowed, nudgeTurn, pickMove, updateInner, type InnerState, type Traits } from "./harness-policy.ts";
+import {
+  EMPTY_INNER, holdQuit, mulberry32, nudgeAllowed, nudgeTurn, pickMove, soundsLikeQuit, updateInner,
+  type InnerState, type SimulationRole, type VisibleLesson, type Traits,
+} from "./harness-policy.ts";
 
 export type RunStatus = {
   status: string;
@@ -21,7 +25,7 @@ export type SessionSnap = {
   actions?: string[] | null;
   active_block_index?: number;
   choice?: { prompt: string; choices: { id: string; text: string }[] } | null;
-  messages: { id?: string; role: string; content: string }[];
+  messages: { id?: string; role: string; content: string; step?: number }[];
   response_message_id?: string | null;
   tutor_call_kind?: "speak" | "answer";
   block_id?: string;
@@ -48,7 +52,14 @@ export type ClaimedChat = {
   behavior: "rule" | "free" | "script";
   seed: number;
   script?: string[];
-  child: { description?: string; traits?: Traits; child_profile?: { interests?: string } };
+  child: {
+    number?: number;
+    scenario?: string;
+    simulation_role?: SimulationRole;
+    description?: string;
+    traits?: Traits;
+    child_profile?: { interests?: string; reading_level?: string; response_length?: string; expression_style?: string };
+  };
   pending_nudges?: number;
   stuck_answers?: number;
   claim_generation?: number;
@@ -93,6 +104,7 @@ export type HarnessTransport = {
   answerKey: (chatId: string) => Promise<{
     revision?: number;
     expected?: string;
+    visible_passage?: string;
     correct_choice_id?: string;
     misconceptions?: { wrong_move?: string }[];
     probes?: string[];
@@ -106,6 +118,8 @@ export type HarnessTransport = {
   childText: (input: {
     model: string;
     intent: string;
+    role?: SimulationRole;
+    visible?: VisibleLesson;
     description: string;
     traits: Traits;
     expected?: string;
@@ -210,20 +224,42 @@ async function planSubmission(
   const traits = chat.child.traits ?? {};
   const key = await transport.answerKey(chat.id);
   const actions = availableActions(session);
-  if (key.choices && key.choices.length > 0 && actions.choices.length > 0) {
+  const role = chat.child.simulation_role ?? (chat.behavior === "script" ? "script"
+    : chat.behavior === "rule" && [13, 14].includes(chat.child.number ?? 0) ? "answer_key_control" : "learner");
+  const tutorMessage = lastTutorMessage(session);
+  const tutor = tutorMessage?.content ?? "";
+  const target = role === "script" && chat.child.scenario ? findHarnessScenario(chat.child.scenario) : undefined;
+  const presetText = target ? scenarioMove(chat.child.scenario!, {
+    personaNumber: chat.child.number ?? 0, blockType: session.active_block_type ?? "", substep: session.active_substep ?? "",
+    tutor, canType: actions.canType, buttons: actions.buttons, choices: actions.choices,
+    question: session.choice?.prompt, history: session.messages, blockIndex: session.active_block_index,
+    lastScenarioLine: inner.lastScenarioAction?.blockId === key.block_id ? inner.lastScenarioAction?.text : undefined,
+  }) : undefined;
+  const policyRole = target && !presetText ? "learner" : role;
+  const previous = inner.concepts?.[key.block_id || ""];
+  const visible: VisibleLesson = {
+    canType: actions.canType, buttons: actions.buttons, choices: actions.choices.map(({ id, text }) => ({ id, text })),
+    question: session.choice?.prompt, passage: key.visible_passage,
+    recent: session.messages.filter((message) => message !== tutorMessage).slice(-4).map(({ role, content }) => ({ role, content })),
+    previousHelpRequests: previous?.helpRequests,
+    readingLevel: chat.child.child_profile?.reading_level,
+    responseLength: chat.child.child_profile?.response_length,
+    expressionStyle: chat.child.child_profile?.expression_style,
+  };
+  if (role === "answer_key_control" && key.choices?.length && actions.choices.length) {
     actions.choices = actions.choices.map((choice) => ({
       ...choice,
       correct: key.choices?.find((item) => item.id === choice.id)?.correct || choice.id === key.correct_choice_id,
     }));
   }
-  const tutor = lastTutor(session);
-  const nudging = nudgeAllowed({
+  const nudging = actions.canType && nudgeAllowed({
     pending: nudgesLeft,
     answersGiven: stuckAnswers,
     tutor,
     choices: actions.choices.length,
   });
-  const move = nudging
+  const presetIntent = presetText && soundsLikeQuit(presetText) ? "quit" as const : "script" as const;
+  const move = presetText ? { intent: presetIntent, text: presetText, needsModel: false, inner } : nudging
     ? { ...nudgeTurn(nudgesLeft), inner }
     : pickMove({
         traits,
@@ -231,9 +267,10 @@ async function planSubmission(
         seed: chat.seed,
         turn,
         actions,
-        mode: chat.behavior,
+        mode: target ? "rule" : chat.behavior,
         script: chat.script,
-        answerKey: key,
+        role: policyRole,
+        answerKey: role === "answer_key_control" ? key : { probes: key.probes },
         lastTutor: tutor,
         interests: chat.child.child_profile?.interests,
         description: chat.child.description,
@@ -248,8 +285,8 @@ async function planSubmission(
       intent: move.intent,
       description: chat.child.description || "",
       traits,
-      expected: key.expected,
-      wrongMove: key.misconceptions?.[0]?.wrong_move,
+      role: policyRole, visible,
+      ...(role === "answer_key_control" ? { expected: key.expected, wrongMove: key.misconceptions?.[0]?.wrong_move } : {}),
       lastTutor: tutor,
       interests: chat.child.child_profile?.interests,
     });
@@ -264,13 +301,33 @@ async function planSubmission(
     inner: move.inner,
     buttons: actions.buttons,
     lastTutor: tutor,
-    scripted: chat.behavior === "script",
+    scripted: chat.behavior === "script" && (!target || Boolean(presetText)),
   });
   intent = held.intent;
   text = held.text;
+  let choiceFallback = false;
+  if ((role !== "script" || target) && !actions.canType) {
+    const proposed = text.trim().toLowerCase();
+    const chosen = visible.choices.find(({ id, text }) => [id, text, `${id}. ${text}`].some(
+      (label) => label.trim().toLowerCase() === proposed));
+    if (chosen) text = chosen.text;
+    else if (visible.choices.length) {
+      const pick = mulberry32((chat.seed + turn * 997) >>> 0)();
+      text = visible.choices[Math.floor(pick * visible.choices.length)].text;
+      intent = "choice";
+      choiceFallback = true;
+    } else if (!visible.buttons.includes(text)) {
+      if (!visible.buttons.length) throw new Error("The lesson is waiting for a visible action.");
+      text = visible.buttons[0];
+    }
+  }
   if (!text.trim()) text = "ok";
   const before = placeOf(session, key);
-  before.expected = key.expected || "";
+  before.expected = key.expected || ""; // Evaluator-only, never sent to realistic child generation.
+  before.planned_intent = move.intent;
+  before.simulation_role = role;
+  if (target) before.scenario_exercised = Boolean(presetText);
+  before.choice_fallback = choiceFallback;
   // Retain a transcript boundary for replay, without copying every previous message.
   before.message_count = session.messages.length;
   before.last_message_id = session.messages.at(-1)?.id ?? null;
@@ -353,7 +410,6 @@ export async function playChat(
       if (run.plan?.run_cap_cents) continue;
     }
     const before = pending.session_before;
-    const tutor = String(before.tutor_reply || "");
     let receiptOnly = Boolean(run.run_cap_reached);
     if (pending.dispatch_state === "prepared") {
       const turnId = pending.turn_id;
@@ -403,12 +459,26 @@ export async function playChat(
     const place = placeKey(after.block_id, after.substep, after.topic_index);
     let nextInner = updateInner(pending.move_inner, {
       traits,
-      tutorMessage: tutor,
+      tutorMessage: reply || "",
       samePlace: previousPlace !== "" && previousPlace === place,
-      wrong: pending.move_intent === "answer_wrong" || pending.move_intent === "wrong_choice" || pending.move_intent === "careless_slip",
-      usedInterest: Boolean(chat.child.child_profile?.interests) && tutor.toLowerCase().includes(String(chat.child.child_profile?.interests).toLowerCase()),
+      wrong: Boolean(reply && afterSession?.loop_result?.attempt_counted && afterSession.loop_result.stayed),
+      usedInterest: Boolean(chat.child.child_profile?.interests) && String(reply || "").toLowerCase().includes(String(chat.child.child_profile?.interests).toLowerCase()),
     });
-    if (pending.move_intent === "ask_hint") nextInner = { ...nextInner, hints: nextInner.hints + 1 };
+    const loop = afterSession?.loop_result;
+    const attempted = Boolean(reply && loop?.attempt_counted);
+    const askedForHelp = Boolean(reply && /\b(hint|clue|some help|help me)\b/i.test(pending.child_text));
+    const outcome = !reply || !loop ? "unknown" : loop.closed ? `closed_${loop.closed}` : !attempted ? "unscored"
+      : loop.stayed ? "stayed_after_attempt" : loop.advanced ? "advanced_after_attempt" : "attempted";
+    after.learner_observation = outcome;
+    const block = String(before.block_id || "");
+    const concepts = { ...pending.move_inner.concepts };
+    if (block && reply) {
+      const last = concepts[block] || { attempts: 0, helpRequests: 0 };
+      concepts[block] = { attempts: last.attempts + Number(attempted), helpRequests: last.helpRequests + Number(askedForHelp) };
+    }
+    const lastScenarioAction = before.scenario_exercised && reply && block
+      ? { blockId: block, text: pending.child_text } : pending.move_inner.lastScenarioAction;
+    nextInner = { ...nextInner, concepts, lastScenarioAction, hints: nextInner.hints + Number(askedForHelp) };
     const body = {
       turn_id: pending.turn_id, seq: pending.seq, claim_generation: generation ?? 0,
       intent: pending.intent, child_text: pending.child_text, child_prompt: pending.child_prompt,

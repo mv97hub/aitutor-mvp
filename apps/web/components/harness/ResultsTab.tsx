@@ -10,13 +10,17 @@ type DimensionDelta = { dimension: string; before: number | null; after: number 
 type Report = {
   chats: number;
   usable_chats: number;
+  by_simulation_role?: { name: string; chats: number; completion_rate: number; mean_score: number | null; false_passes: number; stuck: number }[];
   by_child: { name: string; chats: number; completion_rate: number; mean_score: number | null; false_passes: number; stuck: number }[];
   by_block_type: { name: string; chats: number; completion_rate: number; mean_score: number | null }[];
   by_model: { name: string; chats: number; completion_rate: number; mean_score: number | null }[];
   top_problems: { tag: string; count: number }[];
   grid: { child: string; block: string; score: number | null }[];
   findings: { title: string; count: number; place: string; block_label?: string }[];
-  summary?: { text?: string };
+  summary?: {
+    text?: string;
+    opportunities?: { role: string; profile: string; scenario: string; block: string; outcome: string; turns: number }[];
+  };
   baseline?: {
     verdict: string;
     band: string;
@@ -73,6 +77,23 @@ export function ResultsTab({ runId }: { runId: string }) {
         {report.baseline ? ` Baseline: ${report.baseline.band}, ${report.baseline.verdict}. Score change ${report.baseline.mean_score_delta ?? "—"}.` : ""}
       </p>
       {report.baseline?.dimension_deltas?.length ? <DeltaList rows={report.baseline.dimension_deltas} /> : null}
+      {report.summary?.opportunities?.length ? (
+        <details>
+          <summary>Turn opportunities by learner, scenario and block</summary>
+          <table>
+            <thead><tr>{["Mode", "Child", "Scenario", "Block before answer", "Tutor outcome", "Turns"].map(
+              (name) => <th key={name} scope="col">{name}</th>
+            )}</tr></thead>
+            <tbody>{report.summary.opportunities.map((row) => (
+              <tr key={JSON.stringify([row.role, row.profile, row.scenario, row.block, row.outcome])}>
+                <td>{row.role.replaceAll("_", " ")}</td><td>{row.profile}</td><td>{row.scenario}</td>
+                <td>{row.block.replaceAll("_", " ")}</td><td>{row.outcome.replaceAll("_", " ")}</td><td>{row.turns}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </details>
+      ) : null}
+      {report.by_simulation_role?.length ? <ScoreTable title="By simulation mode" rows={report.by_simulation_role} /> : null}
       <ScoreTable title="By child" rows={report.by_child} />
       <ScoreTable title="By block type" rows={report.by_block_type} />
       <ScoreTable title="By tutor model" rows={report.by_model} />
