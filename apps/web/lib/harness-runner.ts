@@ -18,7 +18,9 @@ export type SessionSnap = {
   actions?: string[] | null;
   active_block_index?: number;
   choice?: { prompt: string; choices: { id: string; text: string }[] } | null;
-  messages: { role: string; content: string }[];
+  messages: { id?: string; role: string; content: string }[];
+  response_message_id?: string | null;
+  tutor_call_kind?: "speak" | "answer";
   block_id?: string;
   move_attempts?: number;
   prompt?: string;
@@ -88,9 +90,12 @@ export type HarnessTransport = {
   finish: (chatId: string, reason: string) => Promise<void>;
 };
 
+function lastTutorMessage(session: SessionSnap) {
+  return [...session.messages].reverse().find((item) => item.role === "assistant");
+}
+
 function lastTutor(session: SessionSnap): string {
-  const message = [...session.messages].reverse().find((item) => item.role === "assistant");
-  return message?.content ?? "";
+  return lastTutorMessage(session)?.content ?? "";
 }
 
 function assistantCount(session: SessionSnap): number {
@@ -101,6 +106,9 @@ function assistantCount(session: SessionSnap): number {
 function newTutorReply(before: SessionSnap, after: SessionSnap): string | null {
   const latest = lastTutor(after).trim();
   if (!latest) return null;
+  const messageId = lastTutorMessage(after)?.id;
+  if (after.response_message_id !== undefined && (!messageId || messageId !== after.response_message_id)) return null;
+  if (messageId) return before.messages.some((message) => message.id === messageId) ? null : latest;
   if (assistantCount(after) > assistantCount(before)) return latest;
   if (latest === lastTutor(before).trim()) return null;
   return latest;
@@ -135,6 +143,8 @@ function placeOf(
     substep: session.active_substep || "",
     move_attempts: key?.move_attempts ?? session.move_attempts ?? 0,
     tutor_reply: lastTutor(session),
+    tutor_message_id: lastTutorMessage(session)?.id ?? null,
+    tutor_call_kind: session.tutor_call_kind,
     prompt: session.prompt || "",
     safety_flag: session.safety_flag || "none",
     passed: accepted,
@@ -297,8 +307,11 @@ export async function playChat(
       block_type: (afterKey as { block_type?: string }).block_type || afterSession.active_block_type,
     });
     if (!freshReply) {
-      after.tutor_reply = "";
-      after.error = error || "The tutor did not write a new reply.";
+      Object.assign(after, {
+        tutor_reply: "", tutor_message_id: null, tutor_call_kind: undefined, prompt: "",
+        loop_decision: "", loop_result: null, passed: false, safety_flag: "none",
+        error: error || "The tutor did not write a new reply.",
+      });
     }
     const place = placeKey(after.block_id, after.substep, after.topic_index);
     inner = updateInner(move.inner, {

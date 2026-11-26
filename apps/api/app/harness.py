@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import os
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -19,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.ai_safety import read_ai_safety
 from app.block_score import LEGACY_OUTCOMES, classify_stored_outcome
 from app.flow import unique_student_slug
-from app.harness_download import render_download
+from app.harness_download import render_download, reply_message_id
 from app.harness_checks import (
     DEFAULT_CHAT_CAP_CENTS,
     DEFAULT_LUNA_TOKEN_CEILING,
@@ -1239,26 +1240,40 @@ def chat_detail(db: Session, chat: HarnessChat) -> dict:
                 select(KcModelPrompt).where(KcModelPrompt.session_id == chat.session_id).order_by(KcModelPrompt.seq)
             ).all()
         )
+    prompt_counts = Counter(str(row.message_id) for row in prompts if row.message_id)
+    prompts_by_message = {str(row.message_id): row for row in prompts if prompt_counts[str(row.message_id)] == 1}
+    reply_ids = [reply_message_id(turn.session_before, turn.session_after) for turn in turns]
+    reply_counts = Counter(reply_ids)
     body = chat_out(chat)
     body["model_prompts"] = [
-        {"seq": row.seq, "model": row.model, "system_prompt": row.system_prompt} for row in prompts
+        {"id": str(row.id), "message_id": str(row.message_id) if row.message_id else None,
+         "seq": row.seq, "model": row.model, "system_prompt": row.system_prompt} for row in prompts
     ]
-    body["turns"] = [
-        {
+    body["turns"] = []
+    for turn, message_id in zip(turns, reply_ids, strict=True):
+        prompt = prompts_by_message.get(message_id) if message_id and reply_counts[message_id] == 1 else None
+        after = turn.session_after if isinstance(turn.session_after, dict) else {}
+        decision = ""
+        if not str(after.get("tutor_reply") or "").strip() or after.get("error"):
+            after = {**after, "tutor_message_id": None, "tutor_call_kind": None, "prompt": "", "passed": False,
+                     "loop_decision": "", "loop_result": None, "safety_flag": "none"}
+        else:
+            decision = after.get("loop_decision") or ""
+            if not decision and prompt and isinstance(prompt.decision, dict):
+                decision = prompt.decision.get("loop_decision") or ""
+        body["turns"].append({
             "seq": turn.seq,
             "intent": turn.intent,
             "child_text": turn.child_text,
             "child_prompt": turn.child_prompt or "",
-            "tutor_prompt": _tutor_prompt(turn, prompts),
+            "tutor_prompt": prompt.system_prompt if prompt else "",
             "inner_state": turn.inner_state if isinstance(turn.inner_state, dict) else {},
             "session_before": turn.session_before if isinstance(turn.session_before, dict) else {},
-            "session_after": turn.session_after if isinstance(turn.session_after, dict) else {},
+            "session_after": {**after, "prompt": prompt.system_prompt if prompt else ""},
             "child_tokens": turn.child_tokens if isinstance(turn.child_tokens, dict) else {},
             "elapsed_ms": turn.elapsed_ms,
-            "loop_decision": _loop_decision(turn, prompts),
-        }
-        for turn in turns
-    ]
+            "loop_decision": decision,
+        })
     body["evaluations"] = [_evaluation_out(row) for row in reviews]
     body["safety_flags"] = flags
     body["settings_copy"] = dict(chat.settings_copy or {})
@@ -1269,48 +1284,6 @@ def chat_detail(db: Session, chat: HarnessChat) -> dict:
     return body
 
 
-_LOOP_DECISIONS = {"stay", "advance", "complete", "redirect"}
-
-
-def _loop_decision(turn: HarnessTurn, prompts: list[KcModelPrompt]) -> str:
-    """The loop decision stored on the turn, or on the prompt log for that reply."""
-    after = turn.session_after if isinstance(turn.session_after, dict) else {}
-    stored = str(after.get("loop_decision") or "").strip()
-    if stored:
-        return stored
-    reply = str(after.get("tutor_reply") or "").strip()
-    child = str(turn.child_text or "").strip()
-    for row in prompts:
-        decision = row.decision if isinstance(row.decision, dict) else None
-        if not decision:
-            continue
-        name = str(decision.get("decision") or "").strip()
-        if name not in _LOOP_DECISIONS:
-            continue
-        spoken = str(decision.get("reply") or "").strip()
-        if reply and spoken == reply:
-            return name
-        messages = row.messages if isinstance(row.messages, list) else []
-        for message in messages:
-            if isinstance(message, dict) and child and str(message.get("content") or "").strip() == child:
-                return name
-    return ""
-
-
-def _tutor_prompt(turn: HarnessTurn, prompts: list[KcModelPrompt]) -> str:
-    after = turn.session_after if isinstance(turn.session_after, dict) else {}
-    stored = str(after.get("prompt") or "").strip()
-    if stored:
-        return stored
-    chosen = None
-    for row in prompts:
-        if row.seq <= turn.seq:
-            chosen = row
-    if chosen is None and prompts:
-        chosen = prompts[0]
-    return chosen.system_prompt if chosen is not None else ""
-
-
 def get_chat(db: Session, chat_id: uuid.UUID) -> dict:
     chat = db.get(HarnessChat, chat_id)
     if chat is None:
@@ -1318,44 +1291,44 @@ def get_chat(db: Session, chat_id: uuid.UUID) -> dict:
     return chat_detail(db, chat)
 
 
-def _llm_calls(db: Session, chat: HarnessChat) -> list[dict]:
-    prompts: list[KcModelPrompt] = []
-    usage: list[dict] = []
-    if chat.session_id is not None:
-        prompts = list(
-            db.scalars(
-                select(KcModelPrompt).where(KcModelPrompt.session_id == chat.session_id).order_by(KcModelPrompt.seq)
-            ).all()
-        )
-        usage = list(session_token_usage(db, chat.session_id).get("turns") or [])
+def _llm_calls(db: Session, chat: HarnessChat, prompts: list[dict]) -> list[dict]:
+    if chat.session_id is None:
+        return []
+    usage = session_token_usage(db, chat.session_id)["turns"]
+    prompt_counts = Counter(prompt["message_id"] for prompt in prompts)
+    usage_counts = Counter(str(row["message_id"]) for row in usage if row["message_id"])
+    usage_by_message = {str(row["message_id"]): row for row in usage if row["message_id"]}
+
+    def usage_fields(row: dict) -> dict:
+        incoming, outgoing = row["input_tokens"], row["output_tokens"]
+        billed = min(row["cached_tokens"], incoming)
+        return {
+            "usage_id": str(row["id"]), "message_id": str(row["message_id"]) if row["message_id"] else None,
+            "model": row["model"], "kind": row["kind"], "input_tokens": incoming,
+            "output_tokens": outgoing, "cached_tokens": row["cached_tokens"],
+            "cost_usd": _model_cost(row["model"], incoming - billed, billed, outgoing),
+        }
+
     calls = []
-    count = max(len(prompts), len(usage))
-    for index in range(count):
-        prompt = prompts[index] if index < len(prompts) else None
-        row = usage[index] if index < len(usage) else {}
-        model = (prompt.model if prompt is not None else "") or str(row.get("model") or "") or chat.tutor_model
-        incoming = int(row.get("input_tokens") or 0)
-        outgoing = int(row.get("output_tokens") or 0)
-        cached = int(row.get("cached_tokens") or 0)
-        billed = min(cached, incoming)
-        cost = _model_cost(model, incoming - billed, billed, outgoing) if row else None
-        calls.append(
-            {
-                "model": model,
-                "system_prompt": prompt.system_prompt if prompt is not None else "",
-                "kind": str(row.get("kind") or ""),
-                "input_tokens": incoming if row else None,
-                "output_tokens": outgoing if row else None,
-                "cached_tokens": cached if row else None,
-                "cost_usd": cost,
-            }
-        )
+    linked_usage = set()
+    for prompt in prompts:
+        message_id = prompt["message_id"]
+        call = {"prompt_id": prompt["id"], "message_id": message_id,
+                "model": prompt["model"], "system_prompt": prompt["system_prompt"]}
+        if message_id and prompt_counts[message_id] == usage_counts[message_id] == 1:
+            row = usage_by_message[message_id]
+            if not prompt["model"] or not row["model"] or prompt["model"] == row["model"]:
+                call.update(usage_fields(row))
+                call["model"] = row["model"] or prompt["model"]
+                linked_usage.add(row["id"])
+        calls.append(call)
+    calls.extend(usage_fields(row) for row in usage if row["id"] not in linked_usage)
     return calls
 
 
 def _download_payload(db: Session, chat: HarnessChat) -> dict:
     body = chat_detail(db, chat)
-    body["llm_calls"] = _llm_calls(db, chat)
+    body["llm_calls"] = _llm_calls(db, chat, body["model_prompts"])
     return body
 
 

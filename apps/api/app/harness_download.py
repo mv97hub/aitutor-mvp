@@ -7,6 +7,7 @@ blank or failed tutor call, plus the checks, scores, and the model record.
 from __future__ import annotations
 
 import json
+from collections import Counter
 
 from app.harness_report import block_label
 
@@ -45,35 +46,30 @@ def block_marks(turns: list[dict]) -> list[dict]:
     """First turn of a block, and the last turn before the next block."""
     marks: list[dict] = []
     previous = ""
-    for index, turn in enumerate(turns):
-        after = _dict(turn.get("session_after"))
-        key = _block_key(after)
+    places = []
+    for turn in turns:
+        before = _dict(turn.get("session_before"))
+        places.append(before if _block_key(before) else _dict(turn.get("session_after")))
+    for index, (turn, place) in enumerate(zip(turns, places, strict=True)):
+        key = _block_key(place)
         if not key:
             continue
-        nxt = turns[index + 1] if index + 1 < len(turns) else None
-        next_key = _block_key(_dict(nxt.get("session_after"))) if isinstance(nxt, dict) else ""
+        next_key = _block_key(places[index + 1]) if index + 1 < len(places) else ""
         if key != previous:
-            marks.append({"seq": turn.get("seq"), "edge": "start", "label": _mark_label(after)})
-        if nxt is not None and next_key and next_key != key:
-            marks.append({"seq": turn.get("seq"), "edge": "end", "label": _mark_label(after)})
+            marks.append({"seq": turn.get("seq"), "edge": "start", "label": _mark_label(place)})
+        if next_key and next_key != key:
+            marks.append({"seq": turn.get("seq"), "edge": "end", "label": _mark_label(place)})
         previous = key
     return marks
 
 
-def _pair_calls(turns: list[dict], calls: list[dict]) -> tuple[list[dict], list[dict | None]]:
-    """Opening tutor calls come before the child turns. Later calls follow the turns."""
-    if not calls:
-        return [], [None] * len(turns)
-    if len(calls) > len(turns):
-        opening = calls[: len(calls) - len(turns)]
-        matched = calls[len(calls) - len(turns) :]
-    else:
-        opening = []
-        matched = calls
-    paired: list[dict | None] = []
-    for index in range(len(turns)):
-        paired.append(matched[index] if index < len(matched) else None)
-    return opening, paired
+def reply_message_id(before: dict, after: dict) -> str:
+    before, after = _dict(before), _dict(after)
+    message_id = _text(after.get("tutor_message_id"))
+    if (after.get("error") or not _text(after.get("tutor_reply"))
+            or after.get("tutor_call_kind") == "speak" or message_id == _text(before.get("tutor_message_id"))):
+        return ""
+    return message_id
 
 
 def _tokens(row: dict) -> str:
@@ -89,12 +85,16 @@ def _cost(value: object) -> str:
     return text if text else "blank"
 
 
-def _llm_lines(call: dict | None, *, child_prompt: str, child_tokens: dict, fallback_model: str) -> list[str]:
-    model = _text((call or {}).get("model")) or fallback_model or "unknown"
+def _llm_lines(call: dict | None, *, child_prompt: str, child_tokens: dict) -> list[str]:
+    model = _text((call or {}).get("model")) or "unknown"
     system_prompt = _text((call or {}).get("system_prompt"))
     lines = [
         "LLM record:",
         f"- Model: {model}",
+        f"- Tutor message ID: {_text((call or {}).get('message_id')) or 'unknown'}",
+        f"- Prompt record ID: {_text((call or {}).get('prompt_id')) or 'not stored'}",
+        f"- Usage record ID: {_text((call or {}).get('usage_id')) or 'not stored'}",
+        f"- Call kind: {_text((call or {}).get('kind')) or 'unknown'}",
         f"- System prompt: {system_prompt or 'not stored'}",
         f"- Child prompt: {child_prompt or 'not stored'}",
         f"- Tutor tokens: {_tokens(call or {})}",
@@ -104,7 +104,7 @@ def _llm_lines(call: dict | None, *, child_prompt: str, child_tokens: dict, fall
     return lines
 
 
-def _turn_lines(turn: dict, marks: list[dict], call: dict | None, tutor_model: str) -> list[str]:
+def _turn_lines(turn: dict, marks: list[dict], call: dict | None) -> list[str]:
     seq = turn.get("seq")
     after = _dict(turn.get("session_after"))
     reply = _text(after.get("tutor_reply"))
@@ -115,23 +115,28 @@ def _turn_lines(turn: dict, marks: list[dict], call: dict | None, tutor_model: s
             continue
         edge = "Start of block" if mark.get("edge") == "start" else "End of block"
         lines.append(f"{edge}: {mark.get('label')}")
+    for label, place in (("before", _dict(turn.get("session_before"))), ("after", after)):
+        if _block_key(place):
+            lines.append(f"Block {label}: {_mark_label(place)} ({_block_key(place)})")
     lines.append(f"Intent: {_text(turn.get('intent')) or 'not stored'}")
     lines.append(f"Child: {turn.get('child_text') or ''}")
     lines.append(f"Tutor: {reply}")
     if error or not reply:
         lines.append(f"Error: {error or 'The tutor did not write a reply.'}")
-    loop = after.get("loop_result")
+    loop = after.get("loop_result") if reply and not error else None
     if not isinstance(loop, dict):
         loop = {}
-    decision = _text(turn.get("loop_decision") or after.get("loop_decision"))
+    decision = _text(turn.get("loop_decision") or after.get("loop_decision")) if reply and not error else ""
     lines.append(f"Loop decision: {decision or 'not stored'}")
     lines.append(f"Loop result: {json.dumps(loop, default=str)}")
+    if call is None:
+        lines.append("Tutor call association: unknown")
+        call = {"message_id": reply_message_id(turn.get("session_before"), after)}
     lines.extend(
         _llm_lines(
             call,
             child_prompt=_text(turn.get("child_prompt")),
             child_tokens=_dict(turn.get("child_tokens")),
-            fallback_model=tutor_model,
         )
     )
     lines.append("")
@@ -144,7 +149,14 @@ def _chat_lines(chat: dict) -> list[str]:
     turns = [row for row in _list(chat.get("turns")) if isinstance(row, dict)]
     calls = [row for row in _list(chat.get("llm_calls")) if isinstance(row, dict)]
     marks = block_marks(turns)
-    opening, paired = _pair_calls(turns, calls)
+    call_counts = Counter(_text(call.get("message_id")) for call in calls)
+    by_message = {
+        message_id: index for index, call in enumerate(calls)
+        if (message_id := _text(call.get("message_id"))) and call_counts[message_id] == 1
+    }
+    answer_ids = [reply_message_id(turn.get("session_before"), turn.get("session_after")) for turn in turns]
+    answer_counts = Counter(answer_ids)
+    rendered = set()
     lines = [
         f"## {name}",
         "",
@@ -157,23 +169,32 @@ def _chat_lines(chat: dict) -> list[str]:
         f"Luna tokens: {int(chat.get('luna_tokens') or 0)}",
         "",
     ]
-    for call in opening:
-        lines.append("### Opening tutor call")
-        lines.append("")
-        lines.extend(
-            _llm_lines(call, child_prompt="", child_tokens={}, fallback_model=_text(chat.get("tutor_model")))
-        )
-        lines.append("")
     if not turns:
         lines.extend(["No turns stored.", ""])
-    for turn, call in zip(turns, paired, strict=False):
-        system = _text(turn.get("tutor_prompt"))
-        used = call
-        if used is not None and system and not _text(used.get("system_prompt")):
-            used = {**used, "system_prompt": system}
-        elif used is None and system:
-            used = {"system_prompt": system, "model": chat.get("tutor_model") or ""}
-        lines.extend(_turn_lines(turn, marks, used, _text(chat.get("tutor_model"))))
+    for turn, answer_id in zip(turns, answer_ids, strict=True):
+        before = _dict(turn.get("session_before"))
+        before_id = _text(before.get("tutor_message_id"))
+        opening = by_message.get(before_id)
+        if (opening is not None and opening not in rendered and before_id not in answer_counts
+                and before.get("tutor_call_kind") != "answer" and calls[opening].get("kind") != "answer"
+                and "speak" in (calls[opening].get("kind"), before.get("tutor_call_kind"))):
+            lines.extend([f"### Opening tutor call before turn {turn.get('seq')}", ""])
+            lines.extend(_llm_lines({**calls[opening], "kind": "speak"}, child_prompt="", child_tokens={}))
+            lines.append("")
+            rendered.add(opening)
+        index = by_message.get(answer_id)
+        call = None
+        if index is not None and answer_counts[answer_id] == 1 and calls[index].get("kind") != "speak":
+            call = {**calls[index], "kind": "answer"}
+            rendered.add(index)
+        lines.extend(_turn_lines(turn, marks, call))
+    remaining = [call for index, call in enumerate(calls) if index not in rendered]
+    if remaining:
+        lines.extend(["### Tutor records without a verified turn", "",
+                      "Turn association is unknown for these stored records.", ""])
+        for call in remaining:
+            lines.extend(_llm_lines(call, child_prompt="", child_tokens={}))
+            lines.append("")
     lines.extend(_review_lines(chat))
     return lines
 
