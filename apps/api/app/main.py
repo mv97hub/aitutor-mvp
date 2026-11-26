@@ -1,9 +1,15 @@
 import logging
+import re
 
-from fastapi import FastAPI, Request
+from alembic.runtime.migration import MigrationContext
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.harness import deployed_commit
 
 from app.routes.ai_safety import router as ai_safety_router
 from app.routes.harness import router as harness_router
@@ -51,3 +57,14 @@ async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+
+@app.get("/health/revision")
+def deployment_revision(db: Session = Depends(get_db)) -> dict:
+    """Identify the running API and the revisions stamped in its database."""
+    commit = deployed_commit()
+    revisions = MigrationContext.configure(db.connection()).get_current_heads()
+    return {
+        "api_commit": commit if re.fullmatch(r"[0-9a-fA-F]{40}", commit) else None,
+        "database_revisions": sorted(revisions),
+    }
