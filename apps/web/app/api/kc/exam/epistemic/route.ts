@@ -9,8 +9,15 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type EpistemicContext = {
-  chat_id: string;
+  chat_id?: string;
+  run_id?: string;
   course_id: string;
+  persona_id?: string | null;
+  chat_ids?: string[];
+  primary_chat_id?: string;
+  covered_components?: number;
+  total_components?: number;
+  coverage_ratio?: number;
   exam_needs_generation: boolean;
   tutor_message_count?: number;
   exam_id?: string;
@@ -20,26 +27,48 @@ type EpistemicContext = {
   temperature?: number;
 };
 
-/** Run a blank-slate epistemic-sandbox Post-Test restricted strictly to a HarnessChat's tutor messages. */
+/** Run a blank-slate epistemic-sandbox Post-Test restricted strictly to tutor messages (single chat or multi-component run rollup). */
 export async function POST(req: Request) {
-  let body: { chatId?: string; model?: string };
+  let body: { chatId?: string; runId?: string; courseId?: string; personaId?: string; model?: string };
   try {
-    body = (await req.json()) as { chatId?: string; model?: string };
+    body = (await req.json()) as {
+      chatId?: string;
+      runId?: string;
+      courseId?: string;
+      personaId?: string;
+      model?: string;
+    };
   } catch {
-    return Response.json({ detail: "Expected JSON with chatId." }, { status: 400 });
+    return Response.json({ detail: "Expected JSON with chatId or runId." }, { status: 400 });
   }
   const chatId = (body.chatId || "").trim();
-  if (!chatId) return Response.json({ detail: "chatId is required." }, { status: 400 });
+  const runId = (body.runId || "").trim();
+  const courseId = (body.courseId || "").trim();
+  const personaId = (body.personaId || "").trim();
+  if (!chatId && !runId) {
+    return Response.json({ detail: "chatId or runId is required." }, { status: 400 });
+  }
 
   let ctx: EpistemicContext;
   try {
-    ctx = await api<EpistemicContext>(`/kc/harness/chats/${encodeURIComponent(chatId)}/epistemic-context?fallback=true`);
+    if (runId) {
+      const qs = new URLSearchParams({ fallback: "true" });
+      if (courseId) qs.set("course_id", courseId);
+      if (personaId) qs.set("persona_id", personaId);
+      ctx = await api<EpistemicContext>(
+        `/kc/harness/runs/${encodeURIComponent(runId)}/epistemic-context?${qs.toString()}`,
+      );
+    } else {
+      ctx = await api<EpistemicContext>(
+        `/kc/harness/chats/${encodeURIComponent(chatId)}/epistemic-context?fallback=true`,
+      );
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not load epistemic exam context.";
     return Response.json({ detail: message }, { status: 502 });
   }
   if (!ctx.exam_id || !ctx.system_prompt || !ctx.user_prompt || !ctx.response_schema) {
-    return Response.json({ detail: "No frozen post-test available for this chat's course." }, { status: 422 });
+    return Response.json({ detail: "No frozen post-test available for this course." }, { status: 422 });
   }
 
   const modelName = examModelForCall(body.model);
@@ -94,14 +123,34 @@ export async function POST(req: Request) {
   }
 
   try {
-    const saved = await api<BlindExamAttemptSummary>(`/kc/harness/chats/${encodeURIComponent(chatId)}/blind-post-test`, {
-      method: "POST",
-      body: JSON.stringify({
-        exam_id: ctx.exam_id,
-        answers: answerMap,
-        transfer_grades: transferGrades,
-      }),
-    });
+    if (runId) {
+      const saved = await api<BlindExamAttemptSummary>(
+        `/kc/harness/runs/${encodeURIComponent(runId)}/blind-post-test`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            exam_id: ctx.exam_id,
+            course_id: ctx.course_id,
+            persona_id: ctx.persona_id ?? undefined,
+            primary_chat_id: ctx.primary_chat_id ?? undefined,
+            answers: answerMap,
+            transfer_grades: transferGrades,
+          }),
+        },
+      );
+      return Response.json(saved);
+    }
+    const saved = await api<BlindExamAttemptSummary>(
+      `/kc/harness/chats/${encodeURIComponent(chatId)}/blind-post-test`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          exam_id: ctx.exam_id,
+          answers: answerMap,
+          transfer_grades: transferGrades,
+        }),
+      },
+    );
     return Response.json(saved);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not record epistemic post-test.";

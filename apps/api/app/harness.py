@@ -1940,6 +1940,205 @@ def record_epistemic_post_test(db: Session, chat_id: uuid.UUID, body: dict) -> d
     return out
 
 
+def _select_run_epistemic_chats(
+    db: Session,
+    run_id: uuid.UUID,
+    *,
+    course_id: uuid.UUID | None = None,
+    persona_id: uuid.UUID | None = None,
+) -> tuple[uuid.UUID, uuid.UUID | None, list[HarnessChat], int]:
+    """Select completed HarnessChats for one (course_id, persona_id) inside a HarnessRun, ordered by course components."""
+    run = db.get(HarnessRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="That harness run was not found.")
+
+    rows = db.scalars(
+        select(HarnessChat)
+        .where(HarnessChat.run_id == run_id, HarnessChat.status == "completed")
+        .order_by(HarnessChat.created_at)
+    ).all()
+    rows = [r for r in rows if r.course_id is not None]
+    if course_id is not None:
+        rows = [r for r in rows if r.course_id == course_id]
+    if not rows:
+        raise HTTPException(status_code=422, detail="No completed chats found for this run/course.")
+
+    distinct_courses = list(dict.fromkeys(r.course_id for r in rows if r.course_id is not None))
+    if course_id is None:
+        if len(distinct_courses) > 1:
+            raise HTTPException(
+                status_code=422,
+                detail="This run includes multiple courses. Pass course_id to select one course.",
+            )
+        selected_course_id = distinct_courses[0]
+    else:
+        selected_course_id = course_id
+
+    course_rows = [r for r in rows if r.course_id == selected_course_id]
+    if persona_id is not None:
+        course_rows = [r for r in course_rows if r.persona_id == persona_id]
+        if not course_rows:
+            raise HTTPException(status_code=422, detail="No completed chats found for that persona on this course.")
+        selected_persona_id: uuid.UUID | None = persona_id
+    else:
+        # Pick the persona with the highest number of completed components on this course
+        counts: dict[uuid.UUID | None, int] = {}
+        for r in course_rows:
+            counts[r.persona_id] = counts.get(r.persona_id, 0) + 1
+        selected_persona_id = max(counts.items(), key=lambda pair: pair[1])[0]
+        course_rows = [r for r in course_rows if r.persona_id == selected_persona_id]
+
+    goal = db.get(KcGoal, selected_course_id)
+    raw_targets = goal.target_kc_ids if (goal is not None and isinstance(goal.target_kc_ids, list)) else []
+    order_index: dict[uuid.UUID, int] = {}
+    for pos, raw_id in enumerate(raw_targets):
+        try:
+            order_index[uuid.UUID(str(raw_id))] = pos
+        except ValueError:
+            continue
+
+    course_rows.sort(key=lambda r: (order_index.get(r.component_id, 10_000) if r.component_id else 10_000, r.created_at))
+    # Keep at most one completed chat per component (latest iteration if multiple)
+    by_comp: dict[uuid.UUID | None, HarnessChat] = {}
+    for r in course_rows:
+        by_comp[r.component_id] = r
+    ordered_chats = list(by_comp.values())
+    total_components = len(order_index) if order_index else len(ordered_chats)
+    return selected_course_id, selected_persona_id, ordered_chats, total_components
+
+
+def run_epistemic_post_test_context(
+    db: Session,
+    run_id: uuid.UUID,
+    *,
+    course_id: uuid.UUID | None = None,
+    persona_id: uuid.UUID | None = None,
+    use_deterministic_fallback: bool = False,
+) -> dict:
+    """Stitch strictly tutor assistant messages across all completed components of one course in a HarnessRun."""
+    from app.blind_evaluator import (
+        build_epistemic_agent_bundle,
+        latest_exam_for_course,
+        load_quarantined_course_context,
+        prepare_exam_prompt_or_cached,
+        validate_and_store_exam,
+    )
+
+    selected_course_id, selected_persona_id, ordered_chats, total_components = _select_run_epistemic_chats(
+        db, run_id, course_id=course_id, persona_id=persona_id
+    )
+    ctx = load_quarantined_course_context(db, selected_course_id)
+    exam = latest_exam_for_course(
+        db, goal_id=selected_course_id, phase="post", spec_fingerprint=ctx["spec_fingerprint"]
+    )
+    if exam is None:
+        if use_deterministic_fallback:
+            validate_and_store_exam(
+                db,
+                goal_id=selected_course_id,
+                phase="post",
+                use_deterministic_fallback=True,
+            )
+            db.flush()
+            exam = latest_exam_for_course(
+                db, goal_id=selected_course_id, phase="post", spec_fingerprint=ctx["spec_fingerprint"]
+            )
+        else:
+            prep = prepare_exam_prompt_or_cached(db, goal_id=selected_course_id, phase="post")
+            return {
+                "run_id": str(run_id),
+                "course_id": str(selected_course_id),
+                "persona_id": str(selected_persona_id) if selected_persona_id else None,
+                "chat_ids": [str(c.id) for c in ordered_chats],
+                "exam_needs_generation": True,
+                "generation_bundle": prep,
+            }
+
+    assert exam is not None
+    stitched: list[str] = []
+    comp_ids = [c.component_id for c in ordered_chats if c.component_id is not None]
+    nodes = db.scalars(select(KcNode).where(KcNode.id.in_(comp_ids))).all() if comp_ids else []
+    titles = {n.id: n.title for n in nodes}
+
+    for ch in ordered_chats:
+        msgs = _chat_tutor_messages_only(db, ch)
+        if not msgs:
+            continue
+        comp_title = titles.get(ch.component_id, "") if ch.component_id else ""
+        if comp_title:
+            stitched.append(f"[Lesson: {comp_title}] {msgs[0]}")
+            stitched.extend(msgs[1:])
+        else:
+            stitched.extend(msgs)
+
+    bundle = build_epistemic_agent_bundle(exam, stitched, course_title=ctx["title"])
+    covered = len(ordered_chats)
+    coverage_ratio = round(covered / total_components, 4) if total_components > 0 else 0.0
+    return {
+        "run_id": str(run_id),
+        "course_id": str(selected_course_id),
+        "persona_id": str(selected_persona_id) if selected_persona_id else None,
+        "chat_ids": [str(c.id) for c in ordered_chats],
+        "primary_chat_id": str(ordered_chats[0].id),
+        "covered_components": covered,
+        "total_components": total_components,
+        "coverage_ratio": coverage_ratio,
+        "exam_needs_generation": False,
+        "tutor_message_count": len(stitched),
+        **bundle,
+    }
+
+
+def record_run_epistemic_post_test(db: Session, run_id: uuid.UUID, body: dict) -> dict:
+    """Grade and store a course-level epistemic-sandbox Post-Test attempt for a HarnessRun."""
+    from app.blind_evaluator import grade_and_record_attempt
+    from app.models import BlindExam
+
+    course_id = _uuid(body.get("course_id"))
+    persona_id = _uuid(body.get("persona_id"))
+    selected_course_id, selected_persona_id, ordered_chats, total_components = _select_run_epistemic_chats(
+        db, run_id, course_id=course_id, persona_id=persona_id
+    )
+    raw_exam_id = _uuid(body.get("exam_id"))
+    if raw_exam_id is None:
+        raise HTTPException(status_code=422, detail="exam_id is required.")
+    exam = db.get(BlindExam, raw_exam_id)
+    if exam is None or exam.goal_id != selected_course_id:
+        raise HTTPException(status_code=404, detail="Blind exam not found for this run's course.")
+
+    raw_answers = body.get("answers")
+    answers: dict[str, str] = {}
+    if isinstance(raw_answers, dict):
+        answers = {str(k): str(v or "") for k, v in raw_answers.items()}
+    elif isinstance(raw_answers, list):
+        for entry in raw_answers:
+            if isinstance(entry, dict) and entry.get("item_id"):
+                answers[str(entry["item_id"])] = str(entry.get("answer") or "")
+    transfer_grades = body.get("transfer_grades") if isinstance(body.get("transfer_grades"), list) else None
+
+    primary_chat_id = _uuid(body.get("primary_chat_id")) or ordered_chats[0].id
+    out = grade_and_record_attempt(
+        db,
+        exam=exam,
+        answers=answers,
+        transfer_grades=transfer_grades,
+        student_id=None,
+        mode="epistemic_sandbox",
+        harness_chat_id=primary_chat_id,
+    )
+    db.commit()
+    covered = len(ordered_chats)
+    return {
+        **out,
+        "run_id": str(run_id),
+        "persona_id": str(selected_persona_id) if selected_persona_id else None,
+        "chat_ids": [str(c.id) for c in ordered_chats],
+        "covered_components": covered,
+        "total_components": total_components,
+        "coverage_ratio": round(covered / total_components, 4) if total_components > 0 else 0.0,
+    }
+
+
 def suite_out(db: Session, row: HarnessSuite) -> dict:
     runs = db.scalars(select(HarnessRun).where(HarnessRun.suite_id == row.id).order_by(HarnessRun.created_at)).all()
     return {

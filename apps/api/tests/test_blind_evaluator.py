@@ -377,3 +377,100 @@ def test_harness_epistemic_sandbox_uses_only_tutor_messages_and_quarantines_lear
                 student_ids=[test_student_id] if test_student_id else [],
                 run_ids=[run_id] if run_id else [],
             )
+
+
+
+def test_run_epistemic_sandbox_stitches_multi_component_tutor_messages_in_course_order() -> None:
+    """F2 multi-component rollup stitches tutor utterances across all completed components of one course."""
+    client = TestClient(app)
+    goal_id = None
+    node_ids: list[uuid.UUID] = []
+    test_student_id = None
+    run_id = None
+    try:
+        with SessionLocal() as db:
+            goal, nodes = _create_sample_course(db)
+            test_student = Student(
+                display_name="Harness Multi-Component Child",
+                slug=f"harness-multi-{uuid.uuid4().hex[:8]}",
+                age=12,
+                is_test=True,
+            )
+            db.add(test_student)
+            db.flush()
+
+            sess_a = KcSession(student_id=test_student.id, goal_id=goal.id, kc_id=nodes[0].id, status="completed")
+            sess_b = KcSession(student_id=test_student.id, goal_id=goal.id, kc_id=nodes[1].id, status="completed")
+            db.add_all([sess_a, sess_b])
+            db.flush()
+            db.add_all(
+                [
+                    KcMessage(session_id=sess_a.id, seq=1, role="assistant", content="COMP_ONE_TUTOR: Inflation measures price rise."),
+                    KcMessage(session_id=sess_a.id, seq=2, role="user", content="CHILD_SECRET_ONE"),
+                    KcMessage(session_id=sess_b.id, seq=1, role="assistant", content="COMP_TWO_TUTOR: Real GDP adjusts for inflation."),
+                    KcMessage(session_id=sess_b.id, seq=2, role="user", content="CHILD_SECRET_TWO"),
+                ]
+            )
+            run = HarnessRun(status="completed", plan={"run_blind_post_test": True})
+            db.add(run)
+            db.flush()
+            # Insert out of course order (node 1 then node 0) to verify course target_kc_ids ordering!
+            chat_b = HarnessChat(
+                run_id=run.id,
+                course_id=goal.id,
+                component_id=nodes[1].id,
+                student_id=test_student.id,
+                session_id=sess_b.id,
+                status="completed",
+            )
+            chat_a = HarnessChat(
+                run_id=run.id,
+                course_id=goal.id,
+                component_id=nodes[0].id,
+                student_id=test_student.id,
+                session_id=sess_a.id,
+                status="completed",
+            )
+            db.add_all([chat_b, chat_a])
+            db.commit()
+            goal_id = goal.id
+            node_ids = [n.id for n in nodes]
+            test_student_id = test_student.id
+            run_id = run.id
+
+        ctx_res = client.get(f"/kc/harness/runs/{run_id}/epistemic-context?course_id={goal_id}&fallback=true")
+        assert ctx_res.status_code == 200
+        body = ctx_res.json()
+        assert body["exam_needs_generation"] is False
+        assert body["covered_components"] == 2
+        assert body["total_components"] == len(node_ids)
+        assert body["tutor_message_count"] == 2
+        prompt = body["user_prompt"]
+        assert "COMP_ONE_TUTOR" in prompt and "COMP_TWO_TUTOR" in prompt
+        assert prompt.index("COMP_ONE_TUTOR") < prompt.index("COMP_TWO_TUTOR")
+        assert "CHILD_SECRET_ONE" not in prompt and "CHILD_SECRET_TWO" not in prompt
+
+        rec = client.post(
+            f"/kc/harness/runs/{run_id}/blind-post-test",
+            json={
+                "exam_id": body["exam_id"],
+                "course_id": str(goal_id),
+                "primary_chat_id": body["primary_chat_id"],
+                "answers": {iid: "unknown" for iid in body["item_ids"]},
+            },
+        )
+        assert rec.status_code == 200
+        rec_body = rec.json()
+        assert rec_body["mode"] == "epistemic_sandbox"
+        assert rec_body["student_id"] is None
+        assert rec_body["covered_components"] == 2
+        assert len(rec_body["chat_ids"]) == 2
+    finally:
+        with SessionLocal() as db:
+            _cleanup(
+                db,
+                goal_ids=[goal_id] if goal_id else [],
+                node_ids=node_ids,
+                student_ids=[test_student_id] if test_student_id else [],
+                run_ids=[run_id] if run_id else [],
+            )

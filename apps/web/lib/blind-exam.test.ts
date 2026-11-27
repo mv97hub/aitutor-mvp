@@ -40,3 +40,11 @@ test("quiet blind exam UI stays isolated from the live tutor and parent view sta
   const progressUi = readFileSync(new URL("../components/KcCourseProgress.tsx", import.meta.url), "utf8");
   assert.equal(progressUi.includes("!area && courseId"), true);
 });
+
+
+test("epistemic API route supports both single-chat and multi-component course run rollups", () => {
+  const route = readFileSync(new URL("../app/api/kc/exam/epistemic/route.ts", import.meta.url), "utf8");
+  assert.equal(route.includes("/kc/harness/runs/"), true);
+  assert.equal(route.includes("/kc/harness/chats/"), true);
+  assert.equal(route.includes("epistemic-context"), true);
+});
