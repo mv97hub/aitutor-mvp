@@ -995,7 +995,7 @@ def _passed(
         return _as_int(after_state.get("probe_turns")) > _as_int(before_state.get("probe_turns"))
     if kind == "socratic" and substep == "initial_thesis" and after_sub not in {"", substep} and new_outcome != "revealed":
         return True
-    if kind == "mcq" and substep == "choice" and after_sub not in {"", "choice"}:
+    if kind == "mcq" and substep == "choice" and (after_sub not in {"", "choice"} or new_outcome == "passed") and new_outcome != "revealed":
         return True
     if kind == "passage_ela" and (after_sub not in {"", substep} or new_outcome == "passed") and not after_state.get("citation_assisted"):
         return True
