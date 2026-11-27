@@ -177,11 +177,27 @@ test("a replay, paused delivery, or unreached scenario does not start another ju
     if (path === "/kc/harness/chats/chat/finish") return Response.json({ ended_how: "scenario_not_reached" });
     if (path === "/kc/harness/chats/chat/turns") return Response.json(stored.shift());
     if (path === "/kc/harness/chats/capped") return Response.json({ run_cap_reached: true, evaluations: [] });
+    if (path === "/kc/harness/chats/chat-budget") {
+      return Response.json({ judge_budget_reached: true, evaluations: [], judge_model: "fixture-invalid-model" });
+    }
+    if (["/kc/harness/chats/cap", "/kc/harness/chats/luna_ceiling", "/kc/harness/chats/run_cap"].includes(path)) {
+      return Response.json({ ended_how: path.split("/").pop(), evaluations: [], judge_model: "fixture-invalid-model" });
+    }
+    if (path === "/kc/harness/chats/under-budget") {
+      return Response.json({ judge_budget_reached: false, evaluations: [], judge_model: "fixture-invalid-model" });
+    }
+    if (path === "/kc/harness/chats/under-budget/evaluations") return Response.json({});
     assert.equal(path, "/kc/harness/chats/chat");
     judgeReads++;
     return Response.json({ evaluations: [{ kind: "judged", child_realism: 4 }] });
   });
   assert.equal(await judgeFinishedChat("capped"), null, "no judge or evaluation write after hitting the cap");
+  assert.equal(await judgeFinishedChat("chat-budget"), null, "no judge or evaluation write after a chat limit");
+  for (const ending of ["cap", "luna_ceiling", "run_cap"]) {
+    assert.equal(await judgeFinishedChat(ending), null, "honor saved cap endings from an older API");
+  }
+  assert.equal((await judgeFinishedChat("under-budget"))?.error, "That model is not allowed.",
+    "an eligible chat still enters the judge path; the fixture model makes no provider call");
   const unreached = await finish(new Request("http://harness.local/api/kc/harness/finish", {
     method: "POST", body: JSON.stringify({ chatId: "chat", reason: "scenario_not_reached", claim_generation: 1 }),
   }));

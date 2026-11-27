@@ -16,6 +16,15 @@ STUCK_NUDGE_COUNT = 2
 DEFAULT_LUNA_TOKEN_CEILING = 100_000
 
 
+def chat_budget_stop(*, priced_cents: int, cap_cents: int | None,
+                     luna_tokens: int, luna_ceiling: int | None) -> str:
+    if cap_cents is not None and priced_cents >= cap_cents:
+        return "cap"
+    if luna_ceiling is not None and luna_tokens >= luna_ceiling:
+        return "luna_ceiling"
+    return ""
+
+
 def stop_reason(
     *,
     session_status: str,
@@ -39,16 +48,17 @@ def stop_reason(
         return "quit"
     if turn_count >= turn_limit:
         return "turn_limit"
-    if same_place_turns >= stuck_limit:
-        return "stuck"
-    if cap_cents is not None and priced_cents >= cap_cents:
-        return "cap"
-    if luna_ceiling is not None and luna_tokens >= luna_ceiling:
-        return "luna_ceiling"
+    budget = chat_budget_stop(priced_cents=priced_cents, cap_cents=cap_cents,
+                              luna_tokens=luna_tokens, luna_ceiling=luna_ceiling)
+    if budget:
+        return budget
     if consecutive_errors >= 2:
         return "route_error"
     if stop_on_safety and safety_flag and safety_flag != "none":
         return "safety"
+    # Only a stuck stop may be deferred to try another nudge.
+    if same_place_turns >= stuck_limit:
+        return "stuck"
     return ""
 
 

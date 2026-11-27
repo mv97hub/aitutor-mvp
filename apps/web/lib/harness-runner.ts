@@ -13,7 +13,7 @@ export type RunStatus = {
   status: string;
   run_cap_reached?: boolean;
   plan?: { run_cap_cents?: number | null };
-  chat_rows?: { id: string; claim_generation?: number }[];
+  chat_rows?: { id: string; claim_generation?: number; chat_budget_stop?: "cap" | "luna_ceiling" | null }[];
 };
 
 export type SessionSnap = {
@@ -383,8 +383,9 @@ export async function playChat(
     if (run.status === "paused" || run.status === "cancelled") return "paused";
     if (run.status === "completed") return "done";
     if (!claimStillOwns(run, chat.id, generation)) return "paused";
-    if (run.run_cap_reached && !pending) {
-      await transport.finish(chat.id, session.status === "completed" ? "completed" : "run_cap", generation);
+    const budgetStop = run.run_cap_reached ? "run_cap" : run.chat_rows?.find((row) => row.id === chat.id)?.chat_budget_stop;
+    if (budgetStop && !pending) {
+      await transport.finish(chat.id, session.status === "completed" ? "completed" : budgetStop, generation);
       return "done";
     }
     if (!pending && session.needs_speech) {
@@ -416,14 +417,16 @@ export async function playChat(
       if (run.plan?.run_cap_cents) continue;
     }
     const before = pending.session_before;
-    let receiptOnly = Boolean(run.run_cap_reached);
-    if (pending.dispatch_state === "prepared") {
+    let receiptOnly = Boolean(budgetStop);
+    // A prepared checkpoint may be known unsent. A resumed or uncertain one
+    // must also ask the server before a retry could incur another tutor charge.
+    if (!receiptOnly || pending.dispatch_state === "prepared") {
       const turnId = pending.turn_id;
       const action = await writeWithRetry(() => transport.dispatchTurn(chat.id, turnId, generation ?? 0));
       if (action === "paused") return "paused";
       if (action === "run_cap") return "done";
       receiptOnly = action === "read_receipt";
-      pending = { ...pending, dispatch_state: "dispatched" };
+      if (pending.dispatch_state === "prepared") pending = { ...pending, dispatch_state: "dispatched" };
     }
     if (onLive && !seen.has(`child:${pending.child_text}`)) {
       seen.add(`child:${pending.child_text}`);

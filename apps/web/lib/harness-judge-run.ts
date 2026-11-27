@@ -56,6 +56,8 @@ const schema = {
 
 type ChatForJudge = {
   run_cap_reached?: boolean;
+  judge_budget_reached?: boolean;
+  ended_how?: string;
   judge_model?: string;
   child?: { description?: string };
   turns?: { seq: number; intent?: string; child_text?: string; session_after?: { tutor_reply?: string } }[];
@@ -102,7 +104,9 @@ export async function judgeTranscript(input: {
 
 export async function judgeFinishedChat(chatId: string): Promise<JudgeEvaluation | null> {
   const detail = await api<ChatForJudge>(`/kc/harness/chats/${chatId}`);
-  if (detail.run_cap_reached || judgedAlready(detail.evaluations)) return null;
+  // During a rolling deployment, an older API can still identify a budget stop by its saved ending.
+  const budgetEnded = detail.judge_budget_reached ?? ["cap", "luna_ceiling", "run_cap"].includes(detail.ended_how ?? "");
+  if (budgetEnded || detail.run_cap_reached || judgedAlready(detail.evaluations)) return null;
   const turns: JudgeTurn[] = (detail.turns || []).map((turn) => ({
     seq: turn.seq,
     intent: turn.intent,

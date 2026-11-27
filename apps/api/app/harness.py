@@ -31,6 +31,7 @@ from app.harness_checks import (
     DEFAULT_TURN_LIMIT,
     WRONG_INTENTS,
     automatic_checks,
+    chat_budget_stop,
     place_key,
     side_action_checks,
     stop_reason,
@@ -530,8 +531,15 @@ def run_out(db: Session, run: HarnessRun) -> dict:
         "updated_at": run.updated_at,
         "chats": len(chats),
         "finished": totals["finished"],
-        "chat_rows": [chat_out(chat) for chat in chats],
+        "chat_rows": [{**chat_out(chat), "chat_budget_stop": _chat_budget_stop(chat, run) or None} for chat in chats],
     }
+
+
+def _nudge_counts(chat: HarnessChat) -> dict[str, int]:
+    # Older terminal rows may still carry counts from the last stuck step.
+    if chat.status in {"completed", "cancelled", "failed"}:
+        return {"pending_nudges": 0, "stuck_answers": 0}
+    return {"pending_nudges": int(chat.pending_nudges or 0), "stuck_answers": int(chat.stuck_answers or 0)}
 
 
 def chat_out(chat: HarnessChat) -> dict:
@@ -558,8 +566,7 @@ def chat_out(chat: HarnessChat) -> dict:
         "cost_usd": chat.cost_usd,
         "luna_tokens": chat.luna_tokens,
         "turn_count": chat.turn_count,
-        "pending_nudges": int(chat.pending_nudges or 0),
-        "stuck_answers": int(chat.stuck_answers or 0),
+        **_nudge_counts(chat),
         "claim_generation": int(chat.claim_generation or 0),
         "created_at": chat.created_at,
         "updated_at": chat.updated_at,
@@ -1104,6 +1111,25 @@ def _close_session(db: Session, chat: HarnessChat) -> None:
     _close_open_session(db, chat.session_id)
 
 
+def _chat_budget_inputs(chat: HarnessChat, plan: dict) -> dict[str, int]:
+    # The threshold is a whole number of cents. Truncating for this comparison
+    # keeps a fractional cent below the threshold eligible.
+    return {
+        "priced_cents": int(_usd(chat.cost_usd) * 100),
+        "cap_cents": int(plan.get("chat_cap_cents") or DEFAULT_CHAT_CAP_CENTS),
+        "luna_tokens": int(chat.luna_tokens or 0),
+        "luna_ceiling": min(int(plan.get("luna_token_ceiling") or DEFAULT_LUNA_TOKEN_CEILING), MAX_LUNA_TOKENS),
+    }
+
+
+def _chat_budget_stop(chat: HarnessChat, run: HarnessRun) -> str:
+    return chat_budget_stop(**_chat_budget_inputs(chat, run.plan or {}))
+
+
+def _dispatch_budget_stop(db: Session, chat: HarnessChat, run: HarnessRun) -> str:
+    return "run_cap" if _run_cap_reached(db, run) else _chat_budget_stop(chat, run)
+
+
 def _same_place(turns: list[HarnessTurn]) -> int:
     if not turns:
         return 0
@@ -1187,8 +1213,9 @@ def dispatch_harness_turn(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID, g
     """Authorize delivery before network I/O. A missing historical marker means delivery is uncertain."""
     chat = _locked_chat(db, chat_id)
     unsent = _as_dict(_as_dict(chat.tokens).get("unsent_child"))
-    if unsent.get("turn_id") == str(turn_id) and chat.ended_how == "run_cap":
-        return {"action": "run_cap"}
+    if (unsent.get("turn_id") == str(turn_id) and generation == chat.claim_generation
+            and chat.ended_how in {"run_cap", "cap", "luna_ceiling"}):
+        return {"action": "run_cap", "ended_how": chat.ended_how}
     _check_turn_owner(chat, {"claim_generation": generation})
     pending = _as_dict(chat.pending_turn)
     if pending.get("turn_id") != str(turn_id):
@@ -1198,7 +1225,8 @@ def dispatch_harness_turn(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID, g
     if run.status != "running":
         return {"action": "paused"}
     prepared = pending.get("dispatch_state") == "prepared"
-    if _run_cap_reached(db, run):
+    budget_stop = _dispatch_budget_stop(db, chat, run)
+    if budget_stop:
         if not prepared or _answer_receipt(db, chat, str(turn_id)) is not None:
             return {"action": "read_receipt"}
         # Closing this chat does not create a fictitious learner or harness turn.
@@ -1206,8 +1234,9 @@ def dispatch_harness_turn(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID, g
             "turn_id": str(turn_id), "child_tokens": pending.get("child_tokens") or {},
         }}
         chat.pending_turn = None
-        _finish(db, chat, "run_cap")
-        return {"action": "run_cap"}
+        _finish(db, chat, budget_stop)
+        # Older workers recognize this action as "finished without sending".
+        return {"action": "run_cap", "ended_how": budget_stop}
     if prepared:
         chat.pending_turn = {**pending, "dispatch_state": "dispatched"}
         db.flush()
@@ -1227,7 +1256,7 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
             if stored.chat_id != chat_id or stored.seq != body.get("seq") or stored.child_text != body.get("child_text"):
                 raise HTTPException(status_code=409, detail="This turn ID belongs to a different submission.")
             return {"turn": stored.seq, "stop": chat.ended_how, "replayed": True,
-                    "pending_nudges": chat.pending_nudges, "stuck_answers": chat.stuck_answers,
+                    **_nudge_counts(chat),
                     "cost_usd": chat.cost_usd, "luna_tokens": chat.luna_tokens}
         matches = pending and all(body.get(key) == pending.get(key) for key in ("turn_id", "seq", "child_text"))
         if (matches and chat.status == "paused" and body.get("claim_generation") == chat.claim_generation
@@ -1244,8 +1273,8 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
             # A timed-out request may still commit. Keep the move across Resume even if
             # no receipt was visible when this transaction inspected the tutor session.
             run = _run_or_404(db, chat.run_id)
-            if _run_cap_reached(db, run):
-                # Other already-paid submissions must still be able to drain.
+            if _dispatch_budget_stop(db, chat, run):
+                # Only this uncertain chat pauses. Other eligible chats can continue.
                 chat.status = "paused"
                 chat.updated_at = _now()
                 db.flush()
@@ -1305,12 +1334,7 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
         intent=turn.intent,
         turn_count=seq,
         same_place_turns=same_place,
-        # Caps are whole cents. Discard the fractional cent only for this
-        # comparison, so a chat just below its limit can still continue.
-        priced_cents=int(_usd(chat.cost_usd) * 100),
-        cap_cents=int(plan.get("chat_cap_cents") or DEFAULT_CHAT_CAP_CENTS),
-        luna_tokens=int(chat.luna_tokens or 0),
-        luna_ceiling=min(int(plan.get("luna_token_ceiling") or DEFAULT_LUNA_TOKEN_CEILING), MAX_LUNA_TOKENS),
+        **_chat_budget_inputs(chat, plan),
         consecutive_errors=errors,
         safety_flag=str(after.get("safety_flag") or "none"),
         stop_on_safety=bool(plan.get("stop_on_safety")),
@@ -1327,7 +1351,7 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     )
     chat.pending_nudges = pending
     chat.stuck_answers = answers
-    if run is not None and not reason:
+    if run is not None and reason in {"", "stuck"}:
         _refresh_totals(db, run)
         if _run_cap_reached(db, run):
             reason = "run_cap"
@@ -1337,8 +1361,7 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     return {
         "turn": seq,
         "stop": reason,
-        "pending_nudges": pending,
-        "stuck_answers": answers,
+        **_nudge_counts(chat),
         "cost_usd": chat.cost_usd,
         "luna_tokens": chat.luna_tokens,
         "chat": chat_out(chat),
@@ -1386,6 +1409,8 @@ def _finish(db: Session, chat: HarnessChat, reason: str) -> None:
     if chat.status in {"completed", "cancelled", "failed"}:
         return
     chat.ended_how = reason
+    chat.pending_nudges = 0
+    chat.stuck_answers = 0
     chat.status = "failed" if reason == "route_error" else "completed"
     chat.updated_at = _now()
     if reason in {"scenario_not_reached", "cap", "luna_ceiling", "turn_limit", "stuck", "quit", "safety", "cancelled", "run_cap"}:
@@ -1574,7 +1599,12 @@ def chat_detail(db: Session, chat: HarnessChat, *, include_run_cap: bool = True)
     reply_counts = Counter(reply_ids)
     body = chat_out(chat)
     if include_run_cap:
-        body["run_cap_reached"] = _run_cap_reached(db, _run_or_404(db, chat.run_id))
+        run = _run_or_404(db, chat.run_id)
+        body["run_cap_reached"] = _run_cap_reached(db, run)
+        body["judge_budget_reached"] = (
+            body["run_cap_reached"] or chat.ended_how in {"cap", "luna_ceiling", "run_cap"}
+            or bool(_chat_budget_stop(chat, run))
+        )
     body["model_prompts"] = [
         {"id": str(row.id), "message_id": str(row.message_id) if row.message_id else None,
          "seq": row.seq, "model": row.model, "system_prompt": row.system_prompt} for row in prompts
