@@ -96,3 +96,7 @@ test("agreement is empty until a hand score exists, then names the gap", () => {
   assert.equal(agreementLabel(4, 4), "agree");
   assert.equal(agreementLabel(5, 2), "off by 3");
 });
+
+test("a saved child-realism-only CPI evaluation suppresses another paid judge call", () => {
+  assert.equal(judgedAlready([{ kind: "judged", scores: [], child_realism: 4, error: "" }]), true);
+});
