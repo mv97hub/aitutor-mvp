@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ClaimedChat, HarnessTransport, SessionSnap } from "./harness-runner.ts";
+import type { ClaimedChat, HarnessTransport, PreparedTurn, SessionSnap } from "./harness-runner.ts";
 import { claimStillOwns, placeKey, playChat } from "./harness-runner.ts";
 
 function session(overrides: Partial<SessionSnap> = {}): SessionSnap {
@@ -816,5 +816,49 @@ test("River roads requests an example and answers the actual cargo question on t
       assert.equal(after.loop_result.attempt_counted, false);
       assert.equal(after.delivery_status, "delivered");
     }
+  }
+});
+
+test("a resumed submission at its own budget reads the receipt with no new child or tutor call", async () => {
+  for (const dispatch_state of ["dispatched", undefined] as const) {
+    const transport = retryTestTransport();
+    const events: string[] = [];
+    const pending: PreparedTurn = {
+      turn_id: crypto.randomUUID(), revision: 1, seq: 1, child_text: "Maybe.", intent: "guess", child_prompt: "",
+      child_tokens: { model: "gpt-4.1-mini", input_tokens: 25_000, output_tokens: 0 },
+      session_before: { message_count: 0 }, dispatch_state, move_intent: "guess",
+      move_inner: { boredom: 0, confusion: 0, frustration: 0, hints: 0 },
+    };
+    transport.runStatus = async () => ({ status: "running", run_cap_reached: false });
+    transport.childText = async () => { throw Error("the charged child generation is already stored"); };
+    transport.dispatchTurn = async () => { events.push("check"); return "read_receipt"; };
+    transport.answer = async (_id, _submission, _model, receiptOnlyId) => {
+      assert.equal(receiptOnlyId, chat().id);
+      events.push("read");
+      return session({ messages: [{ role: "assistant", id: "saved", content: "Saved reply." }], response_message_id: "saved" });
+    };
+    transport.recordTurn = async (_id, body) => {
+      assert.equal((body.session_after as Record<string, unknown>).delivery_status, "recovered");
+      events.push("record"); return {stop: "cap", cost_usd: "0.01", luna_tokens: 0};
+    };
+    assert.equal(await playChat({ ...chat(), pending_turn: pending }, transport), "done");
+    assert.deepEqual(events, ["check", "read", "record"]);
+  }
+});
+
+test("an opening that exhausts a chat budget stops before child generation", async () => {
+  for (const cap of ["cap", "luna_ceiling"] as const) {
+    const transport = retryTestTransport();
+    const events: string[] = [];
+    const owned: ClaimedChat = { ...chat(), behavior: "free" };
+    transport.session = async () => session({ needs_speech: true });
+    transport.runStatus = async () => ({
+      status: "running", chat_rows: [{ id: owned.id, chat_budget_stop: events.length ? cap : null }],
+    });
+    transport.speak = async () => { events.push("opening"); return session(); };
+    transport.childText = async () => { throw Error("the opening used the chat budget"); };
+    transport.finish = async (_id, reason) => { events.push(reason); };
+    assert.equal(await playChat(owned, transport), "done");
+    assert.deepEqual(events, ["opening", cap]);
   }
 });
