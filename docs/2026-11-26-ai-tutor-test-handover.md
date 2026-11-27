@@ -202,6 +202,12 @@ For realistic behavior, give the child generator the visible passage, current qu
 
 AI_Child12 made 34 boundary probes drawn from just five distinct phrases. Add a small set of reviewed, synthetic variants to distinguish an ordinary aside from a request that needs redirection. Count the distinct situations exercised as well as the number of turns.
 
+### Run AI_Child2’s example-and-practice check
+
+On **AI Test Children → New run**, choose **Set up River roads · Tell me more**. Check the preview says one chat, with AI_Child2, *Short informational passage · River roads* and a two-turn limit. Review the model and spending settings before starting. The earlier Reading support presets still request a reread.
+
+The first scripted turn sends “Tell me more”. If the tutor asks what the boat could carry, the child answers “Pears!” If the tutor repeats the main question or asks a different question, inspect the actual reply. The **River roads practice** section of the saved chat shows which turns ran and whether each left the main reading question open with zero assessment attempts. Myuran can then judge whether the example and follow-up were easy to answer aloud. [Original hosted comparison](https://aitutor-mvp-web.onrender.com/api/kc/harness/runs/b985aa7f-9b2d-4eb9-9731-092d78b8e150/download) · [Preset and verification #219](https://github.com/mv97hub/aitutor-mvp/pull/219)
+
 ### Proposed profile scenarios
 
 Keep the fourteen stable persona IDs. The following are **variants and paired scripts** using existing traits and settings, so the team can extend coverage without creating a permanent persona for every combination. Change one feature within a pair, keep its lesson and evidence constant, and include both an expected success and an expected failure where relevant.

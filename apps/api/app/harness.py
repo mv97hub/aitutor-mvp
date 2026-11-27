@@ -416,7 +416,7 @@ def _snapshot(row: HarnessPersona, behavior: str, scenario: str) -> dict:
     if behavior == "rule" and row.number in (13, 14):
         role = "answer_key_control"
     child_profile = dict(row.child_profile or {})
-    reader_lengths = {"reread-short": "bite_sized", "reread-detail": "detailed"}
+    reader_lengths = {"river-example-practice": "bite_sized", "reread-short": "bite_sized", "reread-detail": "detailed"}
     if role == "script" and row.number in (2, 8) and scenario in reader_lengths:
         child_profile["response_length"] = reader_lengths[scenario]
     return {
@@ -1381,7 +1381,7 @@ def _finish(db: Session, chat: HarnessChat, reason: str) -> None:
     chat.ended_how = reason
     chat.status = "failed" if reason == "route_error" else "completed"
     chat.updated_at = _now()
-    if reason in {"cap", "luna_ceiling", "turn_limit", "stuck", "quit", "safety", "cancelled", "run_cap"}:
+    if reason in {"scenario_not_reached", "cap", "luna_ceiling", "turn_limit", "stuck", "quit", "safety", "cancelled", "run_cap"}:
         _close_session(db, chat)
     snapshot = chat.child_snapshot if isinstance(chat.child_snapshot, dict) else {}
     profile = snapshot.get("child_profile") if isinstance(snapshot.get("child_profile"), dict) else {}
@@ -1414,7 +1414,7 @@ def finish_chat(db: Session, chat_id: uuid.UUID, reason: str, claim_generation: 
         _check_turn_owner(chat, {"claim_generation": claim_generation})
     if chat.pending_turn:
         raise HTTPException(status_code=409, detail="Recover the pending submission before closing the chat.")
-    allowed = {"completed", "quit", "turn_limit", "stuck", "cap", "luna_ceiling", "route_error", "safety", "cancelled", "run_cap"}
+    allowed = {"scenario_not_reached", "completed", "quit", "turn_limit", "stuck", "cap", "luna_ceiling", "route_error", "safety", "cancelled", "run_cap"}
     chosen = reason if reason in allowed else "completed"
     _refresh_chat_cost(db, chat)
     _finish(db, chat, chosen)

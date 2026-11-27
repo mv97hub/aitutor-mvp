@@ -2,6 +2,7 @@
 
 import { ApiError } from "./api.ts";
 import { findHarnessScenario, scenarioMove } from "./harness-scenarios.ts";
+import { CARGO_ANSWER, READER_PRACTICE } from "./harness-reader-practice.ts";
 import { availableActions } from "./harness-actions.ts";
 import {
   EMPTY_INNER, holdQuit, mulberry32, nudgeAllowed, nudgeTurn, pickMove, soundsLikeQuit, updateInner,
@@ -220,7 +221,7 @@ function emitNew(seen: Set<string>, session: SessionSnap, chatId: string, onLive
 async function planSubmission(
   chat: ClaimedChat, transport: HarnessTransport, session: SessionSnap, turn: number,
   inner: InnerState, nudgesLeft: number, stuckAnswers: number,
-): Promise<PreparedTurn> {
+): Promise<PreparedTurn | null> {
   const traits = chat.child.traits ?? {};
   const key = await transport.answerKey(chat.id);
   const actions = availableActions(session);
@@ -232,9 +233,10 @@ async function planSubmission(
   const presetText = target ? scenarioMove(chat.child.scenario!, {
     personaNumber: chat.child.number ?? 0, blockType: session.active_block_type ?? "", substep: session.active_substep ?? "",
     tutor, canType: actions.canType, buttons: actions.buttons, choices: actions.choices,
-    question: session.choice?.prompt, history: session.messages, blockIndex: session.active_block_index,
+    question: session.choice?.prompt, passage: key.visible_passage, history: session.messages, blockIndex: session.active_block_index,
     lastScenarioLine: inner.lastScenarioAction?.blockId === key.block_id ? inner.lastScenarioAction?.text : undefined,
   }) : undefined;
+  if (target?.variant.id === READER_PRACTICE && !presetText) return null;
   const policyRole = target && !presetText ? "learner" : role;
   const previous = inner.concepts?.[key.block_id || ""];
   const visible: VisibleLesson = {
@@ -405,6 +407,10 @@ export async function playChat(
     }
     if (!pending) {
       const planned = await planSubmission(chat, transport, session, turn, inner, nudgesLeft, stuckAnswers);
+      if (!planned) {
+        await transport.finish(chat.id, "scenario_not_reached", generation);
+        return "done";
+      }
       pending = await writeWithRetry(() => transport.prepareTurn(chat.id, generation ?? 0, planned));
       // Child generation can take long enough for another chat to exhaust the budget.
       if (run.plan?.run_cap_cents) continue;
@@ -492,6 +498,10 @@ export async function playChat(
     }
     if (recorded.pending) return "paused";
     if (recorded.stop) return "done";
+    if (chat.child.scenario === READER_PRACTICE && before.scenario_exercised && pending.child_text === CARGO_ANSWER) {
+      await transport.finish(chat.id, "turn_limit", generation);
+      return "done";
+    }
     // Only a committed harness turn advances the simulator or selects another child action.
     if (!afterSession) throw new Error("The tutor response still needs recovery.");
     inner = nextInner;

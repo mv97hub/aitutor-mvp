@@ -167,3 +167,35 @@ def test_multiple_tutor_variants_with_the_same_seed_are_compared_once_by_profile
     assert compare_runs(left[:1], [chat("unpaired", "other", "p3")])["matched"] == 0
     assert compare_runs([{**left[0], "paired_seeds": True}],
                         [{**chat("paired", "other", "p3"), "paired_seeds": True}])["matched"] == 1
+
+
+def test_unreached_river_example_records_the_reason_and_closes_the_fixture_session():
+    from sqlalchemy import select
+    from app.database import SessionLocal
+    from app.harness_scenario_fixture import SCENARIO_FIXTURE_CODE
+    from app.models import HarnessPersona, KcGoal, KcSession, Student
+
+    with SessionLocal() as db:
+        child = next(row for row in harness.add_starter_set(db) if row["number"] == 2)
+        persona = db.get(HarnessPersona, child["id"])
+        persona.child_profile = {**persona.child_profile, "response_length": "detailed"}
+        harness.ensure_fixture(db)
+        course = db.scalar(select(KcGoal).where(KcGoal.code == SCENARIO_FIXTURE_CODE))
+        river = next(n for n in harness.load_targets(db, course) if n.code == "harness-scenario-river")
+        run = harness.create_run(db, {
+            "persona_ids": [child["id"]], "course_ids": [str(course.id)], "component_ids": [str(river.id)],
+            "scenario": "river-example-practice", "scenario_group": "reader", "behavior": "script",
+            "iterations": 1, "turn_limit": 2, "tutor_models": ["gpt-4.1-mini"],
+        })
+        chat = harness.claim_chat(db, run["id"])
+        session = db.get(KcSession, chat["session_id"])
+        assert db.get(Student, session.student_id).child_profile["response_length"] == "bite_sized"
+        assert persona.child_profile["response_length"] == "detailed"
+        detail = harness.finish_chat(db, chat["id"], "scenario_not_reached", chat["claim_generation"])
+        assert detail["ended_how"] == "scenario_not_reached"
+        assert detail["turns"] == [] and detail["turn_count"] == 0
+        assert session.status == "completed"
+        assert harness.get_run(db, run["id"])["status"] == "completed"
+        summary = harness.run_report(db, run["id"])["summary"]
+        assert summary["chats"] == 1 and summary["completed"] == 0 and summary["opportunities"] == []
+        assert detail["component_score"] is None and detail["block_outcomes"] == []

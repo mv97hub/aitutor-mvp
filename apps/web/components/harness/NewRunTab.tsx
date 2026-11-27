@@ -19,6 +19,7 @@ import {
   sameModelWarning,
 } from "@/lib/harness";
 import { findHarnessScenario, SCENARIO_GROUPS } from "@/lib/harness-scenarios";
+import { readerPracticePlan, READER_PRACTICE } from "@/lib/harness-reader-practice";
 import { kcModelLabel } from "@/lib/kc-models";
 import { api } from "@/lib/api";
 import type { KcCourse } from "@/lib/kc";
@@ -112,6 +113,16 @@ export function NewRunTab({
   }
 
   function chooseScenario(id: string) {
+    setError("");
+    if (id === READER_PRACTICE) {
+      const preset = readerPracticePlan(ready, children);
+      if (!preset) {
+        setError("This preset needs AI_Child2 and the ready River roads fixture. Add the starter children and load the fixture courses.");
+        return;
+      }
+      setPlan({ ...plan, ...preset });
+      return;
+    }
     const selected = findHarnessScenario(id);
     const allowed = children.filter(persona => selected?.group.personas.includes(persona.number)).map(persona => persona.id);
     const previous = plan.persona_ids.filter(personaId => allowed.includes(personaId));
@@ -163,6 +174,9 @@ export function NewRunTab({
   return (
     <section className="harness-panel">
       <h2>New run</h2>
+      <button type="button" onClick={() => chooseScenario(READER_PRACTICE)}>
+        Set up River roads · Tell me more
+      </button>
       <p className="help">
         {plan.persona_ids.length} children × {componentCount} components × {plan.tutor_models.length} models ×{" "}
         {Math.max(1, plan.tutor_profile_ids.length)} profiles × {plan.iterations} iterations = {count} {count === 1 ? "chat" : "chats"}.
@@ -187,7 +201,7 @@ export function NewRunTab({
               <input
                 type="checkbox"
                 checked={plan.persona_ids.includes(persona.id)}
-                disabled={Boolean(scenario && !scenario.group.personas.includes(persona.number))}
+                disabled={plan.scenario === READER_PRACTICE || Boolean(scenario && !scenario.group.personas.includes(persona.number))}
                 onChange={() => setPlan({ ...plan, persona_ids: toggle(plan.persona_ids, persona.id) })}
               />
               {persona.name} · {persona.description}
@@ -203,6 +217,7 @@ export function NewRunTab({
             <label key={course.id}>
               <input
                 type="checkbox"
+                disabled={plan.scenario === READER_PRACTICE}
                 checked={plan.course_ids.includes(course.id)}
                 onChange={() => setPlan({ ...plan, course_ids: toggle(plan.course_ids, course.id) })}
               />
@@ -214,6 +229,7 @@ export function NewRunTab({
             <label key={component.id}>
               <input
                 type="checkbox"
+                disabled={plan.scenario === READER_PRACTICE}
                 checked={plan.component_ids.includes(component.id)}
                 onChange={() => setPlan({ ...plan, component_ids: toggle(plan.component_ids, component.id) })}
               />
@@ -311,7 +327,7 @@ export function NewRunTab({
         </label>
         <label>
           Turn limit
-          <input type="number" min={1} value={plan.turn_limit} onChange={(event) => setPlan({ ...plan, turn_limit: Number(event.target.value) })} />
+          <input type="number" min={1} disabled={plan.scenario === READER_PRACTICE} value={plan.turn_limit} onChange={(event) => setPlan({ ...plan, turn_limit: Number(event.target.value) })} />
         </label>
         <label>
           Stuck limit
@@ -350,7 +366,12 @@ export function NewRunTab({
               ))}
             </select>
           </label>
-          {scenario ? (
+          {scenario?.variant.id === READER_PRACTICE ? (
+            <p className="help">
+              AI_Child2 asks “Tell me more” on River roads. If the tutor asks what a boat could carry,
+              the child answers “Pears!” Other questions stop the replay for review. Open the saved chat to check both turns.
+            </p>
+          ) : scenario ? (
             <>
               <p>{scenario.group.context}</p>
               <p className="help">
