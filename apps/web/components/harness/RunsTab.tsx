@@ -3,23 +3,18 @@
 import { useEffect, useState } from "react";
 
 import { api } from "@/lib/api";
-import { RunSummary } from "@/components/harness/RunSummary";
 import { downloadHarnessFile } from "@/lib/harness-file";
 import { runStatusLine } from "@/lib/harness-background";
-import { recentLines, transcriptForChat, type TranscriptLine } from "@/lib/harness-live";
 
 type ChatRow = {
   id: string;
   status: string;
   ended_how: string;
-  session_id?: string | null;
   child?: { name?: string };
   tutor_model: string;
   cost_usd: string | null;
   luna_tokens: number;
 };
-
-type SessionMessage = { role?: string; content?: string; seq?: number };
 
 type RunRow = {
   id: string;
@@ -27,34 +22,17 @@ type RunRow = {
   chats: number;
   finished: number;
   totals: { priced_cents?: number; luna_tokens?: number; cost_usd?: string | null };
-  plan: { concurrency?: number; child_model?: string; judge_model?: string };
 };
-
-function LiveLines({ chatId, lines }: { chatId: string; lines: TranscriptLine[] }) {
-  const shown = recentLines(lines);
-  return (
-    <ol className="harness-transcript">
-      {shown.map((line) => (
-        <li key={`${chatId}-${line.seq}`} value={line.seq}>
-          <strong>{line.role === "tutor" ? "Tutor" : "Child"}:</strong> {line.text}
-        </li>
-      ))}
-    </ol>
-  );
-}
 
 export function RunsTab({
   selected,
-  onOpenChat,
   onSelect,
 }: {
   selected: string;
-  onOpenChat: (runId: string, chatId: string) => void;
   onSelect?: (runId: string) => void;
 }) {
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [detail, setDetail] = useState<{ id: string; chat_rows?: ChatRow[] } | null>(null);
-  const [sessions, setSessions] = useState<Record<string, SessionMessage[]>>({});
   const [error, setError] = useState("");
   const [driving, setDriving] = useState("");
 
@@ -80,28 +58,7 @@ export function RunsTab({
       return;
     }
     try {
-      const loaded = await api<{ id: string; chat_rows?: ChatRow[] }>(`/kc/harness/runs/${id}`);
-      setDetail(loaded);
-      const active = (loaded.chat_rows || []).filter(
-        (chat) => (chat.status === "running" || chat.status === "queued") && chat.session_id,
-      );
-      const found = await Promise.all(
-        active.map(async (chat) => {
-          try {
-            const session = await api<{ messages?: SessionMessage[] }>(`/kc/tutor/sessions/${chat.session_id}`);
-            return [chat.id, session.messages || []] as const;
-          } catch {
-            return [chat.id, null] as const;
-          }
-        }),
-      );
-      setSessions((current) => {
-        const copy = { ...current };
-        for (const [chatId, messages] of found) {
-          if (messages) copy[chatId] = messages;
-        }
-        return copy;
-      });
+      setDetail(await api<{ id: string; chat_rows?: ChatRow[] }>(`/kc/harness/runs/${id}`));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load this run.");
     }
@@ -165,48 +122,13 @@ export function RunsTab({
     }
   }
 
-  async function downloadChat(chatId: string) {
-    setError("");
-    try {
-      await downloadHarnessFile(`/api/kc/harness/chats/${chatId}/download`, `harness-chat-${chatId}.md`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not download the chat.");
-    }
-  }
-
   const rows = detail?.chat_rows || [];
-  const active = rows.filter((chat) => chat.status === "running" || chat.status === "queued");
 
   return (
     <section className="harness-panel">
       <h2>Runs</h2>
-      {detail?.id ? <RunSummary runId={detail.id} /> : null}
       {rows.length > 0 ? <p className="help">{runStatusLine(rows)}</p> : null}
       {error ? <p className="banner">{error}</p> : null}
-      {active.length > 0 ? (
-        <div className="harness-live">
-          <h3>In progress</h3>
-          {active.map((chat) => {
-            const lines = transcriptForChat(chat.id, sessions[chat.id], []);
-            return (
-              <article key={chat.id}>
-                <p>
-                  <button type="button" onClick={() => onOpenChat(detail?.id || "", chat.id)}>
-                    {chat.child?.name || "Test child"} · {chat.status}
-                  </button>
-                </p>
-                {lines.length > 0 ? (
-                  <LiveLines chatId={chat.id} lines={lines} />
-                ) : (
-                  <p className="help">
-                    {chat.session_id ? "Waiting for the first tutor message." : "Queued. Press Start to run this chat on the server."}
-                  </p>
-                )}
-              </article>
-            );
-          })}
-        </div>
-      ) : null}
       <table className="harness-table">
         <thead>
           <tr>
@@ -239,12 +161,6 @@ export function RunsTab({
                 <button type="button" onClick={() => void downloadRun(run.id)}>
                   Download
                 </button>
-                <button type="button" onClick={() => void act(`/kc/harness/runs/${run.id}/again`)}>
-                  Run again
-                </button>
-                <button type="button" onClick={() => void act(`/kc/harness/runs/${run.id}/trim`)}>
-                  Trim stored prompts
-                </button>
                 <button type="button" onClick={() => void act(`/kc/harness/runs/${run.id}`, "DELETE")}>
                   Delete
                 </button>
@@ -254,20 +170,12 @@ export function RunsTab({
         </tbody>
       </table>
       <p className="help">
-        Start runs the chats on the server. Closing this tab does not stop them. Stop keeps the chats already stored. Start again continues the same chat.
-      </p>
-      <p className="help">
-        Trim keeps prompts for the baseline and the newest run of each suite. Older runs keep the transcript, scores, intents, and recommendations.
+        Start runs the chats on the server. Closing this tab does not stop them. Stop keeps the chats already stored. Start again continues the same chat. Download is one file for the whole run.
       </p>
       <ul>
-        {(detail?.chat_rows || []).map((chat) => (
+        {rows.map((chat) => (
           <li key={chat.id}>
-            <button type="button" onClick={() => onOpenChat(detail?.id || "", chat.id)}>
-              {chat.child?.name} · {chat.tutor_model} · {chat.status} {chat.ended_how} · cost {chat.cost_usd ?? "blank"} · luna {chat.luna_tokens}
-            </button>
-            <button type="button" onClick={() => void downloadChat(chat.id)}>
-              Download
-            </button>
+            {chat.child?.name} · {chat.tutor_model} · {chat.status} {chat.ended_how} · cost {chat.cost_usd ?? "blank"} · luna {chat.luna_tokens}
           </li>
         ))}
       </ul>

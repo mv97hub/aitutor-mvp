@@ -74,7 +74,14 @@ def test_judge_usage_is_charged_on_save_and_public_counts_can_reconcile_old_pric
         db.add(chat)
         db.flush()
         counts = {"input_tokens": 50_000, "output_tokens": 5_000}
-        detail = harness.save_evaluation(db, chat.id, {"usage": {**counts, "opaque_metadata": "private"}})
+        db.add(HarnessEvaluation(
+            chat_id=chat.id, kind="judged", judge_model=chat.judge_model,
+            scores={"usage": {**counts, "opaque_metadata": "private"}},
+        ))
+        db.flush()
+        harness._refresh_chat_cost(db, chat)
+        harness._refresh_totals(db, run)
+        detail = harness.get_chat(db, chat.id)
         assert Decimal(detail["cost_usd"]) == Decimal("0.0105")
         assert detail["run_cap_reached"]
         assert detail["evaluations"][0]["usage"] == counts
@@ -109,10 +116,11 @@ def test_invalid_judge_usage_cannot_reduce_cost_or_break_historical_reads(invali
         db.flush()
         # Old JSON could include arbitrary values and string representations of counts.
         usage = {"input_tokens": invalid, "output_tokens": "5000", "opaque_metadata": "private"}
-        db.add(HarnessEvaluation(chat_id=chat.id, kind="judged", judge_model=chat.judge_model,
-                                 scores={"usage": usage}))
+        db.add_all(HarnessEvaluation(chat_id=chat.id, kind="judged", judge_model=chat.judge_model,
+                                     scores={"usage": usage}) for _ in range(2))
         db.flush()
-        detail = harness.save_evaluation(db, chat.id, {"usage": usage})
+        harness._refresh_chat_cost(db, chat)
+        detail = harness.get_chat(db, chat.id)
         assert [e["usage"] for e in detail["evaluations"]] == [{"output_tokens": 5000}] * 2
         assert Decimal(detail["cost_usd"]) == Decimal("0.006")
         assert not detail["run_cap_reached"]
@@ -163,7 +171,10 @@ def test_luna_usage_at_the_storage_limit_stays_unpriced_and_stops_the_chat():
         db.add(chat)
         db.flush()
         raw = {"input_tokens": 2**31 - 1, "output_tokens": 2**31 - 1}
-        judged = harness.save_evaluation(db, chat.id, {"usage": raw})
+        db.add(HarnessEvaluation(chat_id=chat.id, kind="judged", judge_model="gpt-6-luna", scores={"usage": raw}))
+        db.flush()
+        harness._refresh_chat_cost(db, chat)
+        judged = harness.get_chat(db, chat.id)
         assert judged["cost_usd"] is None and judged["luna_tokens"] == 2**31 - 1
         assert judged["evaluations"][0]["usage"] == raw
         result = harness.record_turn(db, chat.id, {

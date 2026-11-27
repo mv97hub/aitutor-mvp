@@ -1,9 +1,19 @@
-/** Shared types, prices, and recommendation rules for AI Test Children. */
+/** Shared types and prices for AI Test Children. */
 
 import { GPT6_LUNA_MODEL, KC_MODELS, type KcModel } from "./kc-models.ts";
 
 export const DEFAULT_CHILD_MODEL: KcModel = "gpt-4.1-mini";
-export const DEFAULT_JUDGE_MODEL: KcModel = "gpt-6.1-sol";
+
+export type HarnessPersona = {
+  id: string;
+  number: number;
+  name: string;
+  description: string;
+  age: number;
+  child_profile: Record<string, string | string[]>;
+  traits: Record<string, number>;
+  archived?: boolean;
+};
 export const DEFAULT_CHAT_CAP_CENTS = 40;
 export const DEFAULT_TURN_LIMIT = 40;
 export const DEFAULT_STUCK_LIMIT = 8;
@@ -37,40 +47,7 @@ function trimMoney(amount: number): string {
   return text || "0";
 }
 
-export const ESTIMATE_TUTOR_CALLS = 32;
-export const ESTIMATE_TUTOR_INPUT = 2700;
-export const ESTIMATE_TUTOR_OUTPUT = 180;
-export const ESTIMATE_CHILD_CALLS = 12;
-export const ESTIMATE_CHILD_INPUT = 400;
-export const ESTIMATE_CHILD_OUTPUT = 40;
-export const ESTIMATE_JUDGE_INPUT = 4000;
-export const ESTIMATE_JUDGE_OUTPUT = 600;
-
-export function estimateChatUsd(tutorModel: string, childModel: string, judgeModel: string): {
-  usd: string | null;
-  unpriced: string[];
-} {
-  const parts = [
-    { model: tutorModel, calls: ESTIMATE_TUTOR_CALLS, input: ESTIMATE_TUTOR_INPUT, output: ESTIMATE_TUTOR_OUTPUT },
-    { model: childModel, calls: ESTIMATE_CHILD_CALLS, input: ESTIMATE_CHILD_INPUT, output: ESTIMATE_CHILD_OUTPUT },
-    { model: judgeModel, calls: 1, input: ESTIMATE_JUDGE_INPUT, output: ESTIMATE_JUDGE_OUTPUT },
-  ];
-  let total = 0;
-  let priced = false;
-  const unpriced: string[] = [];
-  for (const part of parts) {
-    const one = costUsd(part.model, part.input, 0, part.output);
-    if (one == null) {
-      if (!unpriced.includes(part.model)) unpriced.push(part.model);
-      continue;
-    }
-    priced = true;
-    total += Number(one) * part.calls;
-  }
-  return { usd: priced ? trimMoney(total) : null, unpriced };
-}
-
-/** Children, profiles, and New run all show this list. Archived children stay off it. */
+/** Children and New run show this list. Archived children stay off it. */
 export function listedTestChildren<T extends { archived?: boolean }>(personas: T[]): T[] {
   return personas.filter((persona) => !persona.archived);
 }
@@ -87,49 +64,6 @@ export function chatCount(input: {
 
 export function sameModelWarning(childModel: string, tutorModels: string[]): boolean {
   return tutorModels.includes(childModel);
-}
-
-export type RecommendationCard = {
-  title: string;
-  evidence?: { summary?: string; count?: number; block_type?: string };
-  block_type?: string;
-  cause_class?: string;
-  place?: string;
-  proposed?: Record<string, unknown>;
-  prompt_direction: "shorter" | "longer" | "same";
-  kind: "setting" | "reword" | "remove" | "add";
-  risk?: string;
-  confidence?: string;
-};
-
-export function ensureSimplification(cards: RecommendationCard[]): RecommendationCard[] {
-  if (cards.some((card) => card.kind === "remove" || (card.kind === "reword" && card.prompt_direction === "shorter"))) {
-    return cards;
-  }
-  return [
-    ...cards,
-    {
-      title: "Shorten a rule instead of adding one",
-      kind: "remove",
-      prompt_direction: "shorter",
-      cause_class: "prompt",
-      place: "Drop or shorten the line that already covers this finding before adding another.",
-      proposed: { text: "Remove the overlapping sentence from the stored prompt." },
-      risk: "A shorter prompt can drop a reminder the model was using.",
-      confidence: "medium",
-      evidence: { summary: "The drafter only proposed additions. A cut is required before the batch is complete." },
-    },
-  ];
-}
-
-export function keptRunIds(suites: { baseline_run_id?: string | null; run_ids: string[] }[]): string[] {
-  const kept = new Set<string>();
-  for (const suite of suites) {
-    if (suite.baseline_run_id) kept.add(suite.baseline_run_id);
-    const latest = suite.run_ids[suite.run_ids.length - 1];
-    if (latest) kept.add(latest);
-  }
-  return [...kept];
 }
 
 export function lunaNote(model: string): string | null {

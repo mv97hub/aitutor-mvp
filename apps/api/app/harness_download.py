@@ -1,7 +1,7 @@
 """One markdown file for a harness chat or a whole run.
 
 The file is meant to be opened later. It keeps every stored turn, including a
-blank or failed tutor call, plus the checks, scores, and the model record.
+blank or failed tutor call, plus the automatic checks, block outcomes, and the model record.
 """
 
 from __future__ import annotations
@@ -9,7 +9,26 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-from app.harness_report import PARTIAL_NOTES, block_label, judge_status, report_judge, reported_child_realism, reported_scores
+BLOCK_LABELS = {
+    "topic_goal": "Topic / Goal",
+    "mcq": "Multiple Choice Question",
+    "case_study": "Case Study / Contrasting Cases",
+    "socratic": "Socratic Discussion",
+    "curiosity": "Curiosity / Wonder Hook",
+    "worked_example": "Worked Example + Faded Step",
+    "spot_the_flaw": "Spot the Flaw / Buggy Rule",
+    "teach_back": "Teach-Back / Feynman",
+    "retrieval_check": "Retrieval & Elaborative Interrogation",
+    "explanation": "Explanatory Walkthrough",
+    "passage_ela": "ELA Reading Passage",
+}
+
+
+def block_label(value: object) -> str:
+    key = str(value or "").strip()
+    if not key:
+        return ""
+    return BLOCK_LABELS.get(key, key.replace("_", " "))
 
 
 def _text(value: object) -> str:
@@ -235,29 +254,7 @@ def _review_lines(chat: dict) -> list[str]:
     lines = ["### Automatic checks", ""]
     reviews = [row for row in _list(chat.get("evaluations")) if isinstance(row, dict)]
     checks = next((_dict(row.get("checks")) for row in reversed(reviews) if row.get("kind") == "automatic"), {})
-    judged = report_judge(reviews)
-    scores = reported_scores(judged)
-    judge_error = _text(judged.get("error"))
-    partial = PARTIAL_NOTES.get(judge_status(judged))
     lines.append(json.dumps(checks, indent=2, default=str) if checks else "{}")
-    lines.extend(["", "### Judge scores", ""])
-    if judge_error:
-        lines.append(f"Judge error: {judge_error}")
-    else:
-        if partial:
-            lines.append(partial)
-        realism = reported_child_realism(judged)
-        if realism is not None:
-            lines.append(f"Child realism {realism}/5")
-        for row in scores:
-            line = f"{row['dimension']}: {row['score']}"
-            if "turn" in row:
-                line += f". Turn {row['turn']}"
-            if row.get("quote"):
-                line += f". “{row['quote']}”"
-            lines.append(line)
-        if not scores and not partial:
-            lines.append("not judged")
     lines.extend(["", "### Block outcomes", ""])
     outcomes = [row for row in _list(chat.get("block_outcomes")) if isinstance(row, dict)]
     if not outcomes:

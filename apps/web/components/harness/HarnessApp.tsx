@@ -3,17 +3,14 @@
 import { useState } from "react";
 
 import { KcBanner } from "@/components/KcBanner";
-import { ChatTab } from "@/components/harness/ChatTab";
 import { ChildrenTab } from "@/components/harness/ChildrenTab";
 import { NewRunTab } from "@/components/harness/NewRunTab";
-import { ProfilesView, type HarnessPersona } from "@/components/harness/ProfilesView";
-import { RecommendationsTab } from "@/components/harness/RecommendationsTab";
-import { ResultsTab } from "@/components/harness/ResultsTab";
 import { RunsTab } from "@/components/harness/RunsTab";
+import type { HarnessPersona } from "@/lib/harness";
 import type { KcCourse } from "@/lib/kc";
 import type { TutorProfile } from "@/lib/types";
 
-const TABS = ["Children", "Profiles", "New run", "Runs", "Chat", "Results", "Recommendations"] as const;
+const TABS = ["Children", "New run", "Runs"] as const;
 
 export function HarnessApp({
   personas: initialPersonas,
@@ -29,7 +26,6 @@ export function HarnessApp({
   const [tab, setTab] = useState<(typeof TABS)[number]>("Children");
   const [personas, setPersonas] = useState(initialPersonas);
   const [runId, setRunId] = useState("");
-  const [chatId, setChatId] = useState("");
 
   return (
     <>
@@ -50,7 +46,6 @@ export function HarnessApp({
           ))}
         </div>
         {tab === "Children" ? <ChildrenTab personas={personas} onChange={setPersonas} /> : null}
-        {tab === "Profiles" ? <ProfilesView personas={personas} /> : null}
         {tab === "New run" ? (
           <NewRunTab
             personas={personas}
@@ -62,20 +57,7 @@ export function HarnessApp({
             }}
           />
         ) : null}
-        {tab === "Runs" ? (
-          <RunsTab
-            selected={runId}
-            onSelect={setRunId}
-            onOpenChat={(nextRun, nextChat) => {
-              setRunId(nextRun);
-              setChatId(nextChat);
-              setTab("Chat");
-            }}
-          />
-        ) : null}
-        {tab === "Chat" ? <ChatTab chatId={chatId} /> : null}
-        {tab === "Results" ? <ResultsTab runId={runId} /> : null}
-        {tab === "Recommendations" ? <RecommendationsTab runId={runId} onSelectRun={setRunId} /> : null}
+        {tab === "Runs" ? <RunsTab selected={runId} onSelect={setRunId} /> : null}
       </main>
     </>
   );

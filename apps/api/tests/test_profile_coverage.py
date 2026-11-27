@@ -2,8 +2,6 @@
 from types import SimpleNamespace
 
 from app import harness
-from app.harness_report import run_summary
-
 
 def test_seed_identifies_the_scenario_and_explicit_tutor_pairs_share_draws():
     def assign(personas, paired=False):
@@ -28,23 +26,6 @@ def test_only_passage_paragraphs_seen_in_this_block_are_offered_for_rereading():
                 SimpleNamespace(step=1, role="assistant", content="Let's read. The first tree was an oak. What grew there?"),
                 SimpleNamespace(step=1, role="user", content="The second was a cedar.")]
     assert harness.seen_passage(text, messages, 1) == "The first tree was an oak."
-
-
-def test_reporting_counts_opportunities_by_profile_block_and_observed_outcome():
-    def row(role, name, block, outcome):
-        return {"simulation_role": role, "persona_name": name, "ended_how": "completed", "report_turns": [
-            {"block_type_before": block, "learner_observation": outcome, "choice_fallback": False},
-        ]}
-
-    cases = [row("learner", "AI_Child5", "curiosity", "unscored"),
-             row("answer_key_control", "AI_Child13", "spot_the_flaw", "advanced_after_attempt"),
-             row("script", "AI_Child14", "spot_the_flaw", "stayed_after_attempt")]
-    summary = run_summary(cases)
-    counts = {(r["role"], r["profile"], r["block"], r["outcome"]): r["turns"] for r in summary["opportunities"]}
-    assert counts == {("learner", "AI_Child5", "curiosity", "unscored"): 1,
-                      ("answer_key_control", "AI_Child13", "spot_the_flaw", "advanced_after_attempt"): 1,
-                      ("script", "AI_Child14", "spot_the_flaw", "stayed_after_attempt"): 1}
-    assert "Learner-visible" in summary["text"]
 
 
 def test_distinct_variant_streams_and_explicit_family_pairing():
@@ -122,19 +103,6 @@ def test_paired_reader_variants_change_only_the_temporary_learners_response_leng
             assert len(seeds) == 1
 
 
-def test_known_boundary_situations_count_wordings_together_and_setup_separately():
-    cases = [{"persona_name": "AI_Child12", "scenario": "aside", "simulation_role": "script", "report_turns": [
-        {"child_text": "my dog biscuit sleeps on my bed", "block_type_before": "curiosity", "scenario_exercised": True},
-        {"child_text": "my drawing has a purple tree in it", "block_type_before": "curiosity", "scenario_exercised": True},
-        {"child_text": "earlier setup turn", "block_type_before": "topic_goal", "scenario_exercised": False}
-    ]}, {"persona_name": "AI_Child12", "report_turns": [{"child_text": "yes"}]}]
-    summary = run_summary(cases)
-    assert "ordinary aside (2 turns, Scripted control)" in summary["text"]
-    assert {(r["scenario"], r["role"]): r["turns"] for r in summary["opportunities"]} == {
-        ("aside", "script"): 2, ("aside (setup)", "script"): 1, ("unspecified", "legacy_unknown"): 1,
-    }
-
-
 def test_loading_fixtures_makes_independent_curiosity_flaw_and_cpi_cases_selectable():
     from sqlalchemy import select
     from app.database import SessionLocal
@@ -153,20 +121,6 @@ def test_loading_fixtures_makes_independent_curiosity_flaw_and_cpi_cases_selecta
         assert targets["harness-scenario-cpi"].blocks[1]["data"]["solo_problem"] == RATE
         assert targets["harness-scenario-choice"].blocks[0]["data"]["question_stem"] == RATE
         assert "stress" in targets["harness-scenario-hamlet"].title.lower()
-
-
-def test_multiple_tutor_variants_with_the_same_seed_are_compared_once_by_profile_and_model():
-    from app.harness_report import compare_runs
-    def chat(name, model, profile):
-        return {"id": name, "seed": 60, "persona_name": "child", "component_id": "task",
-                "tutor_model": model, "seed_profile": profile, "ended_how": "completed"}
-    left = [chat("a1", "m1", "p1"), chat("a2", "m1", "p2")]
-    right = [chat("b2", "m1", "p2"), chat("b1", "m1", "p1")]
-    assert compare_runs(left, right)["matched"] == 2
-    assert compare_runs(left, [chat("unknown", "other", "p3")])["matched"] == 0
-    assert compare_runs(left[:1], [chat("unpaired", "other", "p3")])["matched"] == 0
-    assert compare_runs([{**left[0], "paired_seeds": True}],
-                        [{**chat("paired", "other", "p3"), "paired_seeds": True}])["matched"] == 1
 
 
 def test_unreached_river_example_records_the_reason_and_closes_the_fixture_session():
@@ -196,6 +150,4 @@ def test_unreached_river_example_records_the_reason_and_closes_the_fixture_sessi
         assert detail["turns"] == [] and detail["turn_count"] == 0
         assert session.status == "completed"
         assert harness.get_run(db, run["id"])["status"] == "completed"
-        summary = harness.run_report(db, run["id"])["summary"]
-        assert summary["chats"] == 1 and summary["completed"] == 0 and summary["opportunities"] == []
         assert detail["component_score"] is None and detail["block_outcomes"] == []

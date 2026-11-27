@@ -1,5 +1,5 @@
 import { HarnessApp } from "@/components/harness/HarnessApp";
-import type { HarnessPersona } from "@/components/harness/ProfilesView";
+import type { HarnessPersona } from "@/lib/harness";
 import { api } from "@/lib/api";
 import type { KcCourse } from "@/lib/kc";
 import type { TutorProfile } from "@/lib/types";

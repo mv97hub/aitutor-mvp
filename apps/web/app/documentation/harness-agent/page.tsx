@@ -148,7 +148,7 @@ Authorization: Bearer <token>`}</pre>
         </p>
         <p>
           This is the same markdown file as Download on the Runs tab. One file for the run: every turn, the automatic
-          checks, the judge scores, the block outcomes, and the model record. A blank or failed tutor call stays in the
+          checks, the block outcomes, and the model record. A blank or failed tutor call stays in the
           file. Save it after the read says <code>finished</code> or <code>stopped</code>.
         </p>
         <pre>{`GET /api/kc/harness/agent/runs/6f1c0b2e-4a7d-4e1a-9c3b-8a0e5d2f7b11/download

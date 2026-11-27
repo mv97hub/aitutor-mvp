@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.database import SessionLocal
-from app.harness import claim_chat, dispatch_harness_turn, download_chat, get_chat, prepare_harness_turn, record_turn, save_evaluation
+from app.harness import claim_chat, dispatch_harness_turn, download_chat, get_chat, prepare_harness_turn, record_turn
 from app.models import HarnessChat, HarnessEvaluation, HarnessRun, HarnessTurn, KcGoal, KcNode, KcSession, KcTurnReceipt, Student
 
 from app.token_usage import record_token_usage
@@ -68,10 +68,9 @@ def test_recovered_turn_stops_even_when_the_stuck_limit_is_reached(reason, queue
                                output_tokens=0, cached_tokens=0)
         if reason == "run_cap":
             # Another chat's recorded usage reaches the threshold while the answer is in flight.
-            sibling = HarnessChat(run_id=run.id, status="completed", judge_model="gpt-4.1-mini")
+            sibling = HarnessChat(run_id=run.id, status="completed", cost_usd="0.01")
             db.add(sibling)
             db.flush()
-            save_evaluation(db, sibling.id, {"usage": {"input_tokens": 25_000}})
         db.add(KcTurnReceipt(session_id=session.id, client_turn_id=submission["turn_id"], route="answer",
                              revision=session.revision, status="committed", payload=submission["child_text"],
                              result={"revision": session.revision + 1}))

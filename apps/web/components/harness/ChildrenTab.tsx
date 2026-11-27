@@ -3,9 +3,7 @@
 import { useState } from "react";
 
 import { BasicsFields, LearnStyleFields, PersonaFields } from "@/components/learn/ChildFields";
-import { ProfilesView, type HarnessPersona } from "@/components/harness/ProfilesView";
-import { TRAIT_FIELDS, listedTestChildren, traitSentence } from "@/lib/harness";
-import { previewLines } from "@/lib/harness-policy";
+import { TRAIT_FIELDS, listedTestChildren, traitSentence, type HarnessPersona } from "@/lib/harness";
 import { api } from "@/lib/api";
 import type { ChildDraft } from "@/lib/learn";
 
@@ -58,7 +56,6 @@ export function ChildrenTab({
   const [description, setDescription] = useState(current?.description || "");
   const [draft, setDraft] = useState<ChildDraft>(draftFrom(current));
   const [traits, setTraits] = useState<Record<string, number>>(current?.traits || {});
-  const [preview, setPreview] = useState<string[]>([]);
   const [error, setError] = useState("");
 
   function open(persona: HarnessPersona) {
@@ -66,7 +63,6 @@ export function ChildrenTab({
     setDescription(persona.description);
     setDraft(draftFrom(persona));
     setTraits(persona.traits);
-    setPreview([]);
     setError("");
   }
 
@@ -217,12 +213,6 @@ export function ChildrenTab({
             </div>
             <div className="harness-actions">
               <button type="submit">Save</button>
-              <button
-                type="button"
-                onClick={() => setPreview(previewLines(traits, description))}
-              >
-                Preview
-              </button>
               <button type="button" onClick={() => void copyChild()}>
                 Copy
               </button>
@@ -230,19 +220,11 @@ export function ChildrenTab({
                 Archive
               </button>
             </div>
-            {preview.length > 0 ? (
-              <ul>
-                {preview.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-            ) : null}
           </form>
         ) : (
           <p className="help">Add the starter set to begin.</p>
         )}
       </section>
-      <ProfilesView personas={personas} />
     </div>
   );
 }

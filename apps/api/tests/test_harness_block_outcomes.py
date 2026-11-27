@@ -3,7 +3,7 @@
 import pytest
 
 from app.database import SessionLocal
-from app.harness import download_run, get_chat, run_report
+from app.harness import download_run, get_chat
 from app.models import HarnessChat, HarnessRun, KcGoal, KcNode, KcSession, Student
 
 
@@ -96,11 +96,4 @@ def test_stored_block_outcomes_reach_chat_download_and_run_report(version: int) 
                 line += " (answer revealed)"
             lines.append(line)
         assert markdown.split("### Block outcomes\n\n")[1].splitlines() == lines
-        scores = run_report(db, run.id)["summary"]["block_scores"]
-        assert len(scores) == 1
-        annotations = {"Saved reveal": ", answer revealed"}
-        if version == 2:
-            annotations.update({"Observed reveal": ", answer revealed", "Reading": ", participated"})
-        assert scores[0]["outcomes"] == ", ".join(
-            f"{title} ({outcome}{annotations.get(title, '')})" for title, outcome in expected
-        )
+        assert "### Judge scores" not in markdown

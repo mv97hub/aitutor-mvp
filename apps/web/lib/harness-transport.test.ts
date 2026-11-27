@@ -157,7 +157,7 @@ test("prepared transport uses the original revision and committed transcript eve
   assert.equal(bodies.length, 2, "receipt-only recovery never enters the tutor route");
 });
 
-test("a replay, paused delivery, or unreached scenario does not start another judge", async (t) => {
+test("finish and turn record the chat and do not call a judge", async (t) => {
   const hooks = registerHooks({
     resolve(specifier, context, next) {
       return specifier.startsWith("@/lib/")
@@ -167,47 +167,22 @@ test("a replay, paused delivery, or unreached scenario does not start another ju
   });
   const { POST } = await import("../app/api/kc/harness/turn/route.ts");
   const { POST: finish } = await import("../app/api/kc/harness/finish/route.ts");
-  const { judgeFinishedChat } = await import("./harness-judge-run.ts").finally(() => hooks.deregister());
-  const stored = [
-    { stop: "completed" }, { stop: "completed", replayed: true }, { stop: "awaiting_retry", pending: true },
-  ];
-  let judgeReads = 0;
+  hooks.deregister();
+  const seen: string[] = [];
   t.mock.method(globalThis, "fetch", async (url: string) => {
     const path = new URL(url).pathname;
-    if (path === "/kc/harness/chats/chat/finish") return Response.json({ ended_how: "scenario_not_reached" });
-    if (path === "/kc/harness/chats/chat/turns") return Response.json(stored.shift());
-    if (path === "/kc/harness/chats/capped") return Response.json({ run_cap_reached: true, evaluations: [] });
-    if (path === "/kc/harness/chats/chat-budget") {
-      return Response.json({ judge_budget_reached: true, evaluations: [], judge_model: "fixture-invalid-model" });
-    }
-    if (["/kc/harness/chats/cap", "/kc/harness/chats/luna_ceiling", "/kc/harness/chats/run_cap"].includes(path)) {
-      return Response.json({ ended_how: path.split("/").pop(), evaluations: [], judge_model: "fixture-invalid-model" });
-    }
-    if (path === "/kc/harness/chats/under-budget") {
-      return Response.json({ judge_budget_reached: false, evaluations: [], judge_model: "fixture-invalid-model" });
-    }
-    if (path === "/kc/harness/chats/under-budget/evaluations") return Response.json({});
-    assert.equal(path, "/kc/harness/chats/chat");
-    judgeReads++;
-    return Response.json({ evaluations: [{ kind: "judged", child_realism: 4 }] });
+    seen.push(path);
+    if (path.endsWith("/finish")) return Response.json({ ended_how: "completed" });
+    if (path.endsWith("/turns")) return Response.json({ stop: "completed" });
+    return Response.json({});
   });
-  assert.equal(await judgeFinishedChat("capped"), null, "no judge or evaluation write after hitting the cap");
-  assert.equal(await judgeFinishedChat("chat-budget"), null, "no judge or evaluation write after a chat limit");
-  for (const ending of ["cap", "luna_ceiling", "run_cap"]) {
-    assert.equal(await judgeFinishedChat(ending), null, "honor saved cap endings from an older API");
-  }
-  assert.equal((await judgeFinishedChat("under-budget"))?.error, "That model is not allowed.",
-    "an eligible chat still enters the judge path; the fixture model makes no provider call");
-  const unreached = await finish(new Request("http://harness.local/api/kc/harness/finish", {
-    method: "POST", body: JSON.stringify({ chatId: "chat", reason: "scenario_not_reached", claim_generation: 1 }),
+  const finished = await finish(new Request("http://harness.local/api/kc/harness/finish", {
+    method: "POST", body: JSON.stringify({ chatId: "chat", reason: "completed", claim_generation: 1 }),
   }));
-  assert.equal(unreached.status, 200);
-  assert.equal(judgeReads, 0, "no paid judge for missing practice evidence");
-  for (let index = 0; index < 3; index++) {
-    const res = await POST(new Request("http://harness.local/api/kc/harness/turn", {
-      method: "POST", body: JSON.stringify({ chatId: "chat", turn: { turn_id: "stable" } }),
-    }));
-    assert.equal(res.status, 200);
-    assert.equal(judgeReads, 1);
-  }
+  assert.equal(finished.status, 200);
+  const recorded = await POST(new Request("http://harness.local/api/kc/harness/turn", {
+    method: "POST", body: JSON.stringify({ chatId: "chat", turn: { turn_id: "stable" } }),
+  }));
+  assert.equal(recorded.status, 200);
+  assert.equal(seen.some((path) => path.includes("judge") || path.includes("evaluations")), false);
 });
