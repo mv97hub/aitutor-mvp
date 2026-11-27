@@ -2197,6 +2197,11 @@ def resolve_block_turn(
     prior_tutor: str = "",
     learner_ready: bool = False,
     off_course: bool = False,
+    affect: str = "",
+    confidence: str = "",
+    mastery_spec: dict | None = None,
+    modality_affinity: dict | None = None,
+    broken_kc_code: str = "",
 ) -> BlockResolution:
     tier = hint_tier if hint_tier in HINTS else "nudge"
     fresh = _clean_ids(list(rubric_met))
@@ -2511,6 +2516,13 @@ def resolve_block_turn(
                 reveals=reveals + 1,
                 cfg=cfg,
                 misconception=matched_wrong,
+                last_outcome="revealed",
+                last_attempts=tries,
+                affect=affect,
+                confidence=confidence,
+                mastery_spec=mastery_spec,
+                modality_affinity=modality_affinity,
+                broken_kc_code=broken_kc_code,
             )
         attempts = move_attempts + 1
         bumped = _next_tier(tier)
@@ -2656,6 +2668,13 @@ def resolve_block_turn(
             met=met,
             reveals=reveals_now,
             cfg=cfg,
+            last_outcome=outcome,
+            last_attempts=attempts,
+            affect=affect,
+            confidence=confidence,
+            mastery_spec=mastery_spec,
+            modality_affinity=modality_affinity,
+            broken_kc_code=broken_kc_code if outcome == "revealed" else "",
         )
 
     if not stall_miss and btype == "passage_ela" and learner_asks_for_passage(answer):
@@ -3109,10 +3128,180 @@ def tutor_gave_away_answer(block: dict, state: dict | None, substep: str, prior_
     return _matches(prior_tutor, chain)
 
 
+HIGH_DEMAND_BLOCKS = frozenset({
+    "case_study",
+    "socratic",
+    "worked_example",
+    "teach_back",
+    "spot_the_flaw",
+    "passage_ela",
+})
+LOWER_DEMAND_BLOCKS = frozenset({
+    "mcq",
+    "retrieval_check",
+    "topic_goal",
+})
+
+
+@dataclass(frozen=True)
+class NextBlockRoute:
+    """Deterministic F4 next-block routing decision (no second ICAP number)."""
+
+    next_step: int | None
+    fast_tracked_rows: tuple[dict, ...] = ()
+    redirect: bool = False
+    pivot_reason: str = ""
+
+
 def _outcome_succeeded(row: dict | None) -> bool:
     if not isinstance(row, dict):
         return False
-    return str(row.get("outcome") or "") in {"passed", "engaged"}
+    return str(row.get("outcome") or "") in {"passed", "engaged", "fast_tracked"}
+
+
+def _affinity_score(modality_affinity: dict | None, block_type: str) -> float | None:
+    """Laplace-smoothed independent success rate for a block type from frozen session affinity."""
+    if not isinstance(modality_affinity, dict):
+        return None
+    slot = modality_affinity.get(block_type)
+    if not isinstance(slot, dict):
+        return None
+    try:
+        completed = int(slot.get("completed") or 0)
+        independent = int(slot.get("independent") or 0)
+    except (TypeError, ValueError):
+        return None
+    if completed <= 0:
+        return None
+    return (max(0, independent) + 1.0) / (completed + 2.0)
+
+
+def select_next_block(
+    *,
+    blocks: list[dict],
+    index: int,
+    results: list[dict],
+    last_outcome: str = "",
+    last_attempts: int = 1,
+    reveals: int = 0,
+    affect: str = "",
+    confidence: str = "",
+    mastery_spec: dict | None = None,
+    modality_affinity: dict | None = None,
+    broken_kc_code: str = "",
+) -> NextBlockRoute:
+    """Deterministic F4 dynamic block policy router called identically by resolve and forecast.
+
+    Standing rules:
+    - No second ICAP scale: demand derives purely from block type + mastery_spec.claims.
+    - Empty mastery_spec falls back to sequential order (legacy course safety).
+    - Reads only the frozen session modality_affinity snapshot, never live learner state.
+    """
+    from app.mastery import actionable_spec, claim_ids_of
+
+    completed_ids = {
+        str(row.get("id") or row.get("block_id") or "").strip()
+        for row in (results or [])
+        if isinstance(row, dict)
+    }
+    remaining = [
+        pos
+        for pos, blk in enumerate(blocks)
+        if pos != index and str(blk.get("id") or f"blk_{pos + 1}").strip() not in completed_ids
+    ]
+
+    # 1. Broken-prerequisite redirect when an actionable-spec revealed miss matched a stored broken_kc misconception.
+    if actionable_spec(mastery_spec) and last_outcome == "revealed" and str(broken_kc_code or "").strip():
+        return NextBlockRoute(next_step=None, fast_tracked_rows=(), redirect=True, pivot_reason="broken_kc_redirect")
+
+    if not remaining:
+        return NextBlockRoute(next_step=None, fast_tracked_rows=())
+
+    current_block = blocks[index] if 0 <= index < len(blocks) else {}
+    current_type = str(current_block.get("type") or "").strip()
+
+    # 2. Dylan Rule (Fast-Track Compression): unassisted Try-1 pass on a higher-demand block
+    # with high confidence OR bored/curious_stretch skips downstream lower-demand blocks whose
+    # claim_ids are already satisfied by passed blocks.
+    fast_track_eligible = (
+        actionable_spec(mastery_spec)
+        and current_type in HIGH_DEMAND_BLOCKS
+        and last_outcome == "passed"
+        and int(reveals or 0) == 0
+        and int(last_attempts or 1) <= 1
+        and (confidence == "high" or affect in {"bored", "curious_stretch"})
+    )
+    if fast_track_eligible:
+        by_id = {
+            str(row.get("id") or row.get("block_id") or "").strip(): row
+            for row in (results or [])
+            if isinstance(row, dict)
+        }
+        covered_claims: set[str] = set()
+        for pos, blk in enumerate(blocks):
+            bid_pos = str(blk.get("id") or f"blk_{pos + 1}").strip()
+            row = by_id.get(bid_pos)
+            if row is not None and str(row.get("outcome") or "") == "passed":
+                covered_claims.update(claim_ids_of(blk))
+        if covered_claims:
+            ft_rows: list[dict] = []
+            ft_indices: set[int] = set()
+            for pos in remaining:
+                if pos <= index:
+                    continue
+                cand = blocks[pos]
+                cand_type = str(cand.get("type") or "").strip()
+                cand_claims = set(claim_ids_of(cand))
+                if cand_type in LOWER_DEMAND_BLOCKS and cand_claims and cand_claims <= covered_claims:
+                    cand_id = str(cand.get("id") or f"blk_{pos + 1}").strip()
+                    ft_indices.add(pos)
+                    ft_rows.append(
+                        {
+                            "id": cand_id,
+                            "block_id": cand_id,
+                            "block_type": cand_type,
+                            "title": _block_title(cand, pos),
+                            "outcome": "fast_tracked",
+                            "verdict": "known",
+                            "attempts": 0,
+                            "passed_on_first_try": False,
+                            "fast_tracked": True,
+                            "requirements": [],
+                            "strong": "",
+                            "work_on": "",
+                            "summary": "Fast-tracked after independent high-demand mastery.",
+                        }
+                    )
+            if ft_rows:
+                still_remaining = [pos for pos in remaining if pos not in ft_indices]
+                nxt = next((pos for pos in still_remaining if pos > index), still_remaining[0] if still_remaining else None)
+                return NextBlockRoute(
+                    next_step=nxt,
+                    fast_tracked_rows=tuple(ft_rows),
+                    pivot_reason="dylan_fast_track",
+                )
+
+    # 3. Modality Pivot on Struggle: route to the remaining unstarted block whose modality has
+    # a strictly higher frozen independent-success affinity than the sequential default.
+    default_next = next((pos for pos in remaining if pos > index), remaining[0])
+    if (last_outcome == "revealed" or affect == "frustrated") and len(remaining) > 1 and isinstance(modality_affinity, dict):
+        default_type = str(blocks[default_next].get("type") or "").strip()
+        default_score = _affinity_score(modality_affinity, default_type)
+        baseline = default_score if default_score is not None else 0.5
+        best_idx = default_next
+        best_score = baseline
+        for pos in remaining:
+            if pos == default_next:
+                continue
+            cand_type = str(blocks[pos].get("type") or "").strip()
+            score = _affinity_score(modality_affinity, cand_type)
+            if score is not None and score > best_score + 0.05:
+                best_score = score
+                best_idx = pos
+        if best_idx != default_next:
+            return NextBlockRoute(next_step=best_idx, fast_tracked_rows=(), pivot_reason="modality_pivot")
+
+    return NextBlockRoute(next_step=default_next, fast_tracked_rows=())
 
 
 def _advance_or_close_component(
@@ -3124,11 +3313,58 @@ def _advance_or_close_component(
     reveals: int,
     cfg: dict,
     misconception: str = "",
+    last_outcome: str = "",
+    last_attempts: int = 1,
+    affect: str = "",
+    confidence: str = "",
+    mastery_spec: dict | None = None,
+    modality_affinity: dict | None = None,
+    broken_kc_code: str = "",
 ) -> BlockResolution:
-    if index < len(blocks) - 1:
-        next_idx = index + 1
+    route = select_next_block(
+        blocks=blocks,
+        index=index,
+        results=results,
+        last_outcome=last_outcome,
+        last_attempts=last_attempts,
+        reveals=reveals,
+        affect=affect,
+        confidence=confidence,
+        mastery_spec=mastery_spec,
+        modality_affinity=modality_affinity,
+        broken_kc_code=broken_kc_code,
+    )
+    if route.fast_tracked_rows:
+        results = [*results, *(dict(row) for row in route.fast_tracked_rows)]
+
+    if route.redirect:
+        return BlockResolution(
+            decision="redirect",
+            hint_tier="reveal",
+            move_attempts=0,
+            reveals=reveals,
+            enrichment_turns=0,
+            rubric_met=met,
+            misconception=misconception,
+            next_step=index,
+            next_block_id=str(blocks[index].get("id") or f"blk_{index + 1}").strip(),
+            next_block_state={"substep": "done", "dialogue_turns": 0},
+            block_results=results,
+            mark_known=False,
+            mark_fragile=True,
+            redirect=True,
+            unit_complete=True,
+            advance_block=False,
+            passed=False,
+        )
+
+    if route.next_step is not None:
+        next_idx = route.next_step
         next_blk = blocks[next_idx]
         next_id = str(next_blk.get("id") or f"blk_{next_idx + 1}").strip()
+        next_state = initial_block_state(next_blk, cfg, previous=blocks[index])
+        if isinstance(modality_affinity, dict) and modality_affinity:
+            next_state["frozen_modality_affinity"] = dict(modality_affinity)
         return BlockResolution(
             decision="advance",
             hint_tier="nudge",
@@ -3139,7 +3375,7 @@ def _advance_or_close_component(
             misconception=misconception,
             next_step=next_idx,
             next_block_id=next_id,
-            next_block_state=initial_block_state(next_blk, cfg, previous=blocks[index]),
+            next_block_state=next_state,
             block_results=results,
             mark_known=False,
             mark_fragile=False,
@@ -3287,6 +3523,11 @@ def forecast_this_turn(
     fragment: bool = False,
     prior_tutor: str = "",
     opening: bool = False,
+    affect: str = "",
+    confidence: str = "",
+    mastery_spec: dict | None = None,
+    modality_affinity: dict | None = None,
+    broken_kc_code: str = "",
 ) -> TurnForecast:
     """Run the loop twice on copies. No model call.
 
@@ -3325,6 +3566,11 @@ def forecast_this_turn(
             fragment=fragment,
             prior_tutor=prior_tutor,
             learner_ready=False,
+            affect=affect,
+            confidence=confidence,
+            mastery_spec=mastery_spec,
+            modality_affinity=modality_affinity,
+            broken_kc_code=broken_kc_code,
         )
         return _spoken_turn(
             resolution,

@@ -409,6 +409,8 @@ def classify_stored_outcome(stored: dict, scoring_version: int = LEGACY_SCORE) -
         return outcome, outcome == "passed" and attempts <= 1
     if raw in {"", "passed", "engaged"}:
         return "passed", attempts <= 1
+    if raw == "fast_tracked":
+        return "passed", False
     if raw == "revealed":
         return "revealed", False
     return raw or None, False
@@ -713,6 +715,8 @@ def _overlay(
             block_verdict or "", "unassessed"
         )
         for row in new_rows:
+            if row.get("outcome") == "fast_tracked" or row.get("fast_tracked") is True:
+                continue
             if row.get("outcome") == "revealed":
                 row["revealed"] = True
             row["requirements"] = [dict(item) for item in requirements]
@@ -731,7 +735,10 @@ def _overlay(
     mark_fragile = resolution.mark_fragile
     passed = resolution.passed
     if resolution.unit_complete:
-        component = verdict_from_results(produced)
+        if resolution.redirect:
+            component = "fragile"
+        else:
+            component = verdict_from_results(produced)
         after = dict(after)
         after["component_verdict"] = component
         mark_known = component == "known"

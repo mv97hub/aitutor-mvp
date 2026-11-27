@@ -18,7 +18,7 @@ from app.models import KcGoal, KcNode, Student, TutorProfile
 TEMPERATURE = 0.4
 HINTS = ("nudge", "analogy", "scaffold", "reveal")
 DECISIONS = ("stay", "advance", "complete", "redirect")
-AFFECTS = ("engaged", "stuck", "guessing", "frustrated")
+AFFECTS = ("engaged", "stuck", "guessing", "frustrated", "bored", "curious_stretch")
 CONFIDENCE = ("low", "ok", "high")
 
 RECIPE_NAME = {
@@ -1177,7 +1177,7 @@ def _what_to_return() -> list[str]:
         "misconception is the stored wrong move that matched, or null.",
         "hint_tier is the hint this reply used: nudge, analogy, scaffold, or reveal.",
         "help_requested is true when the child asked for help. off_course is true when the answer left this component.",
-        "affect is engaged, stuck, guessing, or frustrated. confidence is low, ok, or high.",
+        "affect is engaged, stuck, guessing, frustrated, bored, or curious_stretch. confidence is low, ok, or high.",
         "You do not set the type, the edges, the score, or the step index.",
     ]
 
