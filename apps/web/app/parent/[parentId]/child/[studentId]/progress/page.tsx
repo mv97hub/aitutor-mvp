@@ -2,6 +2,7 @@ import { KcCourseProgress } from "@/components/KcCourseProgress";
 import { ParentFrame } from "@/components/parent/ParentFrame";
 import { ParentMissing } from "@/components/parent/ParentMissing";
 import { api } from "@/lib/api";
+import type { CourseExamSummary } from "@/lib/blind-exam";
 import type { SkillRadarPayload } from "@/lib/graph2";
 import type { KcNetwork, KcProgress, KcTutorCourse } from "@/lib/kc";
 import { coursesStartedFirst, portfolioCourseStatus } from "@/lib/kc-progress";
@@ -35,6 +36,7 @@ export default async function ParentProgressPage({
   let progress: KcProgress | null = null;
   let network: KcNetwork | null = null;
   let radar: SkillRadarPayload | null = null;
+  let examSummary: CourseExamSummary | null = null;
   let error: string | null = null;
   const base = `/parents/${parentId}/children/${studentId}`;
 
@@ -79,6 +81,9 @@ export default async function ParentProgressPage({
     } catch {
       network = null;
     }
+    examSummary = await api<CourseExamSummary>(
+      `${base}/courses/${encodeURIComponent(courseId)}/exam`,
+    ).catch(() => null);
   }
 
   return (
@@ -91,6 +96,7 @@ export default async function ParentProgressPage({
         progress={progress}
         network={network}
         radar={radar}
+        examSummary={examSummary}
         error={error}
         area={{
           backHref: parentHome(parent.id),

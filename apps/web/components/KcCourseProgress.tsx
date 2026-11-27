@@ -8,6 +8,12 @@ import { NETWORK_WIDTH, NetworkMap, networkHeight } from "@/components/KcNetwork
 import { ProgressRecommend } from "@/components/progress/ProgressRecommend";
 import { ProgressTotals } from "@/components/progress/ProgressTotals";
 import { SkillRadar } from "@/components/progress/SkillRadar";
+import {
+  formatExamPercent,
+  formatHakeGain,
+  learnExamPath,
+  type CourseExamSummary,
+} from "@/lib/blind-exam";
 import type { SkillRadarPayload } from "@/lib/graph2";
 import type { KcNetwork, KcProgress, KcTutorCourse } from "@/lib/kc";
 import { friendlyStrength, learnCoursePath } from "@/lib/learn";
@@ -162,6 +168,7 @@ export function KcCourseProgress({
   progress,
   network,
   radar,
+  examSummary,
   error,
   area,
 }: {
@@ -173,6 +180,7 @@ export function KcCourseProgress({
   progress: KcProgress | null;
   network: KcNetwork | null;
   radar?: SkillRadarPayload | null;
+  examSummary?: CourseExamSummary | null;
   error: string | null;
 }) {
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
@@ -260,6 +268,37 @@ export function KcCourseProgress({
             {score.percent}% · {score.finished} of {score.total}
             {lastActivity ? ` · Last activity ${lastActivity}` : " · No activity yet"}
           </p>
+          {examSummary || (!area && courseId) ? (
+            <div className="exam-summary-strip" aria-label="Blind Pre and Post Check">
+              <div className="exam-summary-values">
+                <span>
+                  Pre-test: <strong>{formatExamPercent(examSummary?.pre_score)}</strong>
+                </span>
+                <span>
+                  Post-test: <strong>{formatExamPercent(examSummary?.post_score)}</strong>
+                </span>
+                {examSummary?.hake_g !== null && examSummary?.hake_g !== undefined ? (
+                  <span>
+                    Gain (g): <strong>{formatHakeGain(examSummary.hake_g)}</strong>
+                  </span>
+                ) : null}
+              </div>
+              {!area && courseId ? (
+                <div className="exam-summary-links">
+                  <Link className="learn-text-link" href={learnExamPath(studentId, courseId, "pre")}>
+                    {examSummary?.pre_score !== null && examSummary?.pre_score !== undefined
+                      ? "Retake pre-test"
+                      : "Take pre-test"}
+                  </Link>
+                  <Link className="learn-text-link" href={learnExamPath(studentId, courseId, "post")}>
+                    {examSummary?.post_score !== null && examSummary?.post_score !== undefined
+                      ? "Retake post-test"
+                      : "Take post-test"}
+                  </Link>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <ProgressTotals
             label="Course totals"
             items={[

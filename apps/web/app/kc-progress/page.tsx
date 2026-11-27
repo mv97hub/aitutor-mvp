@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { KcCourseProgress } from "@/components/KcCourseProgress";
 import { api } from "@/lib/api";
+import type { CourseExamSummary } from "@/lib/blind-exam";
 import type { SkillRadarPayload } from "@/lib/graph2";
 import type { KcNetwork, KcProgress, KcTutorCourse } from "@/lib/kc";
 import { coursesStartedFirst, portfolioCourseStatus } from "@/lib/kc-progress";
@@ -26,6 +27,7 @@ export default async function KcProgressPage({
   let progress: KcProgress | null = null;
   let network: KcNetwork | null = null;
   let radar: SkillRadarPayload | null = null;
+  let examSummary: CourseExamSummary | null = null;
   let error: string | null = null;
 
   try {
@@ -66,6 +68,9 @@ export default async function KcProgressPage({
     } catch {
       network = null;
     }
+    examSummary = await api<CourseExamSummary>(
+      `/kc/tutor/courses/${encodeURIComponent(courseId)}/exam?student_id=${encodeURIComponent(studentId)}`,
+    ).catch(() => null);
   }
 
   return (
@@ -77,6 +82,7 @@ export default async function KcProgressPage({
       progress={progress}
       network={network}
       radar={radar}
+      examSummary={examSummary}
       error={error}
     />
   );
