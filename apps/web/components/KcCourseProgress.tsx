@@ -7,6 +7,8 @@ import { BrandMark } from "@/components/BrandMark";
 import { NETWORK_WIDTH, NetworkMap, networkHeight } from "@/components/KcNetwork";
 import { ProgressRecommend } from "@/components/progress/ProgressRecommend";
 import { ProgressTotals } from "@/components/progress/ProgressTotals";
+import { SkillRadar } from "@/components/progress/SkillRadar";
+import type { SkillRadarPayload } from "@/lib/graph2";
 import type { KcNetwork, KcProgress, KcTutorCourse } from "@/lib/kc";
 import { friendlyStrength, learnCoursePath } from "@/lib/learn";
 import {
@@ -159,6 +161,7 @@ export function KcCourseProgress({
   courseId,
   progress,
   network,
+  radar,
   error,
   area,
 }: {
@@ -169,6 +172,7 @@ export function KcCourseProgress({
   courseId: string;
   progress: KcProgress | null;
   network: KcNetwork | null;
+  radar?: SkillRadarPayload | null;
   error: string | null;
 }) {
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
@@ -215,6 +219,8 @@ export function KcCourseProgress({
   const body = (
     <>
       {heading}
+
+      {radar ? <SkillRadar radar={radar} /> : null}
 
       <section className="learn-section progress-portfolio-section" aria-label="Course Portfolio">
         <h2>Course Portfolio</h2>

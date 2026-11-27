@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { KcCourseProgress } from "@/components/KcCourseProgress";
 import { api } from "@/lib/api";
+import type { SkillRadarPayload } from "@/lib/graph2";
 import type { KcNetwork, KcProgress, KcTutorCourse } from "@/lib/kc";
 import { coursesStartedFirst, portfolioCourseStatus } from "@/lib/kc-progress";
 import type { Student } from "@/lib/types";
@@ -24,11 +25,16 @@ export default async function KcProgressPage({
   let courseId = params.course?.trim() ?? "";
   let progress: KcProgress | null = null;
   let network: KcNetwork | null = null;
+  let radar: SkillRadarPayload | null = null;
   let error: string | null = null;
 
   try {
-    const students = await api<Student[]>("/students");
+    const [students, loadedRadar] = await Promise.all([
+      api<Student[]>("/students"),
+      api<SkillRadarPayload>(`/kc/students/${encodeURIComponent(studentId)}/radar`).catch(() => null),
+    ]);
     studentName = students.find((student) => student.id === studentId)?.display_name ?? "";
+    radar = loadedRadar;
   } catch {
     studentName = "";
   }
@@ -70,6 +76,7 @@ export default async function KcProgressPage({
       courseId={courseId}
       progress={progress}
       network={network}
+      radar={radar}
       error={error}
     />
   );

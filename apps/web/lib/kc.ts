@@ -1,3 +1,5 @@
+import type { SkillEndCard } from "./graph2";
+
 export type KcType = "factual" | "procedural" | "conceptual" | "causal" | "synthesis";
 
 export type KcBlockType =
@@ -13,7 +15,7 @@ export type KcBlockType =
   | "explanation"
   | "passage_ela";
 
-export type KcMasteryClaim = { id: string; statement: string };
+export type KcMasteryClaim = { id: string; statement: string; skills?: string[] };
 
 export type KcMasterySpec = {
   archetype: string;
@@ -535,6 +537,10 @@ export type KcTutorSession = {
   revision?: number;
   scoring_version?: number;
   verdict?: string | null;
+  end_card?: SkillEndCard | null;
+  graph2_judge_status?: string;
+  graph2_judge_pending?: boolean;
+  unit_complete?: boolean;
   actions?: string[] | null;
   needs_speech: boolean;
   choice: { prompt: string; choices: { id: string; text: string }[] } | null;

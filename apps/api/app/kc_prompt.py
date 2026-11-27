@@ -288,7 +288,11 @@ def stored_blocks(node: KcNode | None) -> list[dict]:
                 continue
             bid = str(item.get("id") or f"blk_{idx}").strip() or f"blk_{idx}"
             data = item.get("data") if isinstance(item.get("data"), dict) else {}
-            valid.append({"id": bid, "type": btype, "data": dict(data)})
+            entry: dict = {"id": bid, "type": btype, "data": dict(data)}
+            cids = item.get("claim_ids")
+            if isinstance(cids, list) and cids:
+                entry["claim_ids"] = [str(cid).strip() for cid in cids if str(cid).strip()]
+            valid.append(entry)
         if valid:
             return valid
     return []
@@ -986,6 +990,7 @@ def _who_you_are_talking_to(
     active_block_state: dict | None = None,
     passage_reprint: bool = False,
     last_answer: str = "",
+    frozen_tutor_note: str = "",
 ) -> list[str]:
     del cfg, active_block_state, last_answer
     cp = effective_child_profile(student)
@@ -1073,6 +1078,9 @@ def _who_you_are_talking_to(
         parts.append(f"The child cares about {named}. Keep examples inside the subject.")
     else:
         parts.append("Keep examples inside the subject.")
+    note_lines = [line.strip() for line in str(frozen_tutor_note or "").splitlines() if line.strip()]
+    if note_lines:
+        return [" ".join(parts), *note_lines]
     return [" ".join(parts)]
 
 
@@ -4351,6 +4359,7 @@ def build_kc_prompt(
     block_results: list | None = None,
     moves: object | None = None,
     safety: dict | None = None,
+    frozen_tutor_note: str = "",
 ) -> dict:
     """Assemble the prompt for the active block (`node.blocks[step]`). Safety comes first."""
     del stability
@@ -4686,6 +4695,7 @@ def build_kc_prompt(
                     state_dict,
                     passage_reprint=passage_reprint,
                     last_answer=last_answer or "",
+                    frozen_tutor_note=frozen_tutor_note,
                 ),
             ),
             (

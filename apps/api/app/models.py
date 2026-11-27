@@ -1127,6 +1127,10 @@ class KcSession(Base):
             "verdict IS NULL OR verdict IN ('known', 'fragile', 'unassessed')",
             name="ck_kc_sessions_verdict",
         ),
+        CheckConstraint(
+            "graph2_judge_status IN ('none', 'pending', 'completed', 'failed', 'skipped')",
+            name="ck_kc_sessions_graph2_judge_status",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -1173,6 +1177,11 @@ class KcSession(Base):
     )
     rubric_met: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     last_misconception: Mapped[str] = mapped_column(String(240), nullable=False, default="", server_default="")
+    frozen_tutor_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    close_end_card: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    graph2_judge_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="none", server_default="none"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
@@ -1355,7 +1364,7 @@ class TutorTokenUsage(Base):
 
     __tablename__ = "tutor_token_usage"
     __table_args__ = (
-        CheckConstraint("kind IN ('speak', 'answer')", name="ck_tutor_token_usage_kind"),
+        CheckConstraint("kind IN ('speak', 'answer', 'judge')", name="ck_tutor_token_usage_kind"),
         Index("ix_tutor_token_usage_student_created", "student_id", "created_at"),
         Index("ix_tutor_token_usage_created_at", "created_at"),
         Index("ix_tutor_token_usage_session_id", "session_id"),
@@ -1684,6 +1693,109 @@ class HarnessRecommendation(Base):
     confidence: Mapped[str] = mapped_column(String(16), nullable=False, default="low")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="new")
     trial_profile_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class StudentEducationalState(Base):
+    """Graph-2 longitudinal educational state for one real student.
+
+    Harness / test children are never written here. The live tutor never reads
+    the eight skill scores or the radar — only the frozen plain-text note
+    copied onto KcSession when the next component opens.
+    """
+
+    __tablename__ = "student_educational_state"
+
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), primary_key=True
+    )
+    skills: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    hint_uptake: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    block_affinity: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    expression_stats: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    biomarkers: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    tutor_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    tutor_note_component_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_nodes.id", ondelete="SET NULL"), nullable=True
+    )
+    tutor_note_course_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_goals.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class LearnerCourseState(Base):
+    """Course-scoped learner memory: misconceptions, unlock notes, and analogies that worked."""
+
+    __tablename__ = "learner_course_state"
+    __table_args__ = (
+        UniqueConstraint("student_id", "goal_id", name="uq_learner_course_state_student_goal"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    goal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_goals.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    misconceptions: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    unlock_notes: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    analogies_worked: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class SkillObservation(Base):
+    """Append-only ledger of one graded Graph-2 skill observation from a closed component."""
+
+    __tablename__ = "skill_observation"
+    __table_args__ = (
+        CheckConstraint(
+            "skill IN ('evidence', 'perspectives', 'causes', 'inquiry', "
+            "'errors', 'transfer', 'explaining', 'calibration')",
+            name="ck_skill_observation_skill",
+        ),
+        CheckConstraint("rubric_grade >= 0 AND rubric_grade <= 3", name="ck_skill_observation_grade"),
+        CheckConstraint(
+            "cap_applied IS NULL OR cap_applied IN ('revealed', 'giveaway', 'overlap')",
+            name="ck_skill_observation_cap",
+        ),
+        CheckConstraint("capped_y >= 0.0 AND capped_y <= 1.0", name="ck_skill_observation_capped_y"),
+        UniqueConstraint("session_id", "skill", name="uq_skill_observation_session_skill"),
+        Index("ix_skill_observation_student_skill", "student_id", "skill", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    goal_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_goals.id", ondelete="SET NULL"), nullable=True
+    )
+    kc_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_nodes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    block_id: Mapped[str] = mapped_column(String(80), nullable=False, default="", server_default="")
+    block_type: Mapped[str] = mapped_column(String(40), nullable=False, default="", server_default="")
+    claim_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    skill: Mapped[str] = mapped_column(String(32), nullable=False)
+    rubric_grade: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_y: Mapped[float] = mapped_column(Float, nullable=False)
+    cap_applied: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    capped_y: Mapped[float] = mapped_column(Float, nullable=False)
+    score_before: Mapped[float] = mapped_column(Float, nullable=False)
+    score_after: Mapped[float] = mapped_column(Float, nullable=False)
+    obs_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    quote: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
