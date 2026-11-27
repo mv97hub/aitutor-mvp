@@ -39,12 +39,16 @@ def _grade(path, claim, **decision):
     return response.json()
 
 
-def test_partial_and_complete_solo_proposals_are_counted_once(open_lesson):
+def _solo_session(open_lesson, tutor_reply=SOLO):
     session = open_lesson([BLOCK])
     _speak(session, "How should we begin an observation?")
-    first = _decide(session, FADED, substep_passed=True, reply=SOLO)
+    first = _decide(session, FADED, substep_passed=True, reply=tutor_reply)
     assert first["active_substep"] == "solo_solve"
+    return session
 
+
+def test_partial_and_complete_solo_proposals_are_counted_once(open_lesson):
+    session = _solo_session(open_lesson)
     path, claim, prompt = _claim(session, PARTIAL)
     assert "This typed line is unscored help" not in prompt
     assert "ask only for the missing part" in prompt
@@ -66,11 +70,14 @@ def test_partial_and_complete_solo_proposals_are_counted_once(open_lesson):
     assert replay["replayed"] and replay["messages"] == result["messages"]
 
 
-@pytest.mark.parametrize("question", ["What does avoidant attachment mean?", "Can I have a hint?"])
+@pytest.mark.parametrize("question", [
+    "What does avoidant attachment mean?", "Can I have a hint?", "Is it my turn?",
+    "Is it time for lunch?", "Is that something you can explain?",
+    "Is the answer supposed to be a pattern or a number?", "Is the answer somewhere in the passage?",
+    "Is that the attachment question again?", "Could it be explained with a different observation?",
+])
 def test_solo_clarification_is_free_even_if_the_grader_checks_pass(open_lesson, question):
-    session = open_lesson([BLOCK])
-    _speak(session, "How should we begin an observation?")
-    _decide(session, FADED, substep_passed=True, reply=SOLO)
+    session = _solo_session(open_lesson)
     path, claim, prompt = _claim(session, question)
     assert "This typed line is unscored help" in prompt
     result = _grade(path, claim, decision="advance", substep_passed=True, reply="Here is some context.")
@@ -83,3 +90,32 @@ def test_only_authored_solo_targets_enable_worked_example_proposals():
     assert proposed_step_answer(BLOCK, "faded_step", PARTIAL) is None
     legacy = {**BLOCK, "data": {**BLOCK["data"], "solo_expected_answer": ""}}
     assert proposed_step_answer(legacy, "solo_solve", PARTIAL) is None
+
+
+@pytest.mark.parametrize("answer", ["Is it 15 dollars?", "Is it fifteen dollars?", "Is the answer 15 dollars?", "Is it twelve?"])
+def test_solo_result_can_be_proposed_without_repeating_the_key_calculation(answer):
+    block = {**BLOCK, "data": {**BLOCK["data"], "solo_expected_answer": "Five plus ten dollars = 15 dollars."}}
+    assert proposed_step_answer(block, "solo_solve", answer)
+
+
+@pytest.mark.parametrize("answer", [
+    "Is it secure attachment because his caregiver came back?", "Could it be secure?", "Is the answer ambivalent?",
+])
+def test_incorrect_but_on_topic_answer_is_still_an_attempt(open_lesson, answer):
+    session = _solo_session(open_lesson)
+    path, claim, prompt = _claim(session, answer)
+    assert "Grade the learner's proposed answer" in prompt
+    result = _grade(path, claim, decision="stay", substep_passed=False, reply="Look at how Leo responded on reunion.")
+    assert result["active_substep"] == "solo_solve"
+    row = next(r for r in _state(session)["requirements"] if r["key"] == "solo_solve")
+    assert (row["observation"], row["attempts"]) == ("insufficient", 1)
+
+
+def test_tentative_response_after_the_solo_answer_was_given_stays_assisted(open_lesson):
+    session = _solo_session(open_lesson, "Here is the answer: " + EXPECTED + " Say it back.")
+    path, claim, prompt = _claim(session, COMPLETE)
+    assert "Grade the learner's proposed answer" in prompt
+    result = _grade(path, claim, decision="advance", substep_passed=True, reply="Yes, that is the limit.")
+    assert result["unit_complete"]
+    row = next(r for r in _closed(session)["requirements"] if r["key"] == "solo_solve")
+    assert (row["observation"], row["attempts"]) == ("assisted", 1)

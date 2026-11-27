@@ -1158,6 +1158,7 @@ _PROPOSAL_FIELDS = {
     ("retrieval_check", "recall"): "expected_fact",
     ("retrieval_check", "elaborate_why"): "expected_why_rationale",
     ("case_study", "transfer"): "transfer_expected",
+    ("worked_example", "solo_solve"): "solo_expected_answer",
 }
 
 
@@ -1171,6 +1172,11 @@ _MATH_OPERATOR = re.compile(
     re.I,
 )
 _ANSWER_CHECK_OPEN = re.compile(r"^(?:is (?:it|that)|(?:would|could) (?:it|that) be)\s+", re.I)
+_SOLO_ANSWER_OPEN = re.compile(r"^is the answer\s+", re.I)
+_SOLO_TASK_REQUEST = re.compile(
+    r"^(?:supposed|expected|meant) to\b|^(?:explained|rephrased|repeated|clarified)\b(?! by\b)"
+    r"|\b(?:question|problem|exercise|task) (?:again|as (?:before|last time))\b", re.I,
+)
 _ANSWER_CHECK_TAG = re.compile(r",?\s+(?:is that (?:right|correct)|isn['’]t it|right|correct)$", re.I)
 _FOLLOWUP = re.compile(r"(?:,?\s+and|[.!])\s+(?:could|would|can|who|what|why|how|when|where)\b", re.I)
 
@@ -1180,13 +1186,17 @@ def proposed_step_answer(block: dict, substep: str, answer: str) -> str | None:
     target = _proposal_target(block, substep)
     if not target or not answer:
         return None
-    # A computation is a try in either punctuation. Word overlap cannot verify its operations.
-    formula = _MATH_OPERATOR.search(target)
+    # A solo solution may show its working even when the question asks only for the result.
+    # The recall rule below requires an operation when the learner is asked for the formula.
+    solo = block.get("type") == "worked_example" and substep == "solo_solve"
+    formula = not solo and _MATH_OPERATOR.search(target)
     if "?" not in answer and not (formula and _MATH_OPERATOR.search(answer)):
         return None
     # Judge the proposed content. A separate question can ask about something else.
     first = _FOLLOWUP.split(answer.partition("?")[0].strip(), maxsplit=1)[0]
     candidate, opened = _ANSWER_CHECK_OPEN.subn("", first)
+    if solo and not opened:
+        candidate, opened = _SOLO_ANSWER_OPEN.subn("", first)
     candidate, checked = _ANSWER_CHECK_TAG.subn("", candidate)
     words = _words(candidate)
     if not words or _opens_as_question(words) or words[0] in _QUESTION_AUXILIARIES:
@@ -1194,6 +1204,20 @@ def proposed_step_answer(block: dict, substep: str, answer: str) -> str | None:
     if words[0] in {"possible", "okay", "ok"} or re.search(
         r"^true that\b|\b(?:a hint|some help|more context|you want me to)\b", candidate, re.I
     ):
+        return ""
+    if solo:
+        # A question about the task can start with "Is it ...?" too. Look for
+        # a proposed term, a quantity or evidence about the solution. A wrong
+        # one-word label still deserves a try even if it shares nothing with the key.
+        if _SOLO_TASK_REQUEST.search(candidate):
+            return ""
+        short_label = opened and re.fullmatch(r"(?:an? )?[\w-]+", candidate, re.I)
+        anchors = _content_word_set(target) - _FILLER_ANCHORS
+        numerical = any(c.isdigit() for c in target) and re.fullmatch(
+            r"[$£€]?[-+]?\d+(?:[.,/]\d+)*\s*%?(?:\s+[a-z]+){0,2}", candidate, re.I
+        )
+        if short_label or numerical or anchors.intersection(_content_word_set(candidate)) or words == _words(target):
+            return candidate
         return ""
     # A declarative statement checked with "..., right?" may paraphrase every word in the key.
     if checked and _statement_before_question(first):
