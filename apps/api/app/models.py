@@ -1057,6 +1057,14 @@ class KcGoal(Base):
             "minutes IS NULL OR minutes > 0",
             name="ck_kc_goals_minutes",
         ),
+        CheckConstraint(
+            "catalog_tier IN ('core', 'enrichment', 'custom')",
+            name="ck_kc_goals_catalog_tier",
+        ),
+        CheckConstraint(
+            "upvotes_count >= 0",
+            name="ck_kc_goals_upvotes_non_negative",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -1077,6 +1085,9 @@ class KcGoal(Base):
     standards: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     history: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    catalog_tier: Mapped[str] = mapped_column(String(24), nullable=False, default="core", server_default="core")
+    upvotes_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    default_archetype: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
@@ -1729,11 +1740,15 @@ class StudentEducationalState(Base):
 
 
 class LearnerCourseState(Base):
-    """Course-scoped learner memory: misconceptions, unlock notes, and analogies that worked."""
+    """Course-scoped learner memory, course mode, and parent policy locks (F3 + F6)."""
 
     __tablename__ = "learner_course_state"
     __table_args__ = (
         UniqueConstraint("student_id", "goal_id", name="uq_learner_course_state_student_goal"),
+        CheckConstraint(
+            "course_mode IN ('explore', 'mastery', 'exam_prep')",
+            name="ck_learner_course_state_course_mode",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -1746,6 +1761,8 @@ class LearnerCourseState(Base):
     misconceptions: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     unlock_notes: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     analogies_worked: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    course_mode: Mapped[str] = mapped_column(String(24), nullable=False, default="mastery", server_default="mastery")
+    parent_policy_locks: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
@@ -1874,3 +1891,76 @@ class BlindExamAttempt(Base):
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ParentSessionDigest(Base):
+    """Auto-persisted parent-safe session digest written at component close (F6).
+
+    Harness / test children are never written here. Contains no raw chat text or prompts.
+    """
+
+    __tablename__ = "parent_session_digests"
+    __table_args__ = (
+        CheckConstraint(
+            "trajectory_state IN ('flourishing', 'steady_progress', 'needs_reinforcement', 'struggling', 'returning')",
+            name="ck_parent_session_digests_trajectory",
+        ),
+        UniqueConstraint("session_id", name="uq_parent_session_digests_session_id"),
+        Index("ix_parent_session_digests_student_created", "student_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    goal_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_goals.id", ondelete="SET NULL"), nullable=True
+    )
+    kc_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_nodes.id", ondelete="CASCADE"), nullable=False
+    )
+    trajectory_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="steady_progress", server_default="steady_progress"
+    )
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    talking_points: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    biomarkers_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    recommended_interventions: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class TeacherShareToken(Base):
+    """Revocable SHA-256 token granting read-only teacher snapshot access (F6).
+
+    Raw token is shown once at creation; only its SHA-256 hex digest is persisted.
+    """
+
+    __tablename__ = "teacher_share_tokens"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_teacher_share_tokens_hash"),
+        Index("ix_teacher_share_tokens_parent_student", "parent_id", "student_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False, default="", server_default="")
+    parent_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("parents.id", ondelete="CASCADE"), nullable=False
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=False
+    )
+    goal_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("kc_goals.id", ondelete="SET NULL"), nullable=True
+    )
+    label: Mapped[str] = mapped_column(String(120), nullable=False, default="", server_default="")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )

@@ -5,6 +5,7 @@ import { ParentMissing } from "@/components/parent/ParentMissing";
 import { api } from "@/lib/api";
 import type { SkillRadarPayload } from "@/lib/graph2";
 import { knownId, parentSettings, type Parent } from "@/lib/parent";
+import type { ParentCopilotSummary } from "@/lib/parent-copilot";
 import type { Student } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -18,20 +19,25 @@ export default async function ParentDashboardPage({ params }: { params: Promise<
   let parent: Parent | null = null;
   let learners: Student[] = [];
   const radars: Record<string, SkillRadarPayload | null> = {};
+  const copilots: Record<string, ParentCopilotSummary | null> = {};
   let error: string | null = null;
   try {
     [parent, learners] = await Promise.all([
       api<Parent>(`/parents/${parentId}`),
       api<Student[]>(`/parents/${parentId}/students`),
     ]);
-    const loadedRadars = await Promise.all(
+    const loadedChildData = await Promise.all(
       learners.map(async (child) => {
-        const payload = await api<SkillRadarPayload>(`/parents/${parentId}/children/${child.id}/radar`).catch(() => null);
-        return [child.id, payload] as const;
+        const [radarPayload, copilotPayload] = await Promise.all([
+          api<SkillRadarPayload>(`/parents/${parentId}/children/${child.id}/radar`).catch(() => null),
+          api<ParentCopilotSummary>(`/parents/${parentId}/children/${child.id}/copilot`).catch(() => null),
+        ]);
+        return [child.id, radarPayload, copilotPayload] as const;
       }),
     );
-    for (const [cid, payload] of loadedRadars) {
-      radars[cid] = payload;
+    for (const [cid, radarPayload, copilotPayload] of loadedChildData) {
+      radars[cid] = radarPayload;
+      copilots[cid] = copilotPayload;
     }
   } catch (err) {
     error = err instanceof Error ? err.message : "The tutor service is not reachable.";
@@ -40,5 +46,5 @@ export default async function ParentDashboardPage({ params }: { params: Promise<
     return <ParentMissing title="That parent was not found." detail={error || "Pick someone from the parent list."} />;
   }
   if (learners.length === 0) redirect(parentSettings(parent.id));
-  return <ParentDashboard parent={parent} learners={learners} radars={radars} />;
+  return <ParentDashboard parent={parent} learners={learners} radars={radars} copilots={copilots} />;
 }

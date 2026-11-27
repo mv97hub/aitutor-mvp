@@ -5,12 +5,21 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.blind_evaluator import course_exam_summary
 from app.database import get_db
 from app.graph2 import build_radar_payload
 from app.kc import _course_or_404, network, progress, tutor_courses
+from app.parent_copilot import (
+    DEFAULT_SHARE_TTL_DAYS,
+    apply_parent_intervention,
+    create_teacher_share_token,
+    get_parent_copilot_summary,
+    list_teacher_share_tokens,
+    revoke_teacher_share_token,
+)
 from app.parents import (
     ParentChatDetail,
     ParentChatSummary,
@@ -139,3 +148,88 @@ def get_parent_child_course_exam(
     student = require_linked_child(db, parent_id, student_id)
     course = _course_or_404(db, course_id)
     return course_exam_summary(db, goal_id=course.id, student_id=student.id)
+
+
+class ParentInterventionIn(BaseModel):
+    course_id: uuid.UUID
+    course_mode: str | None = None
+    locks: dict | None = None
+
+
+class TeacherShareCreateIn(BaseModel):
+    course_id: uuid.UUID | None = None
+    label: str = Field(default="", max_length=120)
+    expires_in_days: int = Field(default=DEFAULT_SHARE_TTL_DAYS, ge=1, le=180)
+
+
+@router.get("/parents/{parent_id}/children/{student_id}/copilot")
+def get_parent_child_copilot(
+    parent_id: uuid.UUID,
+    student_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> dict:
+    return get_parent_copilot_summary(db, parent_id=parent_id, student_id=student_id)
+
+
+@router.post("/parents/{parent_id}/children/{student_id}/interventions/apply")
+def post_parent_child_intervention(
+    parent_id: uuid.UUID,
+    student_id: uuid.UUID,
+    body: ParentInterventionIn,
+    db: Session = Depends(get_db),
+) -> dict:
+    out = apply_parent_intervention(
+        db,
+        parent_id=parent_id,
+        student_id=student_id,
+        goal_id=body.course_id,
+        locks=body.locks,
+        course_mode=body.course_mode,
+    )
+    db.commit()
+    return out
+
+
+@router.get("/parents/{parent_id}/children/{student_id}/teacher-shares")
+def get_parent_child_teacher_shares(
+    parent_id: uuid.UUID,
+    student_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return list_teacher_share_tokens(db, parent_id=parent_id, student_id=student_id)
+
+
+@router.post("/parents/{parent_id}/children/{student_id}/teacher-shares")
+def post_parent_child_teacher_share(
+    parent_id: uuid.UUID,
+    student_id: uuid.UUID,
+    body: TeacherShareCreateIn,
+    db: Session = Depends(get_db),
+) -> dict:
+    out = create_teacher_share_token(
+        db,
+        parent_id=parent_id,
+        student_id=student_id,
+        goal_id=body.course_id,
+        label=body.label,
+        expires_in_days=body.expires_in_days,
+    )
+    db.commit()
+    return out
+
+
+@router.delete("/parents/{parent_id}/children/{student_id}/teacher-shares/{share_id}")
+def delete_parent_child_teacher_share(
+    parent_id: uuid.UUID,
+    student_id: uuid.UUID,
+    share_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> dict:
+    out = revoke_teacher_share_token(
+        db,
+        parent_id=parent_id,
+        student_id=student_id,
+        share_id=share_id,
+    )
+    db.commit()
+    return out
