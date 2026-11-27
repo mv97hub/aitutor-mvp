@@ -2611,6 +2611,8 @@ def test_topic_then_static_mcq_checks_the_answer_and_stores_assessments() -> Non
         assert "?" not in advanced["reply"]
         assert advanced["messages"][-1]["role"] == "assistant"
         assert advanced["messages"][-1]["step"] == 0
+        assert advanced["messages"][-2]["role"] == "user"
+        assert advanced["messages"][-2]["step"] == 0
         spoken_next = client.post(
             f"/kc/tutor/sessions/{session_id}/speech",
             json={"content": "Next we pick the river color."},

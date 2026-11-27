@@ -106,7 +106,7 @@ test("the lesson component is shared and the phone page hides the composer durin
   assert.match(lesson, /learn-next-card/);
   assert.match(lesson, /\/api\/kc\/tutor\/speak/);
   assert.match(lesson, /kc-step-divider/);
-  assert.match(lesson, /blockStepDivider/);
+  assert.match(lesson, /lessonStepDivider/);
   assert.match(lesson, /\/api\/kc\/tutor\/answer/);
   assert.match(mobile, /hideComposerWhileChoosing/);
   assert.equal(mobile.includes("KcDebugPanel"), false);
