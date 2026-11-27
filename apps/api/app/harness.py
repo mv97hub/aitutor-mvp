@@ -280,6 +280,7 @@ def normalize_plan(raw: dict) -> dict:
         "scenario_group": str(raw.get("scenario_group") or "")[:100],
         "seed_from_run": str(raw.get("seed_from_run") or ""),
         "seed_from_profile": str(raw.get("seed_from_profile") or ""),
+        "run_blind_post_test": raw.get("run_blind_post_test") is True,
     }
 
 
@@ -1826,6 +1827,117 @@ def ensure_fixture(db: Session) -> dict:
     body = course_out(db, base)
     body["fixture"] = True
     return body
+
+
+def _chat_tutor_messages_only(db: Session, chat: HarnessChat) -> list[str]:
+    """Extract ONLY the tutor's assistant messages from a HarnessChat for epistemic-sandbox evaluation."""
+    from app.models import KcMessage
+
+    if chat.session_id is not None:
+        rows = db.scalars(
+            select(KcMessage)
+            .where(KcMessage.session_id == chat.session_id, KcMessage.role == "assistant")
+            .order_by(KcMessage.seq)
+        ).all()
+        msgs = [str(row.content or "").strip() for row in rows if str(row.content or "").strip()]
+        if msgs:
+            return msgs
+    turns = _saved_turns(db, chat.id)
+    return [
+        str((t.session_after or {}).get("tutor_reply") or "").strip()
+        for t in turns
+        if isinstance(t.session_after, dict) and str(t.session_after.get("tutor_reply") or "").strip()
+    ]
+
+
+def epistemic_post_test_context(
+    db: Session,
+    chat_id: uuid.UUID,
+    *,
+    use_deterministic_fallback: bool = False,
+) -> dict:
+    """Build the blank-slate epistemic-sandbox Post-Test bundle restricted strictly to tutor messages."""
+    from app.blind_evaluator import (
+        build_epistemic_agent_bundle,
+        latest_exam_for_course,
+        load_quarantined_course_context,
+        prepare_exam_prompt_or_cached,
+        validate_and_store_exam,
+    )
+
+    chat = db.get(HarnessChat, chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="That chat was not found.")
+    if chat.course_id is None:
+        raise HTTPException(status_code=422, detail="That chat has no linked course.")
+
+    ctx = load_quarantined_course_context(db, chat.course_id)
+    exam = latest_exam_for_course(db, goal_id=chat.course_id, phase="post", spec_fingerprint=ctx["spec_fingerprint"])
+    if exam is None:
+        if use_deterministic_fallback:
+            validate_and_store_exam(
+                db,
+                goal_id=chat.course_id,
+                phase="post",
+                use_deterministic_fallback=True,
+            )
+            db.flush()
+            exam = latest_exam_for_course(db, goal_id=chat.course_id, phase="post", spec_fingerprint=ctx["spec_fingerprint"])
+        else:
+            prep = prepare_exam_prompt_or_cached(db, goal_id=chat.course_id, phase="post")
+            return {
+                "chat_id": str(chat.id),
+                "course_id": str(chat.course_id),
+                "exam_needs_generation": True,
+                "generation_bundle": prep,
+            }
+
+    assert exam is not None
+    tutor_messages = _chat_tutor_messages_only(db, chat)
+    bundle = build_epistemic_agent_bundle(exam, tutor_messages, course_title=ctx["title"])
+    return {
+        "chat_id": str(chat.id),
+        "course_id": str(chat.course_id),
+        "exam_needs_generation": False,
+        "tutor_message_count": len(tutor_messages),
+        **bundle,
+    }
+
+
+def record_epistemic_post_test(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
+    """Grade and store a blank-slate epistemic-sandbox Post-Test attempt for a HarnessChat."""
+    from app.blind_evaluator import grade_and_record_attempt
+    from app.models import BlindExam
+
+    chat = db.get(HarnessChat, chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="That chat was not found.")
+    raw_exam_id = _uuid(body.get("exam_id"))
+    if raw_exam_id is None:
+        raise HTTPException(status_code=422, detail="exam_id is required.")
+    exam = db.get(BlindExam, raw_exam_id)
+    if exam is None or (chat.course_id is not None and exam.goal_id != chat.course_id):
+        raise HTTPException(status_code=404, detail="Blind exam not found for this chat's course.")
+    raw_answers = body.get("answers")
+    answers: dict[str, str] = {}
+    if isinstance(raw_answers, dict):
+        answers = {str(k): str(v or "") for k, v in raw_answers.items()}
+    elif isinstance(raw_answers, list):
+        for entry in raw_answers:
+            if isinstance(entry, dict) and entry.get("item_id"):
+                answers[str(entry["item_id"])] = str(entry.get("answer") or "")
+    transfer_grades = body.get("transfer_grades") if isinstance(body.get("transfer_grades"), list) else None
+    out = grade_and_record_attempt(
+        db,
+        exam=exam,
+        answers=answers,
+        transfer_grades=transfer_grades,
+        student_id=None,
+        mode="epistemic_sandbox",
+        harness_chat_id=chat.id,
+    )
+    db.commit()
+    return out
 
 
 def suite_out(db: Session, row: HarnessSuite) -> dict:

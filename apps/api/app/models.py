@@ -1799,3 +1799,78 @@ class SkillObservation(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
+
+
+class BlindExam(Base):
+    """Frozen isomorphic Pre-Test or Post-Test generated strictly from quarantined course metadata."""
+
+    __tablename__ = "blind_exams"
+    __table_args__ = (
+        CheckConstraint("phase IN ('pre', 'post')", name="ck_blind_exams_phase"),
+        CheckConstraint("version >= 1", name="ck_blind_exams_version"),
+        UniqueConstraint("goal_id", "phase", "version", name="uq_blind_exams_goal_phase_version"),
+        Index("ix_blind_exams_goal_phase", "goal_id", "phase", "spec_fingerprint"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    goal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_goals.id", ondelete="CASCADE"), nullable=False
+    )
+    phase: Mapped[str] = mapped_column(String(16), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    spec_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    items: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    rubric_key: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+
+
+class BlindExamAttempt(Base):
+    """Graded Pre/Post blind exam submission (human learner or harness epistemic sandbox)."""
+
+    __tablename__ = "blind_exam_attempts"
+    __table_args__ = (
+        CheckConstraint("phase IN ('pre', 'post')", name="ck_blind_exam_attempts_phase"),
+        CheckConstraint("mode IN ('human', 'epistemic_sandbox')", name="ck_blind_exam_attempts_mode"),
+        CheckConstraint("status IN ('in_progress', 'graded')", name="ck_blind_exam_attempts_status"),
+        CheckConstraint(
+            "raw_score IS NULL OR (raw_score >= 0.0 AND raw_score <= 1.0)",
+            name="ck_blind_exam_attempts_raw_score",
+        ),
+        Index(
+            "ix_blind_exam_attempts_student_goal_phase",
+            "student_id",
+            "goal_id",
+            "phase",
+            "submitted_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    exam_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("blind_exams.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    goal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kc_goals.id", ondelete="CASCADE"), nullable=False
+    )
+    student_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=True
+    )
+    harness_chat_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
+    phase: Mapped[str] = mapped_column(String(16), nullable=False)
+    mode: Mapped[str] = mapped_column(String(24), nullable=False, default="human", server_default="human")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="graded", server_default="graded")
+    answers: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    item_grades: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    raw_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mcq_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    transfer_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    paired_pre_attempt_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    paired_pre_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hake_g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

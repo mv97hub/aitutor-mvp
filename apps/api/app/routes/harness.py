@@ -20,6 +20,7 @@ from app.harness import (
     dispatch_harness_turn,
     download_run,
     ensure_fixture,
+    epistemic_post_test_context,
     finish_chat,
     get_chat,
     get_run,
@@ -29,6 +30,7 @@ from app.harness import (
     pause_run,
     pending_answer_result,
     prepare_harness_turn,
+    record_epistemic_post_test,
     record_turn,
     resume_run,
     run_again,
@@ -178,3 +180,17 @@ def post_turn(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> 
 @router.post("/kc/harness/chats/{chat_id}/finish")
 def post_finish(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
     return finish_chat(db, chat_id, str(body.get("reason") or "completed"), body.get("claim_generation"))
+
+
+@router.get("/kc/harness/chats/{chat_id}/epistemic-context")
+def get_epistemic_context(
+    chat_id: uuid.UUID,
+    fallback: bool = False,
+    db: Session = Depends(get_db),
+) -> dict:
+    return epistemic_post_test_context(db, chat_id, use_deterministic_fallback=fallback)
+
+
+@router.post("/kc/harness/chats/{chat_id}/blind-post-test")
+def post_blind_post_test(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
+    return record_epistemic_post_test(db, chat_id, body)
