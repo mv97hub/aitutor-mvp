@@ -1782,6 +1782,8 @@ def _resolve_explanation_turn(
         substep = "explain_topic"
     state["substep"] = substep
     state["topic_index"] = topic_index
+    # Older active walkthroughs counted changing topics as attempts. They only record participation.
+    state.pop("block_attempts", None)
     on_last = substep == "explain_topic" and bool(topics) and topic_index >= len(topics) - 1
     if move_on_before_topic_taught(block, state, answer):
         # The topic was only named. This reply teaches it. The index does not move.
@@ -1830,8 +1832,6 @@ def _resolve_explanation_turn(
             move_attempts=move_attempts,
             enrichment_turns=enrichment_turns,
         )
-    tries = int(state.get("block_attempts") or 0) + 1
-    state["block_attempts"] = tries
     state["elaboration_turns"] = 0
     if substep == "explain_topic" and topics and topic_index < len(topics) - 1:
         state["topic_index"] = topic_index + 1
@@ -1859,10 +1859,10 @@ def _resolve_explanation_turn(
             "block_type": "explanation",
             "title": title,
             "outcome": "engaged",
-            "attempts": tries,
+            "attempts": 0,
             "strong": strong_text or title,
             "work_on": work_text,
-            "summary": f"engaged explanation after {tries} tries",
+            "summary": "Completed the walkthrough.",
         }
     )
     return _advance_or_close_component(
