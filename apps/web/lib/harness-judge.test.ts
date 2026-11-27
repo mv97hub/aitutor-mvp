@@ -58,7 +58,7 @@ test("an answered side question is not ignored_question", () => {
       ],
       child_realism: 3,
     },
-    { turns, checks: { side: [{ turn: 0, answered: true }] } },
+    { turns, checks: { side: [{ turn: 0, reply_delivered: true, answered: true }] } },
   );
   assert.deepEqual(
     dropped.tags.map((tag) => tag.tag),
@@ -87,9 +87,11 @@ test("an answered side question only clears the tag on its transcript turn", () 
   ];
   const result = acceptJudgeOutput({ tags }, {
     turns: dialogue,
-    checks: { side: [{ turn: 0, answered: false }, { turn: 1, answered: true }] },
+    checks: { side: [{ turn: 0, answered: null, reply_delivered: true }, { turn: 1, answered: true, reply_delivered: true }] },
   });
   assert.deepEqual(result.tags, [tags[0]]);
+  const legacy = acceptJudgeOutput({ tags }, { turns: dialogue, checks: { side: [{ turn: 0, answered: true }] } });
+  assert.deepEqual(legacy.tags, tags);
 });
 
 test("a failed judge call is stored as not judged", () => {

@@ -6,8 +6,9 @@ import re
 from difflib import SequenceMatcher
 
 from app.kc_blocks import passage_paragraphs
+from app.kc_loop import learner_asks_question_or_background
 
-CHECKS_VERSION = "2"
+CHECKS_VERSION = "3"
 DEFAULT_CHAT_CAP_CENTS = 40
 DEFAULT_TURN_LIMIT = 40
 DEFAULT_STUCK_LIMIT = 8
@@ -585,12 +586,98 @@ def instruction_rows(prompt: str, reply: str) -> list[dict]:
     return rows
 
 
+def _attempt_charged(turn: dict) -> bool | None:
+    loop = turn.get("loop_result")
+    if isinstance(loop, dict) and isinstance(loop.get("attempt_counted"), bool):
+        return loop["attempt_counted"]
+    # Legacy counters describe the current substep and can reset when it changes.
+    before, after = turn.get("attempt_before"), turn.get("attempt_after")
+    if type(before) is not int or type(after) is not int or after < before:
+        return None
+    if not turn.get("substep_before") or not turn.get("block_before"):
+        return None
+    if place_key(turn["block_before"], turn["substep_before"], turn.get("topic_before")) != turn_place(turn):
+        return None
+    return after > before
+
+
+_CANDIDATE = re.compile(r"^(?:i think +)?(?:(?:my|the) answer is |it is |it's |is it |(?:could|would) it be )?")
+_NUMBER_WITH_UNIT = r"[+-]?\d+(?:\.\d+)?(?:\s*(?:%|percent))?"
+_FINAL_RESULT = re.compile(rf"=\s*({_NUMBER_WITH_UNIT})[.!]?$")
+_RESULT_CLAIM = re.compile(rf"^(?:the )?([a-z][a-z '–-]{{0,45}}?) (?:is|was|equals?) ({_NUMBER_WITH_UNIT})$")
+
+
+def _answer_text(value: str) -> str:
+    # Retain mathematical punctuation and units. For example, 6.2 is not 62.
+    return " ".join(value.lower().replace("’", "'").split()).rstrip(".!?")
+
+
+def _answered_despite_side_plan(turn: dict) -> bool:
+    """Only positive evidence can override a planned aside."""
+    if not graded_step(turn) or not loop_accepted(turn) or not _text(turn.get("tutor_reply")) or turn.get("error"):
+        return False
+    raw = _text(turn.get("child_text"))
+    key = _answer_text(_text(turn.get("expected")))
+    candidate = _CANDIDATE.sub("", _answer_text(raw), count=1)
+    if not candidate or learner_asks_question_or_background(candidate):
+        return False
+    # A direct answer, including "Is it …?", can exactly name the saved fact.
+    if candidate == key:
+        return True
+    if learner_asks_question_or_background(raw):
+        return False
+    # In a worked key such as "… = 62.5%", match the stated final quantity
+    # and its subject. Mentioning a term or an intermediate number is insufficient.
+    result = _FINAL_RESULT.search(key)
+    claim = _RESULT_CLAIM.fullmatch(re.split(r",?\s+because\b", candidate, maxsplit=1)[0].strip())
+    if not result or not claim or claim[2] != result[1]:
+        return False
+    task, separator, _ = key.partition(":")
+    subject = re.sub(r"^(?:calculate|compute|find|determine|work out) (?:the )?", "", task)
+    return bool(separator and subject == claim[1])
+
+
+_ASKS_FOR_CLARIFICATION = re.compile(
+    r"^(?:what (?:does|do|is meant by) |how (?:do|can) (?:i|we) |(?:can|could|would) you (?:explain|clarify) )"
+)
+
+
+def side_action_checks(turns: list[dict], false_fails: list | None = None) -> dict:
+    side, misread, answers = [], [], []
+    free_questions = set()
+    for index, turn in enumerate(turns):
+        intent = _text(turn.get("intent"))
+        if intent not in UNSCORED_INTENTS:
+            continue
+        charged = _attempt_charged(turn)
+        if intent in SIDE_INTENTS and charged is True and _answered_despite_side_plan(turn):
+            answers.append(index)
+            continue
+        if charged or (charged is None and graded_step(turn) and loop_accepted(turn)):
+            misread.append(index)
+        if intent in SIDE_INTENTS:
+            loop = turn.get("loop_result")
+            # A free request for a definition may quote the whole short answer.
+            # Without explicit loop evidence keep the original grading diagnostic.
+            words = _text(turn.get("child_text")).strip().rstrip("?!.")
+            if (isinstance(loop, dict) and loop.get("attempt_counted") is False and graded_step(turn)
+                    and not re.search(r"[?!;]|[.]\s|[,]\s*(?:but|and)\b", words)
+                    and _ASKS_FOR_CLARIFICATION.match(_normalize(words))):
+                free_questions.add(index)
+            delivered = bool(_text(turn.get("tutor_reply")))
+            # The saved text proves delivery. Its relevance needs independent judgment.
+            side.append({"turn": index, "reply_delivered": delivered, "answered": None if delivered else False,
+                         "attempt_held": None if charged is None else not charged})
+    result = {"misread": misread, "side": side, "answers_despite_side_plan": answers}
+    if isinstance(false_fails, list):
+        result["false_fails"] = [i for i in false_fails if type(i) is not int or i not in free_questions]
+    return result
+
+
 def automatic_checks(turns: list[dict], *, ended_how: str, response_length: str) -> dict:
     """Score one chat from stored turns. Each turn is a plain dict."""
     false_passes = []
     false_fails = []
-    misread = []
-    side = []
     buttons = []
     leaks = []
     giveaways = []
@@ -614,8 +701,6 @@ def automatic_checks(turns: list[dict], *, ended_how: str, response_length: str)
         intent = _text(turn.get("intent"))
         reply = _text(turn.get("tutor_reply"))
         prompt = _text(turn.get("prompt"))
-        attempt_before = int(turn.get("attempt_before") or 0)
-        attempt_after = int(turn.get("attempt_after") or 0)
         place = turn_place(turn)
         before_topic = turn.get("topic_before") if "topic_before" in turn else None
         before_place = place_key(turn.get("block_before"), turn.get("substep_before"), before_topic)
@@ -665,16 +750,6 @@ def automatic_checks(turns: list[dict], *, ended_how: str, response_length: str)
             if matched and not accepted:
                 false_fails.append(index)
         passed = loop_accepted(turn)
-        if intent in UNSCORED_INTENTS and (passed or attempt_after > attempt_before):
-            misread.append(index)
-        if intent in SIDE_INTENTS:
-            side.append(
-                {
-                    "turn": index,
-                    "answered": bool(reply),
-                    "attempt_held": attempt_after == attempt_before,
-                }
-            )
         if intent == "tell_me_more" and index > 0:
             previous = _text(turns[index - 1].get("tutor_reply"))
             buttons.append({"turn": index, "kind": "tell_me_more", "new_material": not _same(previous, reply)})
@@ -703,9 +778,7 @@ def automatic_checks(turns: list[dict], *, ended_how: str, response_length: str)
         "turns": len(turns),
         "tutor_replies": tutor_replies,
         "false_passes": false_passes,
-        "false_fails": false_fails,
-        "misread": misread,
-        "side": side,
+        **side_action_checks(turns, false_fails),
         "buttons": buttons,
         "leaks": leaks,
         "giveaways": giveaways,
