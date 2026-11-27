@@ -53,6 +53,7 @@ from app.block_score import (
     stored_block_revealed,
     verdict_from_results,
 )
+from app.kc_blocks import corrected_citation, repeats_citation_speakers
 from app.kc_loop import (
     SAY_THAT_AGAIN,
     hold_for_blank_reply,
@@ -4593,6 +4594,15 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         result["loop_result"] = held
         result["loop_decision"] = loop_result_label(held)
         return seal_receipt(db, session, receipt, result)
+    correction = {}
+    supplied = before_state.get("citation_speaker_hint") or {}
+    only_names = False
+    if not blank_reply and _block.get("type") == "passage_ela" and before_state["substep"] == "cite_evidence":
+        correction = corrected_citation(_block, before_state["substep"], answer)
+        only_names = bool(supplied) and repeats_citation_speakers(answer, supplied)
+    if correction or only_names:
+        decision = "stay"
+        body = {**body, "substep_passed": False, "block_complete": False, "rubric_met": [], "misconception": ""}
     reported = body.get("misconception")
     matched = _stored_wrong(node, answer, None if reported is None else str(reported))
     rubric = [str(item).strip() for item in (body.get("rubric_met") or []) if str(item).strip()]
@@ -4661,6 +4671,16 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
             prior_tutor=next((message.content for message in reversed(messages) if message.role == "assistant"), ""),
             learner_ready=bool(body.get("ready_to_move_on")),
         )
+    if correction or only_names:
+        citation = correction or supplied
+        speaker = citation["speaker"]
+        addressee = f" to {citation['listener']}" if citation["listener"] else ""
+        feedback = f"You found the line where {speaker} speaks{addressee}." if correction else "That names who spoke."
+        question = "What do those words mean in this scene?"
+        if resolution.next_block_state.get("substep") == "craft_or_inference":
+            feedback = f'{speaker} says “{citation["quote"]}”{addressee} in this line.'
+            question = _block["data"]["analysis_question"]
+        reply = f"{feedback} {question}"
     if supported and resolution.unit_complete:
         verdict = str((resolution.next_block_state or {}).get("component_verdict") or "") or "unassessed"
         session.verdict = verdict
@@ -4700,6 +4720,10 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     session.step = resolution.next_step
     next_state = dict(resolution.next_block_state or {})
     next_state.pop("component_verdict", None)
+    if correction and next_state.get("substep") == "cite_evidence":
+        next_state["citation_speaker_hint"] = correction
+    elif next_state.get("substep") != "cite_evidence":
+        next_state.pop("citation_speaker_hint", None)
     student = _student_or_404(db, session.student_id)
     if (
         not blank_reply

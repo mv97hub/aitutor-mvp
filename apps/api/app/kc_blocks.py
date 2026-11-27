@@ -139,6 +139,79 @@ def quote_in_text(quote: str, text: str) -> bool:
     return align_quote_to_passage(quote, text) is not None
 
 
+def corrected_citation(block: dict, substep: str, answer: str) -> dict[str, str]:
+    """Correct an explicit attribution only when one labelled voice supplies the quotation."""
+    if block.get("type") != "passage_ela" or substep != "cite_evidence":
+        return {}
+    data = block.get("data") or {}
+    context = data.get("evidence_context")
+    if not context:
+        return {}
+    # Match a single asserted quotation. Leave alternatives, questions about a
+    # speaker and compound interpretations to the contextual reading judgment.
+    line = answer.strip().rstrip(".!?").rstrip()
+    opening = re.search(r"""["“‘']""", line)
+    if not opening:
+        return {}
+    end_quote = {"“": "”", "‘": "’"}.get(opening[0], opening[0])
+    end = line.find(end_quote, opening.end())
+    if end < 0:
+        return {}
+    tail = line[end + 1:].strip()
+    if tail and not re.fullmatch(r"and means [\w '-]+", tail, re.I):
+        return {}
+    attribution = line[:opening.start()].rstrip(" ,;:")
+    quoted = line[opening.end():end]
+    # A familiar child spelling may locate a line. Exact-quotation grading is separate.
+    excerpt = re.sub(r"\bluv\b", "love", _ask_text(quoted))
+    if len(excerpt.split()) < 2 or len(excerpt) > len(data["passage_text"]):
+        return {}
+    source_words = re.compile(r"\b" + r"\W+".join(map(re.escape, excerpt.split())) + r"\b", re.I)
+    voices = set()
+    matches = {}
+    speaker = ""
+    for line in data["passage_text"].splitlines():
+        line = line.strip()
+        if not line:
+            speaker = ""
+        elif line.isupper() and re.fullmatch(r"[\w '’-]+", line):
+            speaker = line.title()
+            voices.add(speaker)
+        elif speaker and (source := source_words.search(line)):
+            matches[speaker] = source[0]
+    if len(matches) != 1:
+        return {}
+    actual, quotation = matches.popitem()
+    names = "|".join(re.escape(name) for name in voices)
+    claimed = re.fullmatch(
+        rf"({names})\s+(?:says|said|(?:(?:says |said )?to|tells|told)\s+(?:{names}))",
+        attribution, re.I,
+    )
+    if not claimed or claimed[1].casefold() == actual.casefold():
+        return {}
+    # Name the listener only when the author states that relationship.
+    relationships = re.findall(rf"\b{re.escape(actual)} (?:replies|speaks|talks) to ({names})\b", context, re.I)
+    cited = {"speaker": actual, "listener": "", "quote": quotation}
+    if len(relationships) == 1:
+        listener = relationships[0]
+        statement = rf"(?:^|[.!]\s+){re.escape(actual)} (?:replies|speaks|talks) to {re.escape(listener)}"
+        if re.search(statement + r"(?=\s*[.!]|$|, in (?:the |a )?)", context, re.I):
+            cited["listener"] = listener
+    return cited
+
+
+def repeats_citation_speakers(answer: str, citation: dict) -> bool:
+    """Repeating the attribution we supplied cannot demonstrate the meaning of a line."""
+    names = set(_ask_text(f"{citation['speaker']} {citation['listener']}").split())
+    words = set(_ask_text(answer).split())
+    role_words = {
+        "and", "by", "found", "i", "is", "it", "its", "line", "listener", "listens", "quote", "replies",
+        "says", "said", "speaker", "speaking", "speaks", "spoke", "spoken", "talking", "talks", "tells",
+        "the", "think", "to", "was", "where", "you",
+    }
+    return bool(words & names) and words <= names | role_words
+
+
 def clean_evidence_quotes(quotes: object, passage: str) -> list[str]:
     """Keep up to three quotes that actually occur in the passage, in passage wording."""
     raw_items: list[str] = []
