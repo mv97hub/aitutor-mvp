@@ -6775,6 +6775,22 @@ button.progress-card {
   vertical-align: top;
 }
 
+.harness-run-identity {
+  display: grid;
+  grid-template-columns: 11em 1fr;
+  gap: 2px 12px;
+  margin: 0;
+}
+
+.harness-run-identity dt {
+  color: #4a6278;
+}
+
+.harness-run-identity dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .harness-grid,
 .harness-grid-scores {
   display: grid;

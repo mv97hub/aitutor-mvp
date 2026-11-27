@@ -1,10 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import { api } from "@/lib/api";
 import { downloadHarnessFile } from "@/lib/harness-file";
 import { runStatusLine } from "@/lib/harness-background";
+import {
+  HARNESS_RUN_IDENTITY_FIELDS,
+  harnessRunIdentity,
+  type HarnessPersonaRef,
+  type HarnessRunPlan,
+} from "@/lib/harness-run-identity";
 
 type ChatRow = {
   id: string;
@@ -21,14 +27,18 @@ type RunRow = {
   status: string;
   chats: number;
   finished: number;
+  created_at?: string | null;
+  plan?: HarnessRunPlan | null;
   totals: { priced_cents?: number; luna_tokens?: number; cost_usd?: string | null };
 };
 
 export function RunsTab({
   selected,
+  personas = [],
   onSelect,
 }: {
   selected: string;
+  personas?: HarnessPersonaRef[];
   onSelect?: (runId: string) => void;
 }) {
   const [runs, setRuns] = useState<RunRow[]>([]);
@@ -140,37 +150,54 @@ export function RunsTab({
           </tr>
         </thead>
         <tbody>
-          {runs.map((run) => (
-            <tr key={run.id}>
-              <td>{run.status}</td>
-              <td>
-                {run.finished}/{run.chats}
-              </td>
-              <td>{run.totals?.cost_usd ?? "—"}</td>
-              <td>{run.totals?.luna_tokens ?? 0}</td>
-              <td className="harness-actions">
-                <button type="button" disabled={driving === run.id} onClick={() => void start(run)}>
-                  {driving === run.id ? "Starting" : "Start"}
-                </button>
-                <button type="button" onClick={() => void act(`/kc/harness/runs/${run.id}/pause`)}>
-                  Pause
-                </button>
-                <button type="button" onClick={() => void stop(run.id)}>
-                  Stop
-                </button>
-                <button type="button" onClick={() => void downloadRun(run.id)}>
-                  Download
-                </button>
-                <button type="button" onClick={() => void act(`/kc/harness/runs/${run.id}`, "DELETE")}>
-                  Delete
-                </button>
-              </td>
-            </tr>
-          ))}
+          {runs.map((run) => {
+            const identity = harnessRunIdentity(run, personas);
+            return (
+              <Fragment key={run.id}>
+                <tr>
+                  <td>{run.status}</td>
+                  <td>
+                    {run.finished}/{run.chats}
+                  </td>
+                  <td>{run.totals?.cost_usd ?? "—"}</td>
+                  <td>{run.totals?.luna_tokens ?? 0}</td>
+                  <td className="harness-actions">
+                    <button type="button" disabled={driving === run.id} onClick={() => void start(run)}>
+                      {driving === run.id ? "Starting" : "Start"}
+                    </button>
+                    <button type="button" onClick={() => void act(`/kc/harness/runs/${run.id}/pause`)}>
+                      Pause
+                    </button>
+                    <button type="button" onClick={() => void stop(run.id)}>
+                      Stop
+                    </button>
+                    <button type="button" onClick={() => void downloadRun(run.id)}>
+                      Download
+                    </button>
+                    <button type="button" onClick={() => void act(`/kc/harness/runs/${run.id}`, "DELETE")}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+                <tr>
+                  <td colSpan={5}>
+                    <dl className="harness-run-identity">
+                      {HARNESS_RUN_IDENTITY_FIELDS.map((field) => (
+                        <Fragment key={field.key}>
+                          <dt>{field.label}</dt>
+                          <dd>{identity[field.key]}</dd>
+                        </Fragment>
+                      ))}
+                    </dl>
+                  </td>
+                </tr>
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
       <p className="help">
-        Start runs the chats on the server. Closing this tab does not stop them. Stop keeps the chats already stored. Start again continues the same chat. Download is one file for the whole run.
+        Start runs the chats on the server. Closing this tab does not stop them. Stop keeps the chats already stored. Start again continues the same chat. Download is one file for the whole run. Course ids go in courses. Each child name goes in child_profiles. Cost limit is cents, the same field as cost_limit. A blank cost limit means the run had no run cap.
       </p>
       <ul>
         {rows.map((chat) => (
