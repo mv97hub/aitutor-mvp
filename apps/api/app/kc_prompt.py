@@ -1603,6 +1603,7 @@ def _ending(
     summary_stay: bool = False,
     side_question: bool = False,
     omit_recap: bool = False,
+    projected_fragile: bool = False,
 ) -> str:
     if summary_stay and side_question and not unit_complete and not course_complete:
         return (
@@ -1630,6 +1631,11 @@ def _ending(
         )
     length = _close_summary_sentence(close_depth, kind)
     close = _close_body()
+    if projected_fragile and (unit_complete or course_complete):
+        close = (
+            f"{close} Projected unit status is fragile because at least one step needed extra help or a reveal. "
+            "Use the fragile wording above and do not call the unit complete."
+        )
     summary = ""
     if not omit_recap:
         summary = (
@@ -1743,6 +1749,12 @@ def _passage_teach_lines(block: dict, substep: str) -> list[str]:
         if quotes:
             lines.append("Verbatim evidence quotes (withhold until pass or reveal):")
             lines.extend(f"- {quote}" for quote in quotes)
+        if data.get("analysis_question"):
+            lines.append(
+                "When the learner satisfies the evidence step (substep_passed=true), "
+                f"move straight to the next step (analysis focus: {data['analysis_focus']}) "
+                f"and ask this exact question: {data['analysis_question']}"
+            )
     elif current == "craft_or_inference":
         lines.append(f"Analysis focus: {data['analysis_focus']}")
         lines.append(f"Question: {data['analysis_question']}")
@@ -1752,6 +1764,11 @@ def _passage_teach_lines(block: dict, substep: str) -> list[str]:
         lines.append(f"Expected central idea (withhold until pass or reveal): {data['expected_central_idea']}")
         if data["distractor_detail"]:
             lines.append(f"Distractor detail (true, but not the central idea): {data['distractor_detail']}")
+        if data.get("evidence_prompt"):
+            lines.append(
+                "When the learner satisfies the central idea (substep_passed=true), "
+                f"move straight to the next step and ask this exact evidence question: {data['evidence_prompt']}"
+            )
     return lines
 
 
@@ -1800,6 +1817,7 @@ def _this_turn(
     ready_check: bool = False,
     ask_goal_now: bool = False,
     prior_tutor: str = "",
+    projected_fragile: bool = False,
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -2048,6 +2066,7 @@ def _this_turn(
                 side_question and stay_on and not learner_wants_recap_elaboration(last_answer)
             ),
             omit_recap=agreement,
+            projected_fragile=projected_fragile,
         )
     )
     elaborating = _summary_elaboration(block, substep, last_answer)
@@ -2197,6 +2216,7 @@ def _decision_sentence(turn: object, label: str) -> str:
     if _turn_reveal_stop(turn):
         body = (
             "This is the last allowed try. Give the answer and say plainly that you gave it. "
+            "Do not praise the learner's reply as right before giving the answer. "
             "Ask no question. Do not open the next step."
         )
         return f"{prefix}stay. Set decision to stay. {body}"
@@ -2224,6 +2244,7 @@ def _decision_sentence(turn: object, label: str) -> str:
         if getattr(turn, "revealed", False):
             body = (
                 "This is the last allowed try. Give the answer and say plainly that you gave it. "
+                "Do not praise the learner's reply as right before giving the answer. "
                 "The reply then moves to the next step of this block."
             )
         elif getattr(turn, "next_substep", "") == "awaiting_why":
@@ -4586,6 +4607,24 @@ def build_kc_prompt(
         and forecast.chosen is not None
         and forecast.chosen.unit_complete
     )
+    prior_fragile = any(
+        isinstance(item, dict)
+        and (
+            str(item.get("verdict") or "").strip() == "fragile"
+            or str(item.get("outcome") or "").strip() in {"fragile", "revealed"}
+            or item.get("revealed") is True
+        )
+        for item in (block_results or [])
+    )
+    current_fragile = bool(
+        ends_unit
+        and (
+            int(attempts or 0) > 0
+            or int(reveals or 0) > 0
+            or bool(forecast.chosen and forecast.chosen.revealed)
+        )
+    )
+    projected_fragile = bool((unit_complete or ends_unit) and (prior_fragile or current_fragile))
     # A correct pick can open a typed reason even when the usual next step is the summary.
     if btype == "mcq" and substep == "choice" and forecast.chosen and forecast.chosen.next_substep == "awaiting_why":
         widget_on = False
@@ -4662,6 +4701,7 @@ def build_kc_prompt(
                     ready_check=ready_check,
                     ask_goal_now=ask_goal_now,
                     prior_tutor=prior_tutor,
+                    projected_fragile=projected_fragile,
                 ),
             ),
             (

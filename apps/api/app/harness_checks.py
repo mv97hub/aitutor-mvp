@@ -101,8 +101,9 @@ WRONG_INTENTS = {
     "guess",
     "wrong_choice",
 }
+# `_gives_up("idk")` is intentionally counted as a give-up attempt in `kc_loop.py`,
+# so "idk" is not listed as an unscored side intent.
 UNSCORED_INTENTS = {
-    "idk",
     "say_yes",
     "echo",
     "off_topic",
@@ -578,11 +579,44 @@ def _long_word_share(text: str) -> float:
     return long / len(words)
 
 
-def instruction_rows(prompt: str, reply: str) -> list[dict]:
+_CONDITIONAL_NO_QUESTION_PREFIXES = (
+    "if correct:",
+    "if not:",
+    "when this turn reveals",
+    "summary reply: if",
+    "close contract: if",
+    "close contract: when",
+)
+
+
+def _ask_no_question_active(prompt: str, phrases: tuple[str, ...], loop_result: dict | None = None) -> bool:
+    """Only enforce ask_no_question when unconditional or when a conditional close branch actually fired."""
+    matched_lines = [
+        line.strip().lower()
+        for line in (prompt or "").splitlines()
+        if any(phrase in line.lower() for phrase in phrases)
+    ]
+    if not matched_lines:
+        return False
+    unconditional = any(
+        not line.startswith(_CONDITIONAL_NO_QUESTION_PREFIXES) and "if this unit" not in line
+        for line in matched_lines
+    )
+    if unconditional:
+        return True
+    if loop_result is None:
+        return True
+    return bool(loop_result.get("closed")) or bool(loop_result.get("ended_unit"))
+
+
+def instruction_rows(prompt: str, reply: str, *, loop_result: dict | None = None) -> list[dict]:
     folded = prompt.lower()
     rows = []
     for key, phrases in KEY_INSTRUCTIONS:
-        present = any(phrase in folded for phrase in phrases)
+        if key == "ask_no_question":
+            present = _ask_no_question_active(prompt, phrases, loop_result)
+        else:
+            present = any(phrase in folded for phrase in phrases)
         obeyed = True
         if present and key == "ask_no_question":
             obeyed = "?" not in reply
@@ -738,7 +772,11 @@ def automatic_checks(turns: list[dict], *, ended_how: str, response_length: str)
             over_sentence_cap = response_length == "bite_sized" and sum(bool(part.strip()) for part in sentences) > 2
             if len(coaching.strip()) > limit or over_sentence_cap:
                 too_long.append(index)
-            if _LEAK.search(reply):
+            leak_text = reply
+            course_title = _text(turn.get("course_title"))
+            if course_title:
+                leak_text = re.sub(re.escape(course_title), "", leak_text, flags=re.I)
+            if _LEAK.search(leak_text):
                 leaks.append(index)
             if _LINK.search(reply):
                 links.append(index)
@@ -768,7 +806,8 @@ def automatic_checks(turns: list[dict], *, ended_how: str, response_length: str)
         expected = _text(turn.get("expected"))
         if expected and expected.lower() in reply.lower() and not passed and intent not in {"move_on", "tell_me_more"}:
             giveaways.append(index)
-        for row in instruction_rows(prompt, reply):
+        loop_res = turn.get("loop_result") if isinstance(turn.get("loop_result"), dict) else None
+        for row in instruction_rows(prompt, reply, loop_result=loop_res):
             bucket = instruction_hits.setdefault(row["id"], {"present": 0, "obeyed": 0})
             if row["present"]:
                 bucket["present"] += 1
