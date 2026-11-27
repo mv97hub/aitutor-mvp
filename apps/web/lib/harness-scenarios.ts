@@ -79,7 +79,7 @@ function riverPractice(input: ScenarioInput) {
   if (!input.lastScenarioLine) {
     const visible = [input.passage, ...tutorLines(input)].join(" ");
     if (!/rivers carry fresh water from the hills to the sea/i.test(visible)) return;
-    if (/central idea|main idea|mostly about|main point/i.test(prompt(input))) return typedOnce(input, EXAMPLE_REQUEST);
+    if (/central idea|main idea|big idea|mostly about|main point/i.test(prompt(input))) return typedOnce(input, EXAMPLE_REQUEST);
     return;
   }
   if (input.lastScenarioLine !== EXAMPLE_REQUEST) return;

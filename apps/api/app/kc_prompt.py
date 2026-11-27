@@ -1300,18 +1300,24 @@ def _typed_side_request(
     answer: str,
     state: dict | None,
     cfg: dict | None,
+    *,
+    prior_tutor: str = "",
 ) -> bool:
     """A question, "tell me", or a side story that is not a goal attempt."""
     if not str(answer or "").strip():
         return False
-    from app.kc_loop import unscored_side_request
+    from app.kc_loop import stall_turn_capped, unscored_side_request
 
+    stored = state if isinstance(state, dict) else {}
+    if stall_turn_capped(block, substep, answer, stored, cfg, prior_tutor=prior_tutor):
+        return False
     return unscored_side_request(
         block,
         substep,
         answer,
-        state if isinstance(state, dict) else {},
+        stored,
         cfg,
+        prior_tutor=prior_tutor,
     )
 
 
@@ -1402,6 +1408,7 @@ def _prompts_side_question(
     opening: bool,
     cfg: dict | None = None,
     state: dict | None = None,
+    prior_tutor: str = "",
 ) -> bool:
     """True when this turn should answer a side question and then re-ask.
 
@@ -1409,7 +1416,7 @@ def _prompts_side_question(
     """
     if str(block.get("type") or "") == "explanation":
         return False
-    from app.kc_loop import summary_ready_signal
+    from app.kc_loop import learner_side_question, stall_turn_capped, summary_ready_signal
 
     if str(substep or "") == "summary_check" and summary_ready_signal(last_answer):
         return False
@@ -1422,8 +1429,8 @@ def _prompts_side_question(
         state=state,
     ) in _GOAL_START_HOLDS | {"cap"}:
         return False
-    from app.kc_loop import learner_side_question
-
+    if stall_turn_capped(block, substep, last_answer, state, cfg, prior_tutor=prior_tutor):
+        return False
     return learner_side_question(last_answer, block, substep)
 
 
@@ -1784,6 +1791,7 @@ def _this_turn(
     forecast: object | None = None,
     ready_check: bool = False,
     ask_goal_now: bool = False,
+    prior_tutor: str = "",
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -1811,6 +1819,7 @@ def _this_turn(
         opening=opening,
         cfg=cfg,
         state=active_block_state,
+        prior_tutor=prior_tutor,
     )
     if ask_goal_now:
         lines.append(
@@ -1862,7 +1871,7 @@ def _this_turn(
             "For a partial answer, acknowledge what is correct and ask only for the missing part. "
             "Only repeat the active question if no part of the answer was usable."
         )
-    side = _typed_side_request(block, substep, last_answer, active_block_state, cfg)
+    side = _typed_side_request(block, substep, last_answer, active_block_state, cfg, prior_tutor=prior_tutor)
     stay_on = stay_on_course_enabled(cfg)
     if goal_start in {"aside", "cap"}:
         pass
@@ -3352,6 +3361,7 @@ def _how_to_teach(
     forecast: object | None = None,
     ask_goal_now: bool = False,
     passage_example_turn: str = "",
+    prior_tutor: str = "",
 ) -> list[str]:
     if _agreement_close(summary_begin, worked_close, last_answer):
         # The close sentence is a this-turn branch. The section underneath stays stable.
@@ -3440,7 +3450,7 @@ def _how_to_teach(
         stay_on_course_enabled,
     )
 
-    side = _typed_side_request(block, substep, last_answer, active_block_state, cfg)
+    side = _typed_side_request(block, substep, last_answer, active_block_state, cfg, prior_tutor=prior_tutor)
     stay_on = stay_on_course_enabled(cfg)
     aside = explanation_side_remark(block, last_answer, active_block_state, cfg)
     restated = explanation_restates_topic(block, active_block_state, last_answer)
@@ -4514,13 +4524,16 @@ def build_kc_prompt(
         nxt_data = nxt.get("data") if isinstance(nxt.get("data"), dict) else {}
         if str(nxt.get("type") or "") == "mcq" and str(nxt_data.get("mode") or "static") == "dynamic":
             needs_dynamic_mcq = True
-    side_request = _typed_side_request(active_block, substep, last_answer or "", state_dict, cfg)
+    prior_tutor = _previous_tutor_text(last_messages or "", last_answer or "")
+    side_request = _typed_side_request(
+        active_block, substep, last_answer or "", state_dict, cfg, prior_tutor=prior_tutor
+    )
     course_stay = stay_on_course_enabled(cfg)
     aside_help = bool(
         course_stay
         and btype == "topic_goal"
         and substep == "explain"
-        and unanswered_side_turn(active_block, substep, last_answer or "", state_dict, cfg)
+        and unanswered_side_turn(active_block, substep, last_answer or "", state_dict, cfg, prior_tutor=prior_tutor)
     )
     passage_example_turn = ""
     if short_passage_example_requested(active_block, last_answer or "", cp["response_length"], opening=opening):
@@ -4535,12 +4548,12 @@ def build_kc_prompt(
             opening=opening,
             cfg=cfg,
             state=state_dict,
+            prior_tutor=prior_tutor,
         )
         and course_stay
     )
     from app.kc_loop import forecast_this_turn
 
-    prior_tutor = _previous_tutor_text(last_messages or "", last_answer or "")
     forecast = forecast_this_turn(
         blocks=blocks,
         step=index,
@@ -4639,6 +4652,7 @@ def build_kc_prompt(
                     forecast=forecast,
                     ready_check=ready_check,
                     ask_goal_now=ask_goal_now,
+                    prior_tutor=prior_tutor,
                 ),
             ),
             (
@@ -4700,6 +4714,7 @@ def build_kc_prompt(
                     has_next=has_next,
                     forecast=forecast,
                     ask_goal_now=ask_goal_now,
+                    prior_tutor=prior_tutor,
                 ),
             ),
             ("How to sound", _how_to_sound(profile=profile, student=student, turn_kind=turn_kind)),
