@@ -355,3 +355,34 @@ export function blockStepDivider(
   if (step <= previousStep) return null;
   return `Step ${previousStep + 1} complete · Up next: ${heading}`;
 }
+
+type StepLine = { role: string; step?: number };
+
+/**
+ * A chip sits above the first tutor line of a step.
+ * A learner line can already carry the next step before the reply that finished the old one is saved.
+ * That line does not open the chip. The chip waits for the tutor line of the new step.
+ */
+export function lessonStepDivider(
+  messages: StepLine[],
+  index: number,
+  blocks?: { index: number; type_label?: string; short_title?: string }[],
+  totalBlocks?: number,
+): string | null {
+  const message = messages[index];
+  if (!message) return null;
+  if (message.role !== "assistant") {
+    if (index !== 0) return null;
+    return blockStepDivider(undefined, message.step ?? 0, blocks, totalBlocks);
+  }
+  if (index === 0) return blockStepDivider(undefined, message.step ?? 0, blocks, totalBlocks);
+  let previousStep: number | undefined;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const earlier = messages[cursor];
+    if (earlier?.role === "assistant") {
+      previousStep = earlier.step;
+      break;
+    }
+  }
+  return blockStepDivider(previousStep, message.step, blocks, totalBlocks);
+}

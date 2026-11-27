@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   CHILD_STATUSES,
   blockStepDivider,
+  lessonStepDivider,
   childWriteBody,
   displayChildStatus,
   explorerFor,
@@ -114,6 +115,46 @@ test("a step divider names the finished step and the one that is opening", () =>
     "Step 5 complete · Up next: Step 6 of 6 — Retrieval check — Rise of Julius Caesar",
   );
   assert.equal(blockStepDivider(undefined, 0, [{ index: 0, type_label: "Topic + Goal" }], 6), "Step 1 of 6 — Topic + Goal");
+});
+
+test("a step chip is drawn once, after the reply that finished the step", () => {
+  const blocks = [
+    { index: 0, type_label: "Close reading", short_title: "Romeo" },
+    { index: 1, type_label: "Multiple choice", short_title: "" },
+    { index: 2, type_label: "Retrieval check", short_title: "" },
+  ];
+  const messages = [
+    { role: "assistant", step: 0 },
+    { role: "user", step: 1 },
+    { role: "assistant", step: 0 },
+    { role: "assistant", step: 1 },
+    { role: "user", step: 2 },
+    { role: "assistant", step: 1 },
+    { role: "assistant", step: 2 },
+  ];
+  const chips = messages.map((_, index) => lessonStepDivider(messages, index, blocks, 3));
+  assert.equal(chips[0], "Step 1 of 3 — Close reading — Romeo");
+  assert.equal(chips[1], null);
+  assert.equal(chips[2], null);
+  assert.equal(chips[3], "Step 1 complete · Up next: Step 2 of 3 — Multiple choice");
+  assert.equal(chips[4], null);
+  assert.equal(chips[5], null);
+  assert.equal(chips[6], "Step 2 complete · Up next: Step 3 of 3 — Retrieval check");
+  const waiting = [
+    { role: "assistant", step: 0 },
+    { role: "user", step: 1 },
+  ];
+  assert.equal(lessonStepDivider(waiting, 1, blocks, 3), null);
+  const saved = [
+    { role: "assistant", step: 0 },
+    { role: "user", step: 0 },
+    { role: "assistant", step: 0 },
+    { role: "assistant", step: 1 },
+  ];
+  assert.deepEqual(
+    saved.map((_, index) => lessonStepDivider(saved, index, blocks, 3)),
+    [chips[0], null, null, chips[3]],
+  );
 });
 
 test("an icon click keeps the chosen preset after the picker clears the image", () => {

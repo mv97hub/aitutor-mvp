@@ -11,7 +11,7 @@ import type { KcTutorSession } from "@/lib/kc";
 import { committedButtons } from "@/lib/committed-actions";
 import { goalStartActions } from "@/lib/kc-goal-start";
 import { choiceShowing, lessonComposerVisible, quizFor } from "@/lib/learn-mobile";
-import { blockStepDivider, starBurst } from "@/lib/learn";
+import { lessonStepDivider, starBurst } from "@/lib/learn";
 import { getTutorAvatarPreset } from "@/lib/tutor-avatars";
 import type { TutorProfile } from "@/lib/types";
 
@@ -274,10 +274,9 @@ export function KcLesson({
             </article>
           ) : null}
           {session.messages.map((message, index) => {
-            const previous = index > 0 ? session.messages[index - 1] : undefined;
-            const divider = blockStepDivider(
-              index === 0 ? undefined : previous?.step,
-              index === 0 ? (message.step ?? 0) : message.step,
+            const divider = lessonStepDivider(
+              session.messages,
+              index,
               session.block_progress,
               session.total_blocks,
             );

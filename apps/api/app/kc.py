@@ -4820,7 +4820,8 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         _close_finished_walk(db, session, node, reply, body, run_graph2=False)
     session.updated_at = _now()
     if pending:
-        _add_message(db, session, "user", pending)
+        # The advance is already on session.step. This line still belongs to the step the reply finishes.
+        _add_message(db, session, "user", pending, step=index)
     _add_message(db, session, "assistant", reply, step=index)
     state = _state_row(db, student, node)
     settled = _state_settled(state)
