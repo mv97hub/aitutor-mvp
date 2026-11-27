@@ -14,43 +14,28 @@ from app.harness import (
     answer_key,
     cancel_run,
     claim_chat,
-    compare,
     create_persona,
     create_run,
-    create_suite,
     delete_run,
     dispatch_harness_turn,
-    download_chat,
     download_run,
     ensure_fixture,
-    findings_for_run,
     finish_chat,
     get_chat,
     get_run,
     list_chats,
     list_personas,
-    list_recommendations,
     list_runs,
-    list_suites,
     pause_run,
     pending_answer_result,
-    plan_preview,
     prepare_harness_turn,
     record_turn,
     resume_run,
     run_again,
-    run_report,
-    save_evaluation,
-    save_hand_scores,
-    save_recommendations,
-    set_baseline,
-    trial_profile,
     trim_prompts,
     update_persona,
-    update_recommendation,
 )
 from app.harness_agent import agent_run_view
-from app.harness_prompt_source import draft_context
 
 router = APIRouter()
 
@@ -73,11 +58,6 @@ def patch_persona(persona_id: uuid.UUID, body: dict, db: Session = Depends(get_d
 @router.post("/kc/harness/personas/starter")
 def post_starter(db: Session = Depends(get_db)) -> list[dict]:
     return add_starter_set(db)
-
-
-@router.post("/kc/harness/plan-preview")
-def post_preview(body: dict, db: Session = Depends(get_db)) -> dict:
-    return plan_preview(db, body)
 
 
 @router.post("/kc/harness/fixture")
@@ -160,31 +140,6 @@ def get_run_download(run_id: uuid.UUID, db: Session = Depends(get_db)) -> Respon
     return _markdown(download_run(db, run_id), f"harness-run-{run_id}.md")
 
 
-@router.get("/kc/harness/chats/{chat_id}/download")
-def get_chat_download(chat_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
-    return _markdown(download_chat(db, chat_id), f"harness-chat-{chat_id}.md")
-
-
-@router.get("/kc/harness/runs/{run_id}/report")
-def get_report(run_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
-    return run_report(db, run_id)
-
-
-@router.get("/kc/harness/runs/{run_id}/findings")
-def get_findings(run_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
-    return findings_for_run(db, run_id)
-
-
-@router.get("/kc/harness/runs/{run_id}/draft-context")
-def get_draft_context(run_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
-    return draft_context(db, run_id)
-
-
-@router.post("/kc/harness/compare")
-def post_compare(body: dict, db: Session = Depends(get_db)) -> dict:
-    return compare(db, uuid.UUID(str(body.get("left"))), uuid.UUID(str(body.get("right"))))
-
-
 @router.get("/kc/harness/chats")
 def get_chats(db: Session = Depends(get_db)) -> list[dict]:
     return list_chats(db)
@@ -223,48 +178,3 @@ def post_turn(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> 
 @router.post("/kc/harness/chats/{chat_id}/finish")
 def post_finish(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
     return finish_chat(db, chat_id, str(body.get("reason") or "completed"), body.get("claim_generation"))
-
-
-@router.post("/kc/harness/chats/{chat_id}/evaluations")
-def post_evaluation(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
-    return save_evaluation(db, chat_id, body)
-
-
-@router.post("/kc/harness/chats/{chat_id}/hand-scores")
-def post_hand_scores(chat_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
-    return save_hand_scores(db, chat_id, body)
-
-
-@router.get("/kc/harness/suites")
-def get_suites(db: Session = Depends(get_db)) -> list[dict]:
-    return list_suites(db)
-
-
-@router.post("/kc/harness/suites")
-def post_suite(body: dict, db: Session = Depends(get_db)) -> dict:
-    return create_suite(db, body)
-
-
-@router.post("/kc/harness/suites/{suite_id}/baseline")
-def post_baseline(suite_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
-    return set_baseline(db, suite_id, uuid.UUID(str(body.get("run_id"))))
-
-
-@router.get("/kc/harness/recommendations")
-def get_recommendations(run_id: uuid.UUID | None = None, db: Session = Depends(get_db)) -> list[dict]:
-    return list_recommendations(db, run_id=run_id)
-
-
-@router.post("/kc/harness/recommendations")
-def post_recommendations(body: dict, db: Session = Depends(get_db)) -> list[dict]:
-    return save_recommendations(db, body)
-
-
-@router.patch("/kc/harness/recommendations/{card_id}")
-def patch_recommendation(card_id: uuid.UUID, body: dict, db: Session = Depends(get_db)) -> dict:
-    return update_recommendation(db, card_id, body)
-
-
-@router.post("/kc/harness/recommendations/{card_id}/trial")
-def post_trial(card_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
-    return trial_profile(db, card_id)

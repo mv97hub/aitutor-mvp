@@ -5,7 +5,7 @@ import json
 import pytest
 
 from app.database import SessionLocal
-from app.harness import _chat_for_report, download_chat, get_chat
+from app.harness import download_chat, get_chat
 from app.harness_checks import automatic_checks
 from app.models import HarnessChat, HarnessEvaluation, HarnessRun, HarnessTurn
 
@@ -87,8 +87,7 @@ def test_historical_views_use_the_saved_turn_evidence_and_preserve_the_original_
         assert checks["false_fails"] == [2]
         assert checks["instruction_history"] == "original"
         assert detail["turns"][0]["intent"] == "on_topic_question"
-        assert _chat_for_report(db, chat)["checks"] == checks
-        section = download_chat(db, chat.id).split("### Automatic checks")[1].split("### Judge scores")[0]
+        section = download_chat(db, chat.id).split("### Automatic checks")[1].split("### Block outcomes")[0]
         assert json.loads(section.strip()) == checks
         db.expire_all()
         assert automatic.checks == original and judged.tags == [{"tag": "ignored_question", "turn": 1}]

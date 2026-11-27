@@ -38,22 +38,6 @@ from app.harness_checks import (
     stuck_after_turn,
 )
 from app.harness_personas import TRAIT_KEYS, starter_children
-from app.harness_report import (
-    JUDGE_DIMENSIONS,
-    PARTIAL_NOTES,
-    block_label,
-    compare_runs,
-    findings,
-    judge_status,
-    kept_run_ids,
-    report_judge,
-    reported_child_realism,
-    reported_scores,
-    regression_band,
-    rollup,
-    run_summary,
-    stuck_nudge_rows,
-)
 from app.harness_scenario_fixture import SCENARIO_FIXTURE_CODE, scenario_fixture_document
 from app.kc_blocks import passage_paragraphs
 from app.kc import course_out, load_targets, mark_ready, open_session
@@ -279,7 +263,6 @@ def normalize_plan(raw: dict) -> dict:
         "component_ids": [str(item) for item in raw.get("component_ids") or []],
         "tutor_models": _models(raw.get("tutor_models") or raw.get("tutor_model"), label="Tutor model"),
         "child_model": _one_model(raw.get("child_model"), default="gpt-4.1-mini", label="Child model"),
-        "judge_model": _one_model(raw.get("judge_model"), default="gpt-6.1-sol", label="Judge model"),
         "behavior": behavior,
         "tutor_profile_ids": [str(item) for item in raw.get("tutor_profile_ids") or [] if str(item).strip()],
         "iterations": iterations,
@@ -368,36 +351,6 @@ def _persona_rows(db: Session, plan: dict) -> list[HarnessPersona]:
     return ordered
 
 
-def plan_preview(db: Session, raw: dict) -> dict:
-    plan = normalize_plan(raw)
-    if not plan["tutor_models"]:
-        raise HTTPException(status_code=422, detail="Choose a tutor model.")
-    children = _persona_rows(db, plan)
-    components = _components(db, plan)
-    profiles = _profiles(db, plan)
-    chats = matrix_slots(plan, children=len(children), components=len(components), profiles=len(profiles))
-    same = plan["child_model"] in plan["tutor_models"]
-    uses_luna = LUNA_MODEL in plan["tutor_models"] or plan["child_model"] == LUNA_MODEL or plan["judge_model"] == LUNA_MODEL
-    boundary = any(int((row.traits or {}).get("boundary") or 0) >= 4 or row.name == "AI_Child12" for row in children)
-    return {
-        "chats": chats,
-        "children": len(children),
-        "components": len(components),
-        "tutor_models": plan["tutor_models"],
-        "profiles": len(profiles),
-        "iterations": plan["iterations"],
-        "same_model": same,
-        "uses_luna": uses_luna,
-        "luna_priced": False,
-        "chat_cap_cents": plan["chat_cap_cents"],
-        "run_cap_cents": plan["run_cap_cents"],
-        "luna_token_ceiling": plan["luna_token_ceiling"],
-        "boundary_tester": boundary,
-        "estimate_note": (
-            "The dollar estimate uses the published price table. "
-            "gpt-6-luna has no published price, so its calls are blank and stop at the token ceiling."
-        ),
-    }
 
 
 def scenario_seed(run_seed: int, persona, course, component, model: str, profile: str,
@@ -486,7 +439,7 @@ def create_run(db: Session, raw: dict, *, suite_id: uuid.UUID | None = None, see
                                 component_id=node.id,
                                 tutor_model=model,
                                 child_model=plan["child_model"],
-                                judge_model=plan["judge_model"],
+                                judge_model="",
                                 tutor_profile_id=profile.id,
                                 settings_copy={},
                                 seed=int(seed),
@@ -1454,79 +1407,8 @@ def finish_chat(db: Session, chat_id: uuid.UUID, reason: str, claim_generation: 
     return chat_detail(db, chat)
 
 
-def save_evaluation(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
-    chat = _locked_chat(db, chat_id)
-    scores = body.get("scores") if isinstance(body.get("scores"), list) else []
-    tags = body.get("tags") if isinstance(body.get("tags"), list) else []
-    usage = _judge_usage(body.get("usage"))
-    realism = body.get("child_realism")
-    error = str(body.get("error") or "").strip()[:500]
-    payload = {"items": scores, "usage": usage}
-    if error:
-        payload["error"] = error
-    db.add(
-        HarnessEvaluation(
-            chat_id=chat.id,
-            kind="judged",
-            checks={},
-            scores=payload,
-            tags=tags,
-            rubric_version=str(body.get("rubric_version") or "1")[:40],
-            judge_model=str(body.get("judge_model") or chat.judge_model or "")[:120],
-            child_realism=int(realism) if realism is not None else None,
-        )
-    )
-    db.flush()  # Include this evaluation's usage in the query that prices the chat.
-    _refresh_chat_cost(db, chat)
-    run = db.get(HarnessRun, chat.run_id)
-    if run is not None:
-        _refresh_totals(db, run)
-    db.flush()
-    return chat_detail(db, chat)
 
 
-def save_hand_scores(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
-    """Store a person's 1-to-5 on the judge dimensions. Empty until they enter one."""
-    chat = db.get(HarnessChat, chat_id)
-    if chat is None:
-        raise HTTPException(status_code=404, detail="That chat was not found.")
-    items = []
-    seen: set[str] = set()
-    for row in body.get("scores") or []:
-        if not isinstance(row, dict):
-            continue
-        dimension = str(row.get("dimension") or "")
-        if dimension not in JUDGE_DIMENSIONS or dimension in seen:
-            continue
-        try:
-            score = int(row.get("score"))
-        except (TypeError, ValueError):
-            continue
-        if score < 1 or score > 5:
-            continue
-        seen.add(dimension)
-        items.append({"dimension": dimension, "score": score})
-    db.execute(
-        delete(HarnessEvaluation).where(
-            HarnessEvaluation.chat_id == chat.id,
-            HarnessEvaluation.kind == "hand",
-        )
-    )
-    if items:
-        db.add(
-            HarnessEvaluation(
-                chat_id=chat.id,
-                kind="hand",
-                checks={},
-                scores={"items": items},
-                tags=[],
-                rubric_version="2",
-                judge_model="",
-                child_realism=None,
-            )
-        )
-    db.flush()
-    return chat_detail(db, chat)
 
 
 def _evaluation_out(row: HarnessEvaluation) -> dict:
@@ -1573,12 +1455,6 @@ def _saved_evaluations(db: Session, chat: HarnessChat, turns: list[HarnessTurn])
 def chat_detail(db: Session, chat: HarnessChat, *, include_run_cap: bool = True) -> dict:
     turns = _saved_turns(db, chat.id)
     reviews = _saved_evaluations(db, chat, turns)
-    judged = report_judge(reviews)
-    if judged:
-        judged["selected_for_report"] = True
-        judged["reported_scores"] = reported_scores(judged)
-        judged["reported_child_realism"] = reported_child_realism(judged)
-        judged["partial_note"] = PARTIAL_NOTES.get(judge_status(judged), "")
     flags = []
     if chat.session_id is not None:
         events = db.scalars(select(AiSafetyEvent).where(AiSafetyEvent.kc_session_id == chat.session_id)).all()
@@ -1757,201 +1633,10 @@ def _block_score(db: Session, chat: HarnessChat) -> tuple[int | None, list[dict]
     return session.score, outcomes
 
 
-def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
-    turns = _saved_turns(db, chat.id)
-    reviews = _saved_evaluations(db, chat, turns)
-    checks = next((row["checks"] for row in reversed(reviews) if row["kind"] == "automatic"), {})
-    judged = report_judge(reviews)
-    scores = judged.get("scores", [])
-    tags = judged.get("tags", [])
-    snapshot = chat.child_snapshot if isinstance(chat.child_snapshot, dict) else {}
-    settings = chat.settings_copy if isinstance(chat.settings_copy, dict) else {}
-    block_types = []
-    blocks_by_id: dict[str, str] = {}
-    for block in settings.get("blocks") or []:
-        if isinstance(block, dict) and block.get("type"):
-            block_types.append(str(block["type"]))
-            if block.get("id"):
-                blocks_by_id[str(block["id"])] = str(block["type"])
-
-    def turn_label(turn: HarnessTurn) -> str:
-        after = turn.session_after if isinstance(turn.session_after, dict) else {}
-        typed = str(after.get("block_type") or "")
-        if not typed:
-            typed = blocks_by_id.get(str(after.get("block_id") or ""), "")
-        return block_label(typed)
-
-    false_pass_blocks: list[str] = []
-    stuck_blocks: list[str] = []
-    turn_blocks: list[str] = []
-    last_place = ""
-    same_step = 0
-    for turn in turns:
-        label = turn_label(turn)
-        if label and label not in turn_blocks:
-            turn_blocks.append(label)
-        after = turn.session_after if isinstance(turn.session_after, dict) else {}
-        topic = after.get("topic_index") if "topic_index" in after else None
-        place = place_key(after.get("block_id"), after.get("substep"), topic)
-        stuck_label = label
-        if label and str(after.get("substep") or "") == "explain_topic" and topic is not None and topic != "":
-            try:
-                stuck_label = f"{label}, topic {int(topic) + 1}"
-            except (TypeError, ValueError):
-                stuck_label = label
-        if place == last_place:
-            same_step += 1
-            if same_step >= 8 and stuck_label and stuck_label not in stuck_blocks:
-                stuck_blocks.append(stuck_label)
-        else:
-            same_step = 1
-            last_place = place
-    for index in checks.get("false_passes") or []:
-        if isinstance(index, int) and 0 <= index < len(turns):
-            label = turn_label(turns[index])
-            if label and label not in false_pass_blocks:
-                false_pass_blocks.append(label)
-    nudge_turns = []
-    for turn in turns:
-        after = turn.session_after if isinstance(turn.session_after, dict) else {}
-        nudge_turns.append(
-            {
-                "intent": turn.intent,
-                "turn": turn.seq,
-                "child_text": turn.child_text,
-                "tutor_reply": str(after.get("tutor_reply") or ""),
-                "block_id": str(after.get("block_id") or ""),
-                "substep": str(after.get("substep") or ""),
-                "block_type": turn_label(turn),
-            }
-        )
-    tag_blocks: dict[str, str] = {}
-    for tag in tags:
-        if not isinstance(tag, dict):
-            continue
-        try:
-            index = int(tag.get("turn") or 0)
-        except (TypeError, ValueError):
-            index = 0
-        if 0 <= index < len(turns):
-            label = turn_label(turns[index])
-            if label:
-                tag_blocks[str(tag.get("tag") or "")] = label
-    report_turns = []
-    for turn in turns:
-        after = turn.session_after if isinstance(turn.session_after, dict) else {}
-        before = turn.session_before if isinstance(turn.session_before, dict) else {}
-        typed = str(after.get("block_type") or "")
-        if not typed:
-            typed = blocks_by_id.get(str(after.get("block_id") or ""), "")
-        report_turns.append(
-            {
-                "seq": turn.seq,
-                "intent": turn.intent,
-                "child_text": turn.child_text,
-                "tutor_reply": str(after.get("tutor_reply") or ""),
-                "block_type": typed,
-                "block_label": block_label(typed),
-                "block_id": str(after.get("block_id") or ""),
-                "block_before": str(before.get("block_id") or ""),
-                "block_type_before": str(before.get("block_type") or blocks_by_id.get(str(before.get("block_id") or ""), "")),
-                "planned_intent": before.get("planned_intent"),
-                "scenario_exercised": before.get("scenario_exercised"),
-                "simulation_role": before.get("simulation_role"),
-                "learner_observation": after.get("learner_observation"),
-                "choice_fallback": before.get("choice_fallback") is True,
-                "substep": str(after.get("substep") or ""),
-                "substep_before": str(before.get("substep") or ""),
-                "passed": bool(after.get("passed")),
-                "error": str(after.get("error") or ""),
-                "expected": str(before.get("expected") or ""),
-                "loop_result": after.get("loop_result") if isinstance(after.get("loop_result"), dict) else {},
-            }
-        )
-        if "topic_index" in after:
-            report_turns[-1]["topic_index"] = after.get("topic_index")
-    goal = db.get(KcGoal, chat.course_id) if chat.course_id else None
-    node = db.get(KcNode, chat.component_id) if chat.component_id else None
-    component_score, block_outcomes = _block_score(db, chat) if chat.session_id is not None else (None, [])
-    return {
-        "id": str(chat.id),
-        "persona_name": snapshot.get("name") or "",
-        "simulation_role": snapshot.get("simulation_role"),
-        "seed_profile": snapshot.get("seed_profile") or chat.tutor_profile_id,
-        "paired_seeds": snapshot.get("paired_seeds") is True,
-        "scenario": snapshot.get("scenario"),
-        "traits": snapshot.get("traits") or {},
-        "course_title": goal.title if goal is not None else "",
-        "component_title": node.title if node is not None else "",
-        "component_id": str(chat.component_id or ""),
-        "block_types": block_types,
-        "false_pass_blocks": false_pass_blocks,
-        "stuck_blocks": stuck_blocks,
-        "stuck_nudges": stuck_nudge_rows(nudge_turns) if chat.ended_how == "stuck" else [],
-        "turn_blocks": turn_blocks,
-        "tag_blocks": tag_blocks,
-        "tutor_model": chat.tutor_model,
-        "profile_name": settings.get("profile_name") or chat.tutor_profile_id or "",
-        "ended_how": chat.ended_how,
-        "cost_usd": chat.cost_usd,
-        "checks": checks,
-        "scores": scores,
-        "tags": tags,
-        "child_realism": judged.get("child_realism"),
-        "judge_error": judged.get("error", ""),
-        "component_score": component_score,
-        "block_outcomes": block_outcomes,
-        "seed": chat.seed,
-        "iteration": chat.iteration,
-        "turn_intents": [turn.intent for turn in turns],
-        "report_turns": report_turns,
-    }
 
 
-def run_report(db: Session, run_id: uuid.UUID) -> dict:
-    run = _run_or_404(db, run_id)
-    chats = db.scalars(select(HarnessChat).where(HarnessChat.run_id == run.id)).all()
-    rows = [_chat_for_report(db, chat) for chat in chats if chat.status in {"completed", "failed", "cancelled"}]
-    summary = run_summary(rows)
-    slim = [{key: value for key, value in row.items() if key != "report_turns"} for row in rows]
-    report = rollup(slim)
-    report["summary"] = summary
-    report["run_id"] = str(run.id)
-    report["findings"] = findings(report)
-    report["code_version"] = run.code_version
-    if run.suite_id is not None:
-        suite = db.get(HarnessSuite, run.suite_id)
-        if suite is not None and suite.baseline_run_id and suite.baseline_run_id != run.id:
-            baseline = db.get(HarnessRun, suite.baseline_run_id)
-            if baseline is not None:
-                base_rows = [
-                    _chat_for_report(db, chat)
-                    for chat in db.scalars(select(HarnessChat).where(HarnessChat.run_id == baseline.id)).all()
-                ]
-                comparison = compare_runs(base_rows, rows)
-                report["baseline"] = {
-                    "run_id": str(baseline.id),
-                    "verdict": comparison["verdict"],
-                    "band": regression_band(comparison),
-                    "new_hard_stops": comparison["new_hard_stops"],
-                    "new_false_passes": comparison["new_false_passes"],
-                    "new_empty_replies": comparison["new_empty_replies"],
-                    "mean_score_delta": comparison["mean_score_delta"],
-                    "dimension_deltas": comparison["dimension_deltas"],
-                }
-    return report
 
 
-def compare(db: Session, left_id: uuid.UUID, right_id: uuid.UUID) -> dict:
-    left = _run_or_404(db, left_id)
-    right = _run_or_404(db, right_id)
-    left_rows = [_chat_for_report(db, chat) for chat in db.scalars(select(HarnessChat).where(HarnessChat.run_id == left.id)).all()]
-    right_rows = [_chat_for_report(db, chat) for chat in db.scalars(select(HarnessChat).where(HarnessChat.run_id == right.id)).all()]
-    body = compare_runs(left_rows, right_rows)
-    body["band"] = regression_band(body)
-    body["left"] = str(left.id)
-    body["right"] = str(right.id)
-    return body
 
 
 def fixture_document() -> dict:
@@ -2023,178 +1708,22 @@ def suite_out(db: Session, row: HarnessSuite) -> dict:
     }
 
 
-def create_suite(db: Session, body: dict) -> dict:
-    name = str(body.get("name") or "").strip()[:160]
-    if not name:
-        raise HTTPException(status_code=422, detail="Name the suite.")
-    plan = body.get("plan") if isinstance(body.get("plan"), dict) else {}
-    row = HarnessSuite(name=name, plan=plan)
-    run_id = _uuid(body.get("run_id"))
-    if run_id is not None:
-        run = db.get(HarnessRun, run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="That run was not found.")
-        row.plan = dict(run.plan or {})
-        db.add(row)
-        db.flush()
-        run.suite_id = row.id
-    else:
-        db.add(row)
-        db.flush()
-    return suite_out(db, row)
 
 
-def list_suites(db: Session) -> list[dict]:
-    return [suite_out(db, row) for row in db.scalars(select(HarnessSuite).order_by(HarnessSuite.created_at.desc())).all()]
 
 
-def set_baseline(db: Session, suite_id: uuid.UUID, run_id: uuid.UUID) -> dict:
-    suite = db.get(HarnessSuite, suite_id)
-    run = db.get(HarnessRun, run_id)
-    if suite is None or run is None:
-        raise HTTPException(status_code=404, detail="That suite or run was not found.")
-    run.suite_id = suite.id
-    suite.baseline_run_id = run.id
-    db.flush()
-    return suite_out(db, suite)
 
 
-def recommendation_out(row: HarnessRecommendation) -> dict:
-    return {
-        "id": row.id,
-        "run_id": row.run_id,
-        "suite_id": row.suite_id,
-        "title": row.title,
-        "evidence": row.evidence if isinstance(row.evidence, dict) else {},
-        "cause_class": row.cause_class,
-        "place": row.place,
-        "proposed": row.proposed if isinstance(row.proposed, dict) else {},
-        "prompt_direction": row.prompt_direction,
-        "kind": row.kind,
-        "risk": row.risk,
-        "confidence": row.confidence,
-        "status": row.status,
-        "trial_profile_id": row.trial_profile_id,
-        "created_at": row.created_at,
-    }
 
 
-def list_recommendations(db: Session, *, run_id: uuid.UUID | None = None) -> list[dict]:
-    stmt = select(HarnessRecommendation).order_by(HarnessRecommendation.created_at.desc())
-    if run_id is not None:
-        stmt = stmt.where(HarnessRecommendation.run_id == run_id)
-    return [recommendation_out(row) for row in db.scalars(stmt).all()]
 
 
-def save_recommendations(db: Session, body: dict) -> list[dict]:
-    run_id = _uuid(body.get("run_id"))
-    suite_id = _uuid(body.get("suite_id"))
-    cards = body.get("cards") if isinstance(body.get("cards"), list) else []
-    if not cards:
-        raise HTTPException(status_code=422, detail="A review needs at least one card.")
-    if body.get("replace") and run_id is not None:
-        db.execute(delete(HarnessRecommendation).where(HarnessRecommendation.run_id == run_id))
-    saved = []
-    for card in cards:
-        if not isinstance(card, dict):
-            continue
-        kind = str(card.get("kind") or "reword")
-        if kind not in {"setting", "reword", "remove", "add"}:
-            kind = "reword"
-        direction = str(card.get("prompt_direction") or "same")
-        if direction not in {"shorter", "longer", "same"}:
-            direction = "same"
-        evidence = card.get("evidence") if isinstance(card.get("evidence"), dict) else {"summary": str(card.get("evidence") or "")}
-        block_type = str(card.get("block_type") or evidence.get("block_type") or "").strip()
-        if block_type:
-            evidence = {**evidence, "block_type": block_type}
-        row = HarnessRecommendation(
-            run_id=run_id,
-            suite_id=suite_id,
-            title=str(card.get("title") or "Change")[:200],
-            evidence=evidence,
-            cause_class=str(card.get("cause_class") or "")[:40],
-            place=str(card.get("place") or "")[:2000],
-            proposed=card.get("proposed") if isinstance(card.get("proposed"), dict) else {"text": str(card.get("proposed") or "")},
-            prompt_direction=direction,
-            kind=kind,
-            risk=str(card.get("risk") or "")[:2000],
-            confidence=str(card.get("confidence") or "low")[:16],
-            status="new",
-        )
-        db.add(row)
-        db.flush()
-        saved.append(recommendation_out(row))
-    return saved
 
 
-def update_recommendation(db: Session, card_id: uuid.UUID, body: dict) -> dict:
-    row = db.get(HarnessRecommendation, card_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="That recommendation was not found.")
-    status = str(body.get("status") or "").strip()
-    allowed = {"new", "accepted", "rejected", "on_trial", "shipped", "verified", "regressed"}
-    if status:
-        if status not in allowed:
-            raise HTTPException(status_code=422, detail="That status is not one of the review states.")
-        if status == "shipped":
-            raise HTTPException(status_code=422, detail="Accepted settings are not applied to the live profile from here.")
-        row.status = status
-    db.flush()
-    return recommendation_out(row)
 
 
-def _apply_setting(config: dict, proposed: dict) -> dict:
-    updated = copy.deepcopy(config)
-    scope = str(proposed.get("scope") or "overarching")
-    key = str(proposed.get("key") or "").strip()
-    if not key:
-        return updated
-    if scope == "block":
-        block = str(proposed.get("block") or "")
-        updated.setdefault("blocks", {}).setdefault(block, {})[key] = proposed.get("value")
-    elif scope == "voice":
-        updated.setdefault("voice", {})[key] = proposed.get("value")
-    else:
-        updated.setdefault("overarching", {})[key] = proposed.get("value")
-    return updated
 
 
-def trial_profile(db: Session, card_id: uuid.UUID) -> dict:
-    """Copy the tutor profile with the proposed setting. Real children stay on their own profile."""
-    row = db.get(HarnessRecommendation, card_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="That recommendation was not found.")
-    if row.kind != "setting":
-        raise HTTPException(status_code=422, detail="Only a settings card can make a trial profile. Wording and loop changes go on a branch.")
-    if row.cause_class == "safety":
-        raise HTTPException(status_code=422, detail="Safety changes are not trialed here. There is one global safety row.")
-    proposed = row.proposed if isinstance(row.proposed, dict) else {}
-    source_id = str(proposed.get("profile_id") or "") or None
-    source = get_profile_by_id_or_slug(db, source_id) if source_id else load_profile(db)
-    if source is None:
-        raise HTTPException(status_code=404, detail="The source tutor profile was not found.")
-    created = create_tutor_profile(
-        db,
-        name=f"Trial {row.title}"[:120],
-        description="Harness trial. Hidden from tutor pickers.",
-        source_profile_id=source.id,
-    )
-    created.is_test = True
-    config = effective_kc_tutor_config(created)
-    created.kc_tutor_config = _apply_setting(config, proposed)
-    row.trial_profile_id = created.id
-    row.status = "on_trial"
-    db.flush()
-    plan = {}
-    if row.run_id is not None:
-        run = db.get(HarnessRun, row.run_id)
-        if run is not None:
-            plan = dict(run.plan or {})
-            plan["tutor_profile_ids"] = [created.id]
-            plan["seed_from_run"] = str(run.id)
-            plan["seed_from_profile"] = source.id
-    return {"recommendation": recommendation_out(row), "trial_profile_id": created.id, "plan": plan}
 
 
 def trim_prompts(db: Session, *, run_id: uuid.UUID | None = None) -> dict:
@@ -2208,7 +1737,13 @@ def trim_prompts(db: Session, *, run_id: uuid.UUID | None = None) -> dict:
             ).all()
         ]
         suites.append({"baseline_run_id": str(suite.baseline_run_id or ""), "run_ids": run_ids})
-    kept = kept_run_ids(suites)
+    kept: set[str] = set()
+    for suite in suites:
+        baseline = str(suite.get("baseline_run_id") or "")
+        if baseline:
+            kept.add(baseline)
+        if suite["run_ids"]:
+            kept.add(suite["run_ids"][-1])
     stmt = select(HarnessRun)
     if run_id is not None:
         stmt = stmt.where(HarnessRun.id == run_id)
@@ -2230,6 +1765,3 @@ def trim_prompts(db: Session, *, run_id: uuid.UUID | None = None) -> dict:
     return {"trimmed": trimmed, "kept": sorted(kept), "skipped": skipped}
 
 
-def findings_for_run(db: Session, run_id: uuid.UUID) -> dict:
-    report = run_report(db, run_id)
-    return {"run_id": str(run_id), "findings": report.get("findings") or [], "top_problems": report.get("top_problems") or []}

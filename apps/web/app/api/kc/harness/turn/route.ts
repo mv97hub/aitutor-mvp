@@ -1,10 +1,9 @@
 import { api, ApiError } from "@/lib/api";
-import { judgeFinishedChat } from "@/lib/harness-judge-run";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-/** Store one harness turn. When that turn finishes the chat, judge it here. */
+/** Store one harness turn. The turn is recorded and returned. */
 export async function POST(req: Request) {
   let body: { chatId?: string; turn?: Record<string, unknown> };
   try {
@@ -14,22 +13,14 @@ export async function POST(req: Request) {
   }
   const chatId = body.chatId || "";
   if (!chatId || !body.turn) return new Response("chatId and turn are required.", { status: 400 });
-  let recorded: { stop?: string; pending?: boolean; recover?: boolean; replayed?: boolean };
   try {
-    recorded = await api(`/kc/harness/chats/${chatId}/turns`, {
+    const recorded = await api(`/kc/harness/chats/${chatId}/turns`, {
       method: "POST",
       body: JSON.stringify(body.turn),
     });
+    return Response.json(recorded);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not store the turn.";
     return new Response(message, { status: error instanceof ApiError ? error.status : 502 });
   }
-  if (recorded.stop && !recorded.pending && !recorded.recover && !recorded.replayed) {
-    try {
-      await judgeFinishedChat(chatId);
-    } catch {
-      // The turn is already stored. A judge failure is recorded inside judgeFinishedChat when the model call fails.
-    }
-  }
-  return Response.json(recorded);
 }
