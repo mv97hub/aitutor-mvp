@@ -1198,8 +1198,10 @@ def is_assessed_stall_turn(
     """
     btype = str((block or {}).get("type") or "").strip()
     step = str(substep or "").strip()
-    if btype in {"explanation", "curiosity"} or step in {"explain", "explain_topic", "summary_check"}:
+    if btype == "explanation" or step in {"explain", "explain_topic", "summary_check"}:
         return False
+    if btype == "curiosity":
+        return bool(off_course)
     raw = answer or ""
     if not raw.strip() or _gives_up(raw):
         return False
@@ -2414,12 +2416,18 @@ def resolve_block_turn(
         and not learner_done_with_explanation(answer)
         and not _matches_mcq_choice(block, answer, state)
         and not _denies_flaw(block, substep, answer)
-        and not answer_addresses_substep(block, substep, answer, state, cfg)
+        and (
+            (btype == "curiosity" and bool(off_course) and not substep_passed)
+            or not answer_addresses_substep(block, substep, answer, state, cfg)
+        )
         and (
             (
                 bool(off_course)
                 and not substep_passed
-                and not (_content_word_set(answer) & (_anchor_words(block) | _tutor_question_words(prior_tutor)))
+                and (
+                    btype == "curiosity"
+                    or not (_content_word_set(answer) & (_anchor_words(block) | _tutor_question_words(prior_tutor)))
+                )
             )
             or (learner_asks_question_or_background(answer) and learner_side_question(answer, block, substep))
             or ancillary_story(answer, block)

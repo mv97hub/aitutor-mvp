@@ -639,11 +639,12 @@ def run_again(db: Session, run_id: uuid.UUID) -> dict:
     return create_run(db, plan, suite_id=run.suite_id, seeds=_recorded_seeds(db, run.id))
 
 
-def _settings_copy(db: Session, profile: TutorProfile, node: KcNode) -> dict:
+def _settings_copy(db: Session, profile: TutorProfile, node: KcNode, *, course_title: str = "") -> dict:
     return {
         "kc_tutor_config": effective_kc_tutor_config(profile),
         "ai_safety": read_ai_safety(db),
         "blocks": node.blocks if isinstance(node.blocks, list) else [],
+        "course_title": str(course_title or "").strip(),
         "profile_id": profile.id,
         "profile_name": profile.name,
         "code_version": HARNESS_CODE_VERSION,
@@ -729,7 +730,7 @@ def claim_chat(db: Session, run_id: uuid.UUID) -> dict | None:
     chat.student_id = student.id
     chat.session_id = session.id
     chat.claim_generation = next_claim_generation(chat.claim_generation)
-    chat.settings_copy = _settings_copy(db, profile, node)
+    chat.settings_copy = _settings_copy(db, profile, node, course_title=goal.title)
     chat.status = "running"
     chat.updated_at = _now()
     run.updated_at = _now()
@@ -1321,10 +1322,12 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     }
 
 
-def _turns_for_checks(chat: HarnessChat, turns: list[HarnessTurn]) -> list[dict]:
+def _turns_for_checks(chat: HarnessChat, turns: list[HarnessTurn], *, course_title: str = "") -> list[dict]:
+    settings = _as_dict(chat.settings_copy)
+    resolved_course_title = str(settings.get("course_title") or course_title or "").strip()
     passages = {
         block.get("id"): _as_dict(block.get("data")).get("passage_text")
-        for block in _as_list(_as_dict(chat.settings_copy).get("blocks"))
+        for block in _as_list(settings.get("blocks"))
         if isinstance(block, dict) and block.get("type") == "passage_ela" and block.get("id")
     }
     rows = []
@@ -1337,6 +1340,7 @@ def _turns_for_checks(chat: HarnessChat, turns: list[HarnessTurn]) -> list[dict]
                 "child_text": turn.child_text,
                 "tutor_reply": after.get("tutor_reply") or "",
                 "passage_text": passages.get(before.get("block_id")),
+                "course_title": resolved_course_title,
                 "prompt": after.get("prompt") or "",
                 "passed": bool(after.get("passed")),
                 "loop_result": after.get("loop_result") if isinstance(after.get("loop_result"), dict) else {},
@@ -1370,8 +1374,13 @@ def _finish(db: Session, chat: HarnessChat, reason: str) -> None:
         _close_session(db, chat)
     snapshot = chat.child_snapshot if isinstance(chat.child_snapshot, dict) else {}
     profile = snapshot.get("child_profile") if isinstance(snapshot.get("child_profile"), dict) else {}
+    course_title = str(_as_dict(chat.settings_copy).get("course_title") or "").strip()
+    if not course_title and chat.course_id is not None:
+        goal = db.get(KcGoal, chat.course_id)
+        if goal is not None:
+            course_title = str(goal.title or "").strip()
     checks = automatic_checks(
-        _turns_for_checks(chat, _saved_turns(db, chat.id)),
+        _turns_for_checks(chat, _saved_turns(db, chat.id), course_title=course_title),
         ended_how=reason,
         response_length=str(profile.get("response_length") or "balanced"),
     )
@@ -1639,8 +1648,120 @@ def _block_score(db: Session, chat: HarnessChat) -> tuple[int | None, list[dict]
 
 
 
+_EVERY_BLOCK_FIXTURE_DATA: dict[str, dict] = {
+    "topic_goal": {
+        "topic": "Why towns grow beside rivers",
+        "goal": "Explain how rivers lower the cost of moving water, food, and people.",
+        "acceptance_criteria": "Names fresh water and easier boat transport for food and people.",
+        "teaching_notes": None,
+    },
+    "explanation": {
+        "block_title": "Why water transport matters",
+        "topics": [
+            {
+                "id": "t1",
+                "title": "Moving heavy cargo",
+                "explanation": "Floating cargo on a river uses far less effort than hauling wagons over land, so towns beside rivers can trade food and goods cheaply.",
+                "key_points": ["Water reduces friction for heavy loads.", "Cheaper transport lets towns grow and trade."],
+                "examples_or_analogies": None,
+            }
+        ],
+        "summary_takeaway": "Rivers let towns move heavy goods cheaply and reliably.",
+    },
+    "worked_example": {
+        "problem_statement": "A wagon carries 200 kg of grain while a river barge carries 1,000 kg. How many wagons equal one barge?",
+        "steps": [
+            {"step_text": "Identify the two capacities: 1,000 kg per barge and 200 kg per wagon.", "rationale": "Match units before dividing."},
+            {"step_text": "Divide 1,000 by 200 to get 5 wagons.", "rationale": "Each wagon holds 200 kg, so 5 wagons equal 1,000 kg."},
+        ],
+        "faded_step_index": 1,
+        "solo_problem": "A river barge carries 1,200 kg of grain and each wagon carries 300 kg. How many wagons equal one barge?",
+        "solo_expected_answer": "4 wagons (1,200 / 300 = 4).",
+    },
+    "mcq": {
+        "mode": "static",
+        "question_stem": "Why did early trading towns usually grow near navigable rivers?",
+        "choices": [
+            {
+                "id": "a",
+                "text": "Boats could move food and people more easily and provide fresh water.",
+                "is_correct": True,
+                "distractor_rationale": None,
+                "misconception_code": None,
+            },
+            {
+                "id": "b",
+                "text": "Rivers prevent any town from ever trading with neighbors.",
+                "is_correct": False,
+                "distractor_rationale": "Rivers encourage trade rather than preventing it.",
+                "misconception_code": None,
+            },
+        ],
+        "correct_explanation": "Navigable rivers supply fresh water and lower the effort needed to transport food and people.",
+    },
+    "socratic": {
+        "central_dilemma": "A growing river town has space to build either a new boat dock for trade or a levee wall to guard against spring floods, but not both this year.",
+        "initial_probe": "Which would you build first, and why?",
+        "counterexamples": [
+            "If you build only the dock, a single spring flood can wash out the warehouses and boats.",
+            "If you build only the levee, merchants may move to a neighboring port and leave the town without trade income.",
+        ],
+        "target_synthesis": "Protect essential safety first or phase flood protection alongside trade capacity so growth is not wiped out by floods.",
+    },
+    "case_study": {
+        "case_a": "Town A sits where two calm rivers meet; grain arrives from farms in two hours by barge.",
+        "case_b": "Town B sits in dry hills thirty miles from any river; wagons take two days to haul the same grain.",
+        "prediction_prompt": "Which town can feed more residents at lower cost, and what shared factor explains both cases?",
+        "invariant_principle": "Lower transport effort and reliable water access make food cheaper and support larger towns.",
+        "transfer_prompt": None,
+        "transfer_expected": None,
+    },
+    "spot_the_flaw": {
+        "rookie_work": "A student writes: 'Towns grow beside rivers only because people like looking at the water.'",
+        "flaw_description": "It ignores the practical causes—fresh water supply and easier boat transport for food and people.",
+        "underlying_misconception": "Confusing a pleasant feature with the main economic and survival reason settlements form.",
+        "corrected_version": "Towns grow beside rivers mainly because rivers provide fresh water and make moving food and people by boat much easier.",
+    },
+    "teach_back": {
+        "peer_persona_prompt": "Explain to a younger classmate why a river acts like a highway for a town.",
+        "required_concepts": ["fresh water", "boats move food and people easily"],
+        "peer_follow_up_question": "Why does moving food by boat matter so much for how big a town can get?",
+    },
+    "retrieval_check": {
+        "recall_prompt": "What are the two main reasons rivers help towns grow?",
+        "expected_fact": "Rivers supply fresh water and let boats move food and people.",
+        "elaborative_why_prompt": "Why does easier transport help a town grow larger?",
+        "expected_why_rationale": "Cheaper, faster shipping brings in more food and goods to support more residents.",
+    },
+    "curiosity": {
+        "phenomenon_hook": "Many of the world's oldest cities—Cairo, London, and Baghdad—all started right on major rivers even though rivers sometimes flood.",
+        "prediction_question": "Why would people build right next to a river if it might flood?",
+        "bridge_to_unit": "The everyday gains of fresh water and cheap boat transport usually outweighed the occasional risk of flooding.",
+        "wonder_branches": None,
+    },
+    "passage_ela": _BLOCK_EXAMPLES["passage_ela"],
+}
+
+
+def _has_legacy_fixture_stubs(blocks: object) -> bool:
+    if not isinstance(blocks, list):
+        return False
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        data = block.get("data") if isinstance(block.get("data"), dict) else {}
+        if block.get("type") == "worked_example" and data.get("solo_expected_answer") == "The answer.":
+            return True
+        if block.get("type") == "spot_the_flaw" and data.get("flaw_description") == "What is wrong.":
+            return True
+    return False
+
+
 def fixture_document() -> dict:
-    blocks = [{"id": f"blk_{kind}", "type": kind, "data": data} for kind, data in _BLOCK_EXAMPLES.items()]
+    blocks = [
+        {"id": f"blk_{kind}", "type": kind, "data": dict(_EVERY_BLOCK_FIXTURE_DATA[kind])}
+        for kind in _BLOCK_EXAMPLES
+    ]
     return {
         "schema": SCHEMA,
         "course": {
@@ -1664,11 +1785,16 @@ def fixture_document() -> dict:
                         "code": "harness-every-block-all",
                         "title": "Every block type",
                         "description": "The learner meets every block type in one component.",
-                        "summary": "All eleven block types.",
-                        "outline": "Walk each block.",
-                        "core_truth": "Each block type asks for something different.",
-                        "rubric": ["Names the idea."],
-                        "misconceptions": [{"wrong_move": "All blocks are the same question.", "broken_kc": ""}],
+                        "summary": "All eleven block types on why towns grow beside rivers.",
+                        "outline": "Walk each block on rivers, transport, and evidence.",
+                        "core_truth": "Rivers supply fresh water and lower the effort of moving food and people by boat.",
+                        "rubric": ["Names fresh water and easier boat transport."],
+                        "misconceptions": [
+                            {
+                                "wrong_move": "Towns grow near rivers only for scenery rather than water and transport.",
+                                "broken_kc": "",
+                            }
+                        ],
                         "standards": ["h1"],
                         "prerequisite_codes": [],
                         "encompasses_codes": [],
@@ -1685,6 +1811,12 @@ def ensure_fixture(db: Session) -> dict:
         course = db.scalar(select(KcGoal).where(KcGoal.code == code))
         if course is None:
             course = import_new_course(db, document())
+        elif code == FIXTURE_CODE:
+            fresh_blocks = document()["units"][0]["components"][0]["blocks"]
+            for node in load_targets(db, course):
+                if node.code == "harness-every-block-all" and _has_legacy_fixture_stubs(node.blocks):
+                    node.blocks = fresh_blocks
+                    db.flush()
         if not course.ready:
             mark_ready(db, course)
         return course
