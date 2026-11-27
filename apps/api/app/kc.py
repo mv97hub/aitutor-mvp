@@ -3176,7 +3176,12 @@ def _block_context(db: Session, session: KcSession, node: KcNode | None):
     data = block.get("data") if isinstance(block, dict) and isinstance(block.get("data"), dict) else {}
     required = str(data.get("acceptance_criteria") or data.get("goal") or "")
     first = next((message.content for message in messages if message.role == "user"), "")
-    fragment = bool(block and block.get("type") == "topic_goal" and is_fragment(first, required))
+    short_expression = bool(
+        student is not None and effective_child_profile(student).get("expression_style") == "one_word_or_taps"
+    )
+    fragment = bool(
+        not short_expression and block and block.get("type") == "topic_goal" and is_fragment(first, required)
+    )
     return profile, goal, messages, fragment, cfg, blocks, index, block, state
 
 
@@ -4645,6 +4650,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
             work_on=str(body.get("what_to_work_on") or body.get("work_on") or ""),
             prior_tutor=next((message.content for message in reversed(messages) if message.role == "assistant"), ""),
             learner_ready=bool(body.get("ready_to_move_on")),
+            off_course=bool(body.get("off_course")),
         )
     else:
         resolution = resolve_block_turn(
@@ -4671,6 +4677,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
             work_on=str(body.get("what_to_work_on") or body.get("work_on") or ""),
             prior_tutor=next((message.content for message in reversed(messages) if message.role == "assistant"), ""),
             learner_ready=bool(body.get("ready_to_move_on")),
+            off_course=bool(body.get("off_course")),
         )
     if correction or only_names:
         citation = correction or supplied
