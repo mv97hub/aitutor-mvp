@@ -4695,7 +4695,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     if supported:
         if _requirements_advanced(before_state, before_results, resolution):
             session.attempts = int(session.attempts or 0) + 1
-    else:
+    elif _block.get("type") != "explanation":
         session.attempts = int(session.attempts or 0) + 1
     session.step = resolution.next_step
     next_state = dict(resolution.next_block_state or {})
