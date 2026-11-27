@@ -37,10 +37,15 @@ from app.harness_checks import (
 from app.harness_personas import TRAIT_KEYS, starter_children
 from app.harness_report import (
     JUDGE_DIMENSIONS,
+    PARTIAL_NOTES,
     block_label,
     compare_runs,
     findings,
+    judge_status,
     kept_run_ids,
+    report_judge,
+    reported_child_realism,
+    reported_scores,
     regression_band,
     rollup,
     run_summary,
@@ -1499,13 +1504,13 @@ def save_hand_scores(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
 
 def _evaluation_out(row: HarnessEvaluation) -> dict:
     scores = row.scores if isinstance(row.scores, dict) else {}
-    items = scores.get("items") if isinstance(scores, dict) else row.scores
+    items = scores.get("items") if isinstance(row.scores, dict) else row.scores
     return {
         "id": row.id,
         "kind": row.kind,
         "checks": row.checks if isinstance(row.checks, dict) else {},
         "scores": items if isinstance(items, list) else [],
-        "error": str(scores.get("error") or "") if isinstance(scores, dict) else "",
+        "error": str(scores.get("error") or ""),
         "tags": row.tags if isinstance(row.tags, list) else [],
         "rubric_version": row.rubric_version,
         "judge_model": row.judge_model,
@@ -1515,11 +1520,24 @@ def _evaluation_out(row: HarnessEvaluation) -> dict:
     }
 
 
+def _saved_evaluations(db: Session, chat_id: uuid.UUID) -> list[dict]:
+    rows = db.scalars(
+        select(HarnessEvaluation)
+        .where(HarnessEvaluation.chat_id == chat_id)
+        .order_by(HarnessEvaluation.created_at, HarnessEvaluation.id)
+    )
+    return [_evaluation_out(row) for row in rows]
+
+
 def chat_detail(db: Session, chat: HarnessChat, *, include_run_cap: bool = True) -> dict:
     turns = db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id).order_by(HarnessTurn.seq)).all()
-    reviews = db.scalars(
-        select(HarnessEvaluation).where(HarnessEvaluation.chat_id == chat.id).order_by(HarnessEvaluation.created_at)
-    ).all()
+    reviews = _saved_evaluations(db, chat.id)
+    judged = report_judge(reviews)
+    if judged:
+        judged["selected_for_report"] = True
+        judged["reported_scores"] = reported_scores(judged)
+        judged["reported_child_realism"] = reported_child_realism(judged)
+        judged["partial_note"] = PARTIAL_NOTES.get(judge_status(judged), "")
     flags = []
     if chat.session_id is not None:
         events = db.scalars(select(AiSafetyEvent).where(AiSafetyEvent.kc_session_id == chat.session_id)).all()
@@ -1570,7 +1588,7 @@ def chat_detail(db: Session, chat: HarnessChat, *, include_run_cap: bool = True)
             "elapsed_ms": turn.elapsed_ms,
             "loop_decision": decision,
         })
-    body["evaluations"] = [_evaluation_out(row) for row in reviews]
+    body["evaluations"] = reviews
     body["safety_flags"] = flags
     body["settings_copy"] = dict(chat.settings_copy or {})
     if chat.session_id is not None:
@@ -1694,21 +1712,11 @@ def _block_score(db: Session, chat: HarnessChat) -> tuple[int | None, list[dict]
 
 
 def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
-    reviews = db.scalars(select(HarnessEvaluation).where(HarnessEvaluation.chat_id == chat.id)).all()
-    checks = {}
-    scores: list = []
-    tags: list = []
-    realism = None
-    judge_error = ""
-    for review in reviews:
-        if review.kind == "automatic" and isinstance(review.checks, dict):
-            checks = review.checks
-        if review.kind == "judged":
-            payload = review.scores if isinstance(review.scores, dict) else {}
-            scores = payload.get("items") if isinstance(payload.get("items"), list) else []
-            tags = review.tags if isinstance(review.tags, list) else []
-            realism = review.child_realism
-            judge_error = str(payload.get("error") or "") if isinstance(payload, dict) else ""
+    reviews = _saved_evaluations(db, chat.id)
+    checks = next((row["checks"] for row in reversed(reviews) if row["kind"] == "automatic"), {})
+    judged = report_judge(reviews)
+    scores = judged.get("scores", [])
+    tags = judged.get("tags", [])
     turns = db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id).order_by(HarnessTurn.seq)).all()
     snapshot = chat.child_snapshot if isinstance(chat.child_snapshot, dict) else {}
     settings = chat.settings_copy if isinstance(chat.settings_copy, dict) else {}
@@ -1843,8 +1851,8 @@ def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
         "checks": checks,
         "scores": scores,
         "tags": tags,
-        "child_realism": realism,
-        "judge_error": judge_error,
+        "child_realism": judged.get("child_realism"),
+        "judge_error": judged.get("error", ""),
         "component_score": component_score,
         "block_outcomes": block_outcomes,
         "seed": chat.seed,
