@@ -1,21 +1,21 @@
 """A stuck synthetic learner gets two nudges only while the chat may continue."""
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.database import SessionLocal
-from app.harness import claim_chat, prepare_harness_turn, record_turn
+from app.harness import claim_chat, dispatch_harness_turn, get_chat, prepare_harness_turn, record_turn, save_evaluation
 from app.models import HarnessChat, HarnessEvaluation, HarnessRun, HarnessTurn, KcGoal, KcNode, KcSession, KcTurnReceipt, Student
 
 
-@pytest.mark.parametrize("reason, already_nudging", [
-    ("cap", False), ("luna_ceiling", False), ("safety", False), ("route_error", False),
-    ("safety", True),
+@pytest.mark.parametrize("reason, queued_nudges", [
+    ("cap", 0), ("luna_ceiling", 0), ("safety", 0), ("route_error", 0),
+    ("safety", 2), ("run_cap", 0), ("run_cap", 1),
 ])
-def test_recovered_turn_stops_even_when_the_stuck_limit_is_reached(reason, already_nudging):
+def test_recovered_turn_stops_even_when_the_stuck_limit_is_reached(reason, queued_nudges):
     with SessionLocal() as db:
         key = uuid4().hex
         student = Student(slug=key, display_name="Test learner", is_test=True)
@@ -23,6 +23,8 @@ def test_recovered_turn_stops_even_when_the_stuck_limit_is_reached(reason, alrea
         run = HarnessRun(status="running", plan={
             "stuck_limit": 2, "stop_on_safety": True, "chat_cap_cents": 1, "luna_token_ceiling": 1000,
         })
+        if reason == "run_cap":
+            run.plan = {**run.plan, "run_cap_cents": 1}
         db.add_all([student, goal, node, run])
         db.flush()
         session = KcSession(student_id=student.id, goal_id=goal.id, kc_id=node.id, revision=1)
@@ -35,9 +37,12 @@ def test_recovered_turn_stops_even_when_the_stuck_limit_is_reached(reason, alrea
         same_step = {"status": "in_progress", "block_id": "cpi", "substep": "recall"}
         previous = dict(same_step, error="Empty reply") if reason == "route_error" else same_step
         assert record_turn(db, chat.id, {"intent": "guess", "session_after": previous})["stop"] == ""
-        if already_nudging:
+        if queued_nudges:
             signal = record_turn(db, chat.id, {"intent": "guess", "session_after": same_step})
             assert signal["stop"] == "" and signal["pending_nudges"] == 2
+            if queued_nudges == 1:
+                first = record_turn(db, chat.id, {"intent": "nudge", "session_after": same_step})
+                assert first["stop"] == "" and first["pending_nudges"] == 1
 
         tokens = {}
         if reason == "cap":
@@ -46,8 +51,16 @@ def test_recovered_turn_stops_even_when_the_stuck_limit_is_reached(reason, alrea
             tokens = {"model": "gpt-6-luna", "input_tokens": 1000}
         seq = chat.turn_count + 1
         submission = {"turn_id": str(uuid4()), "seq": seq, "revision": session.revision, "child_text": "Maybe.",
-                      "intent": "nudge" if already_nudging else "guess", "child_tokens": tokens, "session_before": same_step}
+                      "intent": "nudge" if queued_nudges else "guess", "child_tokens": tokens, "session_before": same_step}
+        submission["dispatch_state"] = "prepared"
         prepare_harness_turn(db, chat.id, {"seq": seq, "claim_generation": 1, "submission": submission})
+        assert dispatch_harness_turn(db, chat.id, UUID(submission["turn_id"]), 1)["action"] == "send"
+        if reason == "run_cap":
+            # Another chat's recorded usage reaches the threshold while the answer is in flight.
+            sibling = HarnessChat(run_id=run.id, status="completed", judge_model="gpt-4.1-mini")
+            db.add(sibling)
+            db.flush()
+            save_evaluation(db, sibling.id, {"usage": {"input_tokens": 25_000}})
         db.add(KcTurnReceipt(session_id=session.id, client_turn_id=submission["turn_id"], route="answer",
                              revision=session.revision, status="committed", payload=submission["child_text"],
                              result={"revision": session.revision + 1}))
@@ -59,10 +72,14 @@ def test_recovered_turn_stops_even_when_the_stuck_limit_is_reached(reason, alrea
         if reason == "route_error":
             after.update(delivery_status="committed_empty", tutor_reply="", error="Empty reply")
         body = {**submission, "session_after": after, "claim_generation": 1}
-        assert record_turn(db, chat.id, body)["stop"] == reason
+        stopped = record_turn(db, chat.id, body)
+        assert stopped["stop"] == reason
+        assert stopped["pending_nudges"] == stopped["stuck_answers"] == 0
         assert chat.ended_how == reason and run.status == "completed"
         replay = record_turn(db, chat.id, body)
         assert replay["replayed"] and replay["stop"] == reason
+        assert replay["pending_nudges"] == replay["stuck_answers"] == 0
+        assert chat.pending_nudges == chat.stuck_answers == 0
         assert chat.turn_count == seq and chat.pending_turn is None
         assert db.get(HarnessTurn, submission["turn_id"]).seq == seq
         checks = db.scalars(select(HarnessEvaluation).where(HarnessEvaluation.chat_id == chat.id)).one().checks
@@ -81,15 +98,16 @@ def test_recovered_turn_stops_even_when_the_stuck_limit_is_reached(reason, alrea
     ("run_cap", None, 0, True),
 ])
 def test_judge_admission_uses_saved_ending_and_exact_chat_limits(ending, cost, luna, expected):
-    from app.harness import get_chat
-
     with SessionLocal() as db:
         run = HarnessRun(status="completed", plan={"chat_cap_cents": 1, "luna_token_ceiling": 1000})
         db.add(run)
         db.flush()
-        chat = HarnessChat(run_id=run.id, status="completed", ended_how=ending, cost_usd=cost, luna_tokens=luna)
+        # Historical completed rows can retain pending nudge counters and lack a complete price ledger.
+        chat = HarnessChat(run_id=run.id, status="completed", ended_how=ending, cost_usd=cost,
+                           luna_tokens=luna, pending_nudges=2, stuck_answers=1)
         db.add(chat)
         db.flush()
         detail = get_chat(db, chat.id)
         assert detail["judge_budget_reached"] is expected
+        assert detail["pending_nudges"] == detail["stuck_answers"] == 0
         assert not db.is_modified(chat) and not db.is_modified(run)
