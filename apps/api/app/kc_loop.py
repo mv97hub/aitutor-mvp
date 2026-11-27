@@ -1175,6 +1175,7 @@ _ANSWER_CHECK_OPEN = re.compile(r"^(?:is (?:it|that)|(?:would|could) (?:it|that)
 _SOLO_ANSWER_OPEN = re.compile(r"^is the answer\s+", re.I)
 _SOLO_TASK_REQUEST = re.compile(
     r"^(?:supposed|expected|meant) to\b|^(?:explained|rephrased|repeated|clarified)\b(?! by\b)"
+    r"|^(?:somewhere )?(?:in|on) (?:the|this|my|our)\b[^.!?]*\b(?:passage|question|worksheet|problem|page|notes|textbook)\b"
     r"|\b(?:question|problem|exercise|task) (?:again|as (?:before|last time))\b", re.I,
 )
 _ANSWER_CHECK_TAG = re.compile(r",?\s+(?:is that (?:right|correct)|isn['’]t it|right|correct)$", re.I)

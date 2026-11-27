@@ -74,7 +74,7 @@ def test_partial_and_complete_solo_proposals_are_counted_once(open_lesson):
     "What does avoidant attachment mean?", "Can I have a hint?", "Is it my turn?",
     "Is it time for lunch?", "Is that something you can explain?",
     "Is the answer supposed to be a pattern or a number?", "Is the answer somewhere in the passage?",
-    "Is that the attachment question again?", "Could it be explained with a different observation?",
+    "Is the answer somewhere in the attachment passage?", "Is that the attachment question again?", "Could it be explained with a different observation?",
 ])
 def test_solo_clarification_is_free_even_if_the_grader_checks_pass(open_lesson, question):
     session = _solo_session(open_lesson)
