@@ -20,6 +20,7 @@ from app.routes.kc import router as kc_router
 from app.routes.parents import router as parents_router
 from app.routes.sessions import router as sessions_router
 from app.routes.studio import router as studio_router
+from app.routes.teacher_share import router as teacher_share_router
 from app.routes.tutor_profile import router as tutor_profile_router
 
 logger = logging.getLogger("uvicorn.error")
@@ -40,6 +41,7 @@ app.include_router(graph2_router)
 app.include_router(blind_exam_router)
 app.include_router(ai_safety_router)
 app.include_router(parents_router)
+app.include_router(teacher_share_router)
 app.include_router(harness_router)
 
 

@@ -2549,12 +2549,13 @@ def _close_finished_walk(
 
 def _run_graph2_sync_close(db: Session, session: KcSession, node: KcNode, blocks: list[dict]) -> dict:
     from app.graph2 import apply_sync_close
+    from app.parent_copilot import record_parent_session_digest
 
     student = db.get(Student, session.student_id)
     if student is None:
         return {"end_card": None, "judge_pending": False}
     goal = db.get(KcGoal, session.goal_id) if session.goal_id else None
-    return apply_sync_close(
+    out = apply_sync_close(
         db,
         session=session,
         student=student,
@@ -2562,6 +2563,14 @@ def _run_graph2_sync_close(db: Session, session: KcSession, node: KcNode, blocks
         node=node,
         blocks=blocks,
     )
+    record_parent_session_digest(
+        db,
+        session=session,
+        student=student,
+        goal=goal,
+        node=node,
+    )
+    return out
 
 
 def _unit_status(state: KcState | None, node: KcNode, sessions: list[KcSession]) -> str:

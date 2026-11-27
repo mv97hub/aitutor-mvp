@@ -7324,3 +7324,304 @@ button.progress-card {
   align-items: center;
   font-size: 0.92rem;
 }
+
+
+/* === F6: Active Parent Co-Pilot & Revocable Teacher Snapshot === */
+.copilot-stack {
+  display: grid;
+  gap: 20px;
+  margin-top: 24px;
+}
+
+.copilot-card,
+.teacher-share-card {
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 20px 22px;
+  box-shadow: 0 8px 24px rgba(48, 32, 12, 0.05);
+}
+
+.copilot-card h2,
+.teacher-share-card h2 {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+}
+
+.copilot-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.copilot-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.copilot-badge.is-good {
+  background: var(--good-wash);
+  color: var(--good);
+  border-color: rgba(29, 107, 69, 0.28);
+}
+
+.copilot-badge.is-warn {
+  background: #fef5e7;
+  color: #8a5100;
+  border-color: rgba(138, 81, 0, 0.25);
+}
+
+.copilot-badge.is-alert {
+  background: var(--miss-wash);
+  color: var(--miss);
+  border-color: rgba(141, 47, 42, 0.28);
+}
+
+.copilot-bio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.copilot-bio-tile {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.copilot-bio-tile strong {
+  font-size: 1.35rem;
+  color: var(--teal-deep);
+}
+
+.copilot-bio-tile span {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.copilot-summary-line {
+  margin: 0 0 10px;
+}
+
+.copilot-talking-list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  display: grid;
+  gap: 8px;
+}
+
+.copilot-rec-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.copilot-course-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 12px;
+  font-size: 0.92rem;
+}
+
+.copilot-misc-box {
+  background: #fef5e7;
+  border: 1px solid rgba(196, 73, 29, 0.22);
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin: 10px 0 14px;
+  font-size: 0.92rem;
+}
+
+.copilot-misc-box ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.copilot-mode-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.copilot-mode-btn {
+  text-align: left;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.copilot-mode-btn span {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.copilot-mode-btn.is-active {
+  border-color: var(--teal);
+  background: rgba(15, 110, 107, 0.08);
+}
+
+.copilot-lock-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 12px 0;
+}
+
+.copilot-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  cursor: pointer;
+}
+
+.copilot-anchor-row,
+.copilot-share-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.copilot-anchor-row input,
+.copilot-share-form input,
+.copilot-share-form select {
+  flex: 1 1 200px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.copilot-notice {
+  color: var(--good);
+  font-size: 0.9rem;
+  margin: 8px 0 0;
+}
+
+.copilot-fresh-share {
+  background: var(--good-wash);
+  border: 1px solid rgba(29, 107, 69, 0.25);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 12px 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.copilot-fresh-share p {
+  margin: 0;
+  width: 100%;
+}
+
+.copilot-fresh-share code {
+  background: #fff;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+
+.copilot-share-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.copilot-share-item {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.copilot-share-item div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.copilot-share-item.is-revoked,
+.copilot-share-item.is-expired {
+  opacity: 0.6;
+}
+
+.teacher-share-page {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+  display: grid;
+  gap: 20px;
+}
+
+.teacher-share-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.teacher-share-header h1 {
+  margin: 4px 0;
+}
+
+.teacher-share-eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.78rem;
+  color: var(--teal-deep);
+  font-weight: 700;
+}
+
+.teacher-course-list {
+  display: grid;
+  gap: 16px;
+}
+
+.teacher-course-item {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.teacher-course-item h3 {
+  margin: 0 0 4px;
+}

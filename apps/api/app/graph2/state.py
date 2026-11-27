@@ -225,24 +225,31 @@ def copy_note_for_session_open(
     """
     if is_harness_student_or_session(db, student=student):
         return ""
-    edu = db.get(StudentEducationalState, student.id)
-    if edu is None:
-        return ""
-    if edu.tutor_note_component_id == node.id and edu.tutor_note_course_id == goal.id:
-        return str(edu.tutor_note or "")
     course_state = db.scalar(
         select(LearnerCourseState).where(
             LearnerCourseState.student_id == student.id,
             LearnerCourseState.goal_id == goal.id,
         )
     )
-    spec = stored_spec(node)
-    requested = spec_requested_skills(spec)
-    return compose_tutor_note(
-        skills_state=_normalized_skills_map(edu.skills),
-        next_component_skills=requested,
-        course_misconceptions=course_state.misconceptions if course_state is not None else [],
-    )
+    from app.parent_copilot import format_parent_locks_note
+
+    parent_line = format_parent_locks_note(course_state)
+    edu = db.get(StudentEducationalState, student.id)
+    base_note = ""
+    if edu is not None:
+        if edu.tutor_note_component_id == node.id and edu.tutor_note_course_id == goal.id:
+            base_note = str(edu.tutor_note or "")
+        else:
+            spec = stored_spec(node)
+            requested = spec_requested_skills(spec)
+            base_note = compose_tutor_note(
+                skills_state=_normalized_skills_map(edu.skills),
+                next_component_skills=requested,
+                course_misconceptions=course_state.misconceptions if course_state is not None else [],
+            )
+    if base_note and parent_line:
+        return f"{base_note}\n{parent_line}"
+    return base_note or parent_line
 
 
 def apply_sync_close(
