@@ -24,6 +24,7 @@ from app.block_score import LEGACY_OUTCOMES, REQUIREMENT_SCORE, classify_stored_
 from app.flow import unique_student_slug
 from app.harness_download import render_download, reply_message_id
 from app.harness_checks import (
+    CHECKS_VERSION,
     DEFAULT_CHAT_CAP_CENTS,
     DEFAULT_LUNA_TOKEN_CEILING,
     DEFAULT_STUCK_LIMIT,
@@ -32,6 +33,7 @@ from app.harness_checks import (
     automatic_checks,
     chat_budget_stop,
     place_key,
+    side_action_checks,
     stop_reason,
     stuck_after_turn,
 )
@@ -1366,14 +1368,14 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
     }
 
 
-def _turns_for_checks(db: Session, chat: HarnessChat) -> list[dict]:
+def _turns_for_checks(chat: HarnessChat, turns: list[HarnessTurn]) -> list[dict]:
     passages = {
         block.get("id"): _as_dict(block.get("data")).get("passage_text")
         for block in _as_list(_as_dict(chat.settings_copy).get("blocks"))
         if isinstance(block, dict) and block.get("type") == "passage_ela" and block.get("id")
     }
     rows = []
-    for turn in db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id).order_by(HarnessTurn.seq)).all():
+    for turn in turns:
         after = turn.session_after if isinstance(turn.session_after, dict) else {}
         before = turn.session_before if isinstance(turn.session_before, dict) else {}
         rows.append(
@@ -1385,8 +1387,8 @@ def _turns_for_checks(db: Session, chat: HarnessChat) -> list[dict]:
                 "prompt": after.get("prompt") or "",
                 "passed": bool(after.get("passed")),
                 "loop_result": after.get("loop_result") if isinstance(after.get("loop_result"), dict) else {},
-                "attempt_before": int(before.get("move_attempts") or 0),
-                "attempt_after": int(after.get("move_attempts") or 0),
+                "attempt_before": before.get("move_attempts"),
+                "attempt_after": after.get("move_attempts"),
                 "block_id": after.get("block_id") or "",
                 "block_before": before.get("block_id") or "",
                 "substep": after.get("substep") or "",
@@ -1416,7 +1418,7 @@ def _finish(db: Session, chat: HarnessChat, reason: str) -> None:
     snapshot = chat.child_snapshot if isinstance(chat.child_snapshot, dict) else {}
     profile = snapshot.get("child_profile") if isinstance(snapshot.get("child_profile"), dict) else {}
     checks = automatic_checks(
-        _turns_for_checks(db, chat),
+        _turns_for_checks(chat, _saved_turns(db, chat.id)),
         ended_how=reason,
         response_length=str(profile.get("response_length") or "balanced"),
     )
@@ -1545,18 +1547,32 @@ def _evaluation_out(row: HarnessEvaluation) -> dict:
     }
 
 
-def _saved_evaluations(db: Session, chat_id: uuid.UUID) -> list[dict]:
+def _saved_turns(db: Session, chat_id: uuid.UUID) -> list[HarnessTurn]:
+    return list(db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat_id).order_by(HarnessTurn.seq)))
+
+
+def _saved_evaluations(db: Session, chat: HarnessChat, turns: list[HarnessTurn]) -> list[dict]:
     rows = db.scalars(
         select(HarnessEvaluation)
-        .where(HarnessEvaluation.chat_id == chat_id)
+        .where(HarnessEvaluation.chat_id == chat.id)
         .order_by(HarnessEvaluation.created_at, HarnessEvaluation.id)
     )
-    return [_evaluation_out(row) for row in rows]
+    reviews = [_evaluation_out(row) for row in rows]
+    for review in reviews:
+        checks = review["checks"]
+        if (review["kind"] == "automatic" and checks.get("version") in ("1", "2")
+                and checks.get("turns") == len(turns)):
+            # Refresh only side-action diagnostics from that chat's saved
+            # snapshots. Keep the stored review, model grades and original version.
+            derived = side_action_checks(_turns_for_checks(chat, turns), checks.get("false_fails"))
+            review["checks"] = {**checks, **derived,
+                                "side_checks_version": CHECKS_VERSION}
+    return reviews
 
 
 def chat_detail(db: Session, chat: HarnessChat, *, include_run_cap: bool = True) -> dict:
-    turns = db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id).order_by(HarnessTurn.seq)).all()
-    reviews = _saved_evaluations(db, chat.id)
+    turns = _saved_turns(db, chat.id)
+    reviews = _saved_evaluations(db, chat, turns)
     judged = report_judge(reviews)
     if judged:
         judged["selected_for_report"] = True
@@ -1742,12 +1758,12 @@ def _block_score(db: Session, chat: HarnessChat) -> tuple[int | None, list[dict]
 
 
 def _chat_for_report(db: Session, chat: HarnessChat) -> dict:
-    reviews = _saved_evaluations(db, chat.id)
+    turns = _saved_turns(db, chat.id)
+    reviews = _saved_evaluations(db, chat, turns)
     checks = next((row["checks"] for row in reversed(reviews) if row["kind"] == "automatic"), {})
     judged = report_judge(reviews)
     scores = judged.get("scores", [])
     tags = judged.get("tags", [])
-    turns = db.scalars(select(HarnessTurn).where(HarnessTurn.chat_id == chat.id).order_by(HarnessTurn.seq)).all()
     snapshot = chat.child_snapshot if isinstance(chat.child_snapshot, dict) else {}
     settings = chat.settings_copy if isinstance(chat.settings_copy, dict) else {}
     block_types = []

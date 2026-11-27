@@ -60,7 +60,7 @@ export type JudgeTurn = {
 export type JudgeScore = { dimension: string; score: number; quote: string; turn: number };
 export type JudgeTag = { tag: string; turn: number; quote: string };
 
-export type SideCheck = { turn?: number; answered?: boolean };
+export type SideCheck = { turn?: number; reply_delivered?: boolean; answered?: boolean | null };
 
 export function judgePrompt(input: { child?: string; turns: JudgeTurn[] }): string {
   const anchors = DIMENSIONS.map((dimension) => {
@@ -101,11 +101,11 @@ function quoteInTurn(quote: string, turns: JudgeTurn[], turnNo: number): boolean
 function answeredSideTurns(turns: JudgeTurn[], side: SideCheck[] | undefined): Set<number> {
   const hits = new Set<number>();
   for (const row of side || []) {
-    if (!row || !row.answered) continue;
-    const index = Number(row.turn);
-    if (Number.isNaN(index)) continue;
-    hits.add(index);
-    const at = turns[index];
+    // In older checks, "answered" meant only that a tutor message was delivered.
+    if (row?.reply_delivered !== true || row.answered !== true) continue;
+    // Automatic checks store array offsets. Judge citations use transcript sequence numbers.
+    if (typeof row.turn !== "number" || !Number.isInteger(row.turn) || row.turn < 0) continue;
+    const at = turns[row.turn];
     if (at && typeof at.seq === "number") hits.add(at.seq);
   }
   return hits;

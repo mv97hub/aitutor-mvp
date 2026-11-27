@@ -58,7 +58,7 @@ test("an answered side question is not ignored_question", () => {
       ],
       child_realism: 3,
     },
-    { turns, checks: { side: [{ turn: 0, answered: true }] } },
+    { turns, checks: { side: [{ turn: 0, reply_delivered: true, answered: true }] } },
   );
   assert.deepEqual(
     dropped.tags.map((tag) => tag.tag),
@@ -74,6 +74,24 @@ test("an answered side question is not ignored_question", () => {
   );
   assert.equal(kept.tags.length, 1);
   assert.equal(kept.child_realism, null);
+});
+
+test("an answered side question only clears the tag on its transcript turn", () => {
+  const dialogue = [
+    { seq: 1, child_text: "What does govern mean?", tutor_reply: "Look at the next example." },
+    { seq: 2, child_text: "What is a parliament?", tutor_reply: "A group that makes laws." },
+  ];
+  const tags = [
+    { tag: "ignored_question", turn: 1, quote: "What does govern mean?" },
+    { tag: "ignored_question", turn: 2, quote: "What is a parliament?" },
+  ];
+  const result = acceptJudgeOutput({ tags }, {
+    turns: dialogue,
+    checks: { side: [{ turn: 0, answered: null, reply_delivered: true }, { turn: 1, answered: true, reply_delivered: true }] },
+  });
+  assert.deepEqual(result.tags, [tags[0]]);
+  const legacy = acceptJudgeOutput({ tags }, { turns: dialogue, checks: { side: [{ turn: 0, answered: true }] } });
+  assert.deepEqual(legacy.tags, tags);
 });
 
 test("a failed judge call is stored as not judged", () => {
