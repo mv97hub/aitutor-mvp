@@ -1,10 +1,13 @@
 /** Authored learner turns for bounded regression cases. Match only what the learner can see. */
+import { CARGO_ANSWER, EXAMPLE_REQUEST, READER_PRACTICE } from "./harness-reader-practice.ts";
+
 export type ScenarioInput = {
   personaNumber: number;
   blockType: string;
   substep: string;
   tutor: string;
   question?: string;
+  passage?: string;
   canType: boolean;
   buttons: string[];
   choices: { id: string; text: string }[];
@@ -69,6 +72,25 @@ function alreadySaid(input: ScenarioInput, line: string, allBlocks = false) {
 
 function typedOnce(input: ScenarioInput, line: string) {
   return input.canType && !input.choices.length && !alreadySaid(input, line) ? line : undefined;
+}
+
+function riverPractice(input: ScenarioInput) {
+  if (input.personaNumber !== 2 || input.substep !== "central_idea" || !input.canType || input.choices.length) return;
+  if (!input.lastScenarioLine) {
+    const visible = [input.passage, ...tutorLines(input)].join(" ");
+    if (!/rivers carry fresh water from the hills to the sea/i.test(visible)) return;
+    if (/central idea|main idea|mostly about|main point/i.test(prompt(input))) return typedOnce(input, EXAMPLE_REQUEST);
+    return;
+  }
+  if (input.lastScenarioLine !== EXAMPLE_REQUEST) return;
+  // Answer only a visible request for an example of cargo. A place, reason,
+  // yes/no question, or an unsupported phrasing needs an operator's review.
+  const question = input.tutor.match(/(?:^|[.!?]\s+)([^.!?]+)\?\s*$/)?.[1]?.trim() || "";
+  if (/\bpears?\b/i.test(input.tutor)) return;
+  const cargo = /^what (?:else |other (?:things?|food|goods) )?(?:can|could|might) ((?:the |a |that |this )?boats?|it) (?:carry|bring|take|transport)(?:\s+(?:to|on|down|along|across|from)\b[^?]*)?$/i;
+  const vessel = cargo.exec(question)?.[1]?.toLowerCase();
+  const example = input.tutor.slice(0, input.tutor.lastIndexOf(question)).trim().split(/[.!?]\s+/).at(-1) || "";
+  if (vessel && (vessel !== "it" || /\bboat\b/i.test(example))) return CARGO_ANSWER;
 }
 
 function echo(id: string, input: ScenarioInput) {
@@ -162,8 +184,9 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
   }, {
     id: "reader", label: "Reading support", personas: [2, 8], blockTypes: ["passage_ela"], fixture: "Short informational passage · River roads, or Difficulty stress case · Hamlet",
     context: "Both variants ask to reread River roads in the same words. The simulated learner’s response-length setting changes for this run only. The separate difficulty test uses the displayed Hamlet passage.",
-    variants: [{id: "reread-short", label: "Reread · bite-sized setting"}, {id: "reread-detail", label: "Reread · detailed setting"}, {id: "reread-stress", label: "Difficulty stress case · Hamlet"}],
+    variants: [{id: READER_PRACTICE, label: "Tell me more · River roads practice"}, {id: "reread-short", label: "Reread · bite-sized setting"}, {id: "reread-detail", label: "Reread · detailed setting"}, {id: "reread-stress", label: "Difficulty stress case · Hamlet"}],
     respond(id, input) {
+      if (id === READER_PRACTICE) return riverPractice(input);
       if (input.substep !== "central_idea" || !/central idea|main idea|mostly about/i.test(prompt(input))) return;
       if (id === "reread-stress" && !tutorLines(input).some(line => /to be,? or not to be/i.test(line))) return;
       return typedOnce(input, "Can I read the whole passage again and get an explanation?");

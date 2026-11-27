@@ -4,11 +4,12 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import { api } from "@/lib/api";
 import { downloadHarnessFile } from "@/lib/harness-file";
+import { readerPracticeChecks, READER_PRACTICE, type PracticeTurn } from "@/lib/harness-reader-practice";
 import { blockMarks } from "@/lib/harness-blocks";
 import { agreementLabel, DIMENSIONS } from "@/lib/harness-judge";
 import { childPromptText } from "@/lib/harness-policy";
 
-type Turn = {
+type Turn = PracticeTurn & {
   seq: number;
   intent: string;
   child_text: string;
@@ -32,7 +33,7 @@ type ChatDetail = {
   ended_how: string;
   cost_usd: string | null;
   luna_tokens: number;
-  child?: { name?: string; description?: string };
+  child?: { name?: string; description?: string; scenario?: string };
   model_prompts?: { seq: number; model: string; system_prompt: string }[];
   turns?: Turn[];
   evaluations?: {
@@ -102,7 +103,7 @@ export function ChatTab({ chatId }: { chatId: string }) {
       }
       setHandDraft(draft);
       const active = next.status === "running" || next.status === "queued";
-      if (active && next.session_id) {
+      if ((active || (next.ended_how === "scenario_not_reached" && !next.turns?.length)) && next.session_id) {
         const session = await api<{ messages?: LiveMessage[] }>(`/kc/tutor/sessions/${next.session_id}`);
         if (!stop) setLive(session.messages || []);
       } else if (!stop) {
@@ -197,7 +198,7 @@ export function ChatTab({ chatId }: { chatId: string }) {
           </p>
           {live.length > 0 ? (
             <>
-              <h3>Live transcript</h3>
+              <h3>{chat.ended_how === "scenario_not_reached" ? "Tutor opening" : "Live transcript"}</h3>
               <ol className="harness-transcript">
                 {live.map((message, index) => (
                   <li key={`${message.seq ?? index}-${message.role}`}>
@@ -210,6 +211,22 @@ export function ChatTab({ chatId }: { chatId: string }) {
                 ))}
               </ol>
             </>
+          ) : null}
+          {chat.child?.scenario === READER_PRACTICE ? (
+            <section>
+              <h3>River roads practice</h3>
+              <dl>
+                {readerPracticeChecks(chat.turns || []).map((outcome, index) => (
+                  <div key={index}>
+                    <dt>{index === 0 ? "Request for an example" : "Answer to the boat question"}</dt>
+                    <dd>{outcome}</dd>
+                  </div>
+                ))}
+              </dl>
+              {chat.ended_how === "scenario_not_reached" ? (
+                <p className="help">The expected question did not match the script. Check the tutor’s wording below.</p>
+              ) : null}
+            </section>
           ) : null}
           <h3>Transcript</h3>
           <ol className="harness-transcript">

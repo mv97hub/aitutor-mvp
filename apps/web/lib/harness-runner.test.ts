@@ -778,6 +778,8 @@ test("River roads requests an example and answers the actual cargo question on t
   const examples = [
     ["Imagine a boat bringing apples to town. What else could the boat carry?", "Pears!"],
     ["A farmer loads a boat. What could the boat bring to market?", "Pears!"],
+    ["Imagine a boat bringing apples. What else could it carry?", "Pears!"],
+    ["Imagine a cart bringing apples. What else could it carry?", ""],
     ["The boat carried apples to town. Where did the boat carry apples?", ""],
     ["The boat carried apples to town. Did the boat carry apples?", ""],
     ["Imagine a river like a road. Why do you think towns like to be near these water roads?", ""],
