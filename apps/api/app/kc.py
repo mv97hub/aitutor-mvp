@@ -57,6 +57,7 @@ from app.kc_blocks import corrected_citation, repeats_citation_speakers
 from app.kc_loop import (
     SAY_THAT_AGAIN,
     hold_for_blank_reply,
+    mcq_reason_reply,
     passage_example_question_spoken,
     reply_is_unreadable,
     resolve_block_turn,
@@ -4738,6 +4739,13 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     generated = body.get("generated_mcq")
     if isinstance(generated, dict) and generated.get("choices") and resolution.next_step == index:
         next_state["generated_mcq"] = generated
+    if (
+        _block.get("type") == "mcq"
+        and before_state["substep"] == "choice"
+        and resolution.next_step == index
+        and next_state.get("substep") == "awaiting_why"
+    ):
+        reply = mcq_reason_reply(reply)
     if supported and resolution.next_step == index and not resolution.unit_complete:
         next_state = remember_tutor_disclosures(_block, next_state, reply, feedback=True)
     session.active_block_state = next_state

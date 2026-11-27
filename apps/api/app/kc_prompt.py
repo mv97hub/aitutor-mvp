@@ -2209,6 +2209,11 @@ def _decision_sentence(turn: object, label: str) -> str:
                 "This is the last allowed try. Give the answer and say plainly that you gave it. "
                 "The reply then moves to the next step of this block."
             )
+        elif getattr(turn, "next_substep", "") == "awaiting_why":
+            body = (
+                "Confirm the correct choice and ask what helped the learner choose it. "
+                "Wait for their reason before giving the explanation."
+            )
         elif str(getattr(turn, "next_substep", "")) == "summary_check":
             body = (
                 "If this answer satisfies the substep, set substep_passed=true and block_complete=false. "
@@ -3027,7 +3032,7 @@ def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal, *, l
         if pass_depth == "brief_confirm":
             lines.append("When the pick is correct, confirm it in one short sentence.")
         else:
-            lines.append("When the pick is correct, restate why that option fits.")
+            lines.append("Reinforce why the option fits after the learner gives any required reason.")
         if substep == "awaiting_why":
             lines.append("This turn is only the why. Do not ask the multiple choice again.")
 
@@ -4520,6 +4525,11 @@ def build_kc_prompt(
         and forecast.chosen is not None
         and forecast.chosen.unit_complete
     )
+    # A correct pick can open a typed reason even when the usual next step is the summary.
+    if btype == "mcq" and substep == "choice" and forecast.chosen and forecast.chosen.next_substep == "awaiting_why":
+        widget_on = False
+        summary_phase = ""
+        turn_kind = "pass"
     teach_substep = substep
     teach_state = state_dict
     if (

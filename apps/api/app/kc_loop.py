@@ -561,10 +561,15 @@ def summary_needs_learner_question(answer: str, prior_tutor: str) -> bool:
         "im not sure", "im not sure what you mean", "do you mean i ask you",
     }:
         return False
+    return _tutor_invited_learner_question(prior_tutor)
+
+
+def _tutor_invited_learner_question(prior_tutor: str) -> bool:
     # A short answer responds to the tutor's final question. Earlier sentences
     # may mention asking for help, and a Continue-button reminder can follow it.
-    questions = re.findall(r"[^.!?;]*\?", prior_tutor)
-    prompt = questions[-1] if questions else re.split(r"[.!?;]", prior_tutor.strip().rstrip(".!;"))[-1]
+    before_question, marker, _ = prior_tutor.rpartition("?")
+    ending = before_question if marker else prior_tutor.strip().rstrip(".!;")
+    prompt = re.split(r"[.!?;]", ending)[-1]
     prompt = _proceed_text(prompt.replace("’", "'"))
     return bool(re.search(
         r"\b(?:have|got) (?:(?:a|any|one|another|last|final|more|other) )*questions?\b"
@@ -573,6 +578,32 @@ def summary_needs_learner_question(answer: str, prior_tutor: str) -> bool:
         r"|\bask (?:me|(?:you )?(?:one more|another) question)\b",
         prompt,
     ))
+
+
+_MCQ_CLOSE = re.compile(
+    r"\bbefore we (?:finish|wrap up)\b|\bwhat questions? do you have\b"
+    r"|^(?:(?:are you )?ready to|shall we|would you like to|do you want to) "
+    r"(?:finish|move on|continue|wrap up)\b"
+    r"|\bwould you like to (?:learn|try|do) next\b|^how did you like (?:this|the) lesson\b"
+    r"|^(?:thats (?:it|all) for today|(?:were|youre) (?:all )?(?:done|finished)|all done)\b"
+    r"|^(?:anything else|all set|does (?:that|this) make sense)$"
+)
+_MCQ_REASON_REQUEST = re.compile(
+    r"^(?:please )?(?:explain|tell me|show me|(?:walk|talk) me through|give (?:me )?(?:a|one|your) reason)\b"
+)
+
+
+def mcq_reason_reply(reply: str) -> str:
+    """Replace an early wrap-up and keep substantive teaching in the learner's chat."""
+    question = "What helped you choose that answer?"
+    sentences = [_proceed_text(part.replace("’", "'")) for part in re.split(r"[.!?;]+", reply) if part.strip()]
+    if _tutor_invited_learner_question(reply) or any(_MCQ_CLOSE.search(part) for part in sentences):
+        return f"That’s right. {question}"
+    # A tutor can ask for a reason with an imperative, for example "Tell me why."
+    if "?" in reply or any(_MCQ_REASON_REQUEST.match(part) for part in sentences):
+        return reply
+    # Score a declarative explanation as delivered even when we need to append the question.
+    return f"{reply} {question}"
 
 
 def summary_ready_signal(answer: str) -> bool:
