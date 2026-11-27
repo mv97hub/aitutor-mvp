@@ -16,6 +16,7 @@ const sections = [
   { href: "/documentation/kc-tutor", label: "KC Tutor" },
   { href: "/documentation/kc-prompt-layers", label: "KC prompt layers" },
   { href: "/documentation/ai-test-children", label: "AI Test Children" },
+  { href: "/documentation/harness-agent", label: "Harness agent" },
 ] as const;
 
 export default function DocumentationPage() {
