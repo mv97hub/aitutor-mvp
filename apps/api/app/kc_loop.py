@@ -1002,17 +1002,52 @@ def _denies_flaw(block: dict, substep: str, answer: str) -> bool:
     )
 
 
+_TUTOR_QUESTION_STOPWORDS = {
+    "about", "again", "answer", "because", "before", "could", "does", "example",
+    "finish", "from", "good", "have", "here", "hint", "idea", "into", "just",
+    "know", "lesson", "like", "line", "make", "mean", "more", "next", "only",
+    "other", "part", "pick", "question", "really", "right", "said", "same",
+    "sentence", "should", "some", "step", "tell", "that", "their", "them",
+    "then", "there", "these", "they", "thing", "think", "this", "what",
+    "when", "where", "which", "while", "with", "word", "words", "would", "your",
+}
+
+_STALL_NAV_PHRASES = {
+    "whats next",
+    "what is next",
+    "what should we do next",
+    "what do we do next",
+    "now what",
+    "what now",
+}
+
+_MAX_FREE_STALL_TURNS = 2
+
+
+def _tutor_question_words(prior_tutor: str) -> set[str]:
+    """Substantive words from the tutor's final question sentence, if any."""
+    text = (prior_tutor or "").strip()
+    if "?" not in text:
+        return set()
+    before_q = text.rpartition("?")[0]
+    last_sentence = re.split(r"[.!\n]+", before_q)[-1]
+    return _content_word_set(last_sentence) - _TUTOR_QUESTION_STOPWORDS
+
+
 def _short_off_topic_remark(
     answer: str,
     block: dict,
     substep: str,
     state: dict | None,
     cfg: dict | None,
+    *,
+    prior_tutor: str = "",
 ) -> bool:
     """An aside that does not use the lesson's words, such as "arsenal are great".
 
     Sharing none of those words means it is not an attempt, at any length.
-    A wrong answer that uses the lesson's words still counts.
+    A wrong answer that uses the lesson's words or answers the tutor's own
+    scaffolding question still counts.
     """
     words = _proceed_text(answer).split()
     # One word can be a real try. An off-topic line of any longer length is not.
@@ -1023,8 +1058,12 @@ def _short_off_topic_remark(
     anchors = _anchor_words(block)
     if not anchors:
         return False
-    if _content_word_set(answer) & anchors:
+    answer_words = _content_word_set(answer)
+    if answer_words & anchors:
         return False
+    if prior_tutor and len(words) <= 5 and not ancillary_story(answer, block):
+        if answer_words & _tutor_question_words(prior_tutor):
+            return False
     return True
 
 
@@ -1137,7 +1176,94 @@ def learner_non_answer(
         return True
     if _echoes_tutor(raw, prior_tutor):
         return True
-    return _short_off_topic_remark(raw, block, substep, state, cfg)
+    return _short_off_topic_remark(raw, block, substep, state, cfg, prior_tutor=prior_tutor)
+
+
+def is_assessed_stall_turn(
+    block: dict,
+    substep: str,
+    answer: str,
+    state: dict | None,
+    cfg: dict | None,
+    *,
+    prior_tutor: str = "",
+    off_course: bool = False,
+) -> bool:
+    """True when an unscored turn on an assessed substep is a disengaged stall.
+
+    Bare acknowledgements (k, yes), meta-navigation nudges (What's next?),
+    complaints, boundary probes, tutor echoes, and off-topic remarks are stalls.
+    Genuine hint or content questions (e.g. "Can I get a hint?", "Why is the
+    river blue?") and passage rereads stay exempt.
+    """
+    btype = str((block or {}).get("type") or "").strip()
+    step = str(substep or "").strip()
+    if btype in {"explanation", "curiosity"} or step in {"explain", "explain_topic", "summary_check"}:
+        return False
+    raw = answer or ""
+    if not raw.strip() or _gives_up(raw):
+        return False
+    if learner_ready_to_proceed(raw, False) or learner_done_with_explanation(raw):
+        return False
+    if passage_elaboration_request(block, raw):
+        return False
+    if btype == "passage_ela":
+        from app.kc_blocks import learner_asks_for_passage
+
+        if learner_asks_for_passage(raw) or learner_points_at_span(raw, _data(block)):
+            return False
+    clean_text = _proceed_text(raw)
+    if not clean_text:
+        return False
+    if clean_text in _STALL_NAV_PHRASES:
+        return True
+    if clean_text == "yes" and "?" not in raw:
+        return True
+    if clean_text in _ACK_WORDS:
+        return True
+    if clean_text in {"boring", "whatever", "dumb", "sucks"} or any(
+        phrase in clean_text for phrase in _COMPLAINT_PHRASES
+    ):
+        return True
+    if any(phrase in clean_text for phrase in _BOUNDARY_PHRASES):
+        return True
+    if _echoes_tutor(raw, prior_tutor):
+        return True
+    # Keep genuine hint/content questions exempt from the disengaged stall cap.
+    if learner_asks_question_or_background(raw):
+        return False
+    if ancillary_story(raw, block):
+        return True
+    if _short_off_topic_remark(raw, block, step, state, cfg, prior_tutor=prior_tutor):
+        return True
+    if off_course and not (_content_word_set(raw) & (_anchor_words(block) | _tutor_question_words(prior_tutor))):
+        return True
+    return False
+
+
+def stall_turn_capped(
+    block: dict,
+    substep: str,
+    answer: str,
+    state: dict | None,
+    cfg: dict | None,
+    *,
+    prior_tutor: str = "",
+    off_course: bool = False,
+) -> bool:
+    """True when the learner has exhausted free disengaged stalls on this substep."""
+    stored = state if isinstance(state, dict) else {}
+    if int(stored.get("stall_turns") or 0) < _MAX_FREE_STALL_TURNS:
+        return False
+    return is_assessed_stall_turn(
+        block,
+        substep,
+        answer,
+        stored,
+        cfg,
+        prior_tutor=prior_tutor,
+        off_course=off_course,
+    )
 
 
 def _statement_before_question(answer: str) -> bool:
@@ -1276,6 +1402,8 @@ def unscored_side_request(
     answer: str,
     state: dict | None,
     cfg: dict | None,
+    *,
+    prior_tutor: str = "",
 ) -> bool:
     """A question, a short off-topic remark, "tell me", or a side story.
 
@@ -1314,7 +1442,7 @@ def unscored_side_request(
         return True
     if ancillary_story(raw, block):
         return True
-    return _short_off_topic_remark(raw, block, substep, state, cfg)
+    return _short_off_topic_remark(raw, block, substep, state, cfg, prior_tutor=prior_tutor)
 
 
 def unanswered_side_turn(
@@ -1323,6 +1451,8 @@ def unanswered_side_turn(
     answer: str,
     state: dict | None,
     cfg: dict | None,
+    *,
+    prior_tutor: str = "",
 ) -> bool:
     """One check for the opening explanation and the later steps.
 
@@ -1343,6 +1473,7 @@ def unanswered_side_turn(
         raw,
         state,
         cfg,
+        prior_tutor=prior_tutor,
     )
 
 
@@ -2239,7 +2370,7 @@ def resolve_block_turn(
         and not gave_up
         and not grade_attempt
         and stay_on_course_enabled(cfg)
-        and unanswered_side_turn(block, substep, answer, state, cfg)
+        and unanswered_side_turn(block, substep, answer, state, cfg, prior_tutor=prior_tutor)
     )
     # yes, k, a complaint, an echo, an off-topic line, or a boundary probe.
     # Same step, same count. idk is not one of these.
@@ -2285,7 +2416,11 @@ def resolve_block_turn(
         and not _denies_flaw(block, substep, answer)
         and not answer_addresses_substep(block, substep, answer, state, cfg)
         and (
-            (bool(off_course) and not substep_passed and not (_content_word_set(answer) & _anchor_words(block)))
+            (
+                bool(off_course)
+                and not substep_passed
+                and not (_content_word_set(answer) & (_anchor_words(block) | _tutor_question_words(prior_tutor)))
+            )
             or (learner_asks_question_or_background(answer) and learner_side_question(answer, block, substep))
             or ancillary_story(answer, block)
             or clean_text in _ACK_WORDS
@@ -2297,30 +2432,52 @@ def resolve_block_turn(
     )
     # Asking to hear more about the passage is on-topic help, even in exploratory mode.
     # Explicit side stories, questions, complaints, and off-course asides stay unscored
-    # even when the model echoes a previous turn's misconception tag.
+    # even when the model echoes a previous turn's misconception tag — up to
+    # _MAX_FREE_STALL_TURNS disengaged stalls per assessed substep so the loop
+    # cannot livelock forever.
+    stall_miss = False
     if (
         example_reply
         or passage_elaboration_request(block, answer)
         or explicit_non_attempt
         or (not matched_wrong and (side_turn or non_answer))
     ):
-        # Unscored help. Same block, same substep, same attempt count.
-        return _unscored_stay(
-            hint=tier,
-            move_attempts=move_attempts,
-            reveals=reveals,
-            enrichment_turns=enrichment_turns,
-            rubric=_clean_ids(list(stored_rubric)),
-            index=index,
-            bid=bid,
-            state=state,
-            results=results,
+        is_stall = (
+            not example_reply
+            and not passage_elaboration_request(block, answer)
+            and is_assessed_stall_turn(
+                block,
+                substep,
+                answer,
+                state,
+                cfg,
+                prior_tutor=prior_tutor,
+                off_course=bool(off_course),
+            )
         )
+        if is_stall:
+            next_stalls = int(state.get("stall_turns") or 0) + 1
+            state["stall_turns"] = next_stalls
+            if next_stalls > _MAX_FREE_STALL_TURNS:
+                stall_miss = True
+        if not stall_miss:
+            # Unscored help. Same block, same substep, same attempt count.
+            return _unscored_stay(
+                hint=tier,
+                move_attempts=move_attempts,
+                reveals=reveals,
+                enrichment_turns=enrichment_turns,
+                rubric=_clean_ids(list(stored_rubric)),
+                index=index,
+                bid=bid,
+                state=state,
+                results=results,
+            )
     max_retries = max_retries_for_block(block, cfg, goal)
 
     # A choice is removed in the multiple-choice branch below, whatever the model tags.
     # A repeated tag reveals this block and continues. It does not end the unit.
-    if matched_wrong and not (btype == "mcq" and substep == "choice"):
+    if not stall_miss and matched_wrong and not (btype == "mcq" and substep == "choice"):
         should_redirect = misc_policy == "immediate_redirect" or last_misconception == matched_wrong
         if should_redirect:
             tries = int(state.get("block_attempts") or 0) + 1
@@ -2493,20 +2650,21 @@ def resolve_block_turn(
             cfg=cfg,
         )
 
-    if btype == "passage_ela" and learner_asks_for_passage(answer):
+    if not stall_miss and btype == "passage_ela" and learner_asks_for_passage(answer):
         policy = str(bcfg.get("passage_ela_reread_policy") or "free_reprint")
         if policy == "free_reprint":
             return stay(move_attempts, tier)
 
-    if btype == "passage_ela" and substep == "cite_evidence" and not contextual_citation and learner_points_at_span(answer, data):
+    if not stall_miss and btype == "passage_ela" and substep == "cite_evidence" and not contextual_citation and learner_points_at_span(answer, data):
         # Pointing at the span settles citation as assisted and leaves the other steps alone.
         state["citation_assisted"] = True
         note_try()
         if "craft_or_inference" in substeps:
             state["substep"] = "craft_or_inference"
+            state["stall_turns"] = 0
         return stay(0, "nudge")
 
-    if btype == "topic_goal" and substep == "main" and learner_ready_to_proceed(answer, False):
+    if not stall_miss and btype == "topic_goal" and substep == "main" and learner_ready_to_proceed(answer, False):
         tries = note_try()
         covered = rubric_covers_substep(block, index, "main", met) or bool(substep_passed)
         # "move on" after the goal evidence is already met is a pass, not a give-up.
@@ -2515,11 +2673,12 @@ def resolve_block_turn(
         return finish("revealed", tries, reveals + 1)
 
     if (
-        btype == "topic_goal"
+        not stall_miss
+        and btype == "topic_goal"
         and bool(bcfg.get("fragment_self_explanation", True))
         and fragment
         and not state.get("fragment_prompted")
-        and not unscored_side_request(block, substep, answer, state, cfg)
+        and not unscored_side_request(block, substep, answer, state, cfg, prior_tutor=prior_tutor)
         and not learner_side_question(answer, block, substep)
         and not (substep == "summary_check" and summary_ready_signal(answer))
     ):
@@ -2555,10 +2714,54 @@ def resolve_block_turn(
     def _enter_summary(*, revealed: bool) -> BlockResolution:
         state["last_task_substep"] = substep
         state["substep"] = "summary_check"
+        state["stall_turns"] = 0
         if revealed:
             state["revealed_substep"] = True
             return stay(0, "reveal", reveals_now=reveals + 1)
         return stay(0, "nudge")
+
+    def _record_miss() -> BlockResolution:
+        tries = note_try()
+        if move_attempts + 1 >= max_retries:
+            if btype == "case_study" and substep == "predict" and "contrast_and_rule" in task_steps:
+                # The supplied prediction stays assisted. The rule is still open.
+                state["prediction_supplied"] = True
+                state["substep"] = "contrast_and_rule"
+                state["stall_turns"] = 0
+                return stay(0, "nudge", reveals_now=reveals + 1)
+            if btype == "case_study" and substep == "contrast_and_rule" and "transfer" in task_steps:
+                state["rule_supplied"] = True
+                state["substep"] = "transfer"
+                state["stall_turns"] = 0
+                return stay(0, "nudge", reveals_now=reveals + 1)
+            if btype == "passage_ela" and substep in task_steps:
+                position = task_steps.index(substep)
+                if position < len(task_steps) - 1:
+                    state["substep"] = task_steps[position + 1]
+                    state["stall_turns"] = 0
+                    return stay(0, "reveal", reveals_now=reveals + 1)
+            if btype == "worked_example" and substep == "faded_step" and "solo_solve" in substeps:
+                # State the faded answer and stop. The solo problem waits for a later turn.
+                state["revealed_substep"] = True
+                state["faded_answer_given"] = True
+                state["stall_turns"] = 0
+                return stay(0, "reveal", reveals_now=reveals + 1)
+            if btype == "retrieval_check" and substep == "recall" and "elaborate_why" in substeps:
+                # The fact is shown. The why question still has to be asked. The unit stays open.
+                state["substep"] = "elaborate_why"
+                state["recall_revealed"] = True
+                state["stall_turns"] = 0
+                return stay(0, "nudge", reveals_now=reveals + 1)
+            if on_last_task:
+                return _enter_summary(revealed=True)
+            return finish("revealed", tries, reveals + 1)
+        bumped = _next_tier(tier)
+        if bumped == "reveal":
+            bumped = "scaffold"
+        return stay(move_attempts + 1, bumped)
+
+    if stall_miss:
+        return _record_miss()
 
     def _resolve_summary_check() -> BlockResolution:
         # A passed summary closes on any reply that is not a question, in this turn.
@@ -2697,6 +2900,7 @@ def resolve_block_turn(
         depth = max(1, int(bcfg.get("dialogue_depth_turns", 2) or 2))
         probes = int(state.get("probe_turns") or 0) + 1
         state["probe_turns"] = probes
+        state["stall_turns"] = 0
         note_try()
         if probes < depth and not state.get("revealed_substep"):
             return stay(0, "nudge")
@@ -2739,6 +2943,7 @@ def resolve_block_turn(
             if position < len(task_steps) - 1:
                 state["substep"] = task_steps[position + 1]
                 state["probe_turns"] = 0
+                state["stall_turns"] = 0
                 return stay(0, "nudge")
             if btype == "passage_ela":
                 return finish("passed", int(state.get("block_attempts") or 1), reveals)
@@ -2751,39 +2956,7 @@ def resolve_block_turn(
         outcome = "revealed" if state.get("revealed_substep") else "passed"
         return finish(outcome, int(state.get("block_attempts") or 1), reveals)
 
-    tries = note_try()
-    if move_attempts + 1 >= max_retries:
-        if btype == "case_study" and substep == "predict" and "contrast_and_rule" in task_steps:
-            # The supplied prediction stays assisted. The rule is still open.
-            state["prediction_supplied"] = True
-            state["substep"] = "contrast_and_rule"
-            return stay(0, "nudge", reveals_now=reveals + 1)
-        if btype == "case_study" and substep == "contrast_and_rule" and "transfer" in task_steps:
-            state["rule_supplied"] = True
-            state["substep"] = "transfer"
-            return stay(0, "nudge", reveals_now=reveals + 1)
-        if btype == "passage_ela" and substep in task_steps:
-            position = task_steps.index(substep)
-            if position < len(task_steps) - 1:
-                state["substep"] = task_steps[position + 1]
-                return stay(0, "reveal", reveals_now=reveals + 1)
-        if btype == "worked_example" and substep == "faded_step" and "solo_solve" in substeps:
-            # State the faded answer and stop. The solo problem waits for a later turn.
-            state["revealed_substep"] = True
-            state["faded_answer_given"] = True
-            return stay(0, "reveal", reveals_now=reveals + 1)
-        if btype == "retrieval_check" and substep == "recall" and "elaborate_why" in substeps:
-            # The fact is shown. The why question still has to be asked. The unit stays open.
-            state["substep"] = "elaborate_why"
-            state["recall_revealed"] = True
-            return stay(0, "nudge", reveals_now=reveals + 1)
-        if on_last_task:
-            return _enter_summary(revealed=True)
-        return finish("revealed", tries, reveals + 1)
-    bumped = _next_tier(tier)
-    if bumped == "reveal":
-        bumped = "scaffold"
-    return stay(move_attempts + 1, bumped)
+    return _record_miss()
 
 
 def _counts_toward_mastery(block: dict, cfg: dict) -> bool:

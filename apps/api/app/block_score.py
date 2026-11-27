@@ -986,18 +986,22 @@ def _passed(
 ) -> bool:
     after_sub = str(after_state.get("substep") or "")
     if kind == "retrieval_check" and substep == "recall":
+        if new_outcome == "passed":
+            return True
         return after_sub != "recall" and not bool(after_state.get("recall_revealed"))
     if kind == "socratic" and substep == "counterexample_probe":
+        if new_outcome == "passed":
+            return True
         return _as_int(after_state.get("probe_turns")) > _as_int(before_state.get("probe_turns"))
     if kind == "socratic" and substep == "initial_thesis" and after_sub not in {"", substep} and new_outcome != "revealed":
         return True
     if kind == "mcq" and substep == "choice" and after_sub not in {"", "choice"}:
         return True
-    if kind == "passage_ela" and after_sub not in {"", substep} and not after_state.get("citation_assisted"):
+    if kind == "passage_ela" and (after_sub not in {"", substep} or new_outcome == "passed") and not after_state.get("citation_assisted"):
         return True
-    if kind == "case_study" and after_sub not in {"", substep} and new_outcome != "revealed":
+    if kind == "case_study" and (after_sub not in {"", substep} or new_outcome == "passed") and new_outcome != "revealed":
         return True
-    if kind == "teach_back" and after_sub not in {"", substep} and new_outcome != "revealed":
+    if kind == "teach_back" and (after_sub not in {"", substep} or new_outcome == "passed") and new_outcome != "revealed":
         return True
     if kind == "topic_goal" and substep == "main" and after_sub not in {"", "main"} and new_outcome != "revealed":
         return True
