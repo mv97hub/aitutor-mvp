@@ -725,7 +725,7 @@ def test_a_non_topic_block_still_praises_on_a_nudge() -> None:
         ],
         misconceptions=[],
     )
-    text = _text(node=node, opening=False, attempts=1, hint_tier="nudge")
+    text = _text(node=node, opening=False, attempts=1, hint_tier="nudge", last_answer="red")
     turn = _section(text, "This turn")
     assert "Active block type: mcq" in text
     assert "Active turn kind: nudge." in turn
