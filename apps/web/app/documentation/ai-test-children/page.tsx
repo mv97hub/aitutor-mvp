@@ -36,8 +36,11 @@ export default function AiTestChildrenDocsPage() {
           </li>
         </ol>
         <p>
-          Start, Stop, and Download are on the Runs tab. There is one Download for the run. Automatic checks are written
-          when a chat finishes. They do not call a model.
+          Start, Stop, and Download are on the Runs tab. There is one Download for the run. Each run also shows when it
+          ran, in Eastern time, and the values that identify it for the agent create call: run id, course ids, child
+          profile ids, tutor model, child model, concurrency, turn limit, cost limit, and stuck limit. A child profile
+          id is the child name plus the stored persona id. The agent call sends the name. Course ids go in courses.
+          Cost limit is cents. Automatic checks are written when a chat finishes. They do not call a model.
         </p>
 
         <h2>Children</h2>
