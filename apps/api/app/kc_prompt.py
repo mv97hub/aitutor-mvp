@@ -41,7 +41,7 @@ from app.tutor_profile import effective_kc_tutor_config, effective_voice_setting
 TEMPERATURE = 0.4
 HINTS = ("nudge", "analogy", "scaffold", "reveal")
 DECISIONS = ("stay", "advance", "complete", "redirect")
-AFFECTS = ("engaged", "stuck", "guessing", "frustrated")
+AFFECTS = ("engaged", "stuck", "guessing", "frustrated", "bored", "curious_stretch")
 CONFIDENCE = ("low", "ok", "high")
 
 SUBSTEP_LABELS: dict[str, str] = {
@@ -4039,7 +4039,7 @@ def _what_to_return(
         "rubric_met lists the active block evidence id when the learner's response satisfies the criteria.",
         "misconception is the stored wrong move that matched, or null.",
         "hint_tier is nudge, analogy, scaffold, or reveal.",
-        "affect is engaged, stuck, guessing, or frustrated. confidence is low, ok, or high.",
+        "affect is engaged, stuck, guessing, frustrated, bored, or curious_stretch. confidence is low, ok, or high.",
         "On unit close, populate score_justification, what_was_strong, and what_to_work_on; otherwise return empty strings for those three fields.",
         "You do not set the block order, the edges, or the final mastery score.",
     ]
@@ -4651,6 +4651,11 @@ def build_kc_prompt(
         fragment=bool(fragment),
         prior_tutor=prior_tutor,
         opening=opening,
+        affect=affect,
+        mastery_spec=getattr(node, "mastery_spec", None),
+        modality_affinity=state_dict.get("frozen_modality_affinity")
+        if isinstance(state_dict.get("frozen_modality_affinity"), dict)
+        else None,
     )
     ends_unit = (
         _forecast_applies(forecast)

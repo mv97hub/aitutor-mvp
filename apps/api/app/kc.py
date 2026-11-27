@@ -2470,8 +2470,14 @@ def _last_block_finished(node: KcNode | None, session: KcSession) -> bool:
     blocks = stored_blocks(node)
     if not blocks:
         return False
+    done = _result_ids(session.block_results)
+    if all(_block_key(blk, pos) in done for pos, blk in enumerate(blocks)):
+        return True
     last = len(blocks) - 1
-    return _block_key(blocks[last], last) in _result_ids(session.block_results)
+    if _block_key(blocks[last], last) not in done:
+        return False
+    step = min(max(int(session.step or 0), 0), last)
+    return _block_key(blocks[step], step) in done
 
 
 def _walk_fragile(blocks: list[dict], results: object, cfg: dict) -> bool:
@@ -2495,7 +2501,7 @@ def _walk_fragile(blocks: list[dict], results: object, cfg: dict) -> bool:
             continue
         counted = True
         row = by_id.get(_block_key(block, index))
-        if row is None or str(row.get("outcome") or "") not in {"passed", "engaged"}:
+        if row is None or str(row.get("outcome") or "") not in {"passed", "engaged", "fast_tracked"}:
             fragile = True
     if not counted:
         return False
@@ -3486,8 +3492,14 @@ def open_session(
         state = {**state, "requirements": freeze_requirements(blocks[0], cfg)}
     course_run = _ensure_course_run(db, student.id, goal.id)
     from app.graph2 import copy_note_for_session_open
+    from app.graph2.state import is_harness_student_or_session
+    from app.models import StudentEducationalState
 
     frozen_note = copy_note_for_session_open(db, student=student, goal=goal, node=node)
+    if not is_harness_student_or_session(db, student=student):
+        edu_row = db.get(StudentEducationalState, student.id)
+        if edu_row is not None and isinstance(edu_row.block_affinity, dict) and edu_row.block_affinity:
+            state = {**state, "frozen_modality_affinity": dict(edu_row.block_affinity)}
     session = KcSession(
         student_id=student.id,
         goal_id=goal.id,
@@ -4654,6 +4666,18 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     matched = _stored_wrong(node, answer, None if reported is None else str(reported))
     rubric = [str(item).strip() for item in (body.get("rubric_met") or []) if str(item).strip()]
     supported = int(session.scoring_version or 1) >= REQUIREMENT_SCORE and str((_block or {}).get("type") or "") in SUPPORTED
+    broken_kc_code = ""
+    if matched:
+        for item in node.misconceptions or []:
+            if isinstance(item, dict) and str(item.get("wrong_move") or "").strip() == matched:
+                broken_kc_code = str(item.get("broken_kc") or "").strip()
+                break
+    frozen_affinity = (
+        dict(block_state.get("frozen_modality_affinity"))
+        if isinstance(block_state.get("frozen_modality_affinity"), dict)
+        else None
+    )
+    confidence_val = str(body.get("confidence") or "").strip()
     if blank_reply:
         resolution = hold_for_blank_reply(
             blocks=blocks,
@@ -4692,6 +4716,11 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
             prior_tutor=next((message.content for message in reversed(messages) if message.role == "assistant"), ""),
             learner_ready=bool(body.get("ready_to_move_on")),
             off_course=bool(body.get("off_course")),
+            affect=affect,
+            confidence=confidence_val,
+            mastery_spec=getattr(node, "mastery_spec", None),
+            modality_affinity=frozen_affinity,
+            broken_kc_code=broken_kc_code,
         )
     else:
         resolution = resolve_block_turn(
@@ -4719,6 +4748,11 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
             prior_tutor=next((message.content for message in reversed(messages) if message.role == "assistant"), ""),
             learner_ready=bool(body.get("ready_to_move_on")),
             off_course=bool(body.get("off_course")),
+            affect=affect,
+            confidence=confidence_val,
+            mastery_spec=getattr(node, "mastery_spec", None),
+            modality_affinity=frozen_affinity,
+            broken_kc_code=broken_kc_code,
         )
     if correction or only_names:
         citation = correction or supplied
@@ -4731,12 +4765,20 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
             question = _block["data"]["analysis_question"]
         reply = f"{feedback} {question}"
     if supported and resolution.unit_complete:
-        verdict = str((resolution.next_block_state or {}).get("component_verdict") or "") or "unassessed"
+        verdict = "fragile" if resolution.redirect else (str((resolution.next_block_state or {}).get("component_verdict") or "") or "unassessed")
         session.verdict = verdict
         if verdict == "known":
             _mark_known(db, session, node)
         elif verdict == "fragile":
             _mark_fragile(db, session, node)
+            if resolution.redirect:
+                broken_code = broken_kc_code
+                if not broken_code:
+                    for item in node.misconceptions or []:
+                        if isinstance(item, dict) and str(item.get("wrong_move") or "").strip() == resolution.misconception:
+                            broken_code = str(item.get("broken_kc") or "")
+                broken = _nodes_by_code(db).get(broken_code)
+                session.redirect_kc_id = broken.id if broken is not None else None
         else:
             _keep_unassessed(db, session, node)
     else:
@@ -4769,6 +4811,8 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     session.step = resolution.next_step
     next_state = dict(resolution.next_block_state or {})
     next_state.pop("component_verdict", None)
+    if frozen_affinity and not resolution.unit_complete and "frozen_modality_affinity" not in next_state:
+        next_state["frozen_modality_affinity"] = dict(frozen_affinity)
     if correction and next_state.get("substep") == "cite_evidence":
         next_state["citation_speaker_hint"] = correction
     elif next_state.get("substep") != "cite_evidence":

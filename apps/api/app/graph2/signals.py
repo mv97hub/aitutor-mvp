@@ -594,6 +594,8 @@ def analyze_component_close(
         row = results_by_id.get(bid)
         if row is None:
             continue
+        if str(row.get("outcome") or "").strip() == "fast_tracked" or row.get("fast_tracked") is True:
+            continue
 
         # Block affinity + hint uptake deltas
         aff = block_affinity_deltas.setdefault(btype, {"completed": 0, "independent": 0, "revealed": 0})
@@ -675,6 +677,9 @@ def analyze_component_close(
             continue
         bid = str(block.get("id") or f"blk_{idx + 1}")
         if bid not in results_by_id:
+            continue
+        res_row = results_by_id[bid]
+        if str(res_row.get("outcome") or "").strip() == "fast_tracked" or res_row.get("fast_tracked") is True:
             continue
         cids = claim_ids_of(block)
         if not cids:
