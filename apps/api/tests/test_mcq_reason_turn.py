@@ -45,6 +45,7 @@ def _commit(session, claim, reply):
 def test_prompt_asks_for_the_learners_reason_after_a_correct_retry(open_lesson):
     _, _, prompt = _pick(open_lesson)
     turn = prompt.split("This turn\n", 1)[1].split("\n\n", 1)[0]
+    assert "Active turn kind: pass." in turn
     assert "ask what helped the learner choose" in turn
     assert "before we finish" not in turn
     assert "The child picks the choice on screen" not in turn
@@ -52,7 +53,9 @@ def test_prompt_asks_for_the_learners_reason_after_a_correct_retry(open_lesson):
 
 
 @pytest.mark.parametrize("draft", [EARLY_CLOSE, "Ready to move on?", "That's it for today!",
-                                   "Why does that fit? Any final questions before we finish?"])
+                                   "Why does that fit? Any final questions before we finish?",
+                                   "What questions do you have before we finish?",
+                                   "What would you like to learn next?", "Anything else?", "Does that make sense?"])
 def test_early_close_is_replaced_before_the_tutor_reply_is_saved(open_lesson, draft):
     session, claim, _ = _pick(open_lesson)
     result = _commit(session, claim, draft)
@@ -74,6 +77,10 @@ def test_early_close_is_replaced_before_the_tutor_reply_is_saved(open_lesson, dr
 
 @pytest.mark.parametrize(("reply", "credit"), [
     ("Which clue helped you decide the race would finish earlier?", "independent"),
+    ("Which clue shows the character is ready to move on?", "independent"),
+    ("Tell me why that choice fits.", "independent"),
+    ("Talk me through how you got there.", "independent"),
+    ("Which clue helped you decide? Take your time.", "independent"),
     (REASON + " Why does that fit your answer?", "assisted"),
 ])
 def test_valid_reason_prompt_and_any_disclosure_reach_the_child(open_lesson, reply, credit):
