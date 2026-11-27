@@ -157,7 +157,7 @@ test("prepared transport uses the original revision and committed transcript eve
   assert.equal(bodies.length, 2, "receipt-only recovery never enters the tutor route");
 });
 
-test("recording the same final turn twice or pausing for delivery does not start another judge", async (t) => {
+test("a replay, paused delivery, or unreached scenario does not start another judge", async (t) => {
   const hooks = registerHooks({
     resolve(specifier, context, next) {
       return specifier.startsWith("@/lib/")
@@ -166,6 +166,7 @@ test("recording the same final turn twice or pausing for delivery does not start
     },
   });
   const { POST } = await import("../app/api/kc/harness/turn/route.ts");
+  const { POST: finish } = await import("../app/api/kc/harness/finish/route.ts");
   const { judgeFinishedChat } = await import("./harness-judge-run.ts").finally(() => hooks.deregister());
   const stored = [
     { stop: "completed" }, { stop: "completed", replayed: true }, { stop: "awaiting_retry", pending: true },
@@ -173,6 +174,7 @@ test("recording the same final turn twice or pausing for delivery does not start
   let judgeReads = 0;
   t.mock.method(globalThis, "fetch", async (url: string) => {
     const path = new URL(url).pathname;
+    if (path === "/kc/harness/chats/chat/finish") return Response.json({ ended_how: "scenario_not_reached" });
     if (path === "/kc/harness/chats/chat/turns") return Response.json(stored.shift());
     if (path === "/kc/harness/chats/capped") return Response.json({ run_cap_reached: true, evaluations: [] });
     assert.equal(path, "/kc/harness/chats/chat");
@@ -180,6 +182,11 @@ test("recording the same final turn twice or pausing for delivery does not start
     return Response.json({ evaluations: [{ kind: "judged", child_realism: 4 }] });
   });
   assert.equal(await judgeFinishedChat("capped"), null, "no judge or evaluation write after hitting the cap");
+  const unreached = await finish(new Request("http://harness.local/api/kc/harness/finish", {
+    method: "POST", body: JSON.stringify({ chatId: "chat", reason: "scenario_not_reached", claim_generation: 1 }),
+  }));
+  assert.equal(unreached.status, 200);
+  assert.equal(judgeReads, 0, "no paid judge for missing practice evidence");
   for (let index = 0; index < 3; index++) {
     const res = await POST(new Request("http://harness.local/api/kc/harness/turn", {
       method: "POST", body: JSON.stringify({ chatId: "chat", turn: { turn_id: "stable" } }),

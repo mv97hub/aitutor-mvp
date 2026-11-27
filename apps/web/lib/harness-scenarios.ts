@@ -86,11 +86,13 @@ function riverPractice(input: ScenarioInput) {
   // Answer only a visible request for an example of cargo. A place, reason,
   // yes/no question, or an unsupported phrasing needs an operator's review.
   const question = input.tutor.match(/(?:^|[.!?]\s+)([^.!?]+)\?\s*$/)?.[1]?.trim() || "";
-  if (/\bpears?\b/i.test(input.tutor)) return;
-  const cargo = /^what (?:else |other (?:things?|food|goods) )?(?:can|could|might) ((?:the |a |that |this )?boats?|it) (?:carry|bring|take|transport)(?:\s+(?:to|on|down|along|across|from)\b[^?]*)?$/i;
-  const vessel = cargo.exec(question)?.[1]?.toLowerCase();
+  if (/\b(?:pears?|only|except|besides|instead of|other than|allowed)\b/i.test(input.tutor)) return;
+  const cargo = /^what (?:else |other (?:things?|food|goods) )?(?:can|could|might) ((?:the |a |that |this )?boats?|it) (?:carry|bring|take|transport)\b(.*)$/i.exec(question);
+  if (!cargo) return;
+  const [, vessel, destination] = cargo;
+  if (destination && !/^ (?:to|from) (?:the |a |your |our )?(?:town|market|farm|village|city|school|shop)$/i.test(destination)) return;
   const example = input.tutor.slice(0, input.tutor.lastIndexOf(question)).trim().split(/[.!?]\s+/).at(-1) || "";
-  if (vessel && (vessel !== "it" || /\bboat\b/i.test(example))) return CARGO_ANSWER;
+  if (vessel.toLowerCase() !== "it" || /\bboat\b/i.test(example)) return CARGO_ANSWER;
 }
 
 function echo(id: string, input: ScenarioInput) {

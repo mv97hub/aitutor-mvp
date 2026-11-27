@@ -20,7 +20,7 @@ export function readerPracticePlan(courses: Course[], children: { id: string; nu
 export type PracticeTurn = {
   child_text: string;
   session_before?: { scenario_exercised?: boolean; substep?: string; block_id?: string };
-  session_after?: { delivery_status?: string; block_id?: string; substep?: string; loop_result?: {
+  session_after?: { delivery_status?: string; receipt_status?: string; block_id?: string; substep?: string; loop_result?: {
     attempt_counted?: boolean; stayed?: boolean; advanced?: boolean; closed?: string; ended_unit?: boolean;
   } | null };
 };
@@ -33,7 +33,8 @@ export function readerPracticeChecks(turns: PracticeTurn[]) {
     const before = turn.session_before;
     const after = turn.session_after;
     const loop = after?.loop_result;
-    if ((after?.delivery_status !== "delivered" && after?.delivery_status !== "recovered") || typeof loop?.attempt_counted !== "boolean") return "Outcome unavailable";
+    const delivered = after?.delivery_status === "delivered" || after?.delivery_status === "recovered";
+    if (!delivered || after?.receipt_status !== "committed" || typeof loop?.attempt_counted !== "boolean") return "Outcome unavailable";
     if (loop.attempt_counted) return "An assessment attempt was counted";
     if (!before?.block_id || before.substep !== "central_idea" || !after.block_id || !after.substep || typeof loop.stayed !== "boolean") {
       return "Outcome unavailable";

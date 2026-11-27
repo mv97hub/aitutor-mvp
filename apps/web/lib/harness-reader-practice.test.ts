@@ -24,13 +24,14 @@ test("the practice report distinguishes delivered, replayed, counted, changed, m
   const turn: PracticeTurn = {
     child_text: EXAMPLE_REQUEST,
     session_before: { scenario_exercised: true, substep: "central_idea", block_id: "river" },
-    session_after: { delivery_status: "delivered", substep: "central_idea", block_id: "river",
+    session_after: { delivery_status: "delivered", receipt_status: "committed", substep: "central_idea", block_id: "river",
       loop_result: { stayed: true, attempt_counted: false } },
   };
   const ok = "Central-idea question open · zero attempts used";
   const answer = {...turn, child_text: CARGO_ANSWER};
   assert.deepEqual(readerPracticeChecks([turn, answer]), [ok, ok]);
   assert.deepEqual(readerPracticeChecks([turn, {...answer, session_after: {...answer.session_after, delivery_status: "recovered"}}]), [ok, ok]);
+  assert.deepEqual(readerPracticeChecks([turn, {...answer, session_after: {...answer.session_after, receipt_status: undefined}}]), [ok, "Outcome unavailable"]);
   assert.deepEqual(readerPracticeChecks([turn]), [ok, "Not exercised"]);
   assert.deepEqual(readerPracticeChecks([{...turn, session_before: {scenario_exercised: false}}]), ["Not exercised", "Not exercised"]);
   assert.deepEqual(readerPracticeChecks([{...turn, session_after: {...turn.session_after, loop_result: {stayed: true, attempt_counted: true}}}, answer]), ["An assessment attempt was counted", ok]);
@@ -46,6 +47,7 @@ test("the script needs visible River roads and never treats an unrelated questio
     assert.equal(scenarioMove(READER_PRACTICE, {...river, ...changes}), undefined);
   }
   for (const tutor of ["Apples go to town. What did the boat carry?", "It carried pears. What else could a boat carry?",
+    "What could the boat carry to town besides fruit?", "What could the boat carry to town if food is not allowed?",
     "What could the boat carry? Now, why do people live by rivers?"]) {
     assert.equal(scenarioMove(READER_PRACTICE, {...river, tutor, lastScenarioLine: EXAMPLE_REQUEST}), undefined);
   }

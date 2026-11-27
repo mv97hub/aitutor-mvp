@@ -15,10 +15,11 @@ export async function POST(req: Request) {
   const chatId = body.chatId || "";
   if (!chatId) return new Response("chatId is required.", { status: 400 });
   try {
-    await api(`/kc/harness/chats/${chatId}/finish`, {
+    const finished = await api<{ ended_how: string }>(`/kc/harness/chats/${chatId}/finish`, {
       method: "POST",
       body: JSON.stringify({ reason: body.reason || "completed", claim_generation: body.claim_generation }),
     });
+    if (finished.ended_how === "scenario_not_reached") return Response.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not finish the chat.";
     return new Response(message, { status: error instanceof ApiError ? error.status : 502 });
