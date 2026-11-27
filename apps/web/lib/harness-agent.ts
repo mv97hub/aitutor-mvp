@@ -6,23 +6,26 @@ import { ApiError } from "./api.ts";
 import { clampConcurrency } from "./harness-background.ts";
 import {
   DEFAULT_CHAT_CAP_CENTS,
-  DEFAULT_JUDGE_MODEL,
   DEFAULT_LUNA_TOKEN_CEILING,
 } from "./harness.ts";
-import { isKcModel, modelForCall } from "./kc-models.ts";
+import { DEEPSEEK_FLASH_MODEL, GPT6_LUNA_MODEL, isKcModel, modelForCall } from "./kc-models.ts";
 
 /** Recommended chats in flight. The runner still refuses more than 8. */
 export const AGENT_CONCURRENCY = 4;
 export const CONCURRENCY_CEILING = 8;
 export const AGENT_ITERATIONS = 1;
-/** Fields a create call may omit. concurrency then uses 4. judge_model uses gpt-6.1-sol. */
-export const OPTIONAL_FIELDS = ["concurrency", "judge_model"] as const;
+/** Tutor model when the create call leaves tutor_model out. */
+export const AGENT_TUTOR_MODEL = DEEPSEEK_FLASH_MODEL;
+/** Child model when the create call leaves child_model out. */
+export const AGENT_CHILD_MODEL = GPT6_LUNA_MODEL;
+/** Fields a create call may omit. */
+export const OPTIONAL_FIELDS = ["tutor_model", "child_model", "concurrency"] as const;
 const STARTER_NUMBERS = 14;
 const MAX_TURN_LIMIT = 500;
 const MAX_STUCK_LIMIT = 500;
 const MIN_STUCK_LIMIT = 2;
 const MAX_COST_CENTS = 100_000_000;
-const OPTIONAL_NOTE = "Optional fields: concurrency, judge_model.";
+const OPTIONAL_NOTE = "Optional fields: tutor_model, child_model, concurrency.";
 
 export type CourseRef = { id: string; title?: string; code?: string; ready?: boolean };
 export type PersonaRef = { id: string; name?: string; number?: number; archived?: boolean };
@@ -32,7 +35,6 @@ export type AgentJob = {
   personaSet: "starter" | Array<string | number>;
   tutorModel: string;
   childModel: string;
-  judgeModel: string;
   turnLimit: number;
   costLimitCents: number;
   stuckLimit: number;
@@ -146,8 +148,7 @@ export function parseAgentJob(body: unknown): { job: AgentJob } | { detail: stri
     profiles = childList(!blank(raw.child_profiles) ? raw.child_profiles : raw.persona_set);
     if (!profiles && !shape) shape = 'child_profiles is "starter" or a list of test children.';
   }
-  if (blank(raw.tutor_model)) missing.push("tutor_model");
-  if (blank(raw.child_model)) missing.push("child_model");
+  if ("judge_model" in raw) return { detail: "judge_model is not a field on this call." };
   if (!present(raw.turn_limit)) missing.push("turn_limit");
   if (!present(raw.cost_limit)) missing.push("cost_limit");
   if (!present(raw.stuck_limit)) missing.push("stuck_limit");
@@ -160,15 +161,10 @@ export function parseAgentJob(body: unknown): { job: AgentJob } | { detail: stri
     return { detail: parts.join(" ") };
   }
   if (!courses || !profiles) return { detail: missingFields(["courses", "child_profiles"]) };
-  const tutorModel = chosenModel(raw.tutor_model, "tutor_model");
+  const tutorModel = blank(raw.tutor_model) ? AGENT_TUTOR_MODEL : chosenModel(raw.tutor_model, "tutor_model");
   if (typeof tutorModel !== "string") return tutorModel;
-  const childModel = chosenModel(raw.child_model, "child_model");
+  const childModel = blank(raw.child_model) ? AGENT_CHILD_MODEL : chosenModel(raw.child_model, "child_model");
   if (typeof childModel !== "string") return childModel;
-  const judgeSource = present(raw.judge_model) && !(typeof raw.judge_model === "string" && !raw.judge_model.trim())
-    ? raw.judge_model
-    : DEFAULT_JUDGE_MODEL;
-  const judgeModel = chosenModel(judgeSource, "judge_model");
-  if (typeof judgeModel !== "string") return judgeModel;
   const turnLimit = wholeNumber(raw.turn_limit, "turn_limit", 1, MAX_TURN_LIMIT);
   if (typeof turnLimit === "string") return { detail: turnLimit };
   const costLimit = wholeNumber(raw.cost_limit, "cost_limit", 1, MAX_COST_CENTS);
@@ -185,7 +181,6 @@ export function parseAgentJob(body: unknown): { job: AgentJob } | { detail: stri
       personaSet: profiles,
       tutorModel,
       childModel,
-      judgeModel,
       turnLimit,
       costLimitCents: costLimit,
       stuckLimit,
@@ -274,7 +269,6 @@ export function agentRunPlan(courseIds: string[], personaIds: string[], job: Age
     component_ids: [],
     tutor_models: [job.tutorModel],
     child_model: job.childModel,
-    judge_model: job.judgeModel,
     behavior: "rule",
     tutor_profile_ids: [],
     iterations: AGENT_ITERATIONS,

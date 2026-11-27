@@ -3,8 +3,11 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { clampConcurrency } from "./harness-background.ts";
+import { DEEPSEEK_FLASH_MODEL, GPT6_LUNA_MODEL } from "./kc-models.ts";
 import {
+  AGENT_CHILD_MODEL,
   AGENT_CONCURRENCY,
+  AGENT_TUTOR_MODEL,
   CONCURRENCY_CEILING,
   agentRunPlan,
   authorizeHarnessService,
@@ -30,8 +33,6 @@ function request(overrides: Record<string, unknown> = {}) {
   return {
     courses: ["Costs of Inflation"],
     child_profiles: ["AI_Child1"],
-    tutor_model: "gpt-4.1",
-    child_model: "gpt-4.1-mini",
     turn_limit: 40,
     cost_limit: 400,
     stuck_limit: 8,
@@ -43,9 +44,8 @@ function job(overrides: Partial<AgentJob> = {}): AgentJob {
   return {
     courses: ["Costs of Inflation"],
     personaSet: ["AI_Child1"],
-    tutorModel: "gpt-4.1",
-    childModel: "gpt-4.1-mini",
-    judgeModel: "gpt-6.1-sol",
+    tutorModel: DEEPSEEK_FLASH_MODEL,
+    childModel: GPT6_LUNA_MODEL,
     turnLimit: 40,
     costLimitCents: 400,
     stuckLimit: 8,
@@ -105,6 +105,7 @@ test("an agent run recommends concurrency 4 and the ceiling stays 8", () => {
   assert.equal(plan.iterations, 1);
   assert.deepEqual(plan.tutor_models, ["gpt-4o"]);
   assert.equal(plan.child_model, "gpt-4.1-mini");
+  assert.equal("judge_model" in plan, false);
   assert.deepEqual(plan.course_ids, ["course-1", "course-3"]);
   assert.deepEqual(plan.persona_ids, ["p1", "p13"]);
 });
@@ -113,8 +114,6 @@ test("the create call requires the runner inputs and names the optional fields",
   const parsed = parseAgentJob(request({
     courses: [" Costs of Inflation ", "River roads"],
     child_profiles: ["AI_Child1", 13],
-    tutor_model: "gpt-4.1",
-    child_model: "gpt-4.1-mini",
     concurrency: 4,
   }));
   assert.deepEqual(parsed, {
@@ -123,21 +122,24 @@ test("the create call requires the runner inputs and names the optional fields",
       personaSet: ["AI_Child1", 13],
     }),
   });
+  assert.equal(AGENT_TUTOR_MODEL, DEEPSEEK_FLASH_MODEL);
+  assert.equal(AGENT_CHILD_MODEL, GPT6_LUNA_MODEL);
   const omitted = parseAgentJob({ courses: ["Inflation"], child_profiles: "starter" });
-  assert.equal("detail" in omitted, true);
-  if ("detail" in omitted) {
-    assert.match(omitted.detail, /tutor_model/);
-    assert.match(omitted.detail, /child_model/);
-    assert.match(omitted.detail, /turn_limit/);
-    assert.match(omitted.detail, /cost_limit/);
-    assert.match(omitted.detail, /stuck_limit/);
-    assert.match(omitted.detail, /Optional fields: concurrency, judge_model/);
-  }
+  assert.equal(
+    "detail" in omitted && omitted.detail,
+    "Missing required fields: turn_limit, cost_limit, stuck_limit. Optional fields: tutor_model, child_model, concurrency.",
+  );
   const one = parseAgentJob(request({ stuck_limit: undefined }));
-  assert.equal("detail" in one && one.detail, "Missing required field: stuck_limit. Optional fields: concurrency, judge_model.");
+  assert.equal("detail" in one && one.detail, "Missing required field: stuck_limit. Optional fields: tutor_model, child_model, concurrency.");
   const recommended = parseAgentJob(request());
   assert.equal("job" in recommended && recommended.job.concurrency, 4);
-  assert.equal("job" in recommended && recommended.job.judgeModel, "gpt-6.1-sol");
+  assert.equal("job" in recommended && recommended.job.tutorModel, "~deepseek/deepseek-flash-latest");
+  assert.equal("job" in recommended && recommended.job.childModel, "gpt-6-luna");
+  const chosen = parseAgentJob(request({ tutor_model: "deepseek/deepseek-flash-latest", child_model: "gpt-4.1-mini" }));
+  assert.equal("job" in chosen && chosen.job.tutorModel, "~deepseek/deepseek-flash-latest");
+  assert.equal("job" in chosen && chosen.job.childModel, "gpt-4.1-mini");
+  const judge = parseAgentJob(request({ judge_model: "gpt-6.1-sol" }));
+  assert.equal("detail" in judge && judge.detail, "judge_model is not a field on this call.");
   const tooMany = parseAgentJob(request({ concurrency: 9 }));
   assert.equal("detail" in tooMany && tooMany.detail, "concurrency must be from 1 to 8. 4 is recommended.");
   const badModel = parseAgentJob(request({ tutor_model: "not-a-model" }));
@@ -249,7 +251,10 @@ test("the documentation index links the harness agent page", () => {
   assert.match(page, /stuck_limit/);
   assert.match(page, /turn_limit/);
   assert.match(page, /cost_limit/);
-  assert.match(page, /Optional fields: concurrency, judge_model/);
+  assert.match(page, /Optional fields: tutor_model, child_model, concurrency/);
+  assert.match(page, /~deepseek\/deepseek-flash-latest/);
+  assert.match(page, /gpt-6-luna/);
+  assert.match(page, /does\s+not take <code>judge_model<\/code>/);
   assert.match(page, /status/);
   assert.match(page, /stopped/);
   assert.match(page, /one row per child/);

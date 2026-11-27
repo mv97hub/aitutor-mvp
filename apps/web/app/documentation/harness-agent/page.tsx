@@ -31,18 +31,21 @@ export default function HarnessAgentDocsPage() {
           <code>POST /api/kc/harness/agent/runs</code>
         </p>
         <p>
-          Required fields are <code>courses</code>, <code>child_profiles</code>, <code>tutor_model</code>,{" "}
-          <code>child_model</code>, <code>turn_limit</code>, <code>cost_limit</code>, and <code>stuck_limit</code>.
-          Optional fields: concurrency, judge_model. Leave concurrency out to use 4. Leave judge_model out to use
-          gpt-6.1-sol. A request that omits a required field is rejected, and the detail names the optional fields.
+          Required fields are <code>courses</code>, <code>child_profiles</code>, <code>turn_limit</code>,{" "}
+          <code>cost_limit</code>, and <code>stuck_limit</code>. Optional fields: tutor_model, child_model, concurrency.
+          Leave <code>tutor_model</code> out to use <code>~deepseek/deepseek-flash-latest</code>. Leave{" "}
+          <code>child_model</code> out to use <code>gpt-6-luna</code>. Leave concurrency out to use 4. This call does
+          not take <code>judge_model</code>. A request that omits a required field is rejected, and the detail names
+          the optional fields.
         </p>
         <p>
           <code>courses</code> is a list of ready courses. Each entry is an id, a code, or a title.{" "}
           <code>child_profiles</code> is <code>&quot;starter&quot;</code> or a list of test-child names or numbers, such
           as <code>[&quot;AI_Child1&quot;, 13]</code>. The starter set is created when it is not stored yet.{" "}
-          <code>tutor_model</code> and <code>child_model</code> are tutor models. <code>turn_limit</code> is the child
-          turns for one chat. <code>cost_limit</code> is a whole number of cents for the run. <code>stuck_limit</code>{" "}
-          is how many turns without movement stop a chat. <code>concurrency</code> is a whole number from 1 to 8.
+          <code>tutor_model</code> and <code>child_model</code> are tutor models when you send them.{" "}
+          <code>turn_limit</code> is the child turns for one chat. <code>cost_limit</code> is a whole number of cents
+          for the run. <code>stuck_limit</code> is how many turns without movement stop a chat.{" "}
+          <code>concurrency</code> is a whole number from 1 to 8.
         </p>
         <pre>{`POST /api/kc/harness/agent/runs
 Authorization: Bearer <token>
@@ -51,8 +54,6 @@ Content-Type: application/json
 {
   "courses": ["Costs of Inflation", "River roads"],
   "child_profiles": ["AI_Child1", "AI_Child13"],
-  "tutor_model": "gpt-4.1",
-  "child_model": "gpt-4.1-mini",
   "turn_limit": 40,
   "cost_limit": 400,
   "stuck_limit": 8,
