@@ -665,7 +665,7 @@ class TokenUsageTurn(BaseModel):
     session_id: UUID
     course_id: UUID | None = None
     message_id: UUID | None = None
-    kind: Literal["speak", "answer"]
+    kind: Literal["speak", "answer", "judge"]
     model: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
@@ -679,7 +679,7 @@ class SessionTokenUsage(BaseModel):
 
 
 class TokenUsageIn(BaseModel):
-    kind: Literal["speak", "answer"]
+    kind: Literal["speak", "answer", "judge"]
     model: str = Field(default="", max_length=120)
     input_tokens: int = 0
     output_tokens: int = 0

@@ -66,8 +66,8 @@ def record_token_usage(
     cached_tokens: object,
     message_id: uuid.UUID | None = None,
 ) -> TutorTokenUsage:
-    if kind not in {"speak", "answer"}:
-        raise HTTPException(status_code=422, detail="kind must be speak or answer.")
+    if kind not in {"speak", "answer", "judge"}:
+        raise HTTPException(status_code=422, detail="kind must be speak, answer, or judge.")
     linked = None
     if message_id is not None:
         linked = db.get(KcMessage, message_id)

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.graph2 import build_radar_payload
 from app.kc import _course_or_404, network, progress, tutor_courses
 from app.parents import (
     ParentChatDetail,
@@ -115,3 +116,13 @@ def get_parent_child_network(
 ) -> dict:
     require_linked_child(db, parent_id, student_id)
     return network(db, _course_or_404(db, course_id))
+
+
+@router.get("/parents/{parent_id}/children/{student_id}/radar")
+def get_parent_child_radar(
+    parent_id: uuid.UUID,
+    student_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> dict:
+    student = require_linked_child(db, parent_id, student_id)
+    return build_radar_payload(db, student.id)

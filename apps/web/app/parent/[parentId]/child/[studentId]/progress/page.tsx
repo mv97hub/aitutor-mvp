@@ -2,6 +2,7 @@ import { KcCourseProgress } from "@/components/KcCourseProgress";
 import { ParentFrame } from "@/components/parent/ParentFrame";
 import { ParentMissing } from "@/components/parent/ParentMissing";
 import { api } from "@/lib/api";
+import type { SkillRadarPayload } from "@/lib/graph2";
 import type { KcNetwork, KcProgress, KcTutorCourse } from "@/lib/kc";
 import { coursesStartedFirst, portfolioCourseStatus } from "@/lib/kc-progress";
 import { knownId, parentHome, parentProgress, type Parent } from "@/lib/parent";
@@ -33,6 +34,7 @@ export default async function ParentProgressPage({
   let courseId = knownId(query.course) ?? "";
   let progress: KcProgress | null = null;
   let network: KcNetwork | null = null;
+  let radar: SkillRadarPayload | null = null;
   let error: string | null = null;
   const base = `/parents/${parentId}/children/${studentId}`;
 
@@ -45,7 +47,12 @@ export default async function ParentProgressPage({
     learners = linked;
     learner = linked.find((item) => item.id === studentId) ?? null;
     if (learner) {
-      courses = coursesStartedFirst(await api<KcTutorCourse[]>(`${base}/courses`));
+      const [loadedCourses, loadedRadar] = await Promise.all([
+        api<KcTutorCourse[]>(`${base}/courses`),
+        api<SkillRadarPayload>(`${base}/radar`).catch(() => null),
+      ]);
+      courses = coursesStartedFirst(loadedCourses);
+      radar = loadedRadar;
       if (!courseId) {
         const started = courses.find((course) => portfolioCourseStatus(course) !== "");
         courseId = (started ?? courses[0])?.id ?? "";
@@ -83,6 +90,7 @@ export default async function ParentProgressPage({
         courseId={courseId}
         progress={progress}
         network={network}
+        radar={radar}
         error={error}
         area={{
           backHref: parentHome(parent.id),

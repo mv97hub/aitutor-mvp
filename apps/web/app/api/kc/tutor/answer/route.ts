@@ -1,6 +1,7 @@
 import { generateText, jsonSchema, Output, wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 
 import { api, ApiError } from "@/lib/api";
+import { judgeModelForCall } from "@/lib/graph2";
 import type { KcTutorSession } from "@/lib/kc";
 import { languageModel } from "@/lib/language-model";
 import { isKcModel, kcModel, missingKeyMessage, modelForCall } from "@/lib/kc-models";
@@ -106,6 +107,90 @@ function asDecision(value: unknown): Decision | null {
     what_to_work_on: typeof row.what_to_work_on === "string" ? row.what_to_work_on : "",
     safety_flag: typeof row.safety_flag === "string" && row.safety_flag ? row.safety_flag : "none",
   };
+}
+
+type JudgePromptBundle = {
+  skipped?: boolean;
+  system_prompt?: string;
+  user_prompt?: string;
+  response_schema?: Record<string, unknown>;
+  eligible_skills?: string[];
+  temperature?: number;
+};
+
+async function runPostCloseJudge(sessionId: string, tutorModel: string): Promise<void> {
+  try {
+    const promptBundle = await api<JudgePromptBundle>(
+      `/kc/tutor/sessions/${encodeURIComponent(sessionId)}/graph2/judge-prompt`,
+      { method: "POST" },
+    );
+    if (
+      promptBundle.skipped ||
+      !promptBundle.system_prompt ||
+      !promptBundle.user_prompt ||
+      !promptBundle.response_schema
+    ) {
+      return;
+    }
+    const judgeModel = judgeModelForCall(tutorModel, process.env.GRAPH2_JUDGE_MODEL);
+    if (missingKeyMessage(judgeModel)) {
+      await api(`/kc/tutor/sessions/${encodeURIComponent(sessionId)}/graph2/judge-failed`, { method: "POST" }).catch(
+        () => undefined,
+      );
+      return;
+    }
+    const result = await generateText({
+      model: languageModel(judgeModel),
+      instructions: promptBundle.system_prompt,
+      prompt: promptBundle.user_prompt,
+      temperature: typeof promptBundle.temperature === "number" ? promptBundle.temperature : 0,
+      output: Output.object({ schema: jsonSchema(promptBundle.response_schema) }),
+    });
+    const parsed =
+      result.output && typeof result.output === "object"
+        ? result.output
+        : result.text
+          ? JSON.parse(result.text)
+          : null;
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("Batch judge returned an unreadable payload.");
+    }
+    await api(`/kc/tutor/sessions/${encodeURIComponent(sessionId)}/graph2/judge-result`, {
+      method: "POST",
+      body: JSON.stringify(parsed),
+    });
+    const judgeUsage = readModelUsage(result.usage);
+    await api(`/kc/sessions/${encodeURIComponent(sessionId)}/token-usage`, {
+      method: "POST",
+      body: JSON.stringify({
+        kind: "judge",
+        model: judgeModel,
+        message_id: null,
+        ...judgeUsage,
+      }),
+    }).catch(() => undefined);
+  } catch {
+    // Sync biomarkers, end card, and previous tutor note remain intact on judge failure.
+    await api(`/kc/tutor/sessions/${encodeURIComponent(sessionId)}/graph2/judge-failed`, { method: "POST" }).catch(
+      () => undefined,
+    );
+  }
+}
+
+function schedulePostCloseTask(task: () => Promise<void>): void {
+  // Use Next.js `after()` in server requests so the batch judge runs post-response
+  // without blocking the closing reply, while staying loadable under Node ESM tests.
+  void import("next/server")
+    .then((mod) => {
+      if (typeof mod.after === "function") {
+        mod.after(task);
+        return;
+      }
+      void task();
+    })
+    .catch(() => {
+      void task();
+    });
 }
 
 export async function POST(req: Request) {
@@ -248,6 +333,11 @@ export async function POST(req: Request) {
     });
   });
   if (saved.replayed) return Response.json(saved);
+  if (saved.unit_complete && saved.graph2_judge_pending) {
+    schedulePostCloseTask(async () => {
+      await runPostCloseJudge(sessionId, modelName);
+    });
+  }
   return Response.json({
     ...saved,
     loop_result: saved.loop_result ?? null,

@@ -3331,3 +3331,175 @@ def forecast_this_turn(
         return TurnForecast(True, False, accepted, accepted, missed)
     return TurnForecast(True, True, None, accepted, missed)
 
+
+_SUBSTEP_INQUIRY_RE = re.compile(
+    r"(?:\bwhy\b|\bwhat\s+if\b|\bwhat\s+would\s+happen\s+if\b|\bhow\s+come\b|\bwhat\s+about\s+if\b)",
+    re.IGNORECASE,
+)
+
+
+def record_substep_evidence(
+    *,
+    block: dict,
+    before_state: dict,
+    next_state: dict,
+    before_results: list,
+    after_results: list,
+    before_step: int,
+    next_step: int,
+    unit_complete: bool,
+    answer: str,
+    prior_tutor: str,
+    before_attempts: int,
+    after_attempts: int,
+    before_hint_tier: str,
+    after_hint_tier: str,
+    off_course: bool,
+) -> tuple[dict, list[dict]]:
+    """Record child/tutor lines and pass/reveal/giveaway flags per substep for Graph-2 close.
+
+    Does not change routing, scoring, or live tutor speech. When a block seals into
+    `after_results`, copies the accumulated `substep_log` onto that finished row.
+    """
+    btype = str((block or {}).get("type") or "").strip()
+    before_sub = str((before_state or {}).get("substep") or "").strip()
+    next_sub = str((next_state or {}).get("substep") or "").strip()
+    log: list[dict] = [
+        {
+            **dict(item),
+            "child_lines": list(item.get("child_lines") or []),
+            "tutor_lines": list(item.get("tutor_lines") or []),
+            "on_topic_questions": list(item.get("on_topic_questions") or []),
+        }
+        for item in ((before_state or {}).get("substep_log") or [])
+        if isinstance(item, dict)
+    ]
+
+    cleaned_answer = (answer or "").strip()
+    cleaned_tutor = (prior_tutor or "").strip()
+    is_inquiry_q = bool(
+        not off_course and cleaned_answer and _SUBSTEP_INQUIRY_RE.search(cleaned_answer)
+    )
+
+    block_closed = len(after_results) > len(before_results)
+    same_block = (not block_closed) and (not unit_complete) and (next_step == before_step)
+    substep_changed = same_block and next_sub != before_sub
+
+    target_sub = before_sub
+    if target_sub == "summary_check":
+        # Preserve an on-topic inquiry question asked on summary_check onto the prior task substep.
+        if is_inquiry_q and log:
+            if cleaned_answer not in log[-1]["on_topic_questions"]:
+                log[-1]["on_topic_questions"].append(cleaned_answer)
+    elif target_sub:
+        entry = next((item for item in reversed(log) if item.get("substep") == target_sub), None)
+        if entry is None:
+            entry = {
+                "substep": target_sub,
+                "child_lines": [],
+                "tutor_lines": [],
+                "passed": False,
+                "revealed": False,
+                "giveaway": False,
+                "attempts": 0,
+                "hint_tier": before_hint_tier or "nudge",
+                "on_topic_questions": [],
+                "required_quote": bool(btype == "passage_ela" and target_sub == "cite_evidence"),
+            }
+            log.append(entry)
+        if cleaned_tutor and cleaned_tutor not in entry["tutor_lines"]:
+            entry["tutor_lines"].append(cleaned_tutor)
+        if cleaned_answer and cleaned_answer not in entry["child_lines"]:
+            entry["child_lines"].append(cleaned_answer)
+        if is_inquiry_q and cleaned_answer not in entry["on_topic_questions"]:
+            entry["on_topic_questions"].append(cleaned_answer)
+
+        # Track attempts and hint escalation seen on this substep.
+        if substep_changed or block_closed:
+            entry["attempts"] = max(int(entry.get("attempts") or 0), int(before_attempts or 0) + 1)
+        else:
+            entry["attempts"] = max(int(entry.get("attempts") or 0), int(after_attempts or 0))
+        if before_hint_tier in {"analogy", "scaffold", "reveal"} or after_hint_tier in {"analogy", "scaffold", "reveal"}:
+            entry["hint_tier"] = after_hint_tier if after_hint_tier in {"analogy", "scaffold", "reveal"} else before_hint_tier
+
+        disclosed = dict((before_state or {}).get("tutor_disclosures") or {})
+        disclosed.update(dict((next_state or {}).get("tutor_disclosures") or {}))
+        giveaway_now = bool(
+            (before_state or {}).get("answer_given_away")
+            or (next_state or {}).get("answer_given_away")
+            or (before_state or {}).get("giveaway_counted")
+            or (next_state or {}).get("giveaway_counted")
+            or disclosed.get(target_sub)
+            or (target_sub == "awaiting_why" and disclosed.get("why"))
+            or (target_sub == "main" and disclosed.get("goal"))
+        )
+        revealed_now = bool(
+            giveaway_now
+            or (before_state or {}).get("revealed_substep")
+            or (next_state or {}).get("revealed_substep")
+            or (before_state or {}).get("recall_revealed")
+            or (next_state or {}).get("recall_revealed")
+            or (before_state or {}).get("faded_answer_given")
+            or (next_state or {}).get("faded_answer_given")
+        )
+        if giveaway_now:
+            entry["giveaway"] = True
+            entry["revealed"] = True
+        elif revealed_now:
+            entry["revealed"] = True
+
+        if substep_changed and not entry["revealed"] and not entry["giveaway"]:
+            entry["passed"] = True
+
+    updated_state = dict(next_state or {})
+    updated_results = [dict(row) if isinstance(row, dict) else row for row in (after_results or [])]
+
+    if block_closed:
+        new_rows = updated_results[len(before_results) :]
+        for row in new_rows:
+            if not isinstance(row, dict):
+                continue
+            outcome = str(row.get("outcome") or "").strip()
+            verdict = str(row.get("verdict") or "").strip()
+            row_revealed = bool(row.get("revealed") is True or outcome == "revealed")
+            if log:
+                last_entry = log[-1]
+                if row_revealed:
+                    last_entry["revealed"] = True
+                    last_entry["passed"] = False
+                elif outcome in {"passed", "engaged"} or verdict == "known":
+                    if not last_entry.get("revealed") and not last_entry.get("giveaway"):
+                        last_entry["passed"] = True
+                # Reconcile per-requirement disclosures/observations sealed by block_score.
+                reqs = row.get("requirements") if isinstance(row.get("requirements"), list) else []
+                req_by_key = {str(r.get("key") or ""): r for r in reqs if isinstance(r, dict)}
+                for item in log:
+                    sub_key = str(item.get("substep") or "")
+                    req = req_by_key.get(sub_key)
+                    if req is None and btype == "case_study" and sub_key == "contrast_and_rule":
+                        req = req_by_key.get("rule")
+                    if req is None and btype == "mcq" and sub_key == "awaiting_why":
+                        req = req_by_key.get("why")
+                    if req is None and btype == "socratic" and sub_key == "counterexample_probe":
+                        req = next((r for k, r in req_by_key.items() if k.startswith("counterexample")), None)
+                    if req is None:
+                        continue
+                    if req.get("tutor_disclosed"):
+                        item["giveaway"] = True
+                        item["revealed"] = True
+                        item["passed"] = False
+                    elif req.get("gave_up") or req.get("observation") == "insufficient":
+                        item["revealed"] = True
+                        item["passed"] = False
+                    elif req.get("observation") == "independent":
+                        if not item.get("revealed") and not item.get("giveaway"):
+                            item["passed"] = True
+                        item["attempts"] = max(int(item.get("attempts") or 0), int(req.get("attempts") or 0))
+            row["substep_log"] = log
+        updated_state.pop("substep_log", None)
+    elif same_block:
+        updated_state["substep_log"] = log
+
+    return updated_state, updated_results
+
+

@@ -40,8 +40,9 @@ _CLAIM_SCHEMA = {
     "properties": {
         "id": {"type": "string"},
         "statement": {"type": "string"},
+        "skills": {"type": "array", "items": {"type": "string", "enum": list(SKILL_KEYS)}},
     },
-    "required": ["id", "statement"],
+    "required": ["id", "statement", "skills"],
 }
 
 MASTERY_SPEC_SCHEMA = {
@@ -64,7 +65,7 @@ def _recipe_sentence() -> str:
         "Before any block is chosen, assign mastery_spec on each component. "
         f"archetype is one of: {', '.join(ARCHETYPES)}. "
         "claims are two or three observable statements of what the learner can do. "
-        "Each claim has an id and a statement. "
+        "Each claim has an id, a statement, and skills (zero or more of the eight skill keys that claim explicitly tests). "
         "target_level is an integer from 0 to 3. That is the only level. "
         f"skills lists which of these eight keys the component can feed: {', '.join(SKILL_KEYS)}. "
         "Recipes are applied after the claims and filtered by the course's allowed block types: "
@@ -138,6 +139,22 @@ def _default_claims(title: str, summary: str) -> list[dict]:
     ]
 
 
+def _clean_claim_skills(raw: object, *, repair: bool) -> list[str]:
+    if not isinstance(raw, list):
+        if repair:
+            return []
+        raise ValueError("claim skills is a list of the eight skill keys.")
+    kept: list[str] = []
+    for item in raw:
+        key = _squash(item).lower().replace(" ", "_")
+        if key in SKILL_KEYS and key not in kept:
+            kept.append(key)
+            continue
+        if key and not repair:
+            raise ValueError(f"{item!r} is not one of the eight skill keys.")
+    return kept
+
+
 def _claim_rows(raw: object, *, repair: bool, title: str, summary: str) -> list[dict]:
     rows: list[dict] = []
     if isinstance(raw, list):
@@ -152,7 +169,10 @@ def _claim_rows(raw: object, *, repair: bool, title: str, summary: str) -> list[
                     if repair:
                         continue
                     raise ValueError("Each mastery claim needs a statement.")
-                rows.append({"id": _squash(item.get("id"))[:_CLAIM_ID], "statement": statement})
+                row: dict = {"id": _squash(item.get("id"))[:_CLAIM_ID], "statement": statement}
+                if "skills" in item and item.get("skills") is not None:
+                    row["skills"] = _clean_claim_skills(item.get("skills"), repair=repair)
+                rows.append(row)
             elif isinstance(item, str) and repair:
                 statement = _squash(item)[:_CLAIM_TEXT].rstrip()
                 if statement:
@@ -532,3 +552,39 @@ def stored_spec(node: object) -> dict:
         return parse_mastery_spec(raw)
     except ValueError:
         return {}
+
+
+def claim_skills(claim: dict, spec: dict) -> list[str]:
+    """Skills listed on a single claim.
+
+    If the claim explicitly carries a `skills` key (including `[]`), that list
+    is authoritative. For existing F1 claims that predate per-claim `skills`,
+    fall back to the component-level `mastery_spec.skills`.
+    """
+    if not isinstance(claim, dict):
+        return []
+    if "skills" in claim and claim.get("skills") is not None:
+        raw = claim.get("skills")
+    else:
+        raw = spec.get("skills") if isinstance(spec, dict) else []
+    if not isinstance(raw, list):
+        return []
+    kept: list[str] = []
+    for item in raw:
+        key = _squash(item).lower().replace(" ", "_")
+        if key in SKILL_KEYS and key not in kept:
+            kept.append(key)
+    return kept
+
+
+def spec_requested_skills(spec: object) -> list[str]:
+    """Union of skills requested across all claims of an actionable mastery_spec."""
+    if not actionable_spec(spec):
+        return []
+    assert isinstance(spec, dict)
+    kept: list[str] = []
+    for claim in spec.get("claims") or []:
+        for key in claim_skills(claim, spec):
+            if key not in kept:
+                kept.append(key)
+    return kept

@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ChoiceWidget } from "@/components/LessonBlocks";
+import { SkillEndCardView } from "@/components/learn/SkillEndCard";
 import type { TutorMood } from "@/components/learn/LearnQuestPanel";
 import { TutorAvatar } from "@/components/TutorAvatar";
 import type { KcTutorSession } from "@/lib/kc";
@@ -335,6 +336,7 @@ export function KcLesson({
             <article className="learn-next-card">
               <p>Topic complete! · ★ {topicCompleteStars}</p>
               <p>{topicStrength}</p>
+              <SkillEndCardView endCard={session.end_card} />
               {nextTopic ? (
                 <button type="button" className="learn-btn primary" onClick={() => onOpenTopic?.(nextTopic.id)}>
                   Continue to Next Topic → {nextTopic.title}
@@ -348,6 +350,7 @@ export function KcLesson({
               )}
             </article>
           ) : null}
+          {!learnMode && session.status === "completed" ? <SkillEndCardView endCard={session.end_card} /> : null}
         </div>
       </div>
       {speaking || answering ? <p className="ds-typing">{learnMode ? "Tutor is thinking…" : "Tutor is writing…"}</p> : null}

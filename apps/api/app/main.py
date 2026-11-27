@@ -12,6 +12,7 @@ from app.database import get_db
 from app.harness import deployed_commit
 
 from app.routes.ai_safety import router as ai_safety_router
+from app.routes.graph2 import router as graph2_router
 from app.routes.harness import router as harness_router
 from app.routes.catalog import router as catalog_router
 from app.routes.kc import router as kc_router
@@ -34,6 +35,7 @@ app.include_router(sessions_router)
 app.include_router(tutor_profile_router)
 app.include_router(studio_router)
 app.include_router(kc_router)
+app.include_router(graph2_router)
 app.include_router(ai_safety_router)
 app.include_router(parents_router)
 app.include_router(harness_router)

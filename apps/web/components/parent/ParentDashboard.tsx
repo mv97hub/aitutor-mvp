@@ -4,13 +4,24 @@ import { useState } from "react";
 import Link from "next/link";
 
 import { ParentFrame } from "@/components/parent/ParentFrame";
+import { SkillRadar } from "@/components/progress/SkillRadar";
+import type { SkillRadarPayload } from "@/lib/graph2";
 import { gradePill } from "@/lib/learn";
 import { parentChats, parentProgress, type Parent } from "@/lib/parent";
 import type { Student } from "@/lib/types";
 
-export function ParentDashboard({ parent, learners }: { parent: Parent; learners: Student[] }) {
+export function ParentDashboard({
+  parent,
+  learners,
+  radars = {},
+}: {
+  parent: Parent;
+  learners: Student[];
+  radars?: Record<string, SkillRadarPayload | null>;
+}) {
   const [pickedId, setPickedId] = useState<string | null>(learners.length === 1 ? learners[0].id : null);
   const picked = learners.find((child) => child.id === pickedId) ?? null;
+  const pickedRadar = picked ? radars[picked.id] ?? null : null;
 
   return (
     <ParentFrame
@@ -73,6 +84,10 @@ export function ParentDashboard({ parent, learners }: { parent: Parent; learners
             )}
           </div>
         </section>
+
+        {picked && pickedRadar ? (
+          <SkillRadar radar={pickedRadar} heading={`${picked.display_name} · Thinking skills`} />
+        ) : null}
       </div>
     </ParentFrame>
   );

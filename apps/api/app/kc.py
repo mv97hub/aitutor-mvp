@@ -2508,6 +2508,8 @@ def _close_finished_walk(
     node: KcNode,
     reply: str = "",
     body: dict | None = None,
+    *,
+    run_graph2: bool = True,
 ) -> None:
     """A finished block walk must not stay open. The verdict comes from this session."""
     if session.status == "completed":
@@ -2527,6 +2529,8 @@ def _close_finished_walk(
         session.status = "completed"
         session.updated_at = _now()
         _save_requirement_result(db, session, node, body or {}, reply)
+        if run_graph2:
+            _run_graph2_sync_close(db, session, node, blocks)
         return
     student = db.get(Student, session.student_id)
     cfg = effective_kc_tutor_config(resolve_active_profile(db, session=session, student=student))
@@ -2539,6 +2543,25 @@ def _close_finished_walk(
     session.status = "completed"
     session.updated_at = _now()
     _save_component_result(db, session, node, body or {}, reply)
+    if run_graph2:
+        _run_graph2_sync_close(db, session, node, blocks)
+
+
+def _run_graph2_sync_close(db: Session, session: KcSession, node: KcNode, blocks: list[dict]) -> dict:
+    from app.graph2 import apply_sync_close
+
+    student = db.get(Student, session.student_id)
+    if student is None:
+        return {"end_card": None, "judge_pending": False}
+    goal = db.get(KcGoal, session.goal_id) if session.goal_id else None
+    return apply_sync_close(
+        db,
+        session=session,
+        student=student,
+        goal=goal,
+        node=node,
+        blocks=blocks,
+    )
 
 
 def _unit_status(state: KcState | None, node: KcNode, sessions: list[KcSession]) -> str:
@@ -3379,6 +3402,8 @@ def session_out(db: Session, session: KcSession) -> dict:
         "revision": int(session.revision or 0),
         "scoring_version": int(session.scoring_version or 1),
         "verdict": session.verdict if session.status == "completed" else None,
+        "end_card": session.close_end_card if session.status == "completed" else None,
+        "graph2_judge_status": str(getattr(session, "graph2_judge_status", "none") or "none"),
         "actions": offered_actions(
             scoring_version=int(session.scoring_version or 1),
             block_type=str(block.get("type") or "") if isinstance(block, dict) else "",
@@ -3451,6 +3476,9 @@ def open_session(
     if version >= REQUIREMENT_SCORE and blocks:
         state = {**state, "requirements": freeze_requirements(blocks[0], cfg)}
     course_run = _ensure_course_run(db, student.id, goal.id)
+    from app.graph2 import copy_note_for_session_open
+
+    frozen_note = copy_note_for_session_open(db, student=student, goal=goal, node=node)
     session = KcSession(
         student_id=student.id,
         goal_id=goal.id,
@@ -3462,6 +3490,7 @@ def open_session(
         scoring_version=version,
         course_run_id=course_run.id,
         active_block_state=state,
+        frozen_tutor_note=frozen_note,
     )
     db.add(session)
     db.flush()
@@ -4200,6 +4229,7 @@ def prompt_for(db: Session, session: KcSession, pending_answer: str = "") -> dic
         transition_from_block=transition,
         block_results=list(session.block_results or []),
         safety=read_ai_safety(db),
+        frozen_tutor_note=str(getattr(session, "frozen_tutor_note", "") or ""),
     )
     bundle["recipe"] = session.recipe
     bundle["step"] = session.step
@@ -4565,8 +4595,10 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     answer = pending or next(message.content for message in reversed(messages) if message.role == "user")
     before_state = dict(block_state or {})
     before_attempts = int(session.move_attempts or 0)
+    before_hint_tier = str(session.hint_tier or "nudge")
     before_results = list(session.block_results or [])
     before_step = index
+    prior_tutor_line = next((message.content for message in reversed(messages) if message.role == "assistant"), "")
     if safety_flag != "none":
         if pending:
             _add_message(db, session, "user", pending)
@@ -4755,8 +4787,27 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         reply = mcq_reason_reply(reply)
     if supported and resolution.next_step == index and not resolution.unit_complete:
         next_state = remember_tutor_disclosures(_block, next_state, reply, feedback=True)
+    from app.kc_loop import record_substep_evidence
+
+    next_state, sealed_results = record_substep_evidence(
+        block=_block,
+        before_state=before_state,
+        next_state=next_state,
+        before_results=before_results,
+        after_results=list(resolution.block_results),
+        before_step=before_step,
+        next_step=int(resolution.next_step),
+        unit_complete=bool(resolution.unit_complete),
+        answer=answer,
+        prior_tutor=prior_tutor_line,
+        before_attempts=before_attempts,
+        after_attempts=int(resolution.move_attempts or 0),
+        before_hint_tier=before_hint_tier,
+        after_hint_tier=str(resolution.hint_tier or "nudge"),
+        off_course=bool(body.get("off_course")),
+    )
     session.active_block_state = next_state
-    session.block_results = list(resolution.block_results)
+    session.block_results = sealed_results
     if supported:
         _sync_scored_visits(db, session, blocks, index, before_results, resolution)
     if resolution.unit_complete:
@@ -4766,7 +4817,7 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
         else:
             _save_component_result(db, session, node, body, reply)
     elif _last_block_finished(node, session):
-        _close_finished_walk(db, session, node, reply, body)
+        _close_finished_walk(db, session, node, reply, body, run_graph2=False)
     session.updated_at = _now()
     if pending:
         _add_message(db, session, "user", pending)
@@ -4774,12 +4825,19 @@ def apply_decision(db: Session, session: KcSession, body: dict) -> dict:
     state = _state_row(db, student, node)
     settled = _state_settled(state)
     unit_complete = session.status == "completed"
+    close_sync = (
+        _run_graph2_sync_close(db, session, node, blocks)
+        if unit_complete
+        else {"end_card": None, "judge_pending": False}
+    )
     course_complete = bool(unit_complete and settled and _others_known(db, student, goal, node))
     result = session_out(db, session)
     result["reply"] = reply
     result["passed"] = resolution.passed
     result["unit_complete"] = unit_complete
     result["course_complete"] = course_complete
+    result["end_card"] = close_sync["end_card"]
+    result["graph2_judge_pending"] = close_sync["judge_pending"]
     facts = loop_turn_result(
         before_step=before_step,
         before_state=before_state,

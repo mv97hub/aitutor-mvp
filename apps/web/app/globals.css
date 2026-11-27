@@ -6926,3 +6926,220 @@ button.progress-card {
   margin: 0;
   padding-left: 1.2em;
 }
+
+/* F3 Graph-2: Child end card & shared eight-spoke skill radar */
+.skill-end-card {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border: 1px solid #d2dce6;
+  border-radius: 12px;
+  background: #f8fafc;
+  text-align: left;
+}
+
+.skill-end-card h3 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+  color: #0f172a;
+}
+
+.skill-end-card-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.skill-end-card-item {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #ffffff;
+}
+
+.skill-end-card-label {
+  display: block;
+  font-size: 0.9rem;
+  color: #1e293b;
+}
+
+.skill-end-card-sentence {
+  margin: 4px 0 6px;
+  font-size: 0.9rem;
+  color: #334155;
+}
+
+.skill-end-card-quote {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid #94a3b8;
+  background: #f1f5f9;
+  border-radius: 0 6px 6px 0;
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.skill-radar {
+  margin: 18px 0;
+  padding: 18px 20px;
+  border: 1px solid #d2dce6;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.skill-radar-head {
+  margin-bottom: 12px;
+}
+
+.skill-radar-head h2 {
+  margin: 0 0 4px;
+  font-size: 1.05rem;
+  color: #0f172a;
+}
+
+.skill-radar-sub {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #64748b;
+}
+
+.skill-radar-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 380px) minmax(220px, 1fr);
+  gap: 18px;
+  align-items: center;
+}
+
+@media (max-width: 720px) {
+  .skill-radar-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.skill-radar-svg {
+  width: 100%;
+  max-width: 380px;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+.skill-radar-ring {
+  fill: none;
+  stroke: #e2e8f0;
+  stroke-width: 1;
+}
+
+.skill-radar-axis.is-ready {
+  stroke: #94a3b8;
+  stroke-width: 1.2;
+}
+
+.skill-radar-axis.is-hollow {
+  stroke: #cbd5e1;
+  stroke-width: 1.2;
+  stroke-dasharray: 4 4;
+}
+
+.skill-radar-fill {
+  fill: rgba(37, 99, 235, 0.16);
+  stroke: #2563eb;
+  stroke-width: 1.8;
+}
+
+.skill-radar-edge {
+  stroke: #2563eb;
+  stroke-width: 2;
+}
+
+.skill-radar-spoke {
+  cursor: pointer;
+}
+
+.skill-radar-dot.is-ready {
+  fill: #2563eb;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.skill-radar-dot.is-hollow {
+  fill: #ffffff;
+  stroke: #94a3b8;
+  stroke-width: 2;
+  stroke-dasharray: 2 2;
+}
+
+.skill-radar-dot.is-selected {
+  stroke: #0f172a;
+  stroke-width: 2.5;
+}
+
+.skill-radar-label {
+  font-size: 11px;
+  font-weight: 600;
+  fill: #1e293b;
+}
+
+.skill-radar-hollow-tag {
+  font-size: 9.5px;
+  fill: #64748b;
+}
+
+.skill-radar-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.skill-radar-row {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  text-align: left;
+  cursor: pointer;
+}
+
+.skill-radar-row.is-hollow {
+  background: #f8fafc;
+  border-style: dashed;
+  color: #475569;
+}
+
+.skill-radar-row.is-selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.skill-radar-row-name {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.skill-radar-row-meta {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.skill-radar-detail {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid #e2e8f0;
+  display: grid;
+  gap: 6px;
+}
+
+.skill-radar-detail p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #334155;
+}
