@@ -49,6 +49,7 @@ from app.harness import (
     update_persona,
     update_recommendation,
 )
+from app.harness_agent import agent_run_view
 from app.harness_prompt_source import draft_context
 
 router = APIRouter()
@@ -97,6 +98,12 @@ def post_run(body: dict, db: Session = Depends(get_db)) -> dict:
 @router.get("/kc/harness/runs/{run_id}")
 def get_one_run(run_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return get_run(db, run_id)
+
+
+@router.get("/kc/harness/runs/{run_id}/agent")
+def get_agent_run(run_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    """Read-only status for the agent calls. Does not claim a chat or start the loop."""
+    return agent_run_view(db, run_id)
 
 
 @router.post("/kc/harness/runs/{run_id}/pause")
