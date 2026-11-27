@@ -21,9 +21,9 @@ export default function HarnessAgentDocsPage() {
           token configured, the call is 503.
         </p>
         <p>
-          An agent run plays 4 chats at a time. The runner will not go above 8. The tutor model is gpt-4.1, the child
-          model is gpt-4.1-mini, and the judge is gpt-6.1-sol. Each child is run once on every component of the course.
-          A chat still stops at 40 cents on its own. <code>cost_limit</code> is the cap for the whole run, in cents.
+          Each child is run once on every component of each course. A chat still stops at 40 cents on its own.{" "}
+          <code>cost_limit</code> is the cap for the whole run, in cents. The recommended concurrency is 4. The runner
+          will not go above 8.
         </p>
 
         <h2>1. Create and start</h2>
@@ -31,20 +31,32 @@ export default function HarnessAgentDocsPage() {
           <code>POST /api/kc/harness/agent/runs</code>
         </p>
         <p>
-          <code>course</code> is the id, code, or title of a ready course. <code>persona_set</code> is{" "}
-          <code>&quot;starter&quot;</code> or a list of child names or numbers, such as <code>[&quot;AI_Child1&quot;, 13]</code>.
-          The starter set is created when it is not stored yet. <code>turn_limit</code> is the child turns for one chat.
-          <code>cost_limit</code> is a whole number of cents for the run.
+          Required fields are <code>courses</code>, <code>child_profiles</code>, <code>tutor_model</code>,{" "}
+          <code>child_model</code>, <code>turn_limit</code>, <code>cost_limit</code>, and <code>stuck_limit</code>.
+          Optional fields: concurrency, judge_model. Leave concurrency out to use 4. Leave judge_model out to use
+          gpt-6.1-sol. A request that omits a required field is rejected, and the detail names the optional fields.
+        </p>
+        <p>
+          <code>courses</code> is a list of ready courses. Each entry is an id, a code, or a title.{" "}
+          <code>child_profiles</code> is <code>&quot;starter&quot;</code> or a list of test-child names or numbers, such
+          as <code>[&quot;AI_Child1&quot;, 13]</code>. The starter set is created when it is not stored yet.{" "}
+          <code>tutor_model</code> and <code>child_model</code> are tutor models. <code>turn_limit</code> is the child
+          turns for one chat. <code>cost_limit</code> is a whole number of cents for the run. <code>stuck_limit</code>{" "}
+          is how many turns without movement stop a chat. <code>concurrency</code> is a whole number from 1 to 8.
         </p>
         <pre>{`POST /api/kc/harness/agent/runs
 Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "course": "Costs of Inflation",
-  "persona_set": "starter",
+  "courses": ["Costs of Inflation", "River roads"],
+  "child_profiles": ["AI_Child1", "AI_Child13"],
+  "tutor_model": "gpt-4.1",
+  "child_model": "gpt-4.1-mini",
   "turn_limit": 40,
-  "cost_limit": 400
+  "cost_limit": 400,
+  "stuck_limit": 8,
+  "concurrency": 4
 }`}</pre>
         <p>A started run returns 201 and the run id. Keep that id for the next two calls.</p>
         <pre>{`{
@@ -61,8 +73,9 @@ Content-Type: application/json
         </p>
         <p>
           Call it again while <code>status</code> is <code>queued</code>, <code>running</code>, or <code>paused</code>.
-          Stop when it is <code>finished</code> or <code>stopped</code>. A run that hits the turn limit or the cost
-          limit is <code>stopped</code>. It is not <code>finished</code>, and it is not <code>completed</code>.
+          Stop when it is <code>finished</code> or <code>stopped</code>. A run that hits the turn limit, the cost
+          limit, or the stuck limit is <code>stopped</code>. It is not <code>finished</code>, and it is not{" "}
+          <code>completed</code>.
         </p>
         <pre>{`GET /api/kc/harness/agent/runs/6f1c0b2e-4a7d-4e1a-9c3b-8a0e5d2f7b11
 Authorization: Bearer <token>`}</pre>
