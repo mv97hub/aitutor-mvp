@@ -1224,7 +1224,7 @@ _LAST_TOPIC_END = (
 _SIDE_STAY = (
     "Stay on course: this is not an attempt at the goal. "
     "Answer it inside the safety rules, in one or two sentences, then repeat the active question "
-    "and ask the goal again. Set substep_passed=false and block_complete=false. "
+    "and ask the goal again. Set substep_passed=false, block_complete=false, and misconception=null. "
     "Do not offer to move on and do not offer another example. "
     "Stay on this step and this substep. "
     "Do not call this reply partial, a close, or a good start."
@@ -2223,6 +2223,13 @@ def _decision_sentence(turn: object, label: str) -> str:
             )
         else:
             body = "The reply does the next step of this block. Do not ask the step this reply is leaving."
+    elif getattr(turn, "probe_advanced", False):
+        speech = "stay"
+        order = "Set decision to stay."
+        body = (
+            "Set substep_passed=true and block_complete=false. "
+            "Acknowledge how they addressed this counterexample, then pose the next counterexample probe."
+        )
     else:
         speech = "stay"
         order = "Set decision to stay."
@@ -2949,7 +2956,15 @@ def _summary_style_line(style: str) -> str:
     )
 
 
-def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal, *, length_limited: bool) -> list[str]:
+def _block_config_rules(
+    block: dict,
+    substep: str,
+    cfg: dict,
+    goal: KcGoal,
+    *,
+    length_limited: bool,
+    allow_short_expression: bool = False,
+) -> list[str]:
     """Plain instructions for the active block type. No setting names."""
     btype = str(block.get("type") or "topic_goal").strip()
     bcfg = ((cfg.get("blocks") or {}).get(btype)) or {}
@@ -2961,7 +2976,7 @@ def _block_config_rules(block: dict, substep: str, cfg: dict, goal: KcGoal, *, l
         retries = 1 if timed else int(bcfg.get("max_retries_before_reveal", 3) or 3)
         ladder = str(bcfg.get("hint_ladder_style") or "progressive_nudge_analogy_scaffold")
         strictness = str(bcfg.get("goal_evaluation_strictness") or "conceptual_gist")
-        frag_exp = bool(bcfg.get("fragment_self_explanation", True))
+        frag_exp = bool(bcfg.get("fragment_self_explanation", True)) and not allow_short_expression
         enrich = "direct" if timed else str(bcfg.get("enrichment_mode") or "on_request")
         lines.append(f"How to explain this goal: {_depth_sentence(depth)}")
         ladders = {
@@ -3358,7 +3373,17 @@ def _how_to_teach(
     challenge_appetite = str(cp.get("challenge_appetite") or "steady")
 
     length = cp.get("response_length", "balanced")
-    lines.extend(_block_config_rules(block, substep, cfg, goal, length_limited=length in {"bite_sized", "balanced"}))
+    allow_short_expression = cp.get("expression_style") == "one_word_or_taps"
+    lines.extend(
+        _block_config_rules(
+            block,
+            substep,
+            cfg,
+            goal,
+            length_limited=length in {"bite_sized", "balanced"},
+            allow_short_expression=allow_short_expression,
+        )
+    )
     if _worked_reveal_stop(forecast):
         rewritten: list[str] = []
         for line in lines:
@@ -4404,9 +4429,23 @@ def build_kc_prompt(
     include_close = is_final_block_and_substep or unit_complete or course_complete or (
         summary_phase == "check" and is_last_block
     )
-    frag_self_exp = bool(((cfg.get("blocks") or {}).get("topic_goal") or {}).get("fragment_self_explanation", True))
-    interests = ", ".join(str(item) for item in (student.interests or []) if str(item).strip()) or "none named"
     cp = effective_child_profile(student)
+    short_expression = cp.get("expression_style") == "one_word_or_taps"
+    frag_self_exp = (
+        bool(((cfg.get("blocks") or {}).get("topic_goal") or {}).get("fragment_self_explanation", True))
+        and not short_expression
+    )
+    if short_expression:
+        fragment = False
+    interests = ", ".join(str(item) for item in (student.interests or []) if str(item).strip()) or "none named"
+    block_revealed = bool(
+        state_dict.get("revealed_substep")
+        or state_dict.get("recall_revealed")
+        or state_dict.get("faded_answer_given")
+        or state_dict.get("prediction_supplied")
+        or state_dict.get("rule_supplied")
+        or state_dict.get("answer_given_away")
+    )
     turn_kind = compute_turn_kind(
         opening=opening,
         unit_complete=unit_complete,
@@ -4414,7 +4453,7 @@ def build_kc_prompt(
         transition_from_block=transition_from_block,
         attempts=int(attempts or 0),
         hint_tier=hint_tier or "nudge",
-        reveals=int(reveals or 0),
+        reveals=1 if block_revealed else 0,
     )
     from app.kc_blocks import passage_reprint_kind
 

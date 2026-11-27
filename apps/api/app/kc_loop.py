@@ -1636,10 +1636,21 @@ def model_accepts_substep(
 ) -> bool:
     """Trust the model on a real answer. Literal overlap is not required.
 
-    passage_ela stays on its own check. A help, skip, or too-short reply does not pass.
+    passage_ela citations stay on their deterministic quote check, and a central-idea
+    distractor detail alone never passes. A help, skip, or too-short reply does not pass.
     """
-    if str(block.get("type") or "").strip() == "passage_ela" or _denies_flaw(block, substep, answer):
+    btype = str(block.get("type") or "").strip()
+    if _denies_flaw(block, substep, answer):
         return False
+    if btype == "passage_ela":
+        if substep == "cite_evidence":
+            return False
+        if substep == "central_idea":
+            data = _data(block)
+            distractor = str(data.get("distractor_detail") or "").strip()
+            central = str(data.get("expected_central_idea") or "").strip()
+            if distractor and _matches(answer, distractor) and not _central_beyond_detail(answer, central, distractor):
+                return False
     if not learner_gave_real_attempt(block, substep, answer, cfg):
         return False
     if substep_passed:
@@ -2052,6 +2063,7 @@ def resolve_block_turn(
     work_on: str = "",
     prior_tutor: str = "",
     learner_ready: bool = False,
+    off_course: bool = False,
 ) -> BlockResolution:
     tier = hint_tier if hint_tier in HINTS else "nudge"
     fresh = _clean_ids(list(rubric_met))
@@ -2259,8 +2271,39 @@ def resolve_block_turn(
     if scored_try:
         side_turn = False
         non_answer = False
+    clean_text = _proceed_text(answer)
+    explicit_non_attempt = (
+        not early_answer
+        and not gave_up
+        and not grade_attempt
+        and not scored_try
+        and substep != "summary_check"
+        and stay_on_course_enabled(cfg)
+        and not learner_ready_to_proceed(answer, False)
+        and not learner_done_with_explanation(answer)
+        and not _matches_mcq_choice(block, answer, state)
+        and not _denies_flaw(block, substep, answer)
+        and not answer_addresses_substep(block, substep, answer, state, cfg)
+        and (
+            (bool(off_course) and not substep_passed and not (_content_word_set(answer) & _anchor_words(block)))
+            or (learner_asks_question_or_background(answer) and learner_side_question(answer, block, substep))
+            or ancillary_story(answer, block)
+            or clean_text in _ACK_WORDS
+            or clean_text in {"boring", "whatever", "dumb", "sucks"}
+            or any(phrase in clean_text for phrase in _COMPLAINT_PHRASES)
+            or any(phrase in clean_text for phrase in _BOUNDARY_PHRASES)
+            or _echoes_tutor(answer, prior_tutor)
+        )
+    )
     # Asking to hear more about the passage is on-topic help, even in exploratory mode.
-    if example_reply or passage_elaboration_request(block, answer) or (not matched_wrong and (side_turn or non_answer)):
+    # Explicit side stories, questions, complaints, and off-course asides stay unscored
+    # even when the model echoes a previous turn's misconception tag.
+    if (
+        example_reply
+        or passage_elaboration_request(block, answer)
+        or explicit_non_attempt
+        or (not matched_wrong and (side_turn or non_answer))
+    ):
         # Unscored help. Same block, same substep, same attempt count.
         return _unscored_stay(
             hint=tier,
@@ -2655,8 +2698,8 @@ def resolve_block_turn(
         probes = int(state.get("probe_turns") or 0) + 1
         state["probe_turns"] = probes
         note_try()
-        if probes < depth:
-            return stay(move_attempts, "nudge")
+        if probes < depth and not state.get("revealed_substep"):
+            return stay(0, "nudge")
         # Addressing this probe counts. The thesis id does not.
         if _clean_mid_pass():
             return finish(_summary_outcome(), int(state.get("block_attempts") or 1), reveals)
@@ -2974,6 +3017,7 @@ class SpokenTurn:
     next_substep: str
     decision: str
     reveal_stop: bool = False
+    probe_advanced: bool = False
 
 
 @dataclass(frozen=True)
@@ -2991,10 +3035,17 @@ class TurnForecast:
     if_not: SpokenTurn | None
 
 
-def _spoken_turn(resolution: BlockResolution, *, before_substep: str, before_topic: int) -> SpokenTurn:
+def _spoken_turn(
+    resolution: BlockResolution,
+    *,
+    before_substep: str,
+    before_topic: int,
+    before_probes: int = 0,
+) -> SpokenTurn:
     state = resolution.next_block_state if isinstance(resolution.next_block_state, dict) else {}
     substep = str(state.get("substep") or "")
     topic = int(state.get("topic_index") or 0)
+    probes = int(state.get("probe_turns") or 0)
     revealed = bool(state.get("revealed_substep") or state.get("recall_revealed"))
     if resolution.hint_tier == "reveal":
         revealed = True
@@ -3004,6 +3055,7 @@ def _spoken_turn(resolution: BlockResolution, *, before_substep: str, before_top
         speech = "advance"
     else:
         speech = "stay"
+    probe_advanced = speech == "stay" and probes > before_probes
     # A faded-step reveal stays on that step. It is not an advance to the solo problem.
     reveal_stop = (
         speech == "stay"
@@ -3021,6 +3073,7 @@ def _spoken_turn(resolution: BlockResolution, *, before_substep: str, before_top
         next_substep=substep,
         decision=str(resolution.decision or "stay"),
         reveal_stop=reveal_stop,
+        probe_advanced=probe_advanced,
     )
 
 
@@ -3032,6 +3085,7 @@ def _same_speech(left: SpokenTurn, right: SpokenTurn) -> bool:
         and left.revealed == right.revealed
         and left.next_substep == right.next_substep
         and left.reveal_stop == right.reveal_stop
+        and left.probe_advanced == right.probe_advanced
     )
 
 
@@ -3065,6 +3119,7 @@ def forecast_this_turn(
     before = active_block_state if isinstance(active_block_state, dict) else {}
     before_substep = str(before.get("substep") or "")
     before_topic = int(before.get("topic_index") or 0)
+    before_probes = int(before.get("probe_turns") or 0)
 
     def run(passed: bool) -> SpokenTurn:
         resolution = resolve_block_turn(
@@ -3090,7 +3145,12 @@ def forecast_this_turn(
             prior_tutor=prior_tutor,
             learner_ready=False,
         )
-        return _spoken_turn(resolution, before_substep=before_substep, before_topic=before_topic)
+        return _spoken_turn(
+            resolution,
+            before_substep=before_substep,
+            before_topic=before_topic,
+            before_probes=before_probes,
+        )
 
     accepted = run(True)
     missed = run(False)
