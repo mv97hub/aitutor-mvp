@@ -294,7 +294,7 @@ def test_answer_key_matcher_grades_the_words_not_the_intent() -> None:
 
 
 def test_small_score_gap_is_no_clear_difference() -> None:
-    def chat(score: float, ended: str = "completed") -> dict:
+    def chat(score: int, ended: str = "completed") -> dict:
         return {
             "persona_name": "AI_Child1",
             "component_id": "c",
@@ -316,7 +316,10 @@ def test_small_score_gap_is_no_clear_difference() -> None:
     stuck = next(item for item in found if item["tag"] == "stuck")
     assert stuck["block_label"] == "Topic / Goal"
     assert "Topic / Goal" in stuck["title"]
-    comparison = compare_runs([chat(3.1)], [chat(3.2)])
+    before = [dict(chat(3), seed=seed) for seed in range(10)]
+    after = [dict(chat(4 if seed == 0 else 3), seed=seed) for seed in range(10)]
+    comparison = compare_runs(before, after)
+    assert comparison["mean_score_delta"] == 0.1
     assert comparison["verdict"] == "no clear difference"
     hard = compare_runs([chat(3)], [dict(chat(3), ended_how="stuck", checks={"stuck_spans": 1})])
     assert hard["verdict"] == "worse"
@@ -782,7 +785,7 @@ def test_run_summary_groups_checks_and_leaves_out_whats_next_on_an_open_goal() -
 
 
 def test_per_dimension_delta_and_a_new_failure_beats_a_rising_mean() -> None:
-    def chat(teaching: float, engagement: float, **extra: object) -> dict:
+    def chat(teaching: int, engagement: int, **extra: object) -> dict:
         persona = extra.pop("persona_name", "AI_Child1")
         seed = extra.pop("seed", 1)
         body = {
@@ -805,8 +808,8 @@ def test_per_dimension_delta_and_a_new_failure_beats_a_rising_mean() -> None:
         body.update(extra)
         return body
 
-    left = [chat(3, 4, seed=index, persona_name=f"AI_Child{index}") for index in (1, 3, 7)]
-    right = [chat(4, 4.1, seed=index, persona_name=f"AI_Child{index}") for index in (1, 3, 7)]
+    left = [chat(3, 4, seed=index) for index in range(10)]
+    right = [chat(4, 5 if index == 0 else 4, seed=index) for index in range(10)]
     report = compare_runs(left, right)
     by_dimension = {row["dimension"]: row for row in report["dimension_deltas"]}
     assert by_dimension["teaching_quality"]["delta"] == 1.0

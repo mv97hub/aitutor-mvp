@@ -119,11 +119,37 @@ CAUSE_BY_TAG = {
 }
 
 
-def _num(value: object) -> float:
+def _valid_grade(value: object) -> int | None:
+    if not isinstance(value, (int, float, str)) or isinstance(value, bool):
+        return None
     try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return 0.0
+        grade = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return int(grade) if grade.is_integer() and 1 <= grade <= 5 else None
+
+
+def reported_child_realism(chat: dict) -> int | None:
+    return _valid_grade(chat.get("child_realism"))
+
+
+def reported_scores(chat: dict) -> list[dict]:
+    """One valid saved grade per rubric dimension, retaining its original citation."""
+    found = {}
+    for row in chat.get("scores") or []:
+        if not isinstance(row, dict) or row.get("dimension") not in JUDGE_DIMENSIONS:
+            continue
+        grade = _valid_grade(row.get("score"))
+        if grade is None:
+            continue
+        dimension = row["dimension"]
+        shown = {"dimension": dimension, "score": grade}
+        if type(row.get("turn")) is int:
+            shown["turn"] = row["turn"]
+        if isinstance(row.get("quote"), str):
+            shown["quote"] = row["quote"]
+        found[dimension] = shown
+    return list(found.values())
 
 
 # The cutoff stays at 3. The next judged run should be checked before trusting it.
@@ -132,20 +158,34 @@ REALISM_BAR = 3
 STUCK_SPAN = 8
 
 
-def _judged(chat: dict) -> bool:
-    """A chat the judge scored. A failed call and a missing call are not judged."""
-    if str(chat.get("judge_error") or "").strip():
-        return False
-    if chat.get("child_realism") is None:
-        return False
-    return bool(chat.get("scores"))
+PARTIAL_NOTES = {
+    "realism_only": "Partial evaluation. No tutor scores were saved.",
+    "tutor_only": "Partial evaluation. No valid overall child realism score was saved.",
+}
+
+
+def judge_status(chat: dict) -> str:
+    """Classify saved evidence independently of whether the realism score clears the bar."""
+    if str(chat.get("judge_error") or chat.get("error") or "").strip():
+        return "not_judged"
+    realism = reported_child_realism(chat)
+    dimensions = {row["dimension"] for row in reported_scores(chat)}
+    if dimensions - {"child_realism"}:
+        return "scored" if realism is not None else "tutor_only"
+    if realism is not None or "child_realism" in dimensions:
+        return "realism_only"
+    return "not_judged"
+
+
+def report_judge(evaluations: list[dict]) -> dict:
+    """Prefer a scored attempt over a partial or failed one, and the newest within a level."""
+    ranks = {"scored": 2, "realism_only": 1, "tutor_only": 1, "not_judged": 0}
+    attempts = (row for row in reversed(evaluations) if isinstance(row, dict) and row.get("kind") == "judged")
+    return max(attempts, key=lambda row: ranks[judge_status(row)], default={})
 
 
 def _usable(chat: dict) -> bool:
-    """In the roll-up only when the chat was judged and cleared the realism bar."""
-    if not _judged(chat):
-        return False
-    return int(chat.get("child_realism")) >= REALISM_BAR
+    return judge_status(chat) == "scored" and (reported_child_realism(chat) or 0) >= REALISM_BAR
 
 
 def _span_turns(turns: list[dict]) -> list[dict]:
@@ -204,11 +244,7 @@ def _group(chats: list[dict], key) -> list[dict]:
         buckets[str(key(chat) or "—")].append(chat)
     rows = []
     for name, items in sorted(buckets.items(), key=lambda item: item[0]):
-        scores = []
-        for chat in items:
-            for score in chat.get("scores") or []:
-                if isinstance(score, dict) and score.get("dimension") != "child_realism":
-                    scores.append(_num(score.get("score")))
+        scores = [grade for chat in items for grade in _dimension_scores(chat).values()]
         completed = sum(1 for chat in items if chat.get("ended_how") == "completed")
         false_passes = sum(len((chat.get("checks") or {}).get("false_passes") or []) for chat in items)
         stuck = sum(1 for chat in items if chat_is_stuck(chat))
@@ -230,8 +266,7 @@ def _group(chats: list[dict], key) -> list[dict]:
 
 def rollup(chats: list[dict]) -> dict:
     usable = [chat for chat in chats if _usable(chat)]
-    not_judged = sum(1 for chat in chats if not _judged(chat))
-    dropped = sum(1 for chat in chats if _judged(chat) and not _usable(chat))
+    statuses = Counter(map(judge_status, chats))
     tags: dict[str, list[dict]] = defaultdict(list)
     for chat in usable:
         for tag in chat.get("tags") or []:
@@ -298,8 +333,9 @@ def rollup(chats: list[dict]) -> dict:
     return {
         "chats": len(chats),
         "usable_chats": len(usable),
-        "not_judged": not_judged,
-        "low_realism_left_out": dropped,
+        "not_judged": statuses["not_judged"],
+        "partial_evaluations": statuses["realism_only"] + statuses["tutor_only"],
+        "low_realism_left_out": statuses["scored"] - len(usable),
         "by_simulation_role": _group(usable, lambda chat: SIMULATION_LABELS.get(chat.get("simulation_role"), "Historical mode unknown")),
         "by_child": _group(usable, lambda chat: chat.get("persona_name")),
         "by_course": _group(usable, lambda chat: chat.get("course_title")),
@@ -386,7 +422,7 @@ def _grid(chats: list[dict]) -> list[dict]:
     cells: dict[tuple[str, str], list[float]] = defaultdict(list)
     for chat in chats:
         child = str(chat.get("persona_name") or "—")
-        score = _mean([_num(item.get("score")) for item in chat.get("scores") or [] if isinstance(item, dict)])
+        score = _chat_score(chat)
         if score is None:
             continue
         for block in chat.get("block_types") or ["—"]:
@@ -399,7 +435,7 @@ def _grid(chats: list[dict]) -> list[dict]:
 
 def _worst_key(chat: dict) -> tuple:
     checks = chat.get("checks") or {}
-    score = _mean([_num(item.get("score")) for item in chat.get("scores") or [] if isinstance(item, dict)]) or 5
+    score = _chat_score(chat) or 5
     problems = len(checks.get("false_passes") or []) + len(checks.get("errors") or []) + int(checks.get("stuck_spans") or 0)
     return (-problems, score)
 
@@ -497,28 +533,14 @@ def _match_key(chat: dict) -> tuple:
 
 
 def _chat_score(chat: dict) -> float | None:
-    return _mean(
-        [
-            _num(item.get("score"))
-            for item in chat.get("scores") or []
-            if isinstance(item, dict) and item.get("dimension") != "child_realism"
-        ]
-    )
+    return _mean(list(_dimension_scores(chat).values()))
 
 
 def _dimension_scores(chat: dict) -> dict[str, float]:
-    """Tutor dimensions for one usable chat. Low child realism stays out of the roll-up."""
+    """Tutor dimensions for one usable chat. Child realism only controls eligibility."""
     if not _usable(chat):
         return {}
-    found: dict[str, float] = {}
-    for item in chat.get("scores") or []:
-        if not isinstance(item, dict):
-            continue
-        dimension = str(item.get("dimension") or "")
-        if not dimension or dimension == "child_realism":
-            continue
-        found[dimension] = _num(item.get("score"))
-    return found
+    return {row["dimension"]: row["score"] for row in reported_scores(chat) if row["dimension"] != "child_realism"}
 
 
 def _check_count(chat: dict, key: str) -> int:
@@ -623,7 +645,7 @@ def compare_runs(left: list[dict], right: list[dict]) -> dict:
     verdict = "no clear difference"
     if new_hard or new_false or new_empty:
         verdict = "worse"
-    elif mean_delta is None or len(matched) < 3 or abs(mean_delta) < CLEAR_DELTA:
+    elif mean_delta is None or len(deltas) < 3 or abs(mean_delta) < CLEAR_DELTA:
         verdict = "no clear difference"
     elif mean_delta > 0 and len(flips_bad) <= len(flips_good):
         verdict = "better"
@@ -631,6 +653,7 @@ def compare_runs(left: list[dict], right: list[dict]) -> dict:
         verdict = "worse"
     return {
         "matched": len(matched),
+        "scored_pairs": len(deltas),
         "mean_score_delta": mean_delta,
         "dimension_deltas": dimension_deltas,
         "flipped_to_completed": flips_good,
@@ -934,15 +957,10 @@ def failure_groups(chats: list[dict]) -> list[dict]:
 
 
 def tone_rows(chats: list[dict]) -> list[dict]:
-    usable = [chat for chat in chats if _usable(chat)]
+    scorecards = [(chat, _dimension_scores(chat)) for chat in chats]
     rows = []
     for key, label in TONE_DIMENSIONS:
-        scored = []
-        for chat in usable:
-            for item in chat.get("scores") or []:
-                if isinstance(item, dict) and str(item.get("dimension") or "") == key:
-                    scored.append((chat, _num(item.get("score"))))
-                    break
+        scored = [(chat, scores[key]) for chat, scores in scorecards if key in scores]
         lowest = sorted(
             scored,
             key=lambda pair: (pair[1], str(pair[0].get("persona_name") or ""), str(pair[0].get("id") or "")),
@@ -983,8 +1001,7 @@ def _tone_value(row: dict, chats: list[dict]) -> str:
     """
     if row.get("mean") is not None:
         return str(row["mean"])
-    judged = [chat for chat in chats if _judged(chat)]
-    if judged and len(judged) == len(chats):
+    if chats and all(judge_status(chat) == "scored" and not _usable(chat) for chat in chats):
         return "withheld"
     return "not judged"
 
@@ -1042,6 +1059,14 @@ def _summary_text(
     ]
     if ended_stuck != stuck:
         lines.insert(1, f"{ended_stuck} ended as stuck.")
+    statuses = Counter(map(judge_status, source))
+    if statuses["realism_only"] or statuses["tutor_only"]:
+        lines.append("Partial evaluations")
+    for status, evidence in (("realism_only", "child realism"), ("tutor_only", "tutor scores")):
+        count = statuses[status]
+        if count:
+            subject = "chat has" if count == 1 else "chats have"
+            lines.append(f"{count} {subject} {evidence} only. Excluded from tutor averages.")
     if not groups:
         lines.append("Automatic checks: none of these failures.")
         lines.append("")

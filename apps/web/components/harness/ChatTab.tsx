@@ -23,7 +23,7 @@ type Turn = PracticeTurn & {
 
 type LiveMessage = { role: string; content: string; seq?: number };
 
-type Score = { dimension: string; score: number; quote: string; turn: number };
+type Score = { dimension: string; score: number; quote?: string; turn?: number };
 
 type ChatDetail = {
   id: string;
@@ -38,6 +38,10 @@ type ChatDetail = {
   turns?: Turn[];
   evaluations?: {
     kind: string;
+    selected_for_report?: boolean;
+    reported_child_realism?: number | null;
+    reported_scores?: Score[];
+    partial_note?: string;
     checks?: Record<string, unknown>;
     scores?: Score[];
     tags?: { tag: string; turn: number; quote: string }[];
@@ -146,7 +150,10 @@ export function ChatTab({ chatId }: { chatId: string }) {
   }
 
   const automatic = chat?.evaluations?.find((item) => item.kind === "automatic");
-  const judged = chat?.evaluations?.find((item) => item.kind === "judged");
+  const judged = chat?.evaluations?.find((item) => item.selected_for_report)
+    ?? chat?.evaluations?.find((item) => item.kind === "judged");
+  const scores = (judged?.selected_for_report ? judged.reported_scores : judged?.scores) || [];
+  const realism = judged?.selected_for_report ? judged.reported_child_realism : judged?.child_realism;
   const hand = chat?.evaluations?.find((item) => item.kind === "hand");
   const handByDimension = new Map((hand?.scores || []).map((score) => [score.dimension, score.score]));
   const marks = blockMarks(chat?.turns || []);
@@ -283,20 +290,23 @@ export function ChatTab({ chatId }: { chatId: string }) {
           <h3>Automatic checks</h3>
           <pre className="harness-json">{JSON.stringify(automatic?.checks || {}, null, 2)}</pre>
           <h3>Judge</h3>
-          {judged?.error || (judged && judged.child_realism == null && !(judged.scores || []).length) ? (
+          {judged?.partial_note ? <p className="help">{judged.partial_note}</p> : null}
+          {judged?.error || (judged && realism == null && !scores.length) ? (
             <p className="help">not judged</p>
           ) : judged ? (
             <ul>
-              {(judged.scores || []).map((score) => {
+              {scores.map((score) => {
                 const handScore = handByDimension.get(score.dimension);
                 return (
                   <li key={score.dimension}>
-                    {score.dimension}: {score.score}. Turn {score.turn}. “{score.quote}”
+                    {score.dimension}: {score.score}.
+                    {score.turn != null ? ` Turn ${score.turn}.` : ""}
+                    {score.quote ? ` “${score.quote}”` : ""}
                     {handScore != null ? ` Hand ${handScore}, ${agreementLabel(score.score, handScore)}.` : ""}
                   </li>
                 );
               })}
-              <li>Child realism {judged.child_realism ?? "not judged"}</li>
+              <li>Child realism {realism == null ? "not judged" : `${realism}/5`}</li>
               {(judged.tags || []).map((tag) => (
                 <li key={`${tag.tag}-${tag.turn}`}>
                   {tag.tag} on turn {tag.turn}. “{tag.quote}”

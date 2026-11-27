@@ -36,6 +36,7 @@ type Comparison = {
   verdict: string;
   band: string;
   matched: number;
+  scored_pairs?: number;
   mean_score_delta: number | null;
   dimension_deltas?: DimensionDelta[];
   new_false_passes?: { child?: string }[];
@@ -73,7 +74,7 @@ export function ResultsTab({ runId }: { runId: string }) {
       <h2>Results</h2>
       {report.summary?.text ? <RunSummary text={report.summary.text} /> : null}
       <p className="help">
-        {report.usable_chats} of {report.chats} chats are in the roll-up. A chat counts only when it was judged and its child realism is 3 or higher. A missing score is not judged.
+        {report.usable_chats} of {report.chats} chats are in the roll-up. Tutor averages include chats with at least one saved tutor score and child realism of 3 or higher.
         {report.baseline ? ` Baseline: ${report.baseline.band}, ${report.baseline.verdict}. Score change ${report.baseline.mean_score_delta ?? "—"}.` : ""}
       </p>
       {report.baseline?.dimension_deltas?.length ? <DeltaList rows={report.baseline.dimension_deltas} /> : null}
@@ -131,7 +132,9 @@ export function ResultsTab({ runId }: { runId: string }) {
       {comparison ? (
         <div>
           <p>
-            {comparison.verdict} ({comparison.band}). Matched {comparison.matched}. Score change {comparison.mean_score_delta ?? "—"}.
+            {comparison.verdict} ({comparison.band}). Matched pairs {comparison.matched}.
+            {comparison.scored_pairs != null ? ` Pairs with tutor scores on both sides ${comparison.scored_pairs}.` : ""}
+            {" "}Score change {comparison.mean_score_delta ?? "—"}.
           </p>
           <DeltaList rows={comparison.dimension_deltas || []} />
           {comparison.new_hard_stops?.length ? <p>New hard stop: {comparison.new_hard_stops.map((row) => row.kind).filter(Boolean).join(", ")}.</p> : null}

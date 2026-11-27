@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-from app.harness_report import block_label
+from app.harness_report import PARTIAL_NOTES, block_label, judge_status, report_judge, reported_child_realism, reported_scores
 
 
 def _text(value: object) -> str:
@@ -230,28 +230,31 @@ def _chat_lines(chat: dict) -> list[str]:
 
 def _review_lines(chat: dict) -> list[str]:
     lines = ["### Automatic checks", ""]
-    checks: dict = {}
-    scores: list = []
-    judge_error = ""
-    for review in _list(chat.get("evaluations")):
-        if not isinstance(review, dict):
-            continue
-        if review.get("kind") == "automatic" and isinstance(review.get("checks"), dict):
-            checks = review["checks"]
-        if review.get("kind") == "judged":
-            scores = review.get("scores") if isinstance(review.get("scores"), list) else []
-            judge_error = _text(review.get("error"))
+    reviews = [row for row in _list(chat.get("evaluations")) if isinstance(row, dict)]
+    checks = next((_dict(row.get("checks")) for row in reversed(reviews) if row.get("kind") == "automatic"), {})
+    judged = report_judge(reviews)
+    scores = reported_scores(judged)
+    judge_error = _text(judged.get("error"))
+    partial = PARTIAL_NOTES.get(judge_status(judged))
     lines.append(json.dumps(checks, indent=2, default=str) if checks else "{}")
     lines.extend(["", "### Judge scores", ""])
     if judge_error:
         lines.append(f"Judge error: {judge_error}")
-    if scores:
+    else:
+        if partial:
+            lines.append(partial)
+        realism = reported_child_realism(judged)
+        if realism is not None:
+            lines.append(f"Child realism {realism}/5")
         for row in scores:
-            if not isinstance(row, dict):
-                continue
-            lines.append(f"{_text(row.get('dimension')) or 'score'}: {row.get('score')}")
-    elif not judge_error:
-        lines.append("not judged")
+            line = f"{row['dimension']}: {row['score']}"
+            if "turn" in row:
+                line += f". Turn {row['turn']}"
+            if row.get("quote"):
+                line += f". “{row['quote']}”"
+            lines.append(line)
+        if not scores and not partial:
+            lines.append("not judged")
     lines.extend(["", "### Block outcomes", ""])
     outcomes = [row for row in _list(chat.get("block_outcomes")) if isinstance(row, dict)]
     if not outcomes:
