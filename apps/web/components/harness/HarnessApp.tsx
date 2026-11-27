@@ -57,7 +57,7 @@ export function HarnessApp({
             }}
           />
         ) : null}
-        {tab === "Runs" ? <RunsTab selected={runId} onSelect={setRunId} /> : null}
+        {tab === "Runs" ? <RunsTab selected={runId} personas={personas} onSelect={setRunId} /> : null}
       </main>
     </>
   );
