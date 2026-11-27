@@ -1818,6 +1818,7 @@ def _this_turn(
     ask_goal_now: bool = False,
     prior_tutor: str = "",
     projected_fragile: bool = False,
+    response_length: str = "balanced",
 ) -> list[str]:
     label = block_step_label(block, step_index, total_blocks, substep, active_block_state)
     presenting = _presenting_dynamic_mcq(block, needs_dynamic_mcq, active_block_state)
@@ -2174,7 +2175,40 @@ def _this_turn(
             last_answer=last_answer,
         )
     )
+    if _is_mcq_wrong_stay(block, substep, opening, forecast):
+        lines.append(
+            "Wrong-pick guard: the learner chose a wrong option and still has another try. "
+            "Explain briefly why their chosen option does not fit and invite another try from the remaining choices. "
+            "Do NOT name, quote, paraphrase, or give away the correct option."
+        )
+    if response_length == "bite_sized":
+        if str(block.get("type") or "").strip() == "passage_ela":
+            lines.append(
+                "Length cap (bite_sized): keep your coaching text outside the passage to at most 2 short sentences "
+                "(under 260 characters total); merge brief reactions like 'Yes,' or 'Sure,' into the first sentence "
+                "instead of a separate exclamation sentence."
+            )
+        else:
+            lines.append(
+                "Length cap (bite_sized): write at most 2 short sentences total (under 260 characters), "
+                "including any greeting, reaction, and closing question. Merge brief reactions like 'Yes,' or 'Sure,' "
+                "with a comma or dash instead of a standalone exclamation sentence."
+            )
     return _align_this_turn(lines, forecast, ready_check=ready_check)
+
+
+def _is_mcq_wrong_stay(block: dict, substep: str, opening: bool, forecast: object | None) -> bool:
+    """True when forecast deterministically keeps a wrong MCQ choice on the active step without revealing."""
+    if opening or str(block.get("type") or "").strip() != "mcq" or substep != "choice":
+        return False
+    if not _forecast_applies(forecast) or getattr(forecast, "depends_on_model", False):
+        return False
+    chosen = getattr(forecast, "chosen", None)
+    return bool(
+        chosen is not None
+        and str(getattr(chosen, "speech", "")) == "stay"
+        and not getattr(chosen, "revealed", False)
+    )
 
 
 def _forecast_applies(forecast: object | None) -> bool:
@@ -2441,6 +2475,7 @@ def _explanation_teach_lines(
     last_answer: str = "",
     summary_begin: bool = False,
     has_next: bool = False,
+    response_length: str = "balanced",
 ) -> list[str]:
     data = block.get("data") if isinstance(block.get("data"), dict) else {}
     topics = explanation_topics(block)
@@ -2586,11 +2621,17 @@ def _explanation_teach_lines(
         if points:
             taught = f"{body} Key points: {points}." if body else f"Key points: {points}."
         lesson = _finish(taught) if taught else "what the title means"
+        extra_bite = (
+            " Keep the whole reply inside the bite_sized cap (max 2 short sentences and under 260 characters total, "
+            "including any check-in question)."
+            if response_length == "bite_sized"
+            else ""
+        )
         lines.append(
             f"{proceed} and, in this same reply, teach the next topic in full: "
             f"Topic {index + 2} of {total}: {nxt['title'] or 'the next topic'}. "
             f"Teach it from: {lesson}. "
-            "Do not only name the title. Do not quiz."
+            f"Do not only name the title. Do not quiz.{extra_bite}"
         )
         return lines
     lines.append(
@@ -2617,6 +2658,7 @@ def _what_to_teach(
     has_next: bool = False,
     forecast: object | None = None,
     ask_goal_now: bool = False,
+    response_length: str = "balanced",
 ) -> list[str]:
     """Strict block isolation: injects ONLY the currently active block and its active substep."""
     btype = str(block.get("type") or "topic_goal").strip()
@@ -2678,6 +2720,7 @@ def _what_to_teach(
     elif btype == "mcq":
         mode = str(data.get("mode") or "static").strip()
         cached_mcq = _cached_generated_mcq(active_block_state)
+        mcq_wrong_stay = _is_mcq_wrong_stay(block, substep, opening, forecast)
         if mode == "static":
             stem = str(data.get("question_stem") or "").strip()
             choices = data.get("choices") if isinstance(data.get("choices"), list) else []
@@ -2686,10 +2729,17 @@ def _what_to_teach(
                 if isinstance(ch, dict):
                     cid = ch.get("id") or chr(ord("a") + idx)
                     ctext = ch.get("text") or ""
-                    corr = " (CORRECT - withhold until solved or max retries)" if ch.get("is_correct") else ""
+                    if ch.get("is_correct"):
+                        corr = (
+                            " (CORRECT - DO NOT NAME, QUOTE, PARAPHRASE, OR REVEAL ON THIS TURN)"
+                            if mcq_wrong_stay
+                            else " (CORRECT - withhold until solved or max retries)"
+                        )
+                    else:
+                        corr = ""
                     rat = f" [Trap rationale: {ch.get('distractor_rationale')}]" if ch.get("distractor_rationale") else ""
                     lines.append(f"Option {cid}: {ctext}{corr}{rat}")
-            if data.get("correct_explanation"):
+            if data.get("correct_explanation") and not mcq_wrong_stay:
                 lines.append(f"Correct explanation takeaway: {_finish(str(data.get('correct_explanation')))}")
         else:
             skill = str(data.get("target_skill") or "").strip()
@@ -2892,6 +2942,7 @@ def _what_to_teach(
                 last_answer=last_answer,
                 summary_begin=summary_begin,
                 has_next=has_next,
+                response_length=response_length,
             )
         )
 
@@ -4702,6 +4753,7 @@ def build_kc_prompt(
                     ask_goal_now=ask_goal_now,
                     prior_tutor=prior_tutor,
                     projected_fragile=projected_fragile,
+                    response_length=str(cp.get("response_length") or "balanced"),
                 ),
             ),
             (
@@ -4722,6 +4774,7 @@ def build_kc_prompt(
                 has_next=has_next,
                 forecast=forecast,
                 ask_goal_now=ask_goal_now,
+                response_length=str(cp.get("response_length") or "balanced"),
             ),
             ),
             (
