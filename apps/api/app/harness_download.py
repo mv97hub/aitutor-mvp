@@ -209,8 +209,11 @@ def _chat_lines(chat: dict) -> list[str]:
     pending = _dict(chat.get("pending_delivery"))
     unsent = _dict(_dict(chat.get("tokens")).get("unsent_child"))
     if unsent:
+        threshold = {"cap": "chat reached its spending cap", "luna_ceiling": "chat reached its Luna token ceiling"}.get(
+            chat.get("ended_how"), "run reached its spending cap",
+        )
         lines.extend(["### Child response stopped before submission", "",
-                      "The run reached its spending cap before the tutor was contacted.",
+                      f"The {threshold} before the tutor was contacted.",
                       f"Submission: {unsent['turn_id']}",
                       f"Child tokens: {_tokens(_dict(unsent.get('child_tokens')))}", ""])
     if pending:

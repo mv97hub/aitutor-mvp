@@ -529,7 +529,7 @@ def run_out(db: Session, run: HarnessRun) -> dict:
         "updated_at": run.updated_at,
         "chats": len(chats),
         "finished": totals["finished"],
-        "chat_rows": [chat_out(chat) for chat in chats],
+        "chat_rows": [{**chat_out(chat), "chat_budget_stop": _chat_budget_stop(chat, run) or None} for chat in chats],
     }
 
 
@@ -1120,6 +1120,14 @@ def _chat_budget_inputs(chat: HarnessChat, plan: dict) -> dict[str, int]:
     }
 
 
+def _chat_budget_stop(chat: HarnessChat, run: HarnessRun) -> str:
+    return chat_budget_stop(**_chat_budget_inputs(chat, run.plan or {}))
+
+
+def _dispatch_budget_stop(db: Session, chat: HarnessChat, run: HarnessRun) -> str:
+    return "run_cap" if _run_cap_reached(db, run) else _chat_budget_stop(chat, run)
+
+
 def _same_place(turns: list[HarnessTurn]) -> int:
     if not turns:
         return 0
@@ -1203,8 +1211,9 @@ def dispatch_harness_turn(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID, g
     """Authorize delivery before network I/O. A missing historical marker means delivery is uncertain."""
     chat = _locked_chat(db, chat_id)
     unsent = _as_dict(_as_dict(chat.tokens).get("unsent_child"))
-    if unsent.get("turn_id") == str(turn_id) and chat.ended_how == "run_cap":
-        return {"action": "run_cap"}
+    if (unsent.get("turn_id") == str(turn_id) and generation == chat.claim_generation
+            and chat.ended_how in {"run_cap", "cap", "luna_ceiling"}):
+        return {"action": "run_cap", "ended_how": chat.ended_how}
     _check_turn_owner(chat, {"claim_generation": generation})
     pending = _as_dict(chat.pending_turn)
     if pending.get("turn_id") != str(turn_id):
@@ -1214,7 +1223,8 @@ def dispatch_harness_turn(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID, g
     if run.status != "running":
         return {"action": "paused"}
     prepared = pending.get("dispatch_state") == "prepared"
-    if _run_cap_reached(db, run):
+    budget_stop = _dispatch_budget_stop(db, chat, run)
+    if budget_stop:
         if not prepared or _answer_receipt(db, chat, str(turn_id)) is not None:
             return {"action": "read_receipt"}
         # Closing this chat does not create a fictitious learner or harness turn.
@@ -1222,8 +1232,9 @@ def dispatch_harness_turn(db: Session, chat_id: uuid.UUID, turn_id: uuid.UUID, g
             "turn_id": str(turn_id), "child_tokens": pending.get("child_tokens") or {},
         }}
         chat.pending_turn = None
-        _finish(db, chat, "run_cap")
-        return {"action": "run_cap"}
+        _finish(db, chat, budget_stop)
+        # Older workers recognize this action as "finished without sending".
+        return {"action": "run_cap", "ended_how": budget_stop}
     if prepared:
         chat.pending_turn = {**pending, "dispatch_state": "dispatched"}
         db.flush()
@@ -1260,8 +1271,8 @@ def record_turn(db: Session, chat_id: uuid.UUID, body: dict) -> dict:
             # A timed-out request may still commit. Keep the move across Resume even if
             # no receipt was visible when this transaction inspected the tutor session.
             run = _run_or_404(db, chat.run_id)
-            if _run_cap_reached(db, run):
-                # Other already-paid submissions must still be able to drain.
+            if _dispatch_budget_stop(db, chat, run):
+                # Only this uncertain chat pauses. Other eligible chats can continue.
                 chat.status = "paused"
                 chat.updated_at = _now()
                 db.flush()
@@ -1576,7 +1587,7 @@ def chat_detail(db: Session, chat: HarnessChat, *, include_run_cap: bool = True)
         body["run_cap_reached"] = _run_cap_reached(db, run)
         body["judge_budget_reached"] = (
             body["run_cap_reached"] or chat.ended_how in {"cap", "luna_ceiling", "run_cap"}
-            or bool(chat_budget_stop(**_chat_budget_inputs(chat, run.plan or {})))
+            or bool(_chat_budget_stop(chat, run))
         )
     body["model_prompts"] = [
         {"id": str(row.id), "message_id": str(row.message_id) if row.message_id else None,
