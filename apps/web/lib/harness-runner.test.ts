@@ -772,3 +772,47 @@ test("a capped run stops before generation and only reads receipts for a pending
   assert.equal(await playChat({ ...chat(), behavior: "free" }, transport), "done");
   assert.deepEqual(events, ["initial child", "close unsent at cap"]);
 });
+
+test("River roads requests an example and answers the actual cargo question on the same reading step", async () => {
+  const opening = "Rivers carry fresh water from the hills to the sea. Towns grow beside rivers because boats can move food and people. What is the central idea of the passage?";
+  const examples = [
+    ["Imagine a boat bringing apples to town. What else could the boat carry?", "Pears!"],
+    ["A farmer loads a boat. What could the boat bring to market?", "Pears!"],
+    ["The boat carried apples to town. Where did the boat carry apples?", ""],
+    ["The boat carried apples to town. Did the boat carry apples?", ""],
+    ["Imagine a river like a road. Why do you think towns like to be near these water roads?", ""],
+    ["Rivers move food. What is the central idea of the passage?", ""],
+  ];
+  for (const [followup, expected] of examples) {
+    const owned = { ...chat(), child: { number: 2, scenario: "river-example-practice" } };
+    const transport = retryTestTransport();
+    const lines: string[] = [];
+    const endings: string[] = [];
+    const recorded: Record<string, unknown>[] = [];
+    const initial = session({ active_block_type: "passage_ela", active_block_index: 0, active_substep: "central_idea",
+      messages: [{id: "opening", role: "assistant", content: opening, step: 0}] });
+    transport.session = async () => initial;
+    transport.childText = async () => { throw new Error("This bounded script never generates a child reply"); };
+    transport.answer = async (_id, turn) => {
+      lines.push(turn.child_text);
+      return { ...initial, loop_result: { stayed: true, attempt_counted: false }, messages: [...initial.messages,
+        {role: "user", content: turn.child_text, step: 0},
+        {role: "assistant", id: "reply-" + turn.seq, content: turn.seq === 1 ? followup : "What is the main idea?", step: 0}],
+      };
+    };
+    transport.recordTurn = async (_id, record) => {
+      recorded.push(record);
+      return { stop: record.seq === 2 ? "turn_limit" : "", luna_tokens: 0, cost_usd: null };
+    };
+    transport.finish = async (_id, reason) => { endings.push(reason); };
+    assert.equal(await playChat(owned, transport), "done");
+    assert.deepEqual(lines, expected ? ["Tell me more", expected] : ["Tell me more"], followup);
+    assert.deepEqual(endings, expected ? [] : ["scenario_not_reached"]);
+    for (const record of recorded) {
+      assert.equal((record.session_before as { scenario_exercised: boolean }).scenario_exercised, true);
+      const after = record.session_after as { loop_result: { attempt_counted: boolean }; delivery_status: string };
+      assert.equal(after.loop_result.attempt_counted, false);
+      assert.equal(after.delivery_status, "delivered");
+    }
+  }
+});
