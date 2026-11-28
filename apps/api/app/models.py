@@ -1740,7 +1740,7 @@ class StudentEducationalState(Base):
 
 
 class LearnerCourseState(Base):
-    """Course-scoped learner memory, course mode, and parent policy locks (F3 + F6)."""
+    """Course-scoped learner memory, course mode, parent locks, and F5 placement state."""
 
     __tablename__ = "learner_course_state"
     __table_args__ = (
@@ -1748,6 +1748,10 @@ class LearnerCourseState(Base):
         CheckConstraint(
             "course_mode IN ('explore', 'mastery', 'exam_prep')",
             name="ck_learner_course_state_course_mode",
+        ),
+        CheckConstraint(
+            "placement_status IN ('not_started', 'in_progress', 'completed', 'skipped')",
+            name="ck_learner_course_state_placement_status",
         ),
     )
 
@@ -1763,6 +1767,10 @@ class LearnerCourseState(Base):
     analogies_worked: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     course_mode: Mapped[str] = mapped_column(String(24), nullable=False, default="mastery", server_default="mastery")
     parent_policy_locks: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    placement_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="not_started", server_default="not_started"
+    )
+    placement_state: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )

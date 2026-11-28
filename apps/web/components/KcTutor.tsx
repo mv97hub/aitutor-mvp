@@ -494,6 +494,8 @@ export function KcTutor({
             progress={progress}
             session={session}
             activeId={session?.kc_id || openKc}
+            studentId={studentId}
+            courseId={courseId}
             onOpenTopic={openLearnTopic}
           />
         ) : (

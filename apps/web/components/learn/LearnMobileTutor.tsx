@@ -144,6 +144,8 @@ export function LearnMobileTutor({
               progress={progress}
               session={session}
               activeId={activeId}
+              studentId={studentId}
+              courseId={courseId}
               onOpenTopic={openTopic}
             />
           </div>

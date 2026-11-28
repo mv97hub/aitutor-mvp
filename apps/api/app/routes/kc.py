@@ -78,6 +78,13 @@ from app.kc_course_io import (
     preview_document,
 )
 from app.kc_prompt_tester import PromptTesterIn, preview_kc_prompt
+from app.kc_placement import (
+    answer_placement_probe,
+    placement_summary,
+    skip_placement,
+    start_placement,
+    submit_warmup_check,
+)
 from app.schemas import KcChatDetail, KcChatSummary, ModelPromptIn, ModelPromptOut, TokenUsageIn, TokenUsageTurn
 from app.token_usage import record_token_usage, usage_out, usage_report
 
@@ -226,6 +233,24 @@ class BindCourseTutorIn(BaseModel):
 
 class RestartCourseIn(BaseModel):
     student_id: uuid.UUID
+
+
+class PlacementStudentIn(BaseModel):
+    student_id: uuid.UUID
+
+
+class PlacementAnswerIn(BaseModel):
+    student_id: uuid.UUID
+    kc_id: uuid.UUID
+    choice_id: str | None = None
+    answer: str = ""
+    unsure: bool = False
+
+
+class WarmupSubmitIn(BaseModel):
+    student_id: uuid.UUID
+    choice_id: str | None = None
+    answer: str = ""
 
 
 class TurnIn(BaseModel):
@@ -576,6 +601,71 @@ def post_tutor_restart(
     db: Session = Depends(get_db),
 ) -> dict:
     return restart_course(db, _course_or_404(db, course_id), _student_or_404(db, body.student_id))
+
+
+@router.get("/kc/tutor/courses/{course_id}/placement")
+def get_course_placement(
+    course_id: uuid.UUID,
+    student_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> dict:
+    return placement_summary(db, _course_or_404(db, course_id), _student_or_404(db, student_id))
+
+
+@router.post("/kc/tutor/courses/{course_id}/placement/start")
+def post_course_placement_start(
+    course_id: uuid.UUID,
+    body: PlacementStudentIn,
+    db: Session = Depends(get_db),
+) -> dict:
+    return start_placement(db, _course_or_404(db, course_id), _student_or_404(db, body.student_id))
+
+
+@router.post("/kc/tutor/courses/{course_id}/placement/answer")
+def post_course_placement_answer(
+    course_id: uuid.UUID,
+    body: PlacementAnswerIn,
+    db: Session = Depends(get_db),
+) -> dict:
+    return answer_placement_probe(
+        db,
+        goal=_course_or_404(db, course_id),
+        student=_student_or_404(db, body.student_id),
+        kc_id=body.kc_id,
+        choice_id=body.choice_id,
+        answer=body.answer,
+        unsure=body.unsure,
+    )
+
+
+@router.post("/kc/tutor/courses/{course_id}/placement/skip")
+def post_course_placement_skip(
+    course_id: uuid.UUID,
+    body: PlacementStudentIn,
+    db: Session = Depends(get_db),
+) -> dict:
+    return skip_placement(
+        db,
+        goal=_course_or_404(db, course_id),
+        student=_student_or_404(db, body.student_id),
+    )
+
+
+@router.post("/kc/tutor/courses/{course_id}/warmups/{kc_id}/submit")
+def post_course_warmup_submit(
+    course_id: uuid.UUID,
+    kc_id: uuid.UUID,
+    body: WarmupSubmitIn,
+    db: Session = Depends(get_db),
+) -> dict:
+    return submit_warmup_check(
+        db,
+        goal=_course_or_404(db, course_id),
+        student=_student_or_404(db, body.student_id),
+        node=_node_or_404(db, kc_id),
+        answer=body.answer,
+        choice_id=body.choice_id,
+    )
 
 
 @router.post("/kc/tutor/sessions")

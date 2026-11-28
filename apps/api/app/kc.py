@@ -1639,6 +1639,10 @@ def _empty_course_card(goal: KcGoal, targets: list[KcNode]) -> dict:
             "started": False,
             "current_topic": None,
             "tutor": None,
+            "warmup_count": 0,
+            "placement_eligible": False,
+            "placement_status": "not_started",
+            "placement_max_probes": 0,
         }
     )
     return card
@@ -1656,6 +1660,7 @@ class _CourseCardLoad:
     profiles_by_id: dict[str, TutorProfile]
     profiles_by_slug: dict[str, TutorProfile]
     default_profile: TutorProfile
+    course_states: dict[tuple[uuid.UUID, uuid.UUID], object] = None  # type: ignore[assignment]
 
 
 def _nodes_by_ids(db: Session, ids: list[uuid.UUID]) -> dict[uuid.UUID, KcNode]:
@@ -1743,6 +1748,7 @@ def _load_course_cards(db: Session, students: list[Student]) -> _CourseCardLoad:
         profiles_by_id=profiles_by_id,
         profiles_by_slug=profiles_by_slug,
         default_profile=default_profile,
+        course_states={},
     )
     if not goals:
         return empty
@@ -1839,6 +1845,17 @@ def _load_course_cards(db: Session, students: list[Student]) -> _CourseCardLoad:
                 continue
             sessions_by_goal.setdefault(key, []).append(row)
             sessions_by_node.setdefault(key, {}).setdefault(row.kc_id, []).append(row)
+    course_states: dict[tuple[uuid.UUID, uuid.UUID], object] = {}
+    if student_ids and goal_ids:
+        from app.models import LearnerCourseState
+
+        for row in db.scalars(
+            select(LearnerCourseState).where(
+                LearnerCourseState.student_id.in_(student_ids),
+                LearnerCourseState.goal_id.in_(goal_ids),
+            )
+        ):
+            course_states[(row.student_id, row.goal_id)] = row
     empty.goals = goals
     empty.targets = targets
     empty.patches = patches
@@ -1846,6 +1863,7 @@ def _load_course_cards(db: Session, students: list[Student]) -> _CourseCardLoad:
     empty.states = states
     empty.sessions_by_node = sessions_by_node
     empty.sessions_by_goal = sessions_by_goal
+    empty.course_states = course_states
     return empty
 
 
@@ -2030,6 +2048,23 @@ def _course_card(
         for unit in units
         if isinstance(unit.get("updated_at"), str) and unit["updated_at"]
     ]
+    started_flag = completed + in_progress > 0
+    from app.kc_placement import (
+        PLACEMENT_MIN_COMPONENTS,
+        course_warmups,
+        max_probes_for_course,
+    )
+
+    cstate = (load.course_states or {}).get((student.id, goal.id))
+    p_status = str(getattr(cstate, "placement_status", "not_started") or "not_started")
+    p_eligible = (
+        bool(goal.ready)
+        and not bool(getattr(student, "is_test", False))
+        and len(targets) >= PLACEMENT_MIN_COMPONENTS
+        and not started_flag
+        and p_status in {"not_started", "in_progress"}
+    )
+    warmups_due = course_warmups(targets, states)
     card = _course_shell(goal)
     card.update(
         {
@@ -2055,9 +2090,13 @@ def _course_card(
             "opportunities_preview": opportunities[:3],
             **star_roll,
             "course_complete": bool(targets) and all(_is_settled(states, node) for node in targets),
-            "started": completed + in_progress > 0,
+            "started": started_flag,
             "current_topic": _current_topic({"units": units, "cards": cards}),
             "tutor": _card_tutor(load, student, goal.id),
+            "warmup_count": len(warmups_due),
+            "placement_eligible": p_eligible,
+            "placement_status": p_status,
+            "placement_max_probes": max_probes_for_course(len(targets)),
         }
     )
     return card
@@ -2838,6 +2877,13 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
             if isinstance(m, dict) and str(m.get("wrong_move") or "").strip()
         ]
         student_misc = _student_misconceptions_for(state, node_sessions)
+        from app.kc_placement import WARMUP_RS_THRESHOLD, retrieval_strength
+
+        rs_val = (
+            retrieval_strength(state.stability, state.last_practiced, status=state.status)
+            if state is not None
+            else None
+        )
 
         return {
             "id": str(node.id),
@@ -2854,6 +2900,14 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
             "child_status": child_status_label(status, mastery, locked=locked),
             "practice_bonus": status == "completed" and mastery != "known",
             "p_known": p_known_val,
+            "stability": round(float(state.stability or 0.0), 2) if state is not None else 0.0,
+            "retrieval_strength": rs_val,
+            "needs_warmup": bool(
+                state is not None
+                and state.status == "known"
+                and rs_val is not None
+                and rs_val < WARMUP_RS_THRESHOLD
+            ),
             "finished_blocks": done,
             "completed_blocks": done,
             "total_blocks": total,
@@ -2909,6 +2963,18 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
             if pcode not in everyone_codes and pcode not in external_prereqs:
                 external_prereqs.append(pcode)
 
+    from app.kc_placement import course_warmups, placement_summary
+
+    warmups_due = course_warmups(targets, states)
+    placement_info = placement_summary(
+        db,
+        goal,
+        student,
+        targets=targets,
+        states=states,
+        sessions_by_node=sessions,
+    )
+
     return {
         "course_id": str(goal.id),
         "title": goal.title,
@@ -2960,6 +3026,8 @@ def progress(db: Session, goal: KcGoal, student: Student) -> dict:
             for node in targets
         ],
         "cards": cards[:CARD_LIMIT],
+        "warmups": warmups_due,
+        "placement": placement_info,
     }
 
 
@@ -2995,6 +3063,9 @@ def restart_course(db: Session, goal: KcGoal, student: Student) -> dict:
         db.execute(delete(KcMessage).where(KcMessage.session_id.in_(drop_ids)))
         db.execute(delete(KcSession).where(KcSession.id.in_(drop_ids)))
     _start_course_run(db, student.id, goal.id)
+    from app.kc_placement import reset_course_placement
+
+    reset_course_placement(db, student.id, goal.id)
     db.flush()
     db.expire_all()
     return progress(db, goal, student)
@@ -4276,14 +4347,18 @@ def _stored_wrong(node: KcNode, answer: str, reported: str | None) -> str:
 
 
 def _mark_known(db: Session, session: KcSession, node: KcNode) -> None:
+    from app.kc_placement import initial_stability_for_session
+
     state = _get_state(db, session.student_id, node.id)
+    weighted_stability = initial_stability_for_session(session)
     if state.status != "known":
         state.status = "known"
-        state.stability = round(max(float(state.stability or 0), KNOWN_STABILITY), 2)
+        state.stability = round(max(float(state.stability or 0), weighted_stability), 2)
         state.last_practiced = _now()
         _bump_encompassed(db, session.student_id, node)
         session.score = PASS_SCORE
         return
+    state.stability = round(max(float(state.stability or 0), weighted_stability), 2)
     state.last_practiced = _now()
     if session.score is None:
         session.score = PASS_SCORE
