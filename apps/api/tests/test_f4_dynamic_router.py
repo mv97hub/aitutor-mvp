@@ -365,3 +365,86 @@ def test_kc_session_persists_f4_affects_in_postgres() -> None:
     finally:
         db.rollback()
         db.close()
+
+
+def test_dylan_rule_fast_tracks_after_multi_substep_worked_example_clean_sweep() -> None:
+    """A 2-substep worked_example aced on Try-1 per substep has total block attempts=2 and still fast-tracks."""
+    blocks = [
+        {
+            "id": "we1",
+            "type": "worked_example",
+            "claim_ids": ["c1"],
+            "data": {
+                "problem_statement": "Is a calculator AI?",
+                "steps": [{"step_text": "Step 1"}, {"step_text": "Step 2"}],
+                "solo_problem": "Is a spam filter AI?",
+                "solo_expected_answer": "Yes, it learns patterns from labeled emails.",
+            },
+        },
+        {
+            "id": "mcq1",
+            "type": "mcq",
+            "claim_ids": ["c1"],
+            "data": {
+                "mode": "static",
+                "question_stem": "Which is narrow AI?",
+                "choices": [
+                    {"id": "a", "text": "Spam filter", "is_correct": True},
+                    {"id": "b", "text": "Calculator", "is_correct": False},
+                ],
+            },
+        },
+        {
+            "id": "soc1",
+            "type": "socratic",
+            "claim_ids": ["c2"],
+            "data": {
+                "central_dilemma": "Should we build general AI?",
+                "initial_probe": "What is your view?",
+                "counterexamples": ["What about safety?"],
+                "target_synthesis": "Weigh benefits and risks.",
+            },
+        },
+    ]
+    results = [
+        {
+            "id": "we1",
+            "block_id": "we1",
+            "block_type": "worked_example",
+            "outcome": "passed",
+            "attempts": 2,
+            "requirements": [
+                {"key": "faded_step", "role": "assessed", "observation": "independent", "attempts": 1},
+                {"key": "solo_solve", "role": "assessed", "observation": "independent", "attempts": 1},
+            ],
+        }
+    ]
+    route = select_next_block(
+        blocks=blocks,
+        index=0,
+        results=results,
+        last_outcome="passed",
+        last_attempts=2,
+        reveals=0,
+        affect="engaged",
+        confidence="high",
+        mastery_spec=_spec(),
+    )
+    assert route.pivot_reason == "dylan_fast_track"
+    assert route.next_step == 2  # Skipped redundant mcq1 -> jumped straight to soc1!
+    assert [r["block_id"] for r in route.fast_tracked_rows] == ["mcq1"]
+
+    # If a substep took a retry (attempts=3 total or requirement attempts=2), do NOT fast-track.
+    retry_route = select_next_block(
+        blocks=blocks,
+        index=0,
+        results=[{**results[0], "attempts": 3, "requirements": [{**results[0]["requirements"][0], "attempts": 2}, results[0]["requirements"][1]]}],
+        last_outcome="passed",
+        last_attempts=3,
+        reveals=0,
+        affect="engaged",
+        confidence="high",
+        mastery_spec=_spec(),
+    )
+    assert retry_route.pivot_reason == ""
+    assert retry_route.next_step == 1

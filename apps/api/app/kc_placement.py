@@ -103,21 +103,17 @@ def initial_stability_for_session(session: KcSession | None) -> float:
         attempts = int(row.get("attempts") or 1)
         hint_tier = str(row.get("hint_tier") or "").strip().lower()
         reqs = row.get("requirements") if isinstance(row.get("requirements"), list) else []
-        req_assisted = any(
-            isinstance(r, dict)
-            and str(r.get("role") or "") == "assessed"
-            and str(r.get("observation") or "") == "assisted"
-            for r in reqs
-        )
-        req_max_attempts = max(
-            (
-                int(r.get("attempts") or 0)
-                for r in reqs
-                if isinstance(r, dict) and str(r.get("role") or "") == "assessed"
-            ),
-            default=0,
-        )
-        effective_attempts = max(attempts, req_max_attempts, 1)
+        assessed_reqs = [
+            r for r in reqs if isinstance(r, dict) and str(r.get("role") or "") == "assessed"
+        ]
+        if assessed_reqs:
+            # Multi-substep blocks (worked_example=2, socratic=3) store per-requirement attempts;
+            # use worst per-requirement attempts so a clean Try-1 sweep earns full SS_k = 1.00.
+            req_assisted = any(str(r.get("observation") or "") == "assisted" for r in assessed_reqs)
+            effective_attempts = max((int(r.get("attempts") or 1) for r in assessed_reqs), default=1)
+        else:
+            req_assisted = False
+            effective_attempts = max(attempts, 1)
         if effective_attempts >= 3 or hint_tier in {"analogy", "scaffold"}:
             worst_tier = max(worst_tier, 3)
         elif effective_attempts == 2 or req_assisted:

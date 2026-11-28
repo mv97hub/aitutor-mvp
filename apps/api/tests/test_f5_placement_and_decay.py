@@ -167,6 +167,33 @@ def test_hint_weighted_initial_stability_tiers() -> None:
     assert initial_stability_for_session(s3) == STABILITY_ATTEMPT_3 == 0.45
     assert initial_stability_for_session(s_ft) == STABILITY_ATTEMPT_1 == 1.0
 
+    # Multi-substep blocks (worked_example=2, socratic=3) passed on Try-1 per requirement earn full SS_k = 1.00.
+    s_multi = SimpleNamespace(
+        block_results=[
+            {
+                "block_type": "worked_example",
+                "outcome": "passed",
+                "attempts": 2,
+                "requirements": [
+                    {"key": "faded_step", "role": "assessed", "observation": "independent", "attempts": 1},
+                    {"key": "solo_solve", "role": "assessed", "observation": "independent", "attempts": 1},
+                ],
+            },
+            {
+                "block_type": "socratic",
+                "outcome": "passed",
+                "attempts": 3,
+                "requirements": [
+                    {"key": "initial_thesis", "role": "assessed", "observation": "independent", "attempts": 1},
+                    {"key": "counterexample_probe", "role": "assessed", "observation": "independent", "attempts": 1},
+                ],
+            },
+        ],
+        move_attempts=1,
+        hint_tier="nudge",
+    )
+    assert initial_stability_for_session(s_multi) == STABILITY_ATTEMPT_1 == 1.0
+
 
 def test_mark_known_persists_hint_weighted_stability() -> None:
     db = SessionLocal()

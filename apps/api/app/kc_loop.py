@@ -3176,6 +3176,48 @@ def _affinity_score(modality_affinity: dict | None, block_type: str) -> float | 
     return (max(0, independent) + 1.0) / (completed + 2.0)
 
 
+def _clean_pass_attempt_ceiling(block: dict, cfg: dict | None = None) -> int:
+    """Minimum turns required for a clean Try-1-per-substep pass on a block."""
+    btype = str(block.get("type") or "").strip()
+    steps = [s for s in substeps_for_block(block, cfg) if s != "summary_check"]
+    base = max(1, len(steps))
+    if btype == "socratic":
+        bcfg = ((cfg or {}).get("blocks") or {}).get("socratic") or {}
+        try:
+            depth = max(1, int(bcfg.get("dialogue_depth_turns") or 2))
+        except (TypeError, ValueError):
+            depth = 2
+        # initial_thesis (1) + dialogue_depth_turns counterexample probes
+        return 1 + depth
+    return base
+
+
+def _block_passed_cleanly_first_try(
+    *,
+    block: dict,
+    result_row: dict | None,
+    last_attempts: int,
+    cfg: dict | None = None,
+) -> bool:
+    """True when every assessed substep/requirement of the closed block passed on Try 1."""
+    if isinstance(result_row, dict):
+        reqs = result_row.get("requirements")
+        if isinstance(reqs, list):
+            assessed = [
+                r
+                for r in reqs
+                if isinstance(r, dict) and str(r.get("role") or "") == "assessed"
+            ]
+            if assessed:
+                return all(
+                    str(r.get("observation") or "") == "independent" and int(r.get("attempts") or 1) <= 1
+                    for r in assessed
+                )
+    if cfg is None:
+        return int(last_attempts or 1) <= 1
+    return int(last_attempts or 1) <= _clean_pass_attempt_ceiling(block, cfg)
+
+
 def select_next_block(
     *,
     blocks: list[dict],
@@ -3189,6 +3231,7 @@ def select_next_block(
     mastery_spec: dict | None = None,
     modality_affinity: dict | None = None,
     broken_kc_code: str = "",
+    cfg: dict | None = None,
 ) -> NextBlockRoute:
     """Deterministic F4 dynamic block policy router called identically by resolve and forecast.
 
@@ -3219,8 +3262,17 @@ def select_next_block(
 
     current_block = blocks[index] if 0 <= index < len(blocks) else {}
     current_type = str(current_block.get("type") or "").strip()
+    current_bid = str(current_block.get("id") or f"blk_{index + 1}").strip()
+    current_row = next(
+        (
+            row
+            for row in reversed(results or [])
+            if isinstance(row, dict) and str(row.get("id") or row.get("block_id") or "").strip() == current_bid
+        ),
+        None,
+    )
 
-    # 2. Dylan Rule (Fast-Track Compression): unassisted Try-1 pass on a higher-demand block
+    # 2. Dylan Rule (Fast-Track Compression): unassisted Try-1-per-substep pass on a higher-demand block
     # with high confidence OR bored/curious_stretch skips downstream lower-demand blocks whose
     # claim_ids are already satisfied by passed blocks.
     fast_track_eligible = (
@@ -3228,7 +3280,12 @@ def select_next_block(
         and current_type in HIGH_DEMAND_BLOCKS
         and last_outcome == "passed"
         and int(reveals or 0) == 0
-        and int(last_attempts or 1) <= 1
+        and _block_passed_cleanly_first_try(
+            block=current_block,
+            result_row=current_row,
+            last_attempts=last_attempts,
+            cfg=cfg,
+        )
         and (confidence == "high" or affect in {"bored", "curious_stretch"})
     )
     if fast_track_eligible:
@@ -3333,6 +3390,7 @@ def _advance_or_close_component(
         mastery_spec=mastery_spec,
         modality_affinity=modality_affinity,
         broken_kc_code=broken_kc_code,
+        cfg=cfg,
     )
     if route.fast_tracked_rows:
         results = [*results, *(dict(row) for row in route.fast_tracked_rows)]
