@@ -19,7 +19,7 @@ What shipped in this cycle (**PRs [#231](https://github.com/mv97hub/aitutor-mvp/
 3. **F6 — Active Parent Co-Pilot & Revocable Teacher Share** ([#238](https://github.com/mv97hub/aitutor-mvp/pull/238)): Produces plain-language parent session digests, scoped per-course `course_mode` + `parent_policy_locks` (never mutating shared `TutorProfile`), and revocable SHA-256 public Teacher Share snapshots (`/teacher/share/[token]`) with zero raw chat transcript exposure.
 4. **F4 — Deterministic Dynamic Block Policy Router** ([#240](https://github.com/mv97hub/aitutor-mvp/pull/240), [#242](https://github.com/mv97hub/aitutor-mvp/pull/242), [#243](https://github.com/mv97hub/aitutor-mvp/pull/243)): Routes lesson blocks deterministically via `select_next_block()` with forecast/resolve parity, Dylan Rule fast-tracking for confident Try-1 sweeps, frozen modality-affinity pivots, `actionable_spec`-gated `broken_kc` redirects, and expanded `bored` / `curious_stretch` affects.
 5. **F5 — Cold-Start DAG Placement & Bjork Memory Decay Warmups** ([#241](https://github.com/mv97hub/aitutor-mvp/pull/241), [#243](https://github.com/mv97hub/aitutor-mvp/pull/243)): Places new learners onto their Zone of Proximal Development (ZPD) frontier in $\le \min(4, \lceil\log_2 N\rceil)$ jargon-free scenario probes with a zero-shame escape hatch, propagates surmise credit across prerequisites, and schedules 2-minute Bjork decay warmups when retrieval strength drops below `0.65`.
-6. **Live Render Verification & Course Backfills**: Backfilled *Treaty of Versailles* (`1/1` component) and *How does AI Work* (`5/5` components) with full `mastery_spec` claims and `claim_ids`, verified `10/10` multi-component completion (`96.2%` avg blind exam score, `AI_Child1` at `100.0%`), and proved F4 fast-tracking (`-17%` to `-27%` turns, `-22%` to `-33%` cost) and F5 `SS_k = 1.00` live on Render.
+6. **Live Render Verification & Full 10/10 Course Backfill**: Non-destructively backfilled **all 10 live learner courses** on Render (**181/181 components**, **967/967 blocks**, **362 claims**, `ready: true` with `0` unintended diffs), verified `10/10` multi-component completion (`96.2%` avg blind exam score, `AI_Child1` at `100.0%`), and proved F4 fast-tracking (`-17%` to `-27%` turns, `-22%` to `-33%` cost) and F5 `SS_k = 1.00` live on Render. Every newly created course via the F1 creator pipeline receives `mastery_spec` claims and `claim_ids` automatically—no retrofitting required.
 
 ### Architecture Documentation Index
 
@@ -164,16 +164,27 @@ All migrations are additive and verified on PostgreSQL (including upgrade/downgr
 
 ---
 
-## 5. Live Render Production Course Backfill
+## 5. Live Render Production Course Backfill (10 / 10 Learner Courses Complete)
 
-Before running the final F2–F5 benchmarks, the two primary live test courses on Render were non-destructively backfilled with structured `mastery_spec` claims and per-block `claim_ids` (pre-backfill verbatim JSON exports were archived prior to mutation):
+All **10 live learner courses** on Render have been non-destructively backfilled with structured `mastery_spec` claims and per-block `claim_ids`, republished (`ready: true`, `missing: []`), and round-trip verified against their pre-backfill exports (**0 unintended diffs** to titles, descriptions, core truths, rubrics, misconceptions, standards, unit groupings, component order, or block data; verbatim pre-backfill JSON backups archived prior to mutation):
 
-| Live Render Course | Course UUID | Components Ready | Blocks Tagged (`claim_ids`) | Claims | Active F3 Skills (`actionable=True`) |
-| --- | --- | --- | --- | --- | --- |
-| **Treaty of Versailles** | `0d8e0717-25c6-430e-b0bf-68ec376ea30a` | `1 / 1` (`the-treaty-of-versailles`) | `7 / 7` | `2` | `causes`, `evidence` |
-| **How does AI Work** | `7ac9be86-0127-4acf-899d-e934dfb00808` | `5 / 5` (`c1`–`c5`) | `27 / 27` | `10` | `causes`, `errors`, `evidence`, `inquiry`, `perspectives`, `transfer` (**6 of 8**) |
+| Live Render Course | Course UUID | Components Ready | Blocks Tagged (`claim_ids`) | Claims | F5 Placement | Active F3 Skills (`actionable=True`) |
+| --- | --- | --- | --- | --- | --- | --- |
+| **How does AI Work** *(best all-in-one test)* | `7ac9be86-0127-4acf-899d-e934dfb00808` | `5 / 5` | `27 / 27` | `10` | Eligible (`max_probes: 3`) | `causes`, `errors`, `evidence`, `inquiry`, `perspectives`, `transfer` (**6**) |
+| **Treaty of Versailles** | `0d8e0717-25c6-430e-b0bf-68ec376ea30a` | `1 / 1` | `7 / 7` | `2` | Single-comp (`N < 2`) | `causes`, `evidence` (**2**) |
+| **Grade 6 - Social Sciences** | `c233746c-2371-45a0-b288-b338de69b24f` | `6 / 6` | `31 / 31` | `12` | Eligible | `causes`, `errors`, `evidence`, `explaining`, `inquiry`, `perspectives`, `transfer` (**7**) |
+| **Test_Explanatory** | `b9d80a7d-7329-4a21-90d7-c45003e26135` | `9 / 9` | `22 / 22` | `18` | Eligible | `causes`, `errors`, `evidence`, `explaining`, `inquiry`, `perspectives`, `transfer` (**7**) |
+| **AP Geography** | `ed41dfa2-9747-4198-927d-dd089441bf03` | `12 / 12` | `51 / 51` | `24` | Eligible | `evidence` (**1**) |
+| **Roman History** | `0826e87d-949a-4f8b-9a9b-a58ef2ef3f8a` | `12 / 12` | `67 / 67` | `24` | Eligible | `evidence` (**1**) |
+| **Romeo and Juliet** | `6a43ff87-66d6-455f-baec-709dfa64b350` | `12 / 12` | `52 / 52` | `24` | Eligible | `evidence` (**1**) |
+| **AP Psychology** | `8acfa84b-e66a-447f-a693-ec3c82a2f4ca` | `35 / 35` | `210 / 210` | `70` | Eligible | `causes`, `errors`, `evidence`, `explaining`, `perspectives`, `transfer` (**6**) |
+| **AP Macroeconomics** | `d88dd955-166e-4136-b685-5f78bfc0d975` | `42 / 42` | `213 / 213` | `84` | Eligible | `causes`, `errors`, `evidence`, `explaining`, `inquiry`, `perspectives`, `transfer` (**7**) |
+| **GCSE History** | `0181821c-2fb8-40eb-8f7d-298c66645554` | `47 / 47` | `287 / 287` | `94` | Eligible | `causes`, `errors`, `evidence`, `explaining`, `inquiry`, `perspectives`, `transfer` (**7**) |
+| **Total (All Live Learner Courses)** | **10 / 10 `ready: true`** | **`181 / 181`** | **`967 / 967`** | **`362`** | **9 / 10 multi-comp** | **Full F2–F6 active across every live learner course** |
 
-> **Legacy Courses Note:** The remaining 10 older courses on Render currently have empty `mastery_spec: {}`. By design, they continue operating safely on legacy fallback routing (F2 exams, F5 placement/warmups, and F6 parent tools remain available), while F3 skill radar evidence and F4 Dylan Rule fast-tracking activate automatically once a course is backfilled or created through the F1 pipeline.
+> **New Courses & Harness Fixtures:**
+> - **All newly created courses** created via the F1 KC Creator pipeline ([`kc_pipeline.py`](../apps/api/app/kc_pipeline.py)) receive `mastery_spec` claims and block `claim_ids` automatically—**no manual retrofitting is ever needed for new courses**.
+> - **Synthetic Harness Fixtures** (*Harness fixture: every block type* and *Harness fixture · learner scenarios*) remain intentionally unmodified to preserve deterministic test-harness baselines.
 
 ---
 
@@ -235,7 +246,7 @@ All backend migrations, API contracts, automated tests (**724** Python tests + *
 ### 5-Minute Live Browser Walkthrough Checklist
 
 - [ ] **F5 Cold-Start Placement (`/learn`):**
-  1. Open [`https://aitutor-mvp-web.onrender.com/learn`](https://aitutor-mvp-web.onrender.com/learn) as a real learner and select **How does AI Work**.
+  1. Open [`https://aitutor-mvp-web.onrender.com/learn`](https://aitutor-mvp-web.onrender.com/learn) as a real learner and select **How does AI Work** (fastest 5-component walkthrough—though any of the 9 multi-component courses such as *Grade 6 - Social Sciences*, *AP Macroeconomics*, *AP Psychology*, or *GCSE History* now work identically).
   2. Confirm the 2-option Placement modal launches cleanly (`max_probes: 3`).
   3. Answer 1–2 probes and click **"Not sure yet — teach me this!"** on one probe; verify zero-shame messaging and confirm the learner lands on their ZPD frontier (with ancestor components marked known via placement surmise).
 - [ ] **F2 Quiet Pre/Post Exam (`/learn/[studentId]/course/[courseId]/exam`):**
@@ -251,7 +262,6 @@ All backend migrations, API contracts, automated tests (**724** Python tests + *
 ### Optional Housekeeping
 
 - **Tidy Superseded Open PRs:** PRs [#194](https://github.com/mv97hub/aitutor-mvp/pull/194) (`codex/closed-loop-architecture-spec`) and [#198](https://github.com/mv97hub/aitutor-mvp/pull/198) (`codex/block-closing-review-docs`) are older spec/planning doc drafts now superseded by [`f2-architecture.md`](f2-architecture.md)–[`f6-architecture.md`](f6-architecture.md) and this handover. They can be closed safely to clear the open PR queue.
-- **Remaining 10 Legacy Render Courses:** Backfilling `mastery_spec` claims on older Render courses is optional and can be scheduled incrementally if full F3 radar / F4 Dylan Rule coverage is desired on legacy content.
 
 ---
 
