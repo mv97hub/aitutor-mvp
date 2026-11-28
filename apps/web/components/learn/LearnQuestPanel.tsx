@@ -3,6 +3,7 @@
 import Link from "next/link";
 
 import { BrandMark } from "@/components/BrandMark";
+import { MemoryWarmupCard } from "@/components/learn/MemoryWarmupCard";
 import { TutorAvatar } from "@/components/TutorAvatar";
 import type { KcBlockProgress, KcProgress, KcTutorSession } from "@/lib/kc";
 import { displayChildStatus, topicStars } from "@/lib/learn";
@@ -81,6 +82,8 @@ export function LearnQuestPanel({
   progress,
   session,
   activeId,
+  studentId,
+  courseId,
   onOpenTopic,
 }: {
   tutor: TutorProfile;
@@ -88,10 +91,13 @@ export function LearnQuestPanel({
   progress: KcProgress | null;
   session: KcTutorSession | null;
   activeId: string;
+  studentId?: string;
+  courseId?: string;
   onOpenTopic: (kcId: string) => void;
 }) {
   const topics = (progress?.units ?? []).filter((unit) => !unit.patch);
   const discovered = topics.filter((unit) => unit.status === "completed" && (unit.core_truth || "").trim());
+  const warmups = progress?.warmups ?? [];
   return (
     <div className="learn-quest-stack">
       <article className={`learn-companion${mood === "thinking" ? " is-thinking" : ""}`}>
@@ -102,6 +108,9 @@ export function LearnQuestPanel({
           {MOOD_LINE[mood]}
         </p>
       </article>
+      {studentId && courseId && warmups.length > 0 ? (
+        <MemoryWarmupCard studentId={studentId} courseId={courseId} warmups={warmups} />
+      ) : null}
       <ol className="learn-trail" aria-label="Course quest trail">
         {topics.map((unit, index) => {
           const label = displayChildStatus(unit.child_status, unit.status, unit.mastery);

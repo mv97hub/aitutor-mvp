@@ -238,6 +238,73 @@ export type KcPipeline = {
   draft: KcCourseDraft | null;
 };
 
+export type KcWarmupChoice = { id: string; text: string };
+
+export type KcWarmupItem = {
+  kc_id: string;
+  code: string;
+  title: string;
+  stability: number;
+  retrieval_strength: number;
+  days_since_practice: number | null;
+  estimated_minutes: number;
+  prompt: string;
+  input_mode: "choice" | "open";
+  choices: KcWarmupChoice[];
+  source_block_type?: string;
+};
+
+export type KcWarmupSubmitResponse = {
+  kc_id: string;
+  code: string;
+  title: string;
+  passed: boolean;
+  old_stability: number;
+  new_stability: number;
+  retrieval_strength: number | null;
+  expected_summary: string;
+  feedback: string;
+};
+
+export type KcPlacementProbe = {
+  kc_id: string;
+  code: string;
+  title: string;
+  probe_number: number;
+  max_probes: number;
+  prompt: string;
+  input_mode: "choice" | "open";
+  choices: KcWarmupChoice[];
+  unsure_choice_id: string | null;
+  unsure_label: string | null;
+  source_block_type?: string;
+};
+
+export type KcPlacementSummary = {
+  eligible: boolean;
+  status: "not_started" | "in_progress" | "completed" | "skipped";
+  min_components: number;
+  component_count: number;
+  max_probes: number;
+  probes_used: number;
+  surmised_count: number;
+  starting_kc_id: string | null;
+  active_probe: KcPlacementProbe | null;
+};
+
+export type KcPlacementStepResponse = {
+  status: "in_progress" | "completed";
+  probes_used: number;
+  max_probes: number;
+  last_passed?: boolean;
+  step_feedback?: string;
+  surmised_count?: number;
+  surmised_kc_ids?: string[];
+  starting_component?: { id: string; code: string; title: string } | null;
+  probe: KcPlacementProbe | null;
+  message?: string;
+};
+
 export type KcCard = {
   role: "fastest" | "patch" | "stretch";
   label: string;
@@ -352,6 +419,9 @@ export type KcProgress = {
     child_status?: string;
     practice_bonus?: boolean;
     p_known?: number;
+    stability?: number;
+    retrieval_strength?: number | null;
+    needs_warmup?: boolean;
     finished_blocks?: number;
     completed_blocks?: number;
     total_blocks?: number;
@@ -385,6 +455,8 @@ export type KcProgress = {
   }[];
   ring: { id: string; code: string; title: string; kc_type: string | null; status: "known" | "fragile" | "not_started" }[];
   cards: KcCard[];
+  warmups?: KcWarmupItem[];
+  placement?: KcPlacementSummary | null;
 };
 
 export type KcTutorCourse = {
@@ -438,6 +510,10 @@ export type KcTutorCourse = {
   last_active_at?: string | null;
   accomplishments_preview?: KcAccomplishmentItem[];
   opportunities_preview?: KcOpportunityItem[];
+  warmup_count?: number;
+  placement_eligible?: boolean;
+  placement_status?: "not_started" | "in_progress" | "completed" | "skipped";
+  placement_max_probes?: number;
 };
 
 export type KcChatSummary = {

@@ -7,7 +7,9 @@ import { useRouter } from "next/navigation";
 import { BrandMark } from "@/components/BrandMark";
 import { TutorAvatar } from "@/components/TutorAvatar";
 import { BasicsFields, ChildMark, PersonaFields } from "@/components/learn/ChildFields";
+import { CoursePlacementModal } from "@/components/learn/CoursePlacementModal";
 import { api } from "@/lib/api";
+import { shouldOfferPlacementEntry, warmupBadgeLabel } from "@/lib/f5-placement";
 import type { KcTutorCourse } from "@/lib/kc";
 import {
   STAR_TOOLTIP,
@@ -40,6 +42,7 @@ export function ChildHome({
   const router = useRouter();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [picker, setPicker] = useState<{ course: KcTutorCourse; mode: "start" | "change" } | null>(null);
+  const [placementEntry, setPlacementEntry] = useState<{ course: KcTutorCourse; tutorId: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [completedOpen, setCompletedOpen] = useState(false);
@@ -83,25 +86,34 @@ export function ChildHome({
         });
         setPicker(null);
         router.refresh();
-      } else {
-        await api("/kc/tutor/start", {
-          method: "POST",
-          body: JSON.stringify({
-            student_id: student.id,
-            course_id: picker.course.id,
-            tutor_profile_id: tutorId,
-          }),
-        });
-        const courseId = picker.course.id;
+      } else if (shouldOfferPlacementEntry(picker.course)) {
+        const chosenCourse = picker.course;
         setPicker(null);
-        router.push(`${basePath}/${student.id}/course/${courseId}`);
-        router.refresh();
+        setPlacementEntry({ course: chosenCourse, tutorId });
+      } else {
+        await launchCourseWithTutor(picker.course.id, tutorId);
+        setPicker(null);
       }
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Could not save that tutor.");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function launchCourseWithTutor(courseId: string, tutorId: string, kcId?: string) {
+    await api("/kc/tutor/start", {
+      method: "POST",
+      body: JSON.stringify({
+        student_id: student.id,
+        course_id: courseId,
+        tutor_profile_id: tutorId,
+        ...(kcId ? { kc_id: kcId } : {}),
+      }),
+    });
+    setPlacementEntry(null);
+    router.push(`${basePath}/${student.id}/course/${courseId}`);
+    router.refresh();
   }
 
   return (
@@ -255,6 +267,15 @@ export function ChildHome({
           onChoose={(tutorId) => void chooseTutor(tutorId)}
         />
       ) : null}
+      {placementEntry ? (
+        <CoursePlacementModal
+          studentId={student.id}
+          course={placementEntry.course}
+          tutorId={placementEntry.tutorId}
+          onClose={() => setPlacementEntry(null)}
+          onLaunch={(kcId) => launchCourseWithTutor(placementEntry.course.id, placementEntry.tutorId, kcId)}
+        />
+      ) : null}
     </main>
   );
 }
@@ -276,10 +297,12 @@ function CourseCard({
   const completed = course.completed_count ?? 0;
   const percent = course.percent ?? 0;
   const topic = course.current_topic?.title;
+  const warmupNote = warmupBadgeLabel(course.warmup_count);
   return (
     <article className={`learn-course-card${hero ? " is-hero" : ""}`}>
       {hero ? <p className="eyebrow">Jump right back in</p> : null}
       <h3>{course.title}</h3>
+      {warmupNote ? <span className="learn-warmup-pill">{warmupNote}</span> : null}
       {course.tutor ? (
         <p className="learn-guided">
           <TutorAvatar

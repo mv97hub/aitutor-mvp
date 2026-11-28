@@ -7625,3 +7625,143 @@ button.progress-card {
 .teacher-course-item h3 {
   margin: 0 0 4px;
 }
+
+/* F5: Cold-start placement entry modal & Bjork 2-minute memory boost card */
+.learn-entry-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.learn-entry-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 18px;
+  border-radius: 14px;
+  border: 1.5px solid var(--line);
+  background: var(--paper);
+  text-align: left;
+  cursor: pointer;
+}
+
+.learn-entry-option:hover {
+  border-color: var(--teal);
+}
+
+.learn-entry-option.is-recommended {
+  border-color: var(--teal);
+  background: rgba(15, 110, 107, 0.06);
+}
+
+.learn-entry-option p {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.learn-placement-probe,
+.learn-placement-summary {
+  display: grid;
+  gap: 14px;
+}
+
+.learn-placement-prompt {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.learn-placement-feedback {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(15, 110, 107, 0.09);
+  color: var(--teal-deep);
+  font-weight: 600;
+}
+
+.learn-placement-choices {
+  display: grid;
+  gap: 8px;
+}
+
+.learn-placement-choice {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: white;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.96rem;
+}
+
+.learn-placement-choice:hover {
+  border-color: var(--teal);
+}
+
+.learn-placement-choice.is-unsure {
+  border-style: dashed;
+  background: var(--paper-2);
+  color: var(--ink-soft);
+}
+
+.learn-placement-open textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: white;
+}
+
+.learn-warmup-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1.5px solid rgba(224, 161, 0, 0.45);
+  background: rgba(224, 161, 0, 0.08);
+}
+
+.learn-warmup-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.learn-warmup-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(224, 161, 0, 0.18);
+  color: #7c4d00;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.learn-warmup-prompt {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.learn-warmup-form {
+  display: flex;
+  gap: 8px;
+}
+
+.learn-warmup-form input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: white;
+}
+
+.learn-warmup-error {
+  margin: 0 0 6px;
+  color: #9e2a2b;
+  font-size: 0.88rem;
+}
