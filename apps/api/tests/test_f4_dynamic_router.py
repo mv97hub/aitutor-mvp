@@ -333,3 +333,35 @@ def test_broken_kc_redirect_and_forecast_resolve_parity() -> None:
     assert fc.applies is True
     assert fc.if_correct is not None and fc.if_correct.unit_complete is True
     assert HIGH_DEMAND_BLOCKS.isdisjoint(LOWER_DEMAND_BLOCKS)
+
+
+def test_kc_session_persists_f4_affects_in_postgres() -> None:
+    """Verify PostgreSQL ck_kc_sessions_affect accepts both 'bored' and 'curious_stretch'."""
+    import uuid
+    from app.database import SessionLocal
+    from app.models import KcGoal, KcNode, KcSession, Student
+
+    db = SessionLocal()
+    try:
+        tag = uuid.uuid4().hex[:6]
+        student = Student(slug=f"f4-aff-{tag}", display_name="Nova", age=10)
+        node = KcNode(code=f"f4-aff-n-{tag}", title="Affect test", core_truth="Truth")
+        db.add_all([student, node])
+        db.flush()
+        goal = KcGoal(code=f"f4-aff-g-{tag}", title="Affect goal", target_kc_ids=[str(node.id)], ready=True)
+        db.add(goal)
+        db.flush()
+
+        for affect_val in ("bored", "curious_stretch"):
+            sess = KcSession(
+                student_id=student.id,
+                goal_id=goal.id,
+                kc_id=node.id,
+                affect=affect_val,
+            )
+            db.add(sess)
+            db.flush()
+            assert sess.affect == affect_val
+    finally:
+        db.rollback()
+        db.close()

@@ -1142,6 +1142,10 @@ class KcSession(Base):
             "graph2_judge_status IN ('none', 'pending', 'completed', 'failed', 'skipped')",
             name="ck_kc_sessions_graph2_judge_status",
         ),
+        CheckConstraint(
+            "affect IN ('', 'engaged', 'stuck', 'guessing', 'frustrated', 'bored', 'curious_stretch')",
+            name="ck_kc_sessions_affect",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
